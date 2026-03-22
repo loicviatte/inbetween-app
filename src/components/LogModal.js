@@ -11,17 +11,46 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
+  Animated,
+  PanResponder,
 } from 'react-native';
 import Slider from '@react-native-community/slider';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Colors, Typography, Spacing, Fonts } from '../theme';
-import { extractFocusPoints, generateClassTitle, normalizeLabel } from '../services/anthropic';
+import {
+  extractPrimaryFocus,
+  extractSecondaryFocus,
+  generateClassTitle,
+  generateCoachingSummary,
+  normalizeLabel,
+} from '../services/anthropic';
 import {
   saveClassInput,
   saveFocusPoint,
   saveFocusProgress,
   getFocusPoints,
+  getRecentClassInputs,
+  updateUserSummary,
 } from '../services/storage';
+import { supabase } from '../lib/supabase';
+
+const OPENAI_API_KEY = process.env.EXPO_PUBLIC_OPENAI_API_KEY;
+
+// ─── Whisper transcription ────────────────────────────────────────────────────
+
+async function transcribeAudio(uri) {
+  const formData = new FormData();
+  formData.append('file', { uri, type: 'audio/m4a', name: 'recording.m4a' });
+  formData.append('model', 'whisper-1');
+  const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
+    body: formData,
+  });
+  if (!res.ok) throw new Error('Whisper error');
+  const data = await res.json();
+  return data.text || '';
+}
 
 // ─── Mic button ───────────────────────────────────────────────────────────────
 
@@ -30,11 +59,12 @@ try { Audio = require('expo-av').Audio; } catch (_) {}
 
 function MicButton({ targetSetter }) {
   const [recording, setRecording] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
   const recordingRef = useRef(null);
 
   async function startRecording() {
     if (!Audio) {
-      targetSetter((prev) => prev + (prev ? ' ' : '') + '[voice not available in Expo Go]');
+      targetSetter((prev) => prev + (prev ? ' ' : '') + '[voice not available]');
       return;
     }
     try {
@@ -50,28 +80,49 @@ function MicButton({ targetSetter }) {
   async function stopRecording() {
     if (!recordingRef.current) return;
     setRecording(false);
+    setTranscribing(true);
     try {
       await recordingRef.current.stopAndUnloadAsync();
+      const uri = recordingRef.current.getURI();
+      recordingRef.current = null;
+      if (OPENAI_API_KEY && uri) {
+        const text = await transcribeAudio(uri);
+        if (text) targetSetter((prev) => prev + (prev ? ' ' : '') + text);
+      } else {
+        targetSetter((prev) => prev + (prev ? ' ' : '') + '[voice note recorded]');
+      }
+    } catch (e) {
+      console.warn(e);
       targetSetter((prev) => prev + (prev ? ' ' : '') + '[voice note recorded]');
-    } catch (e) { console.warn(e); }
-    recordingRef.current = null;
+    }
+    setTranscribing(false);
   }
 
   return (
     <TouchableOpacity
-      style={[styles.micBtn, recording && styles.micBtnActive]}
+      style={[styles.micBtn, (recording || transcribing) && styles.micBtnActive]}
       onPress={recording ? stopRecording : startRecording}
       activeOpacity={0.75}
+      disabled={transcribing}
     >
-      <Text style={styles.micIcon}>{recording ? '⏹' : '🎙'}</Text>
+      {transcribing ? (
+        <ActivityIndicator size="small" color={Colors.secondary} />
+      ) : (
+        <Text style={styles.micIcon}>{recording ? '⏹' : '🎙'}</Text>
+      )}
     </TouchableOpacity>
   );
 }
 
 // ─── Urgency slider ───────────────────────────────────────────────────────────
 
-const URGENCY_LABELS = ['', 'Low', 'Moderate', 'Medium', 'High', 'Critical'];
-const URGENCY_COLORS = ['', '#A8D5A2', '#F4D03F', '#F0A500', '#E87C3E', '#E84040'];
+function urgencyColor(v) {
+  if (v <= 2) return '#A8D5A2';
+  if (v <= 4) return '#F4D03F';
+  if (v <= 6) return '#F0A500';
+  if (v <= 8) return '#E87C3E';
+  return '#E84040';
+}
 
 function UrgencySlider({ value, onChange }) {
   return (
@@ -79,14 +130,15 @@ function UrgencySlider({ value, onChange }) {
       <Slider
         style={styles.slider}
         minimumValue={1}
-        maximumValue={5}
+        maximumValue={10}
         step={1}
         value={value}
         onValueChange={onChange}
-        minimumTrackTintColor={URGENCY_COLORS[value] || Colors.orange}
+        minimumTrackTintColor={urgencyColor(value)}
         maximumTrackTintColor="rgba(17,12,17,0.12)"
-        thumbTintColor={URGENCY_COLORS[value] || Colors.orange}
+        thumbTintColor={urgencyColor(value)}
       />
+      <Text style={styles.urgencyValue}>{value}/10</Text>
     </View>
   );
 }
@@ -97,8 +149,7 @@ const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'S
 
 function formatDateLabel(date) {
   const today = new Date();
-  const isToday = date.toDateString() === today.toDateString();
-  if (isToday) return 'Today';
+  if (date.toDateString() === today.toDateString()) return 'Today';
   const yesterday = new Date(today);
   yesterday.setDate(today.getDate() - 1);
   if (date.toDateString() === yesterday.toDateString()) return 'Yesterday';
@@ -109,27 +160,47 @@ function formatDateLabel(date) {
 
 export default function LogModal({ visible, onClose, onSubmitted }) {
   const [step, setStep] = useState(1);
-  const [classNote, setClassNote] = useState('');
-  const [input1, setInput1] = useState('');
-  const [urgency1, setUrgency1] = useState(3);
+  const [takeaway, setTakeaway] = useState('');
+  const [practicePoint1, setPracticePoint1] = useState('');
+  const [priorityScore1, setPriorityScore1] = useState(5);
   const [showSecond, setShowSecond] = useState(false);
-  const [input2, setInput2] = useState('');
-  const [urgency2, setUrgency2] = useState(3);
+  const [practicePoint2, setPracticePoint2] = useState('');
+  const [priorityScore2, setPriorityScore2] = useState(5);
   const [classDate, setClassDate] = useState(new Date());
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
 
-  const hasInput = classNote.trim().length > 0 || input1.trim().length > 0 || input2.trim().length > 0;
+  const translateY = useRef(new Animated.Value(0)).current;
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, g) => g.dy > 5 && Math.abs(g.dy) > Math.abs(g.dx),
+      onPanResponderMove: (_, g) => { if (g.dy > 0) translateY.setValue(g.dy); },
+      onPanResponderRelease: (_, g) => {
+        if (g.dy > 120 || g.vy > 0.5) {
+          Animated.timing(translateY, { toValue: 800, duration: 200, useNativeDriver: true }).start(() => {
+            translateY.setValue(0);
+            handleClose();
+          });
+        } else {
+          Animated.spring(translateY, { toValue: 0, useNativeDriver: true }).start();
+        }
+      },
+    })
+  ).current;
+
+  const hasInput = takeaway.trim().length > 0 || practicePoint1.trim().length > 0 || practicePoint2.trim().length > 0;
 
   function reset() {
     setStep(1);
-    setClassNote('');
-    setInput1('');
-    setUrgency1(3);
+    setTakeaway('');
+    setPracticePoint1('');
+    setPriorityScore1(3);
     setShowSecond(false);
-    setInput2('');
-    setUrgency2(3);
+    setPracticePoint2('');
+    setPriorityScore2(3);
     setClassDate(new Date());
     setShowDatePicker(false);
     setSubmitting(false);
@@ -153,7 +224,7 @@ export default function LogModal({ visible, onClose, onSubmitted }) {
   }
 
   function handleNext() {
-    if (!input1.trim()) {
+    if (!practicePoint1.trim()) {
       setError('Please describe what you worked on.');
       return;
     }
@@ -166,63 +237,78 @@ export default function LogModal({ visible, onClose, onSubmitted }) {
     setError('');
     try {
       const existingPoints = await getFocusPoints();
-      const existingLabels = existingPoints.map((p) => p.label);
-      const input2Val = showSecond && input2.trim() ? input2 : null;
+      const existingNames = existingPoints.map((p) => p.name);
+      const pp2 = showSecond && practicePoint2.trim() ? practicePoint2 : null;
 
-      const [focusResult, title] = await Promise.all([
-        extractFocusPoints({ input1, urgency1, input2: input2Val, urgency2: showSecond ? urgency2 : null, existingLabels }),
-        generateClassTitle(input1, input2Val),
+      const [primaryFocusName, secondaryFocusName, title] = await Promise.all([
+        extractPrimaryFocus({ practicePoint1, priorityScore1, existingNames }),
+        pp2 ? extractSecondaryFocus({ practicePoint2: pp2, priorityScore2: showSecond ? priorityScore2 : null, existingNames }) : Promise.resolve(null),
+        generateClassTitle(takeaway, practicePoint1),
       ]);
 
-      const ts = classDate.setHours(
-        new Date().getHours(), new Date().getMinutes(), new Date().getSeconds(), 0
-      );
-      const now = typeof ts === 'number' ? ts : Date.now();
-      const classInputId = `ci_${now}`;
+      const now = new Date(classDate);
+      const current = new Date();
+      now.setHours(current.getHours(), current.getMinutes(), current.getSeconds(), 0);
+      const createdAt = now.toISOString();
 
-      let primaryFpId = null;
-      let secondaryFpId = null;
-
-      async function resolveFp(label, urgency) {
-        if (!label) return null;
-        const norm = normalizeLabel(label);
-        const existing = existingPoints.find((p) => p.nameNormalized === norm);
+      async function resolveFp(name) {
+        if (!name) return null;
+        const norm = normalizeLabel(name);
+        const existing = existingPoints.find((p) => p.normalized_name === norm);
         if (existing) {
-          const updated = { ...existing, count: existing.count + 1 };
-          await saveFocusPoint(updated);
-          return updated.id;
+          await saveFocusPoint({ ...existing, count: existing.count + 1 });
+          return existing.id;
         }
-        const newFp = { id: `fp_${now}_${norm}`, userId: 'user_1', nameNormalized: norm, label, description: '', count: 1 };
-        await saveFocusPoint(newFp);
-        existingPoints.push(newFp);
-        return newFp.id;
+        const newId = await saveFocusPoint({ name, normalized_name: norm, count: 1 });
+        if (newId) existingPoints.push({ id: newId, name, normalized_name: norm, count: 1 });
+        return newId;
       }
 
-      primaryFpId = await resolveFp(focusResult.primary_focus, urgency1);
-      if (showSecond && focusResult.secondary_focus) {
-        secondaryFpId = await resolveFp(focusResult.secondary_focus, urgency2);
-      }
+      const primaryFpId = await resolveFp(primaryFocusName);
+      const secondaryFpId = await resolveFp(secondaryFocusName);
 
       await saveClassInput({
-        id: classInputId,
-        userId: 'user_1',
         title,
-        classNote: classNote.trim() || null,
-        input1,
-        urgency1,
-        input2: input2Val,
-        urgency2: showSecond ? urgency2 : null,
-        ai_primary_focus: primaryFpId,
-        ai_secondary_focus: secondaryFpId,
-        createdAt: now,
+        takeaway: takeaway.trim() || null,
+        practice_point_1: practicePoint1,
+        priority_score_1: priorityScore1,
+        practice_point_2: pp2,
+        priority_score_2: showSecond ? priorityScore2 : null,
+        ai_primary_focus: primaryFocusName || null,
+        ai_secondary_focus: secondaryFocusName || null,
+        created_at: createdAt,
       });
 
-      if (primaryFpId) await saveFocusProgress({ id: `fpr_${now}_1`, userId: 'user_1', focusPointId: primaryFpId, classInputId, priorityScore: urgency1 * 10, createdAt: now });
-      if (secondaryFpId) await saveFocusProgress({ id: `fpr_${now}_2`, userId: 'user_1', focusPointId: secondaryFpId, classInputId, priorityScore: urgency2 * 10, createdAt: now });
+      // Retrieve the newly created class input ID
+      const { data: { user } } = await supabase.auth.getUser();
+      const { data: latestInput } = await supabase
+        .from('class_inputs')
+        .select('id')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single();
+      const classInputId = latestInput?.id || null;
+
+      if (primaryFpId) {
+        await saveFocusProgress({ focus_point_id: primaryFpId, class_input_id: classInputId, priority_score: priorityScore1 });
+      }
+      if (secondaryFpId) {
+        await saveFocusProgress({ focus_point_id: secondaryFpId, class_input_id: classInputId, priority_score: priorityScore2 });
+      }
+
+      // Background: coaching summary + nudge refresh
+      getRecentClassInputs(3).then((recent) =>
+        generateCoachingSummary(recent).then(updateUserSummary).catch(() => {})
+      );
+      import('../services/algorithm').then(({ refreshNudgeMessage }) =>
+        refreshNudgeMessage().catch(() => {})
+      );
 
       reset();
       onSubmitted();
     } catch (e) {
+      console.error(e);
       setError('Something went wrong. Please try again.');
     } finally {
       setSubmitting(false);
@@ -233,9 +319,8 @@ export default function LogModal({ visible, onClose, onSubmitted }) {
     <Modal visible={visible} animationType="slide" transparent onRequestClose={handleClose}>
       <View style={styles.overlay}>
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.kvContainer}>
-          <View style={styles.sheet}>
-            {/* Header */}
-            <View style={styles.sheetHeader}>
+          <Animated.View style={[styles.sheet, { transform: [{ translateY }] }]}>
+            <View style={styles.sheetHeader} {...panResponder.panHandlers}>
               <View style={styles.handle} />
               <TouchableOpacity onPress={handleClose} style={styles.closeBtn} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
                 <Text style={styles.closeBtnText}>✕</Text>
@@ -245,45 +330,40 @@ export default function LogModal({ visible, onClose, onSubmitted }) {
             <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.body} showsVerticalScrollIndicator={false}>
               {step === 1 ? (
                 <>
-                  {/* Question 1 */}
                   <Text style={styles.question}>What did you work on in today's class?</Text>
                   <View style={[styles.inputRow, { marginBottom: 20 }]}>
                     <TextInput
                       style={[styles.input, { flex: 1 }]}
-                      value={classNote}
-                      onChangeText={setClassNote}
+                      value={takeaway}
+                      onChangeText={setTakeaway}
                       placeholder="e.g. Worked on footwork in Samba, partnered exercises…"
                       placeholderTextColor={Colors.secondary}
                       multiline
                       numberOfLines={3}
                       textAlignVertical="top"
                     />
-                    <MicButton targetSetter={setClassNote} />
+                    <MicButton targetSetter={setTakeaway} />
                   </View>
 
-                  {/* Question 2 */}
                   <Text style={styles.question}>What do you need to work on?</Text>
 
-                  {/* Input 1 */}
                   <View style={styles.inputRow}>
                     <TextInput
                       style={[styles.input, { flex: 1 }]}
-                      value={input1}
-                      onChangeText={setInput1}
+                      value={practicePoint1}
+                      onChangeText={setPracticePoint1}
                       placeholder="e.g. My hip rotation was stiff on the left side…"
                       placeholderTextColor={Colors.secondary}
                       multiline
                       numberOfLines={3}
                       textAlignVertical="top"
                     />
-                    <MicButton targetSetter={setInput1} />
+                    <MicButton targetSetter={setPracticePoint1} />
                   </View>
 
-                  {/* Urgency 1 */}
                   <Text style={styles.label}>Urgency</Text>
-                  <UrgencySlider value={urgency1} onChange={setUrgency1} />
+                  <UrgencySlider value={priorityScore1} onChange={setPriorityScore1} />
 
-                  {/* Second point toggle */}
                   <TouchableOpacity style={styles.toggleBtn} onPress={() => setShowSecond(!showSecond)} activeOpacity={0.7}>
                     <View style={[styles.toggleDot, showSecond && { backgroundColor: Colors.activeLog }]} />
                     <Text style={styles.toggleText}>Add a second observation</Text>
@@ -294,28 +374,23 @@ export default function LogModal({ visible, onClose, onSubmitted }) {
                       <View style={styles.inputRow}>
                         <TextInput
                           style={[styles.input, { flex: 1 }]}
-                          value={input2}
-                          onChangeText={setInput2}
+                          value={practicePoint2}
+                          onChangeText={setPracticePoint2}
                           placeholder="e.g. Need more power in jumps…"
                           placeholderTextColor={Colors.secondary}
                           multiline
                           numberOfLines={3}
                           textAlignVertical="top"
                         />
-                        <MicButton targetSetter={setInput2} />
+                        <MicButton targetSetter={setPracticePoint2} />
                       </View>
                       <Text style={styles.label}>Urgency</Text>
-                      <UrgencySlider value={urgency2} onChange={setUrgency2} />
+                      <UrgencySlider value={priorityScore2} onChange={setPriorityScore2} />
                     </>
                   )}
 
-                  {/* Date */}
                   <View style={styles.dateSeparator} />
-                  <TouchableOpacity
-                    style={styles.dateBtn}
-                    onPress={() => setShowDatePicker(!showDatePicker)}
-                    activeOpacity={0.75}
-                  >
+                  <TouchableOpacity style={styles.dateBtn} onPress={() => setShowDatePicker(!showDatePicker)} activeOpacity={0.75}>
                     <View style={styles.dateCheckCircle}>
                       <Text style={styles.dateCheckIcon}>✓</Text>
                     </View>
@@ -339,7 +414,6 @@ export default function LogModal({ visible, onClose, onSubmitted }) {
 
                   {!!error && <Text style={styles.error}>{error}</Text>}
 
-                  {/* NEXT */}
                   <TouchableOpacity style={styles.primaryBtn} onPress={handleNext} activeOpacity={0.85}>
                     <Text style={styles.primaryBtnText}>NEXT →</Text>
                   </TouchableOpacity>
@@ -348,26 +422,26 @@ export default function LogModal({ visible, onClose, onSubmitted }) {
                 <>
                   <Text style={styles.question}>Review your log</Text>
 
-                  {classNote.trim() ? (
+                  {takeaway.trim() ? (
                     <View style={styles.reviewCard}>
                       <Text style={styles.reviewLabel}>What you worked on</Text>
-                      <Text style={styles.reviewText}>{classNote}</Text>
+                      <Text style={styles.reviewText}>{takeaway}</Text>
                     </View>
                   ) : null}
 
-                  <View style={[styles.reviewCard, classNote.trim() ? { marginTop: 10 } : {}]}>
-                    <Text style={styles.reviewLabel}>Focus to work on · Urgency {urgency1}/5</Text>
-                    <Text style={styles.reviewText}>{input1}</Text>
+                  <View style={[styles.reviewCard, takeaway.trim() ? { marginTop: 10 } : {}]}>
+                    <Text style={styles.reviewLabel}>Focus to work on · Urgency {priorityScore1}/5</Text>
+                    <Text style={styles.reviewText}>{practicePoint1}</Text>
                   </View>
 
-                  {showSecond && input2.trim() ? (
+                  {showSecond && practicePoint2.trim() ? (
                     <View style={[styles.reviewCard, { marginTop: 10 }]}>
-                      <Text style={styles.reviewLabel}>Observation 2 · Urgency {urgency2}/5</Text>
-                      <Text style={styles.reviewText}>{input2}</Text>
+                      <Text style={styles.reviewLabel}>Observation 2 · Urgency {priorityScore2}/5</Text>
+                      <Text style={styles.reviewText}>{practicePoint2}</Text>
                     </View>
                   ) : null}
 
-                  <View style={styles.reviewCard}>
+                  <View style={[styles.reviewCard, { marginTop: 10 }]}>
                     <Text style={styles.reviewLabel}>Class date</Text>
                     <Text style={styles.reviewText}>{formatDateLabel(classDate)}</Text>
                   </View>
@@ -391,7 +465,7 @@ export default function LogModal({ visible, onClose, onSubmitted }) {
                 </>
               )}
             </ScrollView>
-          </View>
+          </Animated.View>
         </KeyboardAvoidingView>
       </View>
     </Modal>
@@ -418,16 +492,9 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
   handle: { width: 36, height: 4, backgroundColor: 'rgba(17,12,17,0.1)', borderRadius: 2, marginBottom: 12 },
-  sheetTitle: { ...Typography.sectionTitle },
   closeBtn: { position: 'absolute', right: Spacing.side, top: 16 },
   closeBtnText: { fontSize: 18, color: Colors.secondary },
-
-  stepRow: { flexDirection: 'row', justifyContent: 'center', gap: 6, paddingVertical: 12 },
-  stepDot: { width: 24, height: 4, borderRadius: 2, backgroundColor: 'rgba(17,12,17,0.1)' },
-  stepDotActive: { backgroundColor: Colors.black },
-
   body: { paddingHorizontal: Spacing.side, paddingTop: 4, paddingBottom: 20 },
-
   question: {
     fontFamily: Fonts.jakartaExtraBold,
     fontSize: 16,
@@ -436,7 +503,6 @@ const styles = StyleSheet.create({
     lineHeight: 24,
   },
   label: { ...Typography.body, fontWeight: '600', marginBottom: 4, marginTop: 4 },
-
   inputRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, marginBottom: 12 },
   input: {
     borderWidth: 1, borderColor: '#E0E0E0', borderRadius: 12,
@@ -445,20 +511,15 @@ const styles = StyleSheet.create({
   micBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#F5F5F5', alignItems: 'center', justifyContent: 'center', marginTop: 4 },
   micBtnActive: { backgroundColor: '#FFE0E0' },
   micIcon: { fontSize: 20 },
-
-  // Urgency slider
   sliderWrap: { marginBottom: 16 },
+  urgencyValue: { fontFamily: Fonts.jakartaMedium, fontSize: 11, color: Colors.secondary, textAlign: 'right', marginTop: -4 },
   slider: { width: '100%', height: 40 },
-
-  // Second point toggle
   toggleBtn: { flexDirection: 'row', alignItems: 'center', marginBottom: 14, marginTop: 4 },
   toggleDot: {
     width: 20, height: 20, borderRadius: 10,
     borderWidth: 2, borderColor: Colors.activeLog, marginRight: 10,
   },
   toggleText: { ...Typography.body, color: Colors.activeLog, fontWeight: '600' },
-
-  // Date
   dateSeparator: { height: 1, backgroundColor: 'rgba(17,12,17,0.06)', marginVertical: 16 },
   dateBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
@@ -474,8 +535,6 @@ const styles = StyleSheet.create({
   dateBtnText: { fontFamily: Fonts.jakartaBold, fontSize: 14, color: Colors.black, flex: 1 },
   dateBtnArrow: { color: Colors.secondary, fontSize: 12 },
   datePicker: { width: '100%' },
-
-  // Buttons
   primaryBtn: {
     backgroundColor: Colors.black, borderRadius: 16,
     paddingVertical: 16, alignItems: 'center', marginTop: 20,
@@ -483,11 +542,8 @@ const styles = StyleSheet.create({
   primaryBtnText: { color: Colors.white, fontFamily: Fonts.jakartaExtraBold, fontSize: 16, letterSpacing: 0.5 },
   backBtn: { alignItems: 'center', marginTop: 14 },
   backBtnText: { ...Typography.body, color: Colors.secondary },
-
-  // Review
   reviewCard: { backgroundColor: Colors.statCardBg, borderRadius: 12, padding: 14, borderWidth: 0.5, borderColor: Colors.statCardBorder },
   reviewLabel: { fontFamily: Fonts.jakartaMedium, fontSize: 11, color: Colors.secondary, marginBottom: 5, textTransform: 'uppercase', letterSpacing: 0.5 },
   reviewText: { ...Typography.body },
-
   error: { color: 'red', fontSize: 13, marginTop: 10 },
 });

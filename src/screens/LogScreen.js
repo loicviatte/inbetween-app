@@ -13,12 +13,13 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Colors, Fonts, Spacing } from '../theme';
-import { getClassInputs, getFocusPoints, getNotes } from '../services/storage';
+import { getClassInputs, getNotes } from '../services/storage';
 import LogModal from '../components/LogModal';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-function relativeDate(ts) {
+function relativeDate(isoOrTs) {
+  const ts = typeof isoOrTs === 'string' ? new Date(isoOrTs).getTime() : isoOrTs;
   const now = Date.now();
   const diff = now - ts;
   const days = Math.floor(diff / 86400000);
@@ -33,27 +34,25 @@ function Logo() {
   return <Text style={styles.logo}>EE</Text>;
 }
 
-function ClassItem({ item, focusMap, onPress }) {
-  const fp = focusMap[item.ai_primary_focus];
-  const sfp = focusMap[item.ai_secondary_focus];
-  const hasTwo = sfp && item.input2;
+function ClassItem({ item, onPress }) {
+  const hasTwo = item.practice_point_2 && item.ai_secondary_focus;
 
   return (
     <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.75}>
       <View style={[styles.cardAccent, { backgroundColor: Colors.activeLog }]} />
       <View style={styles.cardBody}>
         <View style={styles.cardHeader}>
-          <Text style={styles.cardDate}>{relativeDate(item.createdAt)}</Text>
+          <Text style={styles.cardDate}>{relativeDate(item.created_at)}</Text>
           {hasTwo && (
             <View style={styles.countBadge}>
               <Text style={styles.countBadgeText}>2 points</Text>
             </View>
           )}
         </View>
-        <Text style={styles.cardFocus}>{item.title || (fp ? fp.label : item.input1.split(' ').slice(0, 4).join(' '))}</Text>
-        <Text style={styles.cardInput} numberOfLines={2}>{item.input1}</Text>
+        <Text style={styles.cardFocus}>{item.title || item.ai_primary_focus || item.practice_point_1?.split(' ').slice(0, 4).join(' ')}</Text>
+        <Text style={styles.cardInput} numberOfLines={2}>{item.practice_point_1}</Text>
         {hasTwo && (
-          <Text style={styles.cardSecondary} numberOfLines={1}>+ {sfp.label}</Text>
+          <Text style={styles.cardSecondary} numberOfLines={1}>+ {item.ai_secondary_focus}</Text>
         )}
       </View>
     </TouchableOpacity>
@@ -61,20 +60,20 @@ function ClassItem({ item, focusMap, onPress }) {
 }
 
 function NoteItem({ item, onPress }) {
-  const hasVideo = item.videoClips?.length > 0;
-  const isLinked = !!item.linkedClassInputId;
+  const hasVideo = item.video_clips?.length > 0;
+  const isLinked = !!item.linked_class_input_id;
 
   return (
     <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.75}>
       <View style={[styles.cardAccent, { backgroundColor: '#5788E6' }]} />
       <View style={styles.cardBody}>
         <View style={styles.cardHeader}>
-          <Text style={styles.cardDate}>{relativeDate(item.updatedAt || item.createdAt)}</Text>
+          <Text style={styles.cardDate}>{relativeDate(item.updated_at || item.created_at)}</Text>
           <View style={styles.noteBadges}>
             {hasVideo && (
               <View style={[styles.countBadge, { backgroundColor: 'rgba(87,136,230,0.12)' }]}>
                 <Text style={[styles.countBadgeText, { color: '#5788E6' }]}>
-                  {item.videoClips.length} clip{item.videoClips.length > 1 ? 's' : ''}
+                  {item.video_clips.length} clip{item.video_clips.length > 1 ? 's' : ''}
                 </Text>
               </View>
             )}
@@ -104,7 +103,6 @@ export default function LogScreen({ navigation }) {
   const [activeTab, setActiveTab] = useState('CLASS');
   const [inputs, setInputs] = useState([]);
   const [notes, setNotes] = useState([]);
-  const [focusMap, setFocusMap] = useState({});
   const [search, setSearch] = useState('');
   const [modalVisible, setModalVisible] = useState(false);
 
@@ -120,16 +118,9 @@ export default function LogScreen({ navigation }) {
   ).current;
 
   async function load() {
-    const [allInputs, points, allNotes] = await Promise.all([
-      getClassInputs(),
-      getFocusPoints(),
-      getNotes(),
-    ]);
-    setInputs([...allInputs].sort((a, b) => b.createdAt - a.createdAt));
-    setNotes([...allNotes].sort((a, b) => (b.updatedAt || b.createdAt) - (a.updatedAt || a.createdAt)));
-    const map = {};
-    for (const p of points) map[p.id] = p;
-    setFocusMap(map);
+    const [allInputs, allNotes] = await Promise.all([getClassInputs(), getNotes()]);
+    setInputs(allInputs); // already sorted by created_at desc from Supabase
+    setNotes(allNotes);   // already sorted by updated_at desc from Supabase
   }
 
   useFocusEffect(useCallback(() => { load(); }, []));
@@ -145,8 +136,7 @@ export default function LogScreen({ navigation }) {
   const filteredInputs = search.trim()
     ? inputs.filter((i) => {
         const q = search.toLowerCase();
-        const fp = focusMap[i.ai_primary_focus];
-        return i.input1?.toLowerCase().includes(q) || i.input2?.toLowerCase().includes(q) || fp?.label?.toLowerCase().includes(q);
+        return i.practice_point_1?.toLowerCase().includes(q) || i.practice_point_2?.toLowerCase().includes(q) || i.ai_primary_focus?.toLowerCase().includes(q);
       })
     : inputs;
 
@@ -189,7 +179,7 @@ export default function LogScreen({ navigation }) {
             data={filteredInputs}
             keyExtractor={(item) => item.id}
             renderItem={({ item }) => (
-              <ClassItem item={item} focusMap={focusMap} onPress={() => navigation.navigate('ClassDetail', { inputId: item.id })} />
+              <ClassItem item={item} onPress={() => navigation.navigate('ClassDetail', { inputId: item.id })} />
             )}
             contentContainerStyle={styles.listContent}
             showsVerticalScrollIndicator={false}

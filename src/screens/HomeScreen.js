@@ -4,19 +4,17 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Colors, Fonts, Spacing } from '../theme';
 import {
   getUser,
-  getTopFocusPoint,
-  getRecentClassInputs,
-  getSessionsThisWeek,
+  getTrainingSessionsThisWeek,
   getFocusTrainedCount,
+  getUserSummary,
 } from '../services/storage';
-import { generateCoachingSummary } from '../services/anthropic';
+import { getSlots, refreshNudgeMessage } from '../services/algorithm';
 import LogModal from '../components/LogModal';
 
 function getGreeting() {
@@ -46,37 +44,31 @@ function StatCard({ number, label, dotColor }) {
 
 export default function HomeScreen({ navigation }) {
   const [user, setUser] = useState(null);
-  const [topFocus, setTopFocus] = useState(null);
+  const [slot1, setSlot1] = useState(null);
+  const [nudgeMessage, setNudgeMessage] = useState('');
   const [coachSummary, setCoachSummary] = useState('');
-  const [summaryLoading, setSummaryLoading] = useState(false);
+
   const [sessionsThisWeek, setSessionsThisWeek] = useState(0);
   const [focusCount, setFocusCount] = useState(0);
   const [logModalVisible, setLogModalVisible] = useState(false);
 
   async function load() {
-    const [u, fp, inputs, sessions, fc] = await Promise.all([
+    const [u, slots, sessions, fc, summary, nudge] = await Promise.all([
       getUser(),
-      getTopFocusPoint(),
-      getRecentClassInputs(3),
-      getSessionsThisWeek(),
+      getSlots(),
+      getTrainingSessionsThisWeek(),
       getFocusTrainedCount(),
+      getUserSummary(),
+      refreshNudgeMessage(),
     ]);
     setUser(u);
-    setTopFocus(fp);
+    setSlot1(slots.slot1);
+    setNudgeMessage(nudge || '');
     setSessionsThisWeek(sessions);
     setFocusCount(fc);
-
-    setSummaryLoading(true);
-    try {
-      const summary = await generateCoachingSummary(inputs);
-      setCoachSummary(summary);
-    } catch {
-      setCoachSummary(
-        'Keep showing up — consistency is how progress compounds. Focus on your top priority and trust the process.'
-      );
-    } finally {
-      setSummaryLoading(false);
-    }
+    setCoachSummary(
+      summary || "You're just getting started — log your first class to receive personalized coaching insights."
+    );
   }
 
   useFocusEffect(
@@ -106,14 +98,17 @@ export default function HomeScreen({ navigation }) {
         </Text>
         <Text style={styles.title}>Your next focus is ready</Text>
 
+        {/* Nudge message */}
+        {!!nudgeMessage && (
+          <View style={styles.nudgeCard}>
+            <Text style={styles.nudgeText}>{nudgeMessage}</Text>
+          </View>
+        )}
+
         {/* Where you are now card */}
         <View style={styles.coachCard}>
           <Text style={styles.coachCardTitle}>Where you are now</Text>
-          {summaryLoading ? (
-            <ActivityIndicator color={Colors.orange} style={{ marginVertical: 12 }} />
-          ) : (
-            <Text style={styles.coachCardBody} numberOfLines={3}>{coachSummary}</Text>
-          )}
+          <Text style={styles.coachCardBody} numberOfLines={3}>{coachSummary}</Text>
         </View>
 
         {/* Quick Actions */}
@@ -125,13 +120,13 @@ export default function HomeScreen({ navigation }) {
             onPress={() => navigation.navigate('TRAIN')}
             activeOpacity={0.88}
           >
-            <View style={styles.mainFocusTopRow}>
+            <View style={styles.mainFocusLeft}>
               <Text style={styles.mainFocusLabel}>Main Focus</Text>
-              <Text style={styles.mainFocusArrow}>→</Text>
+              <Text style={styles.mainFocusName} numberOfLines={1}>
+                {slot1?.name || 'No focus yet'}
+              </Text>
             </View>
-            <Text style={styles.mainFocusName} numberOfLines={1}>
-              {topFocus?.label || 'No focus yet'}
-            </Text>
+            <Text style={styles.mainFocusArrow}>→</Text>
           </TouchableOpacity>
 
           {/* Log Class button */}
@@ -149,7 +144,7 @@ export default function HomeScreen({ navigation }) {
         <View style={styles.statsRow}>
           <StatCard
             number={sessionsThisWeek}
-            label="Sessions this week"
+            label="Training this week"
             dotColor={Colors.activeFocus}
           />
           <StatCard
@@ -224,6 +219,23 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
 
+  // Nudge card
+  nudgeCard: {
+    backgroundColor: 'rgba(17,12,17,0.05)',
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    marginBottom: 12,
+    borderLeftWidth: 3,
+    borderLeftColor: Colors.orange,
+  },
+  nudgeText: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 13,
+    color: Colors.black,
+    lineHeight: 19,
+  },
+
   // Coach card
   coachCard: {
     backgroundColor: Colors.coachCard,
@@ -266,41 +278,44 @@ const styles = StyleSheet.create({
   },
   mainFocusBtn: {
     flex: 1,
-    height: 73,
     backgroundColor: Colors.orange,
     borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    justifyContent: 'space-between',
-  },
-  mainFocusTopRow: {
+    paddingHorizontal: 16,
+    paddingVertical: 16,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
+  mainFocusLeft: {
+    flex: 1,
+    gap: 4,
+  },
   mainFocusLabel: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 14,
-    color: '#B35E60',
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 11,
+    color: 'rgba(255,255,255,0.65)',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
   },
   mainFocusArrow: {
     fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 16,
-    color: Colors.profileIcon,
+    fontSize: 20,
+    color: 'rgba(255,255,255,0.8)',
+    lineHeight: 24,
   },
   mainFocusName: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 14,
-    color: Colors.white,
-    marginTop: 6,
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 20,
+    color: '#ffffff',
+    lineHeight: 26,
   },
   logClassBtn: {
     width: 95,
-    height: 73,
-    backgroundColor: '#4CAF50',
+    backgroundColor: '#1A1A1A',
     borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
+    paddingVertical: 14,
   },
   logClassText: {
     fontFamily: Fonts.jakartaBold,
@@ -325,6 +340,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     justifyContent: 'space-between',
+    alignItems: 'flex-end',
     shadowColor: '#000',
     shadowOpacity: 0.04,
     shadowOffset: { width: 0, height: 2 },
@@ -345,12 +361,10 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.montserratMedium,
     fontSize: 11,
     color: 'rgba(17, 12, 17, 0.75)',
-    flex: 1,
   },
   statNumber: {
     fontFamily: Fonts.montserratSemiBold,
     fontSize: 20,
     color: '#110C11',
-    textAlign: 'right',
   },
 });

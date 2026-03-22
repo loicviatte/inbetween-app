@@ -42,6 +42,8 @@ export const MOCK_CLASS_INPUTS = [
   {
     id: 'ci_1',
     userId: 'user_1',
+    title: 'Jump Power & Hip Flow',
+    classNote: 'Worked on jump sequences with my teacher. We focused on explosive take-off and landing softness. Also did hip isolation exercises at the barre.',
     input1: 'My legs felt weak during jumps',
     urgency1: 4,
     input2: 'Hip rotation was stiff on the left side',
@@ -53,6 +55,8 @@ export const MOCK_CLASS_INPUTS = [
   {
     id: 'ci_2',
     userId: 'user_1',
+    title: 'Alignment in Transitions',
+    classNote: 'Full class on transitions between phrases. Teacher corrected my posture constantly — shoulders kept drifting forward in the second phrase.',
     input1: 'Need to work on body alignment in transitions',
     urgency1: 5,
     input2: null,
@@ -64,6 +68,8 @@ export const MOCK_CLASS_INPUTS = [
   {
     id: 'ci_3',
     userId: 'user_1',
+    title: 'Single Leg Stability',
+    classNote: 'Trained single-leg balance and hip mobility drills. Good session overall — felt improvement in the right leg but left side still lagging behind.',
     input1: 'Leg strength still inconsistent, especially single leg',
     urgency1: 4,
     input2: 'Hip rotation improving but needs more range',
@@ -75,6 +81,8 @@ export const MOCK_CLASS_INPUTS = [
   {
     id: 'ci_4',
     userId: 'user_1',
+    title: 'Fatigue & Alignment',
+    classNote: 'Long rehearsal session, about 2 hours. Noticed my form degrading significantly in the last 30 minutes. Need to build more stamina for longer sessions.',
     input1: 'Body alignment breaks down when I get tired',
     urgency1: 4,
     input2: null,
@@ -86,6 +94,8 @@ export const MOCK_CLASS_INPUTS = [
   {
     id: 'ci_5',
     userId: 'user_1',
+    title: 'Leg Strength Drills',
+    classNote: 'Focused strength training session — plyometrics and resistance band work for legs. Felt a real difference compared to last week. Teacher noticed the improvement too.',
     input1: 'Worked on leg strength drills — noticed improvement',
     urgency1: 3,
     input2: null,
