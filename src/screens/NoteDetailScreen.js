@@ -15,7 +15,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Colors, Fonts, Spacing } from '../theme';
-import { getNoteById, saveNote, deleteNote, getClassInputs, getFocusPoints } from '../services/storage';
+import { getNoteById, saveNote, deleteNote, getClassInputs } from '../services/storage';
 
 let ImagePicker = null;
 try { ImagePicker = require('expo-image-picker'); } catch (_) {}
@@ -28,15 +28,11 @@ function formatDate(ts) {
 
 function ClassPickerModal({ visible, onClose, onSelect, currentId }) {
   const [inputs, setInputs] = useState([]);
-  const [focusMap, setFocusMap] = useState({});
 
   useEffect(() => {
     if (!visible) return;
-    Promise.all([getClassInputs(), getFocusPoints()]).then(([ci, fp]) => {
-      setInputs([...ci].sort((a, b) => b.createdAt - a.createdAt));
-      const m = {};
-      for (const p of fp) m[p.id] = p;
-      setFocusMap(m);
+    getClassInputs().then((ci) => {
+      setInputs(ci); // already sorted by created_at desc from Supabase
     });
   }, [visible]);
 
@@ -60,7 +56,6 @@ function ClassPickerModal({ visible, onClose, onSelect, currentId }) {
             keyExtractor={(i) => i.id}
             contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 20 }}
             renderItem={({ item }) => {
-              const fp = focusMap[item.ai_primary_focus];
               const isSelected = item.id === currentId;
               return (
                 <TouchableOpacity
@@ -69,9 +64,9 @@ function ClassPickerModal({ visible, onClose, onSelect, currentId }) {
                   activeOpacity={0.7}
                 >
                   <View style={picker.itemLeft}>
-                    <Text style={picker.itemDate}>{formatDate(item.createdAt)}</Text>
-                    {fp && <Text style={picker.itemFocus}>{fp.label}</Text>}
-                    <Text style={picker.itemText} numberOfLines={1}>{item.input1}</Text>
+                    <Text style={picker.itemDate}>{formatDate(item.created_at)}</Text>
+                    {item.ai_primary_focus && <Text style={picker.itemFocus}>{item.ai_primary_focus}</Text>}
+                    <Text style={picker.itemText} numberOfLines={1}>{item.practice_point_1}</Text>
                   </View>
                   {isSelected && <Text style={picker.checkmark}>✓</Text>}
                 </TouchableOpacity>
@@ -85,25 +80,24 @@ function ClassPickerModal({ visible, onClose, onSelect, currentId }) {
 }
 
 export default function NoteDetailScreen({ route, navigation }) {
-  const { noteId } = route.params || {};
+  const { noteId, linked_class_input_id: initialLinkedId } = route.params || {};
   const isNew = !noteId;
 
-  const [id] = useState(noteId || `note_${Date.now()}`);
+  const [id] = useState(noteId || null);
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
-  const [videoClips, setVideoClips] = useState([]);
-  const [linkedClassInputId, setLinkedClassInputId] = useState(null);
+  const [video_clips, setVideoClips] = useState([]);
+  const [linked_class_input_id, setLinkedClassInputId] = useState(initialLinkedId || null);
   const [linkedClass, setLinkedClass] = useState(null);
   const [pickerVisible, setPickerVisible] = useState(false);
-  const [createdAt] = useState(Date.now());
   const autoSaveTimer = useRef(null);
   const hasChanges = useRef(false);
-  const stateRef = useRef({ title, content, videoClips, linkedClassInputId });
+  const stateRef = useRef({ title, content, video_clips, linked_class_input_id });
 
   // Keep ref in sync
   useEffect(() => {
-    stateRef.current = { title, content, videoClips, linkedClassInputId };
-  }, [title, content, videoClips, linkedClassInputId]);
+    stateRef.current = { title, content, video_clips, linked_class_input_id };
+  }, [title, content, video_clips, linked_class_input_id]);
 
   useEffect(() => {
     if (!isNew) {
@@ -111,8 +105,8 @@ export default function NoteDetailScreen({ route, navigation }) {
         if (note) {
           setTitle(note.title || '');
           setContent(note.content || '');
-          setVideoClips(note.videoClips || []);
-          setLinkedClassInputId(note.linkedClassInputId || null);
+          setVideoClips(note.video_clips || []);
+          setLinkedClassInputId(note.linked_class_input_id || null);
         }
       });
     }
@@ -120,25 +114,20 @@ export default function NoteDetailScreen({ route, navigation }) {
 
   // Load linked class info for display
   useEffect(() => {
-    if (!linkedClassInputId) { setLinkedClass(null); return; }
-    Promise.all([getClassInputs(), getFocusPoints()]).then(([ci, fp]) => {
-      const entry = ci.find((i) => i.id === linkedClassInputId);
-      const m = {};
-      for (const p of fp) m[p.id] = p;
-      setLinkedClass(entry ? { entry, focusMap: m } : null);
+    if (!linked_class_input_id) { setLinkedClass(null); return; }
+    getClassInputs().then((ci) => {
+      const entry = ci.find((i) => i.id === linked_class_input_id);
+      setLinkedClass(entry || null);
     });
-  }, [linkedClassInputId]);
+  }, [linked_class_input_id]);
 
   async function persist(data) {
     await saveNote({
-      id,
-      userId: 'user_1',
+      ...(id ? { id } : {}),
       title: data.title,
       content: data.content,
-      videoClips: data.videoClips,
-      linkedClassInputId: data.linkedClassInputId,
-      createdAt,
-      updatedAt: Date.now(),
+      video_clips: data.video_clips,
+      linked_class_input_id: data.linked_class_input_id,
     });
   }
 
@@ -152,6 +141,7 @@ export default function NoteDetailScreen({ route, navigation }) {
 
   function handleTitleChange(text) { setTitle(text); scheduleAutoSave(); }
   function handleContentChange(text) { setContent(text); scheduleAutoSave(); }
+
 
   useFocusEffect(
     useCallback(() => {
@@ -184,7 +174,7 @@ export default function NoteDetailScreen({ route, navigation }) {
         filename: asset.fileName || asset.uri.split('/').pop(),
         duration: asset.duration ? Math.round(asset.duration) : null,
       };
-      const updated = [...stateRef.current.videoClips, clip];
+      const updated = [...stateRef.current.video_clips, clip];
       setVideoClips(updated);
       scheduleAutoSave();
     }
@@ -196,7 +186,7 @@ export default function NoteDetailScreen({ route, navigation }) {
       {
         text: 'Remove', style: 'destructive',
         onPress: () => {
-          const updated = stateRef.current.videoClips.filter((_, i) => i !== index);
+          const updated = stateRef.current.video_clips.filter((_, i) => i !== index);
           setVideoClips(updated);
           scheduleAutoSave();
         },
@@ -224,8 +214,6 @@ export default function NoteDetailScreen({ route, navigation }) {
     setPickerVisible(false);
     scheduleAutoSave();
   }
-
-  const fp = linkedClass ? linkedClass.focusMap[linkedClass.entry.ai_primary_focus] : null;
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -270,14 +258,14 @@ export default function NoteDetailScreen({ route, navigation }) {
                 <Text style={styles.sectionActionText}>+ Add</Text>
               </TouchableOpacity>
             </View>
-            {videoClips.length === 0 ? (
+            {video_clips.length === 0 ? (
               <TouchableOpacity style={styles.videoEmptyBox} onPress={pickVideo} activeOpacity={0.7}>
                 <Text style={styles.videoEmptyIcon}>▶</Text>
                 <Text style={styles.videoEmptyText}>Add a video clip from your library</Text>
               </TouchableOpacity>
             ) : (
               <View style={styles.clipsList}>
-                {videoClips.map((clip, i) => (
+                {video_clips.map((clip, i) => (
                   <TouchableOpacity key={i} style={styles.clipItem} onLongPress={() => removeClip(i)} activeOpacity={0.8}>
                     <View style={styles.clipThumb}>
                       <Text style={styles.clipThumbIcon}>▶</Text>
@@ -302,16 +290,16 @@ export default function NoteDetailScreen({ route, navigation }) {
             <View style={styles.sectionHeader}>
               <Text style={styles.sectionTitle}>Linked class</Text>
               <TouchableOpacity style={styles.sectionAction} onPress={() => setPickerVisible(true)} activeOpacity={0.7}>
-                <Text style={styles.sectionActionText}>{linkedClassInputId ? 'Change' : '+ Link'}</Text>
+                <Text style={styles.sectionActionText}>{linked_class_input_id ? 'Change' : '+ Link'}</Text>
               </TouchableOpacity>
             </View>
             {linkedClass ? (
               <View style={styles.linkedCard}>
                 <View style={styles.linkedCardLeft} />
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.linkedDate}>{formatDate(linkedClass.entry.createdAt)}</Text>
-                  {fp && <Text style={styles.linkedFocus}>{fp.label}</Text>}
-                  <Text style={styles.linkedText} numberOfLines={2}>{linkedClass.entry.input1}</Text>
+                  <Text style={styles.linkedDate}>{formatDate(linkedClass.created_at)}</Text>
+                  {linkedClass.ai_primary_focus && <Text style={styles.linkedFocus}>{linkedClass.ai_primary_focus}</Text>}
+                  <Text style={styles.linkedText} numberOfLines={2}>{linkedClass.practice_point_1}</Text>
                 </View>
                 <TouchableOpacity onPress={() => handleLinkSelect(null)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
                   <Text style={styles.clipRemove}>✕</Text>
@@ -331,7 +319,7 @@ export default function NoteDetailScreen({ route, navigation }) {
         visible={pickerVisible}
         onClose={() => setPickerVisible(false)}
         onSelect={handleLinkSelect}
-        currentId={linkedClassInputId}
+        currentId={linked_class_input_id}
       />
     </SafeAreaView>
   );

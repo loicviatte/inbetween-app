@@ -1,86 +1,237 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import {
-  MOCK_USER,
-  MOCK_FOCUS_POINTS,
-  MOCK_CLASS_INPUTS,
-  MOCK_FOCUS_PROGRESS,
-  MOCK_NOTES,
-} from '../data/mockData';
+import { supabase } from '../lib/supabase';
 
-const KEYS = {
-  USER: 'inbetween_user',
-  CLASS_INPUTS: 'inbetween_class_inputs',
-  FOCUS_POINTS: 'inbetween_focus_points',
-  FOCUS_PROGRESS: 'inbetween_focus_progress',
-  NOTES: 'inbetween_notes',
-  SEEDED: 'inbetween_seeded',
-};
-
-export async function seedIfNeeded() {
-  const seeded = await AsyncStorage.getItem(KEYS.SEEDED);
-  if (seeded) return;
-  await AsyncStorage.setItem(KEYS.USER, JSON.stringify(MOCK_USER));
-  await AsyncStorage.setItem(KEYS.CLASS_INPUTS, JSON.stringify(MOCK_CLASS_INPUTS));
-  await AsyncStorage.setItem(KEYS.FOCUS_POINTS, JSON.stringify(MOCK_FOCUS_POINTS));
-  await AsyncStorage.setItem(KEYS.FOCUS_PROGRESS, JSON.stringify(MOCK_FOCUS_PROGRESS));
-  await AsyncStorage.setItem(KEYS.NOTES, JSON.stringify(MOCK_NOTES));
-  await AsyncStorage.setItem(KEYS.SEEDED, 'true');
+async function getUserId() {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Not authenticated');
+  return user.id;
 }
+
+// ─── User ────────────────────────────────────────────────────────────────────
 
 export async function getUser() {
-  const raw = await AsyncStorage.getItem(KEYS.USER);
-  return raw ? JSON.parse(raw) : MOCK_USER;
+  const userId = await getUserId();
+  const { data } = await supabase
+    .from('users')
+    .select('*')
+    .eq('id', userId)
+    .single();
+  return data;
 }
 
+export async function updateUserSummary(summary) {
+  const userId = await getUserId();
+  await supabase
+    .from('users')
+    .update({ current_summary: summary })
+    .eq('id', userId);
+}
+
+export async function getUserSummary() {
+  const userId = await getUserId();
+  const { data } = await supabase
+    .from('users')
+    .select('current_summary')
+    .eq('id', userId)
+    .single();
+  return data?.current_summary || null;
+}
+
+// ─── Class Inputs ────────────────────────────────────────────────────────────
+
 export async function getClassInputs() {
-  const raw = await AsyncStorage.getItem(KEYS.CLASS_INPUTS);
-  return raw ? JSON.parse(raw) : [];
+  const userId = await getUserId();
+  const { data } = await supabase
+    .from('class_inputs')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('is_deleted', false)
+    .order('created_at', { ascending: false });
+  return data || [];
 }
 
 export async function saveClassInput(input) {
-  const inputs = await getClassInputs();
-  inputs.push(input);
-  await AsyncStorage.setItem(KEYS.CLASS_INPUTS, JSON.stringify(inputs));
+  const userId = await getUserId();
+  const { error } = await supabase
+    .from('class_inputs')
+    .insert({ ...input, user_id: userId });
+  if (error) throw error;
 }
 
+export async function deleteClassInput(id) {
+  await supabase
+    .from('class_inputs')
+    .update({ is_deleted: true })
+    .eq('id', id);
+}
+
+export async function getRecentClassInputs(limit = 3) {
+  const userId = await getUserId();
+  const { data } = await supabase
+    .from('class_inputs')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('is_deleted', false)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  return data || [];
+}
+
+export async function getSessionsThisWeek() {
+  const userId = await getUserId();
+  const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString();
+  const { data } = await supabase
+    .from('class_inputs')
+    .select('id')
+    .eq('user_id', userId)
+    .eq('is_deleted', false)
+    .gte('created_at', weekAgo);
+  return (data || []).length;
+}
+
+export async function getTrainingSessionsThisWeek() {
+  const userId = await getUserId();
+  const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString();
+  const { data } = await supabase
+    .from('training_sessions')
+    .select('id')
+    .eq('user_id', userId)
+    .gte('started_at', weekAgo)
+    .not('completed_at', 'is', null);
+  return (data || []).length;
+}
+
+// ─── Focus Points ────────────────────────────────────────────────────────────
+
 export async function getFocusPoints() {
-  const raw = await AsyncStorage.getItem(KEYS.FOCUS_POINTS);
-  return raw ? JSON.parse(raw) : [];
+  const userId = await getUserId();
+  const { data } = await supabase
+    .from('focus_points')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('is_deleted', false)
+    .eq('is_archived', false)
+    .order('created_at', { ascending: true });
+  return data || [];
 }
 
 export async function saveFocusPoint(fp) {
-  const points = await getFocusPoints();
-  const idx = points.findIndex((p) => p.id === fp.id);
-  if (idx >= 0) {
-    points[idx] = fp;
-  } else {
-    points.push(fp);
+  const userId = await getUserId();
+  if (fp.id) {
+    const { data: existing } = await supabase
+      .from('focus_points')
+      .select('id')
+      .eq('id', fp.id)
+      .single();
+
+    if (existing) {
+      const { id, user_id, created_at, ...updates } = fp;
+      await supabase
+        .from('focus_points')
+        .update(updates)
+        .eq('id', fp.id);
+      return fp.id;
+    }
   }
-  await AsyncStorage.setItem(KEYS.FOCUS_POINTS, JSON.stringify(points));
+
+  const { id, ...rest } = fp;
+  const { data } = await supabase
+    .from('focus_points')
+    .insert({ ...rest, user_id: userId })
+    .select('id')
+    .single();
+  return data?.id;
 }
 
+export async function archiveFocusPoint(id) {
+  await supabase
+    .from('focus_points')
+    .update({ is_archived: true })
+    .eq('id', id);
+}
+
+export async function getClassInputsForFocus(focusName) {
+  const userId = await getUserId();
+  const { data } = await supabase
+    .from('class_inputs')
+    .select('id, created_at, practice_point_1, practice_point_2, priority_score_1, priority_score_2, takeaway, ai_primary_focus, ai_secondary_focus')
+    .eq('user_id', userId)
+    .eq('is_deleted', false)
+    .or(`ai_primary_focus.eq.${focusName},ai_secondary_focus.eq.${focusName}`)
+    .order('created_at', { ascending: false })
+    .limit(5);
+  return data || [];
+}
+
+export async function cacheFocusSummary(focusPointId, summary) {
+  const payload = JSON.stringify({ summary, generated_at: new Date().toISOString() });
+  await supabase
+    .from('focus_points')
+    .update({ current_exercise: payload })
+    .eq('id', focusPointId);
+}
+
+export async function getCachedFocusSummary(focusPointId) {
+  const { data } = await supabase
+    .from('focus_points')
+    .select('current_exercise')
+    .eq('id', focusPointId)
+    .single();
+  if (!data?.current_exercise) return null;
+  try {
+    const parsed = JSON.parse(data.current_exercise);
+    const age = Date.now() - new Date(parsed.generated_at).getTime();
+    if (age > 7 * 86400000) return null; // older than 7 days
+    return parsed.summary;
+  } catch {
+    return null;
+  }
+}
+
+export async function getFocusTrainedCount() {
+  const userId = await getUserId();
+  const { data } = await supabase
+    .from('training_sessions')
+    .select('slot1_focus_id, slot2_focus_id')
+    .eq('user_id', userId)
+    .not('completed_at', 'is', null);
+  const ids = new Set();
+  for (const row of data || []) {
+    if (row.slot1_focus_id) ids.add(row.slot1_focus_id);
+    if (row.slot2_focus_id) ids.add(row.slot2_focus_id);
+  }
+  return ids.size;
+}
+
+// ─── Focus Progress ──────────────────────────────────────────────────────────
+
 export async function getFocusProgress() {
-  const raw = await AsyncStorage.getItem(KEYS.FOCUS_PROGRESS);
-  return raw ? JSON.parse(raw) : [];
+  const userId = await getUserId();
+  const { data } = await supabase
+    .from('focus_progress')
+    .select('*')
+    .eq('user_id', userId);
+  return data || [];
 }
 
 export async function saveFocusProgress(entry) {
-  const progress = await getFocusProgress();
-  progress.push(entry);
-  await AsyncStorage.setItem(KEYS.FOCUS_PROGRESS, JSON.stringify(progress));
+  const userId = await getUserId();
+  await supabase
+    .from('focus_progress')
+    .insert({ ...entry, user_id: userId });
 }
 
 export async function getTopFocusPoints(n = 2) {
-  const points = await getFocusPoints();
+  const [points, progress] = await Promise.all([getFocusPoints(), getFocusProgress()]);
   if (!points.length) return [];
-  const progress = await getFocusProgress();
 
   const scores = {};
   for (const p of progress) {
-    scores[p.focusPointId] = (scores[p.focusPointId] || 0) + p.priorityScore;
+    scores[p.focus_point_id] = (scores[p.focus_point_id] || 0) + p.priority_score;
   }
 
-  return [...points].sort((a, b) => (scores[b.id] || 0) - (scores[a.id] || 0)).slice(0, n);
+  return [...points]
+    .sort((a, b) => (scores[b.id] || 0) - (scores[a.id] || 0))
+    .slice(0, n);
 }
 
 export async function getTopFocusPoint() {
@@ -88,65 +239,103 @@ export async function getTopFocusPoint() {
   return top[0] || null;
 }
 
+export async function getTopFocusPointsWithCounts(n = 3) {
+  const userId = await getUserId();
+  const [points, sessions] = await Promise.all([
+    getFocusPoints(),
+    supabase
+      .from('training_sessions')
+      .select('slot1_focus_id, slot2_focus_id')
+      .eq('user_id', userId)
+      .not('completed_at', 'is', null)
+      .then(({ data }) => data || []),
+  ]);
+
+  const counts = {};
+  for (const s of sessions) {
+    if (s.slot1_focus_id) counts[s.slot1_focus_id] = (counts[s.slot1_focus_id] || 0) + 1;
+    if (s.slot2_focus_id) counts[s.slot2_focus_id] = (counts[s.slot2_focus_id] || 0) + 1;
+  }
+
+  return [...points]
+    .sort((a, b) => (counts[b.id] || 0) - (counts[a.id] || 0))
+    .slice(0, n)
+    .map(p => ({ ...p, count: counts[p.id] || 0 }));
+}
+
 export async function saveSessionCompletion(focusPointId) {
-  const now = Date.now();
   await saveFocusProgress({
-    id: `fpr_session_${now}`,
-    userId: 'user_1',
-    focusPointId,
-    classInputId: null,
-    priorityScore: -5,
+    focus_point_id: focusPointId,
+    class_input_id: null,
+    priority_score: -5,
     completed: true,
-    createdAt: now,
   });
 }
 
-export async function getRecentClassInputs(limit = 3) {
-  const inputs = await getClassInputs();
-  return inputs.sort((a, b) => b.createdAt - a.createdAt).slice(0, limit);
-}
-
-// Returns sessions logged in the last 7 days
-export async function getSessionsThisWeek() {
-  const inputs = await getClassInputs();
-  const weekAgo = Date.now() - 7 * 86400000;
-  return inputs.filter((i) => i.createdAt >= weekAgo).length;
-}
-
-// Returns count of distinct focus points trained
-export async function getFocusTrainedCount() {
-  const points = await getFocusPoints();
-  return points.length;
-}
+// ─── Notes ───────────────────────────────────────────────────────────────────
 
 export async function getNotes() {
-  const raw = await AsyncStorage.getItem(KEYS.NOTES);
-  return raw ? JSON.parse(raw) : [];
+  const userId = await getUserId();
+  const { data } = await supabase
+    .from('notes')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('is_deleted', false)
+    .order('updated_at', { ascending: false });
+  return data || [];
 }
 
 export async function getNoteById(id) {
-  const notes = await getNotes();
-  return notes.find((n) => n.id === id) || null;
+  const { data } = await supabase
+    .from('notes')
+    .select('*')
+    .eq('id', id)
+    .single();
+  return data || null;
 }
 
 export async function saveNote(note) {
-  const notes = await getNotes();
-  const idx = notes.findIndex((n) => n.id === note.id);
-  if (idx >= 0) {
-    notes[idx] = note;
-  } else {
-    notes.push(note);
+  const userId = await getUserId();
+  const { id, user_id, created_at, ...rest } = note;
+
+  if (id) {
+    const { data: existing } = await supabase
+      .from('notes')
+      .select('id')
+      .eq('id', id)
+      .single();
+
+    if (existing) {
+      await supabase
+        .from('notes')
+        .update(rest)
+        .eq('id', id);
+      return id;
+    }
   }
-  await AsyncStorage.setItem(KEYS.NOTES, JSON.stringify(notes));
+
+  const { data } = await supabase
+    .from('notes')
+    .insert({ ...rest, user_id: userId })
+    .select('id')
+    .single();
+  return data?.id;
 }
 
 export async function deleteNote(id) {
-  const notes = await getNotes();
-  const filtered = notes.filter((n) => n.id !== id);
-  await AsyncStorage.setItem(KEYS.NOTES, JSON.stringify(filtered));
+  await supabase
+    .from('notes')
+    .update({ is_deleted: true })
+    .eq('id', id);
 }
 
 export async function getNotesLinkedToClass(classInputId) {
-  const notes = await getNotes();
-  return notes.filter((n) => n.linkedClassInputId === classInputId);
+  const userId = await getUserId();
+  const { data } = await supabase
+    .from('notes')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('linked_class_input_id', classInputId)
+    .eq('is_deleted', false);
+  return data || [];
 }

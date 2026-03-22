@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, ActivityIndicator } from 'react-native';
 import { NavigationContainer, DefaultTheme } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
@@ -19,7 +19,7 @@ import {
   Montserrat_600SemiBold,
   Montserrat_800ExtraBold,
 } from '@expo-google-fonts/montserrat';
-import { seedIfNeeded } from './src/services/storage';
+import { supabase } from './src/lib/supabase';
 import HomeScreen from './src/screens/HomeScreen';
 import FocusScreen from './src/screens/FocusScreen';
 import LogScreen from './src/screens/LogScreen';
@@ -27,10 +27,13 @@ import ProfileScreen from './src/screens/ProfileScreen';
 import ClassDetailScreen from './src/screens/ClassDetailScreen';
 import NoteDetailScreen from './src/screens/NoteDetailScreen';
 import FocusSessionScreen from './src/screens/FocusSessionScreen';
+import LoginScreen from './src/screens/LoginScreen';
+import RegisterScreen from './src/screens/RegisterScreen';
 import CustomTabBar from './src/components/CustomTabBar';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
+const AuthStack = createNativeStackNavigator();
 
 const AppTheme = {
   ...DefaultTheme,
@@ -49,13 +52,45 @@ function MainTabs() {
       <Tab.Screen name="HOME" component={HomeScreen} />
       <Tab.Screen name="TRAIN" component={FocusScreen} />
       <Tab.Screen name="LOG" component={LogScreen} />
-      {/* PROFILE: hidden from tab bar, accessible via profile icon */}
       <Tab.Screen name="PROFILE" component={ProfileScreen} />
     </Tab.Navigator>
   );
 }
 
+function AuthNavigator() {
+  return (
+    <AuthStack.Navigator screenOptions={{ headerShown: false }}>
+      <AuthStack.Screen name="Login" component={LoginScreen} />
+      <AuthStack.Screen name="Register" component={RegisterScreen} />
+    </AuthStack.Navigator>
+  );
+}
+
+function AppNavigator() {
+  return (
+    <Stack.Navigator screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="MainTabs" component={MainTabs} />
+      <Stack.Screen
+        name="ClassDetail"
+        component={ClassDetailScreen}
+        options={{ animation: 'slide_from_right' }}
+      />
+      <Stack.Screen
+        name="NoteDetail"
+        component={NoteDetailScreen}
+        options={{ animation: 'slide_from_right' }}
+      />
+      <Stack.Screen
+        name="FocusSession"
+        component={FocusSessionScreen}
+        options={{ animation: 'slide_from_right' }}
+      />
+    </Stack.Navigator>
+  );
+}
+
 export default function App() {
+  const [session, setSession] = useState(undefined); // undefined = loading
   const [fontsLoaded] = useFonts({
     PlusJakartaSans_300Light,
     PlusJakartaSans_400Regular,
@@ -66,15 +101,21 @@ export default function App() {
     Montserrat_500Medium,
     Montserrat_600SemiBold,
     Montserrat_800ExtraBold,
-    // Add Monument Extended here once you have the font file:
-    // 'MonumentExtended-UltraBold': require('./assets/fonts/MonumentExtended-UltraBold.otf'),
   });
 
   useEffect(() => {
-    seedIfNeeded();
+    supabase.auth.getSession().then(({ data: { session: s } }) => {
+      setSession(s ?? null);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
+      setSession(s ?? null);
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
 
-  if (!fontsLoaded) {
+  if (!fontsLoaded || session === undefined) {
     return (
       <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff' }}>
         <ActivityIndicator color="#FF9D00" />
@@ -86,24 +127,7 @@ export default function App() {
     <SafeAreaProvider>
       <NavigationContainer theme={AppTheme}>
         <StatusBar style="dark" />
-        <Stack.Navigator screenOptions={{ headerShown: false }}>
-          <Stack.Screen name="MainTabs" component={MainTabs} />
-          <Stack.Screen
-            name="ClassDetail"
-            component={ClassDetailScreen}
-            options={{ animation: 'slide_from_right' }}
-          />
-          <Stack.Screen
-            name="NoteDetail"
-            component={NoteDetailScreen}
-            options={{ animation: 'slide_from_right' }}
-          />
-          <Stack.Screen
-            name="FocusSession"
-            component={FocusSessionScreen}
-            options={{ animation: 'slide_from_right' }}
-          />
-        </Stack.Navigator>
+        {session ? <AppNavigator /> : <AuthNavigator />}
       </NavigationContainer>
     </SafeAreaProvider>
   );

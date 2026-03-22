@@ -10,6 +10,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Colors, Fonts, Spacing } from '../theme';
 import { getUser } from '../services/storage';
+import { supabase } from '../lib/supabase';
 import RadarChart from '../components/RadarChart';
 
 function Logo() {
@@ -41,6 +42,11 @@ export default function ProfileScreen({ navigation }) {
     }, [])
   );
 
+  async function handleLogout() {
+    await supabase.auth.signOut();
+    // Auth state change in App.js will handle navigation automatically
+  }
+
   return (
     <SafeAreaView style={styles.safe}>
       {/* Header */}
@@ -63,7 +69,7 @@ export default function ProfileScreen({ navigation }) {
           <Avatar name={user?.name} />
           <Text style={styles.name}>{user?.name || 'Alexandra Lukey'}</Text>
           <Text style={styles.contact}>
-            {user?.email || 'youremail@domain.com'} | {user?.phone || '+01 234 567 89'}
+            {user?.email || 'youremail@domain.com'}
           </Text>
         </View>
 
@@ -72,6 +78,11 @@ export default function ProfileScreen({ navigation }) {
         <View style={styles.chartCard}>
           <RadarChart scores={[0.7, 0.55, 0.82, 0.5, 0.65]} />
         </View>
+
+        {/* Logout */}
+        <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout} activeOpacity={0.8}>
+          <Text style={styles.logoutText}>Log out</Text>
+        </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
   );
@@ -169,5 +180,17 @@ const styles = StyleSheet.create({
   chartCard: {
     backgroundColor: Colors.background,
     alignItems: 'center',
+  },
+  logoutBtn: {
+    marginTop: 40,
+    paddingVertical: 14,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255,68,68,0.08)',
+    alignItems: 'center',
+  },
+  logoutText: {
+    fontFamily: Fonts.jakartaBold,
+    fontSize: 15,
+    color: '#FF4444',
   },
 });
