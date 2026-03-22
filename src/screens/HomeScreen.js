@@ -80,78 +80,79 @@ export default function HomeScreen({ navigation }) {
   return (
     <SafeAreaView style={styles.safe}>
       <View style={styles.container}>
-        {/* Top nav */}
-        <View style={styles.topNav}>
-          <Logo />
-          <TouchableOpacity
-            style={styles.profileIcon}
-            onPress={() => navigation.navigate('PROFILE')}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.profileInitial}>{user?.name ? user.name[0].toUpperCase() : 'A'}</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* Subtitle + Title */}
-        <Text style={styles.subtitle}>
-          {getGreeting()} {user?.name || 'Alex'}
-        </Text>
-        <Text style={styles.title}>Your next focus is ready</Text>
-
-        {/* Nudge message */}
-        {!!nudgeMessage && (
-          <View style={styles.nudgeCard}>
-            <Text style={styles.nudgeText}>{nudgeMessage}</Text>
+        {/* Top section */}
+        <View>
+          <View style={styles.topNav}>
+            <Logo />
+            <TouchableOpacity
+              style={styles.profileIcon}
+              onPress={() => navigation.navigate('PROFILE')}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.profileInitial}>{user?.name ? user.name[0].toUpperCase() : 'A'}</Text>
+            </TouchableOpacity>
           </View>
-        )}
 
-        {/* Where you are now card */}
-        <View style={styles.coachCard}>
-          <Text style={styles.coachCardTitle}>Where you are now</Text>
-          <Text style={styles.coachCardBody} numberOfLines={3}>{coachSummary}</Text>
-        </View>
+          <Text style={styles.subtitle}>
+            {getGreeting()} {user?.name || 'Alex'}
+          </Text>
+          <Text style={styles.title}>Your next focus is ready</Text>
 
-        {/* Quick Actions */}
-        <Text style={styles.sectionTitle}>Quick Actions</Text>
-        <View style={styles.actionsRow}>
-          {/* Main Focus button */}
-          <TouchableOpacity
-            style={styles.mainFocusBtn}
-            onPress={() => navigation.navigate('TRAIN')}
-            activeOpacity={0.88}
-          >
-            <View style={styles.mainFocusLeft}>
-              <Text style={styles.mainFocusLabel}>Main Focus</Text>
-              <Text style={styles.mainFocusName} numberOfLines={1}>
-                {slot1?.name || 'No focus yet'}
-              </Text>
+          {!!nudgeMessage && (
+            <View style={styles.nudgeCard}>
+              <Text style={styles.nudgeText}>{nudgeMessage}</Text>
             </View>
-            <Text style={styles.mainFocusArrow}>→</Text>
-          </TouchableOpacity>
+          )}
 
-          {/* Log Class button */}
-          <TouchableOpacity
-            style={styles.logClassBtn}
-            onPress={() => setLogModalVisible(true)}
-            activeOpacity={0.88}
-          >
-            <Text style={styles.logClassText}>Log{'\n'}Class</Text>
-          </TouchableOpacity>
+          <View style={styles.coachCard}>
+            <Text style={styles.coachCardTitle}>Where you are now</Text>
+            <Text style={styles.coachCardBody} numberOfLines={3}>{coachSummary}</Text>
+          </View>
         </View>
 
-        {/* Training Rhythm */}
-        <Text style={[styles.sectionTitle, { marginTop: 32 }]}>Your Training Rhythm</Text>
-        <View style={styles.statsRow}>
-          <StatCard
-            number={sessionsThisWeek}
-            label="Training this week"
-            dotColor={Colors.activeFocus}
-          />
-          <StatCard
-            number={focusCount}
-            label="Focus trained"
-            dotColor={Colors.orange}
-          />
+        {/* Middle: Quick Actions */}
+        <View>
+          <Text style={styles.sectionTitle}>Quick Actions</Text>
+          <View style={styles.actionsRow}>
+            <TouchableOpacity
+              style={styles.mainFocusBtn}
+              onPress={() => navigation.navigate('TRAIN')}
+              activeOpacity={0.88}
+            >
+              <View style={styles.mainFocusLeft}>
+                <Text style={styles.mainFocusLabel}>Main Focus</Text>
+                <Text style={styles.mainFocusName} numberOfLines={1}>
+                  {slot1?.name || 'No focus yet'}
+                </Text>
+              </View>
+              <Text style={styles.mainFocusArrow}>→</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.logClassBtn}
+              onPress={() => setLogModalVisible(true)}
+              activeOpacity={0.88}
+            >
+              <Text style={styles.logClassText}>Log{'\n'}Class</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* Bottom: Training Rhythm */}
+        <View>
+          <Text style={styles.sectionTitle}>Your Training Rhythm</Text>
+          <View style={styles.statsRow}>
+            <StatCard
+              number={sessionsThisWeek}
+              label="Training this week"
+              dotColor={Colors.activeFocus}
+            />
+            <StatCard
+              number={focusCount}
+              label="Focus trained"
+              dotColor={Colors.orange}
+            />
+          </View>
         </View>
       </View>
 
@@ -183,7 +184,7 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     marginTop: 16,
-    marginBottom: 20,
+    marginBottom: 16,
   },
   logo: {
     fontFamily: Fonts.monument,
@@ -210,13 +211,13 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.jakartaMedium,
     fontSize: 12,
     color: Colors.secondary,
-    marginBottom: 4,
+    marginBottom: 3,
   },
   title: {
     fontFamily: Fonts.jakartaExtraBold,
     fontSize: 16,
     color: Colors.black,
-    marginBottom: 20,
+    marginBottom: 28,
   },
 
   // Nudge card
@@ -242,7 +243,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     paddingHorizontal: 18,
     paddingVertical: 14,
-    marginBottom: 28,
+    marginBottom: 20,
     shadowColor: '#C460FF',
     shadowOpacity: 0.08,
     shadowOffset: { width: 0, height: 4 },
@@ -268,7 +269,7 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.jakartaExtraBold,
     fontSize: 15,
     color: Colors.secondary,
-    marginBottom: 14,
+    marginBottom: 10,
   },
 
   // Quick Actions
