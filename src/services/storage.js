@@ -145,3 +145,8 @@ export async function deleteNote(id) {
   const filtered = notes.filter((n) => n.id !== id);
   await AsyncStorage.setItem(KEYS.NOTES, JSON.stringify(filtered));
 }
+
+export async function getNotesLinkedToClass(classInputId) {
+  const notes = await getNotes();
+  return notes.filter((n) => n.linkedClassInputId === classInputId);
+}

@@ -1,6 +1,6 @@
 import React, { useEffect } from 'react';
 import { View, ActivityIndicator } from 'react-native';
-import { NavigationContainer } from '@react-navigation/native';
+import { NavigationContainer, DefaultTheme } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
@@ -32,14 +32,22 @@ import CustomTabBar from './src/components/CustomTabBar';
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
 
+const AppTheme = {
+  ...DefaultTheme,
+  colors: { ...DefaultTheme.colors, background: '#FFFFFF' },
+};
+
 function MainTabs() {
   return (
     <Tab.Navigator
       tabBar={(props) => <CustomTabBar {...props} />}
-      screenOptions={{ headerShown: false }}
+      screenOptions={{
+        headerShown: false,
+        tabBarStyle: { backgroundColor: 'transparent', borderTopWidth: 0, elevation: 0 },
+      }}
     >
       <Tab.Screen name="HOME" component={HomeScreen} />
-      <Tab.Screen name="FOCUS" component={FocusScreen} />
+      <Tab.Screen name="TRAIN" component={FocusScreen} />
       <Tab.Screen name="LOG" component={LogScreen} />
       {/* PROFILE: hidden from tab bar, accessible via profile icon */}
       <Tab.Screen name="PROFILE" component={ProfileScreen} />
@@ -76,7 +84,7 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <NavigationContainer>
+      <NavigationContainer theme={AppTheme}>
         <StatusBar style="dark" />
         <Stack.Navigator screenOptions={{ headerShown: false }}>
           <Stack.Screen name="MainTabs" component={MainTabs} />

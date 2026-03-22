@@ -8,7 +8,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Colors, Fonts, Spacing } from '../theme';
-import { getClassInputs, getFocusPoints } from '../services/storage';
+import { getClassInputs, getFocusPoints, getNotesLinkedToClass } from '../services/storage';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -21,12 +21,16 @@ export default function ClassDetailScreen({ route, navigation }) {
   const { inputId } = route.params;
   const [item, setItem] = useState(null);
   const [focusMap, setFocusMap] = useState({});
+  const [linkedNotes, setLinkedNotes] = useState([]);
 
   useEffect(() => {
     async function load() {
-      const [inputs, points] = await Promise.all([getClassInputs(), getFocusPoints()]);
+      const [inputs, points, notes] = await Promise.all([
+        getClassInputs(), getFocusPoints(), getNotesLinkedToClass(inputId),
+      ]);
       const found = inputs.find((i) => i.id === inputId);
       setItem(found || null);
+      setLinkedNotes(notes);
       const map = {};
       for (const p of points) map[p.id] = p;
       setFocusMap(map);
@@ -116,6 +120,33 @@ export default function ClassDetailScreen({ route, navigation }) {
             <Text style={styles.aiBody}>{primaryFp.description}</Text>
           </View>
         ) : null}
+
+        {/* Linked notes */}
+        {linkedNotes.length > 0 && (
+          <View style={styles.notesSection}>
+            <Text style={styles.notesSectionTitle}>Linked notes</Text>
+            {linkedNotes.map((note) => (
+              <TouchableOpacity
+                key={note.id}
+                style={styles.noteItem}
+                onPress={() => navigation.navigate('NoteDetail', { noteId: note.id })}
+                activeOpacity={0.75}
+              >
+                <View style={styles.noteAccent} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.noteTitle}>{note.title || 'Untitled'}</Text>
+                  {note.content ? (
+                    <Text style={styles.notePreview} numberOfLines={1}>{note.content}</Text>
+                  ) : null}
+                </View>
+                {note.videoClips?.length > 0 && (
+                  <Text style={styles.noteClipCount}>{note.videoClips.length} clip{note.videoClips.length > 1 ? 's' : ''}</Text>
+                )}
+                <Text style={styles.noteArrow}>→</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        )}
       </ScrollView>
     </SafeAreaView>
   );
@@ -130,12 +161,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.side,
     paddingTop: 12,
     paddingBottom: 8,
-    borderBottomWidth: 0.5,
-    borderBottomColor: 'rgba(17,12,17,0.08)',
+    borderBottomWidth: 0,
   },
   backBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  backArrow: { fontSize: 18, color: Colors.activeLog },
-  backLabel: { fontFamily: Fonts.jakartaMedium, fontSize: 15, color: Colors.activeLog },
+  backArrow: { fontSize: 16, color: Colors.black },
+  backLabel: { fontFamily: Fonts.jakartaMedium, fontSize: 15, color: Colors.black },
   headerTitle: { fontFamily: Fonts.jakartaExtraBold, fontSize: 15, color: Colors.black },
   headerRight: { width: 60 },
   content: { paddingHorizontal: Spacing.side, paddingTop: 20, paddingBottom: 40 },
@@ -143,7 +173,8 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.jakartaMedium,
     fontSize: 12,
     color: Colors.secondary,
-    marginBottom: 18,
+    marginBottom: 24,
+    letterSpacing: 0.3,
   },
   card: {
     backgroundColor: Colors.statCardBg,
@@ -192,9 +223,9 @@ const styles = StyleSheet.create({
   },
   urgencyDots: { flexDirection: 'row', gap: 5 },
   urgencyDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
     backgroundColor: 'rgba(17,12,17,0.12)',
   },
   aiCard: {
@@ -215,4 +246,33 @@ const styles = StyleSheet.create({
     color: Colors.secondary,
     lineHeight: 20,
   },
+  notesSection: { marginTop: 24 },
+  notesSectionTitle: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 13,
+    color: Colors.black,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 10,
+  },
+  noteItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: Colors.statCardBg,
+    borderRadius: 10,
+    padding: 12,
+    borderWidth: 0.5,
+    borderColor: Colors.statCardBorder,
+    marginBottom: 8,
+  },
+  noteAccent: {
+    width: 3, alignSelf: 'stretch',
+    backgroundColor: Colors.activeHome,
+    borderRadius: 2,
+  },
+  noteTitle: { fontFamily: Fonts.jakartaBold, fontSize: 14, color: Colors.black, marginBottom: 2 },
+  notePreview: { fontFamily: Fonts.jakartaRegular, fontSize: 12, color: Colors.secondary },
+  noteClipCount: { fontFamily: Fonts.jakartaRegular, fontSize: 11, color: Colors.secondary },
+  noteArrow: { fontFamily: Fonts.jakartaBold, fontSize: 14, color: Colors.secondary },
 });

@@ -5,7 +5,7 @@ import { Colors, Fonts } from '../theme';
 
 const TAB_COLORS = {
   HOME: Colors.activeHome,
-  FOCUS: Colors.activeFocus,
+  TRAIN: Colors.activeFocus,
   LOG: Colors.activeLog,
 };
 
@@ -15,7 +15,6 @@ export default function CustomTabBar({ state, navigation }) {
   const insets = useSafeAreaInsets();
   const visibleRoutes = state.routes.filter((r) => !HIDDEN_TABS.includes(r.name));
 
-  // Don't render tab bar on hidden screens
   if (HIDDEN_TABS.includes(state.routes[state.index]?.name)) return null;
 
   return (
@@ -33,12 +32,7 @@ export default function CustomTabBar({ state, navigation }) {
               onPress={() => navigation.navigate(route.name)}
               activeOpacity={0.8}
             >
-              <Text
-                style={[
-                  styles.tabText,
-                  { color: isFocused ? activeColor : Colors.inactive },
-                ]}
-              >
+              <Text style={[styles.tabText, { color: isFocused ? activeColor : Colors.inactive }]}>
                 {route.name}
               </Text>
             </TouchableOpacity>
@@ -51,33 +45,34 @@ export default function CustomTabBar({ state, navigation }) {
 
 const styles = StyleSheet.create({
   wrapper: {
-    paddingHorizontal: 36,
-    backgroundColor: Colors.background,
+    paddingHorizontal: 20,
+    backgroundColor: 'transparent',
   },
   container: {
     flexDirection: 'row',
-    backgroundColor: Colors.tabBarBg,
-    borderRadius: 16,
-    padding: 4,
-    height: 38,
+    backgroundColor: 'rgba(116,116,128,0.10)',
+    borderRadius: 36,
+    padding: 5,
+    height: 58,
   },
   tab: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 12,
+    borderRadius: 30,
   },
   activeTab: {
-    backgroundColor: Colors.activeTabBg,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 30,
     shadowColor: '#000',
-    shadowOpacity: 0.06,
-    shadowOffset: { width: 0, height: 1 },
-    shadowRadius: 4,
-    elevation: 2,
+    shadowOpacity: 0.10,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 8,
+    elevation: 3,
   },
   tabText: {
     fontFamily: Fonts.monument,
-    fontSize: 12,
-    letterSpacing: 0.2,
+    fontSize: 13,
+    letterSpacing: 0.4,
   },
 });

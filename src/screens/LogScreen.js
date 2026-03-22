@@ -18,7 +18,13 @@ import LogModal from '../components/LogModal';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-function formatDate(ts) {
+function relativeDate(ts) {
+  const now = Date.now();
+  const diff = now - ts;
+  const days = Math.floor(diff / 86400000);
+  if (days === 0) return 'Today';
+  if (days === 1) return 'Yesterday';
+  if (days < 7) return `${days} days ago`;
   const d = new Date(ts);
   return `${MONTHS[d.getMonth()]} ${d.getDate()}`;
 }
@@ -30,32 +36,66 @@ function Logo() {
 function ClassItem({ item, focusMap, onPress }) {
   const fp = focusMap[item.ai_primary_focus];
   const sfp = focusMap[item.ai_secondary_focus];
+  const hasTwo = sfp && item.input2;
 
   return (
-    <TouchableOpacity style={styles.logItem} onPress={onPress} activeOpacity={0.7}>
-      <Text style={styles.dateText}>{formatDate(item.createdAt)}</Text>
-      {fp && <Text style={styles.focusTitle}>{fp.label}</Text>}
-      <Text style={styles.descText}>1. {item.input1}</Text>
-      {sfp && item.input2 ? (
-        <>
-          <Text style={[styles.focusTitle, { marginTop: 6 }]}>{sfp.label}</Text>
-          <Text style={styles.descText}>2. {item.input2}</Text>
-        </>
-      ) : null}
+    <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.75}>
+      <View style={[styles.cardAccent, { backgroundColor: Colors.activeLog }]} />
+      <View style={styles.cardBody}>
+        <View style={styles.cardHeader}>
+          <Text style={styles.cardDate}>{relativeDate(item.createdAt)}</Text>
+          {hasTwo && (
+            <View style={styles.countBadge}>
+              <Text style={styles.countBadgeText}>2 points</Text>
+            </View>
+          )}
+        </View>
+        <Text style={styles.cardFocus}>{item.title || (fp ? fp.label : item.input1.split(' ').slice(0, 4).join(' '))}</Text>
+        <Text style={styles.cardInput} numberOfLines={2}>{item.input1}</Text>
+        {hasTwo && (
+          <Text style={styles.cardSecondary} numberOfLines={1}>+ {sfp.label}</Text>
+        )}
+      </View>
     </TouchableOpacity>
   );
 }
 
 function NoteItem({ item, onPress }) {
+  const hasVideo = item.videoClips?.length > 0;
+  const isLinked = !!item.linkedClassInputId;
+
   return (
-    <TouchableOpacity style={styles.logItem} onPress={onPress} activeOpacity={0.7}>
-      <Text style={styles.dateText}>{formatDate(item.updatedAt || item.createdAt)}</Text>
-      {item.title ? <Text style={styles.focusTitle}>{item.title}</Text> : null}
-      {item.content ? (
-        <Text style={styles.descText} numberOfLines={2}>
-          {item.content}
-        </Text>
-      ) : null}
+    <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.75}>
+      <View style={[styles.cardAccent, { backgroundColor: '#5788E6' }]} />
+      <View style={styles.cardBody}>
+        <View style={styles.cardHeader}>
+          <Text style={styles.cardDate}>{relativeDate(item.updatedAt || item.createdAt)}</Text>
+          <View style={styles.noteBadges}>
+            {hasVideo && (
+              <View style={[styles.countBadge, { backgroundColor: 'rgba(87,136,230,0.12)' }]}>
+                <Text style={[styles.countBadgeText, { color: '#5788E6' }]}>
+                  {item.videoClips.length} clip{item.videoClips.length > 1 ? 's' : ''}
+                </Text>
+              </View>
+            )}
+            {isLinked && (
+              <View style={[styles.countBadge, { backgroundColor: 'rgba(76,175,80,0.1)' }]}>
+                <Text style={[styles.countBadgeText, { color: Colors.activeLog }]}>Linked</Text>
+              </View>
+            )}
+          </View>
+        </View>
+        {item.title ? (
+          <Text style={styles.cardFocus}>{item.title}</Text>
+        ) : (
+          <Text style={[styles.cardFocus, { color: Colors.secondary, fontFamily: Fonts.jakartaRegular }]}>
+            Untitled
+          </Text>
+        )}
+        {item.content ? (
+          <Text style={styles.cardInput} numberOfLines={2}>{item.content}</Text>
+        ) : null}
+      </View>
     </TouchableOpacity>
   );
 }
@@ -68,17 +108,11 @@ export default function LogScreen({ navigation }) {
   const [search, setSearch] = useState('');
   const [modalVisible, setModalVisible] = useState(false);
 
-  // Swipe-right gesture on NOTES tab to create new note
-  const swipeStartX = useRef(0);
   const panResponder = useRef(
     PanResponder.create({
-      onStartShouldSetPanResponder: () => activeTab === 'NOTES',
-      onMoveShouldSetPanResponder: (_, g) => activeTab === 'NOTES' && Math.abs(g.dx) > 10 && Math.abs(g.dy) < 20,
-      onPanResponderGrant: (e) => {
-        swipeStartX.current = e.nativeEvent.pageX;
-      },
-      onPanResponderRelease: (e, g) => {
-        if (activeTab === 'NOTES' && g.dx > 60) {
+      onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dx) > 10 && Math.abs(g.dy) < 20,
+      onPanResponderRelease: (_, g) => {
+        if (g.dx > 60) {
           navigation.navigate('NoteDetail', {});
         }
       },
@@ -98,11 +132,7 @@ export default function LogScreen({ navigation }) {
     setFocusMap(map);
   }
 
-  useFocusEffect(
-    useCallback(() => {
-      load();
-    }, [])
-  );
+  useFocusEffect(useCallback(() => { load(); }, []));
 
   function handleAdd() {
     if (activeTab === 'NOTES') {
@@ -116,11 +146,7 @@ export default function LogScreen({ navigation }) {
     ? inputs.filter((i) => {
         const q = search.toLowerCase();
         const fp = focusMap[i.ai_primary_focus];
-        return (
-          i.input1?.toLowerCase().includes(q) ||
-          i.input2?.toLowerCase().includes(q) ||
-          fp?.label?.toLowerCase().includes(q)
-        );
+        return i.input1?.toLowerCase().includes(q) || i.input2?.toLowerCase().includes(q) || fp?.label?.toLowerCase().includes(q);
       })
     : inputs;
 
@@ -133,31 +159,25 @@ export default function LogScreen({ navigation }) {
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
-      {/* Header */}
       <View style={styles.header}>
         <Logo />
-        <TouchableOpacity
-          style={styles.profileIcon}
-          onPress={() => navigation.navigate('PROFILE')}
-          activeOpacity={0.8}
-        >
+        <TouchableOpacity style={styles.profileIcon} onPress={() => navigation.navigate('PROFILE')} activeOpacity={0.8}>
           <Text style={styles.profileInitial}>A</Text>
         </TouchableOpacity>
       </View>
 
-      {/* CLASS / NOTES tab switcher */}
+      {/* Tab switcher */}
       <View style={styles.tabRow}>
         {['CLASS', 'NOTES'].map((tab) => (
           <TouchableOpacity
             key={tab}
-            style={styles.tabItem}
+            style={[styles.tabPill, activeTab === tab && styles.tabPillActive]}
             onPress={() => setActiveTab(tab)}
             activeOpacity={0.7}
           >
-            <Text style={[styles.tabText, activeTab === tab && styles.tabTextActive]}>
+            <Text style={[styles.tabPillText, activeTab === tab && styles.tabPillTextActive]}>
               {tab}
             </Text>
-            {activeTab === tab && <View style={styles.tabUnderline} />}
           </TouchableOpacity>
         ))}
       </View>
@@ -169,66 +189,49 @@ export default function LogScreen({ navigation }) {
             data={filteredInputs}
             keyExtractor={(item) => item.id}
             renderItem={({ item }) => (
-              <ClassItem
-                item={item}
-                focusMap={focusMap}
-                onPress={() => navigation.navigate('ClassDetail', { inputId: item.id })}
-              />
+              <ClassItem item={item} focusMap={focusMap} onPress={() => navigation.navigate('ClassDetail', { inputId: item.id })} />
             )}
             contentContainerStyle={styles.listContent}
             showsVerticalScrollIndicator={false}
-            ListEmptyComponent={
-              <View style={styles.empty}>
-                <Text style={styles.emptyText}>No logs yet. Tap ADD to log your first class.</Text>
-              </View>
-            }
+            ListEmptyComponent={<EmptyState text="No class logs yet. Tap ADD to log your first session." />}
           />
         ) : (
           <FlatList
             data={filteredNotes}
             keyExtractor={(item) => item.id}
             renderItem={({ item }) => (
-              <NoteItem
-                item={item}
-                onPress={() => navigation.navigate('NoteDetail', { noteId: item.id })}
-              />
+              <NoteItem item={item} onPress={() => navigation.navigate('NoteDetail', { noteId: item.id })} />
             )}
             contentContainerStyle={styles.listContent}
             showsVerticalScrollIndicator={false}
-            ListEmptyComponent={
-              <View style={styles.empty}>
-                <Text style={styles.emptyText}>No notes yet. Tap ADD or swipe right to create one.</Text>
-              </View>
-            }
+            ListEmptyComponent={<EmptyState text="No notes yet. Tap ADD or swipe right to create one." />}
           />
         )}
       </View>
 
-      {/* Bottom bar: search + ADD */}
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={90}
-      >
+      {/* Bottom bar */}
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={90}>
         <View style={styles.bottomBar}>
           <View style={styles.searchWrap}>
-            <Text style={styles.searchIcon}>🔍</Text>
+            <Text style={styles.searchIcon}>⌕</Text>
             <TextInput
               style={styles.searchInput}
               value={search}
               onChangeText={setSearch}
               placeholder="Search..."
-              placeholderTextColor={Colors.secondary}
+              placeholderTextColor="#ACADB9"
               clearButtonMode="while-editing"
             />
           </View>
           <TouchableOpacity
-            style={styles.addBtn}
+            style={[styles.addBtn, { backgroundColor: activeTab === 'CLASS' ? '#E3FFA1' : '#DDE3FF' }]}
             onPress={handleAdd}
             activeOpacity={0.85}
           >
             <Text style={styles.addBtnText}>ADD</Text>
-            <View style={styles.addPlusCircle}>
-              <Text style={styles.addPlus}>+</Text>
+            <View style={[styles.addBtnCircle, { backgroundColor: activeTab === 'CLASS' ? '#009B12' : '#5788E6' }]}>
+              <View style={styles.addBtnPlusH} />
+              <View style={styles.addBtnPlusV} />
             </View>
           </TouchableOpacity>
         </View>
@@ -237,12 +240,17 @@ export default function LogScreen({ navigation }) {
       <LogModal
         visible={modalVisible}
         onClose={() => setModalVisible(false)}
-        onSubmitted={() => {
-          setModalVisible(false);
-          load();
-        }}
+        onSubmitted={() => { setModalVisible(false); load(); }}
       />
     </SafeAreaView>
+  );
+}
+
+function EmptyState({ text }) {
+  return (
+    <View style={styles.empty}>
+      <Text style={styles.emptyText}>{text}</Text>
+    </View>
   );
 }
 
@@ -255,147 +263,184 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: Spacing.side,
     paddingTop: 16,
-    paddingBottom: 12,
+    paddingBottom: 14,
   },
-  logo: {
-    fontFamily: Fonts.monument,
-    fontSize: 20,
-    color: Colors.black,
-    letterSpacing: 1,
-  },
+  logo: { fontFamily: Fonts.monument, fontSize: 20, color: Colors.black, letterSpacing: 1 },
   profileIcon: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
+    width: 34, height: 34, borderRadius: 17,
     backgroundColor: Colors.profileIcon,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: 'center', justifyContent: 'center',
   },
-  profileInitial: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 14,
-    color: '#7A4A00',
-  },
+  profileInitial: { fontFamily: Fonts.jakartaBold, fontSize: 14, color: '#7A4A00' },
 
-  // CLASS / NOTES switcher
+  // Tab switcher — pill style
   tabRow: {
     flexDirection: 'row',
     paddingHorizontal: Spacing.side,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(17,12,17,0.06)',
-    marginBottom: 8,
+    marginBottom: 16,
+    gap: 8,
   },
-  tabItem: {
-    marginRight: 28,
-    paddingBottom: 10,
-    alignItems: 'center',
+  tabPill: {
+    paddingHorizontal: 18,
+    paddingVertical: 8,
+    borderRadius: 10,
+    backgroundColor: Colors.statCardBg,
+    borderWidth: 0.5,
+    borderColor: Colors.statCardBorder,
   },
-  tabText: {
+  tabPillActive: {
+    backgroundColor: Colors.black,
+    borderColor: Colors.black,
+  },
+  tabPillText: {
     fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 13,
+    fontSize: 12,
     color: Colors.secondary,
     letterSpacing: 0.5,
   },
-  tabTextActive: {
-    color: Colors.activeLog,
-  },
-  tabUnderline: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    height: 2,
-    backgroundColor: Colors.activeLog,
-    borderRadius: 1,
+  tabPillTextActive: {
+    color: Colors.white,
   },
 
-  // List
+  // Cards
   listContent: {
     paddingHorizontal: Spacing.side,
     paddingBottom: 16,
+    gap: 10,
   },
-  logItem: {
+  card: {
+    flexDirection: 'row',
+    backgroundColor: Colors.statCardBg,
+    borderRadius: 14,
+    overflow: 'hidden',
+    borderWidth: 0.5,
+    borderColor: Colors.statCardBorder,
+    shadowColor: '#000',
+    shadowOpacity: 0.04,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 8,
+    elevation: 1,
+  },
+  cardAccent: {
+    width: 4,
+  },
+  cardBody: {
+    flex: 1,
+    paddingHorizontal: 14,
     paddingVertical: 12,
-    borderBottomWidth: 0.5,
-    borderBottomColor: 'rgba(17,12,17,0.06)',
   },
-  dateText: {
+  cardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 5,
+  },
+  cardDate: {
     fontFamily: Fonts.jakartaMedium,
     fontSize: 11,
-    color: Colors.activeLog,
-    marginBottom: 2,
+    color: Colors.secondary,
   },
-  focusTitle: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 15,
+  noteBadges: { flexDirection: 'row', gap: 5 },
+  countBadge: {
+    backgroundColor: 'rgba(76,175,80,0.1)',
+    borderRadius: 10,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+  },
+  countBadgeText: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 10,
     color: Colors.activeLog,
+  },
+  cardFocus: {
+    fontFamily: Fonts.jakartaBold,
+    fontSize: 14,
+    color: Colors.black,
     marginBottom: 3,
   },
-  descText: {
+  cardInput: {
     fontFamily: Fonts.jakartaRegular,
     fontSize: 13,
     color: Colors.secondary,
     lineHeight: 18,
   },
-  empty: { alignItems: 'center', paddingTop: 60 },
-  emptyText: { fontFamily: Fonts.jakartaRegular, fontSize: 14, color: Colors.secondary },
+  cardSecondary: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 12,
+    color: Colors.secondary,
+    marginTop: 4,
+    fontStyle: 'italic',
+  },
 
-  // Bottom search + ADD bar
+  empty: { alignItems: 'center', paddingTop: 60 },
+  emptyText: { fontFamily: Fonts.jakartaRegular, fontSize: 14, color: Colors.secondary, textAlign: 'center', lineHeight: 22 },
+
+  // Bottom bar
   bottomBar: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: Spacing.side,
-    paddingVertical: 12,
-    gap: 12,
+    paddingVertical: 10,
+    gap: 10,
     borderTopWidth: 0.5,
-    borderTopColor: 'rgba(17,12,17,0.06)',
+    borderTopColor: Colors.statCardBorder,
     backgroundColor: Colors.background,
   },
   searchWrap: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F5F5F5',
-    borderRadius: 20,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    gap: 8,
+    height: 53,
+    backgroundColor: 'rgba(46,46,46,0.03)',
+    borderRadius: 18,
+    paddingLeft: 18,
+    paddingRight: 12,
+    gap: 10,
   },
-  searchIcon: { fontSize: 13 },
+  searchIcon: { fontSize: 20, color: '#006FFD' },
   searchInput: {
     flex: 1,
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 13,
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 14,
     color: Colors.black,
+    letterSpacing: -0.28,
     padding: 0,
   },
   addBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: Colors.activeLog,
-    borderRadius: 24,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
+    width: 119,
+    height: 53,
+    borderRadius: 22,
+    paddingLeft: 14,
+    paddingRight: 5,
     gap: 6,
   },
   addBtnText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 13,
-    color: Colors.white,
-    letterSpacing: 0.5,
+    fontFamily: Fonts.monument,
+    fontSize: 16,
+    color: '#000000',
+    flex: 1,
   },
-  addPlusCircle: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: 'rgba(255,255,255,0.3)',
+  addBtnCircle: {
+    width: 43,
+    height: 43,
+    borderRadius: 1000,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  addPlus: {
-    color: Colors.white,
-    fontSize: 14,
-    fontWeight: 'bold',
-    lineHeight: 18,
+  addBtnPlusH: {
+    position: 'absolute',
+    width: 17,
+    height: 3,
+    borderRadius: 2,
+    backgroundColor: '#fff',
+  },
+  addBtnPlusV: {
+    position: 'absolute',
+    width: 3,
+    height: 17,
+    borderRadius: 2,
+    backgroundColor: '#fff',
   },
 });

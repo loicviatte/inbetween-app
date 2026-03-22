@@ -17,12 +17,17 @@ function Logo() {
   return <Text style={styles.logo}>EE</Text>;
 }
 
-function FocusCard({ point, rank, onPress }) {
+function FocusCard({ point, rank, onPress, recommended, compact }) {
   const isTop = rank < 2;
 
-  return (
+  const inner = (
     <TouchableOpacity
-      style={[styles.focusCard, isTop ? styles.focusCardDark : styles.focusCardLight]}
+      style={[
+        styles.focusCard,
+        isTop ? styles.focusCardDark : styles.focusCardLight,
+        recommended && styles.focusCardInner,
+        compact && styles.focusCardCompact,
+      ]}
       onPress={onPress}
       activeOpacity={0.85}
     >
@@ -31,29 +36,29 @@ function FocusCard({ point, rank, onPress }) {
           {RANK_LABELS[rank] || `#${rank + 1}`}
         </Text>
         <View style={[styles.badge, !isTop && styles.badgeLight]}>
-          <Text style={[styles.badgeText, !isTop && styles.badgeTextLight]}>
+          <Text style={[styles.badgeText, !isTop && styles.badgeTextLight, compact && styles.badgeTextCompact]}>
             {point.count}× trained
           </Text>
         </View>
       </View>
-      <Text style={[styles.focusCardName, !isTop && styles.focusCardNameLight]}>
+      <Text style={[styles.focusCardName, !isTop && styles.focusCardNameLight, compact && styles.focusCardNameCompact]}>
         {point.label}
       </Text>
-      {point.description ? (
-        <Text
-          style={[styles.focusCardDesc, !isTop && styles.focusCardDescLight]}
-          numberOfLines={2}
-        >
-          {point.description}
-        </Text>
-      ) : null}
-      <View style={[styles.chooseRow]}>
-        <Text style={[styles.chooseText, !isTop && styles.chooseTextLight]}>
-          Choose this focus →
-        </Text>
-      </View>
     </TouchableOpacity>
   );
+
+  if (recommended) {
+    return (
+      <View style={styles.recommendedOuter}>
+        <View style={styles.recommendedHeader}>
+          <Text style={styles.recommendedLabel}>RECOMMENDED</Text>
+        </View>
+        {inner}
+      </View>
+    );
+  }
+
+  return inner;
 }
 
 export default function FocusScreen({ navigation }) {
@@ -107,30 +112,19 @@ export default function FocusScreen({ navigation }) {
             point={point}
             rank={i}
             onPress={() => openSession(point, i)}
+            recommended={i === 0}
+            compact={i === 1}
           />
         ))}
 
-        {/* Remaining focus points */}
+        {/* Next focus points — display only, not clickable */}
         {rest.length > 0 && (
           <>
-            <Text style={styles.otherTitle}>Other focus areas</Text>
-            {rest.map((point, i) => (
-              <TouchableOpacity
-                key={point.id}
-                style={styles.otherItem}
-                onPress={() => openSession(point, i + 2)}
-                activeOpacity={0.7}
-              >
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.otherName}>{point.label}</Text>
-                  {point.description ? (
-                    <Text style={styles.otherDesc} numberOfLines={1}>
-                      {point.description}
-                    </Text>
-                  ) : null}
-                </View>
-                <Text style={styles.otherArrow}>→</Text>
-              </TouchableOpacity>
+            <Text style={styles.otherTitle}>Next focus points</Text>
+            {rest.map((point) => (
+              <View key={point.id} style={styles.otherItem}>
+                <Text style={styles.otherName}>{point.label}</Text>
+              </View>
             ))}
           </>
         )}
@@ -197,6 +191,26 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
 
+  // Recommended wrapper
+  recommendedOuter: {
+    borderWidth: 2,
+    borderColor: Colors.orange,
+    borderRadius: 18,
+    marginBottom: 14,
+    overflow: 'hidden',
+  },
+  recommendedHeader: {
+    backgroundColor: Colors.orange,
+    paddingHorizontal: 14,
+    paddingVertical: 5,
+  },
+  recommendedLabel: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 10,
+    color: '#FFFFFF',
+    letterSpacing: 1,
+  },
+
   // Focus card — dark (top 2)
   focusCard: {
     borderRadius: 14,
@@ -204,8 +218,21 @@ const styles = StyleSheet.create({
     paddingVertical: 18,
     marginBottom: 14,
   },
+  focusCardInner: {
+    borderRadius: 0,
+    marginBottom: 0,
+  },
+  focusCardCompact: {
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
   focusCardDark: {
     backgroundColor: Colors.focusCard,
+    shadowColor: '#000',
+    shadowOpacity: 0.15,
+    shadowOffset: { width: 0, height: 6 },
+    shadowRadius: 16,
+    elevation: 6,
   },
   focusCardLight: {
     backgroundColor: Colors.statCardBg,
@@ -246,12 +273,16 @@ const styles = StyleSheet.create({
   },
   focusCardName: {
     fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 22,
+    fontSize: 20,
     color: Colors.white,
     marginBottom: 8,
   },
   focusCardNameLight: {
     color: Colors.black,
+  },
+  focusCardNameCompact: {
+    fontSize: 14,
+    marginBottom: 5,
   },
   focusCardDesc: {
     fontFamily: Fonts.jakartaRegular,
@@ -263,16 +294,35 @@ const styles = StyleSheet.create({
   focusCardDescLight: {
     color: Colors.secondary,
   },
-  chooseRow: {
-    marginTop: 4,
+  choosePill: {
+    alignSelf: 'flex-start',
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderRadius: 20,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    marginTop: 12,
+  },
+  choosePillLight: {
+    backgroundColor: 'rgba(33,150,243,0.1)',
+  },
+  choosePillCompact: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    marginTop: 8,
   },
   chooseText: {
     fontFamily: Fonts.jakartaBold,
     fontSize: 13,
-    color: Colors.profileIcon,
+    color: '#FFFFFF',
   },
   chooseTextLight: {
     color: Colors.activeFocus,
+  },
+  chooseTextCompact: {
+    fontSize: 10,
+  },
+  badgeTextCompact: {
+    fontSize: 10,
   },
 
   // Other focus areas
@@ -286,27 +336,13 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   otherItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 12,
+    paddingVertical: 10,
     borderBottomWidth: 0.5,
     borderBottomColor: 'rgba(17,12,17,0.06)',
-    gap: 12,
   },
   otherName: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 15,
-    color: Colors.black,
-    marginBottom: 2,
-  },
-  otherDesc: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 12,
-    color: Colors.secondary,
-  },
-  otherArrow: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 16,
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 14,
     color: Colors.secondary,
   },
 

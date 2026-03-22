@@ -2,7 +2,7 @@
 export const Colors = {
   background: '#FFFFFF',
   orange: '#FF9D00',
-  green: 'rgba(85, 167, 26, 0.52)',
+  green: '#4CAF50',
   coachCard: 'rgba(215, 150, 255, 0.06)',
   tabBarBg: '#F8F9FE',
   activeTabBg: '#FFFFFF',
@@ -49,6 +49,6 @@ export const Typography = {
 };
 
 export const Spacing = {
-  side: 36,
+  side: 20,
   card: 16,
 };

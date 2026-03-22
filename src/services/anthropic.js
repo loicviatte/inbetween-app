@@ -67,6 +67,34 @@ Respond with ONLY valid JSON, no explanation:
   return JSON.parse(match[0]);
 }
 
+export async function generateClassTitle(input1, input2) {
+  const second = input2 ? `\nSecond observation: "${input2}"` : '';
+  const prompt = `A dance student logged: "${input1}"${second}\n\nGenerate a 2-3 word title summarising the key focus (e.g. "Hip Rotation Power", "Leg Drive", "Balance & Arms"). Return ONLY the title, nothing else.`;
+
+  try {
+    const res = await fetch(API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': API_KEY,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        max_tokens: 20,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+    });
+    if (!res.ok) throw new Error();
+    const data = await res.json();
+    return data.content[0].text.trim().replace(/^["']|["']$/g, '');
+  } catch {
+    // Fallback: first 4 words of input1
+    return input1.split(' ').slice(0, 4).join(' ');
+  }
+}
+
 export async function generateCoachingSummary(recentInputs) {
   if (!recentInputs.length) return "You're just getting started — log your first class to receive personalized coaching insights.";
 

@@ -3,7 +3,6 @@ import {
   View,
   Text,
   StyleSheet,
-  ScrollView,
   TouchableOpacity,
   ActivityIndicator,
 } from 'react-native';
@@ -88,11 +87,7 @@ export default function HomeScreen({ navigation }) {
 
   return (
     <SafeAreaView style={styles.safe}>
-      <ScrollView
-        style={styles.container}
-        contentContainerStyle={styles.content}
-        showsVerticalScrollIndicator={false}
-      >
+      <View style={styles.container}>
         {/* Top nav */}
         <View style={styles.topNav}>
           <Logo />
@@ -117,9 +112,8 @@ export default function HomeScreen({ navigation }) {
           {summaryLoading ? (
             <ActivityIndicator color={Colors.orange} style={{ marginVertical: 12 }} />
           ) : (
-            <Text style={styles.coachCardBody}>{coachSummary}</Text>
+            <Text style={styles.coachCardBody} numberOfLines={3}>{coachSummary}</Text>
           )}
-          <Text style={styles.coachCardHint}>Tap to see full analysis</Text>
         </View>
 
         {/* Quick Actions */}
@@ -128,7 +122,7 @@ export default function HomeScreen({ navigation }) {
           {/* Main Focus button */}
           <TouchableOpacity
             style={styles.mainFocusBtn}
-            onPress={() => navigation.navigate('FOCUS')}
+            onPress={() => navigation.navigate('TRAIN')}
             activeOpacity={0.88}
           >
             <View style={styles.mainFocusTopRow}>
@@ -164,7 +158,7 @@ export default function HomeScreen({ navigation }) {
             dotColor={Colors.orange}
           />
         </View>
-      </ScrollView>
+      </View>
 
       <LogModal
         visible={logModalVisible}
@@ -180,10 +174,12 @@ export default function HomeScreen({ navigation }) {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.background },
-  container: { flex: 1 },
-  content: {
+  container: {
+    flex: 1,
     paddingHorizontal: Spacing.side,
     paddingBottom: 24,
+    paddingTop: 0,
+    justifyContent: 'space-between',
   },
 
   // Top nav
@@ -235,6 +231,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
     paddingVertical: 14,
     marginBottom: 28,
+    shadowColor: '#C460FF',
+    shadowOpacity: 0.08,
+    shadowOffset: { width: 0, height: 4 },
+    shadowRadius: 12,
+    elevation: 3,
   },
   coachCardTitle: {
     fontFamily: Fonts.jakartaExtraBold,
@@ -244,22 +245,17 @@ const styles = StyleSheet.create({
   },
   coachCardBody: {
     fontFamily: Fonts.jakartaRegular,
-    fontSize: 15,
+    fontSize: 13,
     color: '#000000',
-    lineHeight: 22,
+    lineHeight: 20,
     marginBottom: 10,
-  },
-  coachCardHint: {
-    fontFamily: Fonts.jakartaLight,
-    fontSize: 10,
-    color: '#000000',
   },
 
   // Section title
   sectionTitle: {
     fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 20,
-    color: Colors.heading,
+    fontSize: 15,
+    color: Colors.secondary,
     marginBottom: 14,
   },
 
@@ -301,7 +297,7 @@ const styles = StyleSheet.create({
   logClassBtn: {
     width: 95,
     height: 73,
-    backgroundColor: Colors.green,
+    backgroundColor: '#4CAF50',
     borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
@@ -329,6 +325,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     justifyContent: 'space-between',
+    shadowColor: '#000',
+    shadowOpacity: 0.04,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 6,
+    elevation: 1,
   },
   statLabelRow: {
     flexDirection: 'row',
