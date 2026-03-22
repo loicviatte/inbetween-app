@@ -144,12 +144,15 @@ export async function startTrainingSession(slot1FocusId, slot2FocusId) {
 
 // ─── Complete training session ────────────────────────────────────────────────
 
-export async function completeTrainingSession(sessionId) {
+export async function completeTrainingSession(sessionId, feeling = null, sessionNote = null) {
   try {
     if (!sessionId) return;
+    const update = { completed_at: new Date().toISOString() };
+    if (feeling) update.feeling = feeling;
+    if (sessionNote) update.session_note = sessionNote;
     await supabase
       .from('training_sessions')
-      .update({ completed_at: new Date().toISOString() })
+      .update(update)
       .eq('id', sessionId);
   } catch (e) {
     console.error('completeTrainingSession error:', e);

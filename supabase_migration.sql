@@ -59,6 +59,23 @@ create table if not exists public.notes (
   updated_at timestamptz default now()
 );
 
+create table if not exists public.training_sessions (
+  id uuid default gen_random_uuid() primary key,
+  user_id uuid references public.users(id) on delete cascade not null,
+  slot1_focus_id uuid references public.focus_points(id) on delete set null,
+  slot2_focus_id uuid references public.focus_points(id) on delete set null,
+  started_at timestamptz default now(),
+  completed_at timestamptz,
+  feeling text,
+  session_note text,
+  created_at timestamptz default now()
+);
+
+-- If training_sessions already exists, add the new columns:
+ALTER TABLE training_sessions ADD COLUMN IF NOT EXISTS feeling text;
+ALTER TABLE training_sessions ADD COLUMN IF NOT EXISTS session_note text;
+ALTER TABLE training_sessions ADD COLUMN IF NOT EXISTS completed_at timestamptz;
+
 -- ─── Row Level Security ─────────────────────────────────────────────────────
 
 alter table public.users enable row level security;
@@ -66,6 +83,7 @@ alter table public.class_inputs enable row level security;
 alter table public.focus_points enable row level security;
 alter table public.focus_progress enable row level security;
 alter table public.notes enable row level security;
+alter table public.training_sessions enable row level security;
 
 -- users
 create policy "users_select" on public.users for select using (auth.uid() = id);

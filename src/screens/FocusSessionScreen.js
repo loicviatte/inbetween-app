@@ -10,7 +10,9 @@ import {
   ActivityIndicator,
   Modal,
   Pressable,
+  TextInput,
 } from 'react-native';
+import Slider from '@react-native-community/slider';
 import { Audio } from 'expo-av';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Colors, Fonts, Spacing } from '../theme';
@@ -19,6 +21,14 @@ import { completeTrainingSession, getSessionLabel } from '../services/algorithm'
 
 const SESSION_DURATION = 25 * 60;
 const TICK_SOUND = require('../../assets/metronome_tick.wav');
+
+const FEELINGS = [
+  { emoji: '😤', label: 'Hard' },
+  { emoji: '😰', label: 'Struggled' },
+  { emoji: '😐', label: 'Okay' },
+  { emoji: '🙂', label: 'Good' },
+  { emoji: '🔥', label: 'Great' },
+];
 
 function formatTime(seconds) {
   const m = Math.floor(seconds / 60).toString().padStart(2, '0');
@@ -330,6 +340,101 @@ function MetronomeStrip() {
   );
 }
 
+// ─── Feeling Slider ───────────────────────────────────────────────────────────
+
+function FeelingSlider({ value, onChange }) {
+  const sliderValue = value !== null ? value : 2; // default center
+
+  return (
+    <View style={sl.wrap}>
+      <Slider
+        style={sl.slider}
+        minimumValue={0}
+        maximumValue={4}
+        step={1}
+        value={sliderValue}
+        onValueChange={onChange}
+        minimumTrackTintColor={Colors.orange}
+        maximumTrackTintColor="rgba(17,12,17,0.12)"
+        thumbTintColor={Colors.orange}
+      />
+      <View style={sl.row}>
+        {FEELINGS.map((f, i) => (
+          <Text key={i} style={[sl.label, value === i && sl.labelOn]}>{f.label}</Text>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+// ─── Session Feeling Modal ────────────────────────────────────────────────────
+
+function SessionFeelingModal({ visible, focusName, onSave, onSkip }) {
+  const [feelingIdx, setFeelingIdx] = useState(2);
+  const [note, setNote] = useState('');
+  const [saving, setSaving] = useState(false);
+  const slideAnim = useRef(new Animated.Value(600)).current;
+
+  useEffect(() => {
+    if (visible) {
+      setFeelingIdx(2);
+      setNote('');
+      setSaving(false);
+      slideAnim.setValue(600);
+      Animated.spring(slideAnim, {
+        toValue: 0,
+        useNativeDriver: true,
+        tension: 60,
+        friction: 14,
+      }).start();
+    }
+  }, [visible]);
+
+  async function handleSave() {
+    if (saving) return;
+    setSaving(true);
+    const label = FEELINGS[feelingIdx].label;
+    await onSave(label, note.trim() || null);
+  }
+
+  return (
+    <Modal visible={visible} transparent animationType="none" onRequestClose={onSkip}>
+      <Animated.View style={[fm.container, { transform: [{ translateY: slideAnim }] }]}>
+
+        <View style={fm.content}>
+          <Text style={fm.focusLabel}>{focusName}</Text>
+          <Text style={fm.title}>Session Complete ✓</Text>
+          <Text style={fm.subtitle}>How did it go?</Text>
+
+          <FeelingSlider value={feelingIdx} onChange={setFeelingIdx} />
+
+          <TextInput
+            style={fm.noteInput}
+            placeholder="Any notes? (optional)"
+            placeholderTextColor="rgba(17,12,17,0.25)"
+            multiline
+            numberOfLines={3}
+            maxLength={300}
+            value={note}
+            onChangeText={setNote}
+            textAlignVertical="top"
+          />
+        </View>
+
+        <View style={fm.btnWrap}>
+          <TouchableOpacity style={fm.saveBtn} onPress={handleSave} activeOpacity={0.88} disabled={saving}>
+            <Text style={fm.saveBtnText}>{saving ? 'Saving…' : 'Save & Continue'}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={fm.skipBtn} onPress={onSkip} activeOpacity={0.7}>
+            <Text style={fm.skipBtnText}>Skip</Text>
+          </TouchableOpacity>
+        </View>
+
+      </Animated.View>
+    </Modal>
+  );
+}
+
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 
 export default function FocusSessionScreen({ route, navigation }) {
@@ -341,9 +446,12 @@ export default function FocusSessionScreen({ route, navigation }) {
   const [sessionActive, setSessionActive] = useState(false);
   const [sessionDone, setSessionDone] = useState(false);
   const [timeLeft, setTimeLeft] = useState(SESSION_DURATION);
-  const [validated, setValidated] = useState(false);
+  const [showFeelingModal, setShowFeelingModal] = useState(false);
   const intervalRef = useRef(null);
-  const successOpacity = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (sessionDone) setShowFeelingModal(true);
+  }, [sessionDone]);
 
   useEffect(() => {
     async function loadData() {
@@ -383,15 +491,22 @@ export default function FocusSessionScreen({ route, navigation }) {
     setTimeLeft(SESSION_DURATION);
   }
 
-  async function handleValidate() {
-    if (validated) return;
-    setValidated(true);
+  function handleEndSession() {
+    if (intervalRef.current) clearInterval(intervalRef.current);
+    setSessionActive(false);
+    setShowFeelingModal(true);
+  }
+
+  async function handleSave(feeling, note) {
+    await completeTrainingSession(sessionId, feeling, note);
+    setShowFeelingModal(false);
+    navigation.goBack();
+  }
+
+  async function handleSkip() {
     await completeTrainingSession(sessionId);
-    Animated.sequence([
-      Animated.timing(successOpacity, { toValue: 1, duration: 300, useNativeDriver: true }),
-      Animated.delay(1000),
-      Animated.timing(successOpacity, { toValue: 0, duration: 300, useNativeDriver: true }),
-    ]).start(() => navigation.goBack());
+    setShowFeelingModal(false);
+    navigation.goBack();
   }
 
   const progress = sessionActive ? 1 - timeLeft / SESSION_DURATION : sessionDone ? 1 : 0;
@@ -469,21 +584,19 @@ export default function FocusSessionScreen({ route, navigation }) {
           </TouchableOpacity>
         )}
 
-        {(sessionActive || sessionDone) && (
-          <TouchableOpacity
-            style={[styles.validateBtn, validated && styles.validateBtnDone]}
-            onPress={handleValidate}
-            activeOpacity={0.85}
-            disabled={validated}
-          >
-            <Text style={styles.validateBtnText}>{validated ? 'Saved ✓' : 'VALIDATE SESSION'}</Text>
+        {sessionActive && (
+          <TouchableOpacity style={styles.validateBtn} onPress={handleEndSession} activeOpacity={0.85}>
+            <Text style={styles.validateBtnText}>END SESSION</Text>
           </TouchableOpacity>
         )}
       </View>
 
-      <Animated.View style={[styles.overlay, { opacity: successOpacity }]} pointerEvents="none">
-        <Text style={styles.overlayText}>Session validated ✓</Text>
-      </Animated.View>
+      <SessionFeelingModal
+        visible={showFeelingModal}
+        focusName={focusPoint?.name || ''}
+        onSave={handleSave}
+        onSkip={handleSkip}
+      />
 
     </SafeAreaView>
   );
@@ -601,16 +714,7 @@ const styles = StyleSheet.create({
   stopBtnText: { fontFamily: Fonts.jakartaMedium, fontSize: 14, color: Colors.secondary },
 
   validateBtn: { backgroundColor: Colors.black, borderRadius: 14, paddingVertical: 17, alignItems: 'center' },
-  validateBtnDone: { backgroundColor: Colors.activeLog },
   validateBtnText: { fontFamily: Fonts.jakartaExtraBold, fontSize: 15, color: Colors.white, letterSpacing: 1 },
-
-  overlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  overlayText: { fontFamily: Fonts.jakartaExtraBold, fontSize: 20, color: Colors.white, letterSpacing: 0.5 },
 });
 
 // ─── Spotify styles ───────────────────────────────────────────────────────────
@@ -819,4 +923,96 @@ const m = StyleSheet.create({
   pillCatActive: { color: 'rgba(255,255,255,0.5)' },
   pillName: { fontFamily: Fonts.jakartaBold, fontSize: 12, color: Colors.black },
   pillNameActive: { color: Colors.white },
+});
+
+// ─── Feeling slider styles ────────────────────────────────────────────────────
+
+const sl = StyleSheet.create({
+  wrap: { width: '100%', marginBottom: 28 },
+  slider: { width: '100%', height: 40 },
+  row: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 4 },
+  label: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 11,
+    color: 'rgba(17,12,17,0.3)',
+  },
+  labelOn: {
+    color: Colors.orange,
+    fontFamily: Fonts.jakartaBold,
+  },
+});
+
+// ─── Feeling modal styles ─────────────────────────────────────────────────────
+
+const fm = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: Colors.white,
+    paddingHorizontal: 24,
+    paddingTop: 80,
+    paddingBottom: 44,
+    justifyContent: 'space-between',
+  },
+  content: {
+    alignItems: 'center',
+  },
+  focusLabel: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 11,
+    color: Colors.secondary,
+    letterSpacing: 0.3,
+    marginBottom: 12,
+    textAlign: 'center',
+  },
+  title: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 28,
+    color: Colors.black,
+    textAlign: 'center',
+    marginBottom: 6,
+    letterSpacing: -0.3,
+  },
+  subtitle: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 15,
+    color: Colors.secondary,
+    textAlign: 'center',
+    marginBottom: 44,
+  },
+  noteInput: {
+    width: '100%',
+    minHeight: 86,
+    borderWidth: 1,
+    borderColor: 'rgba(17,12,17,0.1)',
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 14,
+    color: Colors.black,
+    backgroundColor: Colors.statCardBg,
+    lineHeight: 21,
+  },
+  btnWrap: { gap: 4 },
+  saveBtn: {
+    backgroundColor: Colors.orange,
+    borderRadius: 14,
+    paddingVertical: 17,
+    alignItems: 'center',
+  },
+  saveBtnText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 15,
+    color: '#000',
+    letterSpacing: 0.3,
+  },
+  skipBtn: {
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  skipBtnText: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 14,
+    color: Colors.secondary,
+  },
 });
