@@ -100,6 +100,31 @@ export async function getTrainingSessionsThisWeek() {
   return (data || []).length;
 }
 
+export async function getTrainingDaysThisWeek() {
+  try {
+    const userId = await getUserId();
+    const now = new Date();
+    const mondayOffset = (now.getDay() + 6) % 7;
+    const monday = new Date(now);
+    monday.setDate(now.getDate() - mondayOffset);
+    monday.setHours(0, 0, 0, 0);
+    const { data } = await supabase
+      .from('training_sessions')
+      .select('started_at')
+      .eq('user_id', userId)
+      .gte('started_at', monday.toISOString())
+      .not('completed_at', 'is', null);
+    const days = new Set();
+    for (const row of data || []) {
+      const idx = (new Date(row.started_at).getDay() + 6) % 7; // Mon=0…Sun=6
+      days.add(idx);
+    }
+    return days;
+  } catch {
+    return new Set();
+  }
+}
+
 // ─── Focus Points ────────────────────────────────────────────────────────────
 
 export async function getFocusPoints() {
