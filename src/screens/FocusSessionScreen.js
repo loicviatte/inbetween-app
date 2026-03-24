@@ -6,11 +6,11 @@ import {
   ScrollView,
   TouchableOpacity,
   Animated,
-  Linking,
   ActivityIndicator,
   Modal,
   Pressable,
   TextInput,
+  Keyboard,
 } from 'react-native';
 import Slider from '@react-native-community/slider';
 import { Audio } from 'expo-av';
@@ -18,8 +18,15 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Colors, Fonts, Spacing } from '../theme';
 import { getFocusPoints, getClassInputsForFocus } from '../services/storage';
 import { completeTrainingSession, getSessionLabel } from '../services/algorithm';
+import {
+  setActiveSession,
+  getActiveSession,
+  clearActiveSession,
+  getSessionTimeLeft,
+} from '../services/activeSession';
 
-const SESSION_DURATION = 25 * 60;
+const DURATIONS = [5, 10, 15, 20, 25, 30, 45, 60, 90];
+const ITEM_H = 52;
 const TICK_SOUND = require('../../assets/metronome_tick.wav');
 
 const FEELINGS = [
@@ -47,12 +54,6 @@ const DANCES = [
   { id: 'vwaltz',    name: 'V.Waltz',    bpm: 180, beats: 3, category: 'S' },
   { id: 'foxtrot',   name: 'Foxtrot',    bpm: 120, beats: 4, category: 'S' },
   { id: 'quickstep', name: 'Quickstep',  bpm: 200, beats: 4, category: 'S' },
-];
-
-const SPOTIFY_PLAYLISTS = [
-  { label: 'Latin',    uri: 'spotify:playlist:37i9dQZF1DX3LDIBRoaCDQ', fallback: 'https://open.spotify.com/playlist/37i9dQZF1DX3LDIBRoaCDQ' },
-  { label: 'Standard', uri: 'spotify:playlist:37i9dQZF1DX4sWSpwq3LiO', fallback: 'https://open.spotify.com/playlist/37i9dQZF1DX4sWSpwq3LiO' },
-  { label: 'Training', uri: 'spotify:playlist:37i9dQZF1DX76Wlfdnj7AP', fallback: 'https://open.spotify.com/playlist/37i9dQZF1DX76Wlfdnj7AP' },
 ];
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -145,8 +146,8 @@ function LinkedNotes({ inputs, loading, onSelect }) {
 
   return (
     <View style={ln.wrap}>
-      <Text style={ln.heading}>Linked class notes</Text>
-      {inputs.map((inp) => (
+      <Text style={ln.heading}>Linked Class</Text>
+      {inputs.slice(0, 3).map((inp) => (
         <TouchableOpacity key={inp.id} style={ln.row} onPress={() => onSelect(inp)} activeOpacity={0.7}>
           <Text style={ln.date}>{formatDate(inp.created_at)}</Text>
           <Text style={ln.text} numberOfLines={1}>{inp.practice_point_1}</Text>
@@ -157,65 +158,7 @@ function LinkedNotes({ inputs, loading, onSelect }) {
   );
 }
 
-// ─── Spotify Strip ────────────────────────────────────────────────────────────
-
-function SpotifyStrip() {
-  const [playing, setPlaying] = useState(false);
-  const [activePlaylist, setActivePlaylist] = useState(null);
-
-  async function openPlaylist(pl) {
-    setActivePlaylist(pl.label);
-    setPlaying(true);
-    const canOpen = await Linking.canOpenURL(pl.uri);
-    Linking.openURL(canOpen ? pl.uri : pl.fallback);
-  }
-
-  function handlePrev() {
-    Linking.openURL('spotify:').catch(() => {});
-  }
-  function handleNext() {
-    Linking.openURL('spotify:').catch(() => {});
-  }
-  function handlePlayPause() {
-    setPlaying(v => !v);
-    Linking.openURL('spotify:').catch(() => {});
-  }
-
-  return (
-    <View style={sp.wrap}>
-      <View style={sp.topRow}>
-        <Text style={sp.label}><Text style={sp.icon}>♪ </Text>Spotify</Text>
-        <View style={sp.controls}>
-          <TouchableOpacity style={sp.ctrlBtn} onPress={handlePrev} activeOpacity={0.7}>
-            <Text style={sp.ctrlIcon}>⏮</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[sp.ctrlBtn, sp.playPauseBtn]} onPress={handlePlayPause} activeOpacity={0.75}>
-            <Text style={sp.playPauseIcon}>{playing ? '⏸' : '▶'}</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={sp.ctrlBtn} onPress={handleNext} activeOpacity={0.7}>
-            <Text style={sp.ctrlIcon}>⏭</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-      <View style={sp.pills}>
-        {SPOTIFY_PLAYLISTS.map(pl => (
-          <TouchableOpacity
-            key={pl.label}
-            style={[sp.pill, activePlaylist === pl.label && sp.pillActive]}
-            onPress={() => openPlaylist(pl)}
-            activeOpacity={0.75}
-          >
-            <Text style={[sp.pillText, activePlaylist === pl.label && sp.pillTextActive]}>
-              {pl.label}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-    </View>
-  );
-}
-
-// ─── Compact Metronome ────────────────────────────────────────────────────────
+// ─── Metronome ────────────────────────────────────────────────────────────────
 
 function MetronomeStrip() {
   const [selectedDance, setSelectedDance] = useState(null);
@@ -223,51 +166,67 @@ function MetronomeStrip() {
   const [beats, setBeats] = useState(4);
   const [running, setRunning] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
-  const beatOpacity = useRef(new Animated.Value(1)).current;
-  const metroRef = useRef(null);
-  const soundRef = useRef(null);
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+  const metroRef = useRef(null);        // setTimeout handle
+  const soundPoolRef = useRef([]);      // 3 pre-loaded sound instances
+  const poolIdxRef = useRef(0);
   const bpmRef = useRef(bpm);
-  const beatsRef = useRef(beats);
 
   useEffect(() => { bpmRef.current = bpm; }, [bpm]);
-  useEffect(() => { beatsRef.current = beats; }, [beats]);
 
   useEffect(() => {
     Audio.setAudioModeAsync({ playsInSilentModeIOS: true });
-    Audio.Sound.createAsync(TICK_SOUND, { volume: 1.0 }).then(({ sound }) => {
-      soundRef.current = sound;
-    });
+    // Pre-load 3 instances so ticks never block on the same in-flight seek
+    Promise.all([0, 1, 2].map(() => Audio.Sound.createAsync(TICK_SOUND, { volume: 1.0 })))
+      .then(results => { soundPoolRef.current = results.map(r => r.sound); });
     return () => {
-      if (metroRef.current) clearInterval(metroRef.current);
-      soundRef.current?.unloadAsync();
+      if (metroRef.current) clearTimeout(metroRef.current);
+      soundPoolRef.current.forEach(s => s.unloadAsync());
     };
   }, []);
 
-  async function playTick() {
-    if (!soundRef.current) return;
-    try {
-      await soundRef.current.setPositionAsync(0);
-      await soundRef.current.playAsync();
-    } catch {}
+  function playTick() {
+    const pool = soundPoolRef.current;
+    if (!pool.length) return;
+    const sound = pool[poolIdxRef.current];
+    poolIdxRef.current = (poolIdxRef.current + 1) % pool.length;
+    // replayAsync rewinds + plays in one atomic call — no double-await lag
+    sound.replayAsync().catch(() => {});
   }
 
-  function flash() {
-    beatOpacity.setValue(1);
-    Animated.timing(beatOpacity, { toValue: 0.2, duration: 100, useNativeDriver: true }).start();
+  function pulse() {
+    pulseAnim.setValue(1.4);
+    Animated.timing(pulseAnim, { toValue: 1, duration: 250, useNativeDriver: true }).start();
   }
 
-  function startMetro(overrideBpm, overrideBeats) {
+  function startMetro(overrideBpm) {
     const b = overrideBpm ?? bpmRef.current;
-    const ms = Math.round(60000 / b);
-    metroRef.current = setInterval(() => {
-      flash();
-      playTick();
-    }, ms);
+    const intervalMs = Math.round(60000 / b);
+    const origin = Date.now();
+    let tick = 0;
+
+    function schedule() {
+      tick++;
+      // Calculate exact delay to next beat, compensating for any JS event-loop drift
+      const delay = Math.max(0, origin + tick * intervalMs - Date.now());
+      metroRef.current = setTimeout(() => {
+        pulse();
+        playTick();
+        schedule();
+      }, delay);
+    }
+
+    // Fire first beat immediately, then schedule the rest
+    pulse();
+    playTick();
+    schedule();
     setRunning(true);
   }
 
   function stopMetro() {
-    if (metroRef.current) clearInterval(metroRef.current);
+    if (metroRef.current) clearTimeout(metroRef.current);
+    metroRef.current = null;
+    pulseAnim.setValue(1);
     setRunning(false);
   }
 
@@ -282,47 +241,68 @@ function MetronomeStrip() {
     setShowPicker(false);
     if (running) {
       stopMetro();
-      setTimeout(() => startMetro(dance.bpm, dance.beats), 50);
+      setTimeout(() => startMetro(dance.bpm), 50);
     }
   }
 
   function adjustBpm(delta) {
     const v = Math.max(40, Math.min(260, bpm + delta));
     setBpm(v);
-    if (running) { stopMetro(); setTimeout(() => startMetro(v, beats), 50); }
+    if (running) { stopMetro(); setTimeout(() => startMetro(v), 50); }
   }
 
   const selected = DANCES.find(d => d.id === selectedDance);
 
   return (
     <View style={m.wrap}>
-      <View style={m.row}>
+      {/* Row 1: dance selector + play button */}
+      <View style={m.topRow}>
         <TouchableOpacity style={m.dancePill} onPress={() => setShowPicker(v => !v)} activeOpacity={0.75}>
-          <Animated.View style={[m.beatDot, running && { opacity: beatOpacity, backgroundColor: Colors.orange }]} />
-          <Text style={m.danceName}>{selected ? selected.name : 'Select dance'}</Text>
+          <Text style={m.danceLabel} numberOfLines={1}>{selected ? selected.name : 'Select dance'}</Text>
           <Text style={m.chevron}>{showPicker ? '▲' : '▼'}</Text>
         </TouchableOpacity>
 
-        <View style={m.bpmRow}>
-          <TouchableOpacity style={m.bpmBtn} onPress={() => adjustBpm(-1)} activeOpacity={0.7}>
-            <Text style={m.bpmBtnText}>−</Text>
-          </TouchableOpacity>
-          <Text style={m.bpmVal}>{bpm}</Text>
-          <TouchableOpacity style={m.bpmBtn} onPress={() => adjustBpm(1)} activeOpacity={0.7}>
-            <Text style={m.bpmBtnText}>+</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[m.playBtn, running && m.playBtnActive]}
-            onPress={toggleMetro}
-            activeOpacity={0.8}
-          >
-            <Text style={m.playBtnText}>{running ? '⏹' : '▶'}</Text>
-          </TouchableOpacity>
-        </View>
+        <TouchableOpacity
+          style={[m.playBtn, running && m.playBtnActive]}
+          onPress={toggleMetro}
+          activeOpacity={0.8}
+        >
+          <Animated.View style={running && { transform: [{ scale: pulseAnim }] }}>
+            <Text style={[m.playIcon, running && m.playIconActive]}>{running ? '■' : '▶'}</Text>
+          </Animated.View>
+        </TouchableOpacity>
       </View>
 
+      {/* Row 2: BPM stepper */}
+      <View style={m.bpmRow}>
+        <TouchableOpacity style={m.stepBtn} onPress={() => adjustBpm(-5)} activeOpacity={0.7}>
+          <Text style={m.stepBtnText}>−−</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={m.stepBtn} onPress={() => adjustBpm(-1)} activeOpacity={0.7}>
+          <Text style={m.stepBtnText}>−</Text>
+        </TouchableOpacity>
+
+        <View style={m.bpmDisplay}>
+          <Text style={[m.bpmVal, running && m.bpmValActive]}>{bpm}</Text>
+          <Text style={m.bpmUnit}>bpm</Text>
+        </View>
+
+        <TouchableOpacity style={m.stepBtn} onPress={() => adjustBpm(1)} activeOpacity={0.7}>
+          <Text style={m.stepBtnText}>+</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={m.stepBtn} onPress={() => adjustBpm(5)} activeOpacity={0.7}>
+          <Text style={m.stepBtnText}>++</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Dance picker */}
       {showPicker && (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={m.picker} contentContainerStyle={m.pickerContent}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={m.picker}
+          contentContainerStyle={m.pickerContent}
+        >
           {DANCES.map(d => (
             <TouchableOpacity
               key={d.id}
@@ -399,7 +379,7 @@ function SessionFeelingModal({ visible, focusName, onSave, onSkip }) {
 
   return (
     <Modal visible={visible} transparent animationType="none" onRequestClose={onSkip}>
-      <Animated.View style={[fm.container, { transform: [{ translateY: slideAnim }] }]}>
+      <Animated.View style={[fm.container, { transform: [{ translateY: slideAnim }] }]} onStartShouldSetResponder={() => { Keyboard.dismiss(); return false; }}>
 
         <View style={fm.content}>
           <Text style={fm.focusLabel}>{focusName}</Text>
@@ -435,6 +415,66 @@ function SessionFeelingModal({ visible, focusName, onSave, onSkip }) {
   );
 }
 
+// ─── Duration Picker ─────────────────────────────────────────────────────────
+
+function DurationPicker({ value, onChange }) {
+  const defaultIdx = Math.max(0, DURATIONS.indexOf(value));
+  const scrollY = useRef(new Animated.Value(defaultIdx * ITEM_H)).current;
+
+  function onScrollEnd(e) {
+    const y = e.nativeEvent.contentOffset.y;
+    const idx = Math.max(0, Math.min(DURATIONS.length - 1, Math.round(y / ITEM_H)));
+    onChange(DURATIONS[idx]);
+  }
+
+  return (
+    <View style={dp.wrap}>
+      {/* Selection band — two hairlines around the center slot */}
+      <View pointerEvents="none" style={dp.band} />
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        snapToInterval={ITEM_H}
+        decelerationRate="fast"
+        contentOffset={{ x: 0, y: defaultIdx * ITEM_H }}
+        onMomentumScrollEnd={onScrollEnd}
+        scrollEventThrottle={16}
+        onScroll={Animated.event(
+          [{ nativeEvent: { contentOffset: { y: scrollY } } }],
+          { useNativeDriver: false }
+        )}
+        contentContainerStyle={dp.content}
+      >
+        {DURATIONS.map((d, i) => {
+          const center = i * ITEM_H;
+          const inputRange = [
+            center - ITEM_H * 2,
+            center - ITEM_H,
+            center,
+            center + ITEM_H,
+            center + ITEM_H * 2,
+          ];
+          const opacity = scrollY.interpolate({
+            inputRange,
+            outputRange: [0.1, 0.28, 1, 0.28, 0.1],
+            extrapolate: 'clamp',
+          });
+          const scale = scrollY.interpolate({
+            inputRange,
+            outputRange: [0.68, 0.82, 1, 0.82, 0.68],
+            extrapolate: 'clamp',
+          });
+          return (
+            <Animated.View key={d} style={[dp.item, { opacity, transform: [{ scale }] }]}>
+              <Text style={dp.num}>{d}</Text>
+              <Text style={dp.unit}>min</Text>
+            </Animated.View>
+          );
+        })}
+      </ScrollView>
+    </View>
+  );
+}
+
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 
 export default function FocusSessionScreen({ route, navigation }) {
@@ -443,9 +483,11 @@ export default function FocusSessionScreen({ route, navigation }) {
   const [classInputs, setClassInputs] = useState([]);
   const [notesLoading, setNotesLoading] = useState(true);
   const [selectedInput, setSelectedInput] = useState(null);
+  const [duration, setDuration] = useState(25);
   const [sessionActive, setSessionActive] = useState(false);
+  const [sessionPaused, setSessionPaused] = useState(false);
   const [sessionDone, setSessionDone] = useState(false);
-  const [timeLeft, setTimeLeft] = useState(SESSION_DURATION);
+  const [timeLeft, setTimeLeft] = useState(25 * 60);
   const [showFeelingModal, setShowFeelingModal] = useState(false);
   const intervalRef = useRef(null);
 
@@ -465,51 +507,95 @@ export default function FocusSessionScreen({ route, navigation }) {
       setNotesLoading(false);
     }
     loadData();
+
+    // Resume if returning to an in-progress session
+    const existing = getActiveSession();
+    if (existing && existing.sessionId === sessionId) {
+      const remaining = Math.floor(getSessionTimeLeft());
+      if (remaining > 0) {
+        setDuration(existing.duration);
+        setTimeLeft(remaining);
+        setSessionActive(true);
+        _startInterval(existing.startedAt, existing.duration);
+      }
+    }
+
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
   }, [focusPointId]);
 
+  function _startInterval(startedAt, dur) {
+    if (intervalRef.current) clearInterval(intervalRef.current);
+    const totalSeconds = dur * 60;
+    intervalRef.current = setInterval(() => {
+      const elapsed = (Date.now() - startedAt) / 1000;
+      const remaining = Math.max(0, totalSeconds - elapsed);
+      setTimeLeft(Math.floor(remaining));
+      if (remaining <= 0) {
+        clearInterval(intervalRef.current);
+        setSessionActive(false);
+        setSessionDone(true);
+        clearActiveSession();
+      }
+    }, 1000);
+  }
+
   function startSession() {
+    const startedAt = Date.now();
+    setActiveSession({ sessionId, focusPointId, focusPointName: focusPoint?.name, rank, sessionCount, duration, startedAt });
     setSessionActive(true);
     setSessionDone(false);
-    setTimeLeft(SESSION_DURATION);
-    intervalRef.current = setInterval(() => {
-      setTimeLeft(prev => {
-        if (prev <= 1) {
-          clearInterval(intervalRef.current);
-          setSessionActive(false);
-          setSessionDone(true);
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
+    setTimeLeft(duration * 60);
+    _startInterval(startedAt, duration);
+  }
+
+  function pauseSession() {
+    if (intervalRef.current) clearInterval(intervalRef.current);
+    setSessionPaused(true);
+    // Freeze HomeScreen countdown by storing remaining seconds
+    const existing = getActiveSession();
+    if (existing) setActiveSession({ ...existing, pausedRemaining: timeLeft });
+  }
+
+  function resumeSession() {
+    setSessionPaused(false);
+    // Recalculate startedAt so elapsed math resumes from current timeLeft
+    const newStartedAt = Date.now() - (duration * 60 - timeLeft) * 1000;
+    const existing = getActiveSession();
+    if (existing) setActiveSession({ ...existing, startedAt: newStartedAt, pausedRemaining: undefined });
+    _startInterval(newStartedAt, duration);
   }
 
   function stopSession() {
     if (intervalRef.current) clearInterval(intervalRef.current);
     setSessionActive(false);
-    setTimeLeft(SESSION_DURATION);
+    setSessionPaused(false);
+    setTimeLeft(duration * 60);
+    clearActiveSession();
   }
 
   function handleEndSession() {
     if (intervalRef.current) clearInterval(intervalRef.current);
     setSessionActive(false);
+    setSessionPaused(false);
     setShowFeelingModal(true);
   }
 
   async function handleSave(feeling, note) {
+    // Only Save marks the session as complete in Supabase
     await completeTrainingSession(sessionId, feeling, note);
+    clearActiveSession();
     setShowFeelingModal(false);
     navigation.goBack();
   }
 
   async function handleSkip() {
     await completeTrainingSession(sessionId);
+    clearActiveSession();
     setShowFeelingModal(false);
     navigation.goBack();
   }
 
-  const progress = sessionActive ? 1 - timeLeft / SESSION_DURATION : sessionDone ? 1 : 0;
+  const progress = sessionActive ? 1 - timeLeft / (duration * 60) : sessionDone ? 1 : 0;
   const slotLabel = rank === 0 ? 'Main Focus' : 'Secondary Focus';
 
   return (
@@ -546,27 +632,23 @@ export default function FocusSessionScreen({ route, navigation }) {
             <Text style={styles.doneCheck}>✓</Text>
             <Text style={styles.doneTitle}>Session complete!</Text>
           </View>
-        ) : (
+        ) : sessionActive ? (
           <>
-            <Text style={[styles.timerText, !sessionActive && styles.timerIdle]}>
-              {formatTime(timeLeft)}
-            </Text>
-            {sessionActive && (
-              <View style={styles.progressTrack}>
-                <View style={[styles.progressFill, { width: `${Math.round(progress * 100)}%` }]} />
-              </View>
-            )}
-            {!sessionActive && (
-              <Text style={styles.timerHint}>25 min session</Text>
-            )}
+            <Text style={styles.timerText}>{formatTime(timeLeft)}</Text>
+            <View style={styles.progressTrack}>
+              <View style={[styles.progressFill, { width: `${Math.round(progress * 100)}%` }]} />
+            </View>
           </>
+        ) : (
+          <DurationPicker
+            value={duration}
+            onChange={(d) => { setDuration(d); setTimeLeft(d * 60); }}
+          />
         )}
       </View>
 
       {/* ── Tools ── */}
       <View style={styles.tools}>
-        <SpotifyStrip />
-        <View style={styles.toolDivider} />
         <MetronomeStrip />
       </View>
 
@@ -578,10 +660,21 @@ export default function FocusSessionScreen({ route, navigation }) {
           </TouchableOpacity>
         )}
 
-        {sessionActive && (
-          <TouchableOpacity style={styles.stopBtn} onPress={stopSession} activeOpacity={0.85}>
-            <Text style={styles.stopBtnText}>Stop</Text>
+        {sessionActive && !sessionPaused && (
+          <TouchableOpacity style={styles.pauseBtn} onPress={pauseSession} activeOpacity={0.85}>
+            <Text style={styles.pauseBtnText}>⏸  Pause</Text>
           </TouchableOpacity>
+        )}
+
+        {sessionActive && sessionPaused && (
+          <View style={styles.pausedRow}>
+            <TouchableOpacity style={styles.resumeBtn} onPress={resumeSession} activeOpacity={0.88}>
+              <Text style={styles.resumeBtnText}>▶  Resume</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.stopBtn} onPress={stopSession} activeOpacity={0.85}>
+              <Text style={styles.stopBtnText}>Stop</Text>
+            </TouchableOpacity>
+          </View>
         )}
 
         {sessionActive && (
@@ -689,8 +782,6 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     marginBottom: 14,
   },
-  toolDivider: { height: 0.5, backgroundColor: Colors.statCardBorder, marginHorizontal: 14 },
-
   ctaWrap: {
     paddingHorizontal: Spacing.side,
     paddingBottom: 8,
@@ -704,12 +795,35 @@ const styles = StyleSheet.create({
   },
   startBtnText: { fontFamily: Fonts.jakartaExtraBold, fontSize: 15, color: '#000', letterSpacing: 1 },
 
-  stopBtn: {
+  pauseBtn: {
     borderRadius: 14,
     paddingVertical: 14,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: 'rgba(17,12,17,0.2)',
+    borderColor: 'rgba(17,12,17,0.15)',
+  },
+  pauseBtnText: { fontFamily: Fonts.jakartaMedium, fontSize: 14, color: Colors.secondary },
+
+  pausedRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  resumeBtn: {
+    flex: 1,
+    backgroundColor: Colors.orange,
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  resumeBtnText: { fontFamily: Fonts.jakartaBold, fontSize: 14, color: '#000' },
+
+  stopBtn: {
+    flex: 1,
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(17,12,17,0.15)',
   },
   stopBtnText: { fontFamily: Fonts.jakartaMedium, fontSize: 14, color: Colors.secondary },
 
@@ -717,30 +831,49 @@ const styles = StyleSheet.create({
   validateBtnText: { fontFamily: Fonts.jakartaExtraBold, fontSize: 15, color: Colors.white, letterSpacing: 1 },
 });
 
-// ─── Spotify styles ───────────────────────────────────────────────────────────
+// ─── Duration Picker styles ───────────────────────────────────────────────────
 
-const sp = StyleSheet.create({
-  wrap: { paddingHorizontal: 14, paddingVertical: 12, gap: 10 },
-  topRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  icon: { color: '#1DB954' },
-  label: { fontFamily: Fonts.jakartaMedium, fontSize: 13, color: Colors.black },
-  controls: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  ctrlBtn: {
-    width: 30, height: 30, borderRadius: 15,
-    backgroundColor: 'rgba(17,12,17,0.07)',
-    alignItems: 'center', justifyContent: 'center',
+const dp = StyleSheet.create({
+  wrap: {
+    height: ITEM_H * 5,
+    width: 200,
+    alignSelf: 'center',
+    overflow: 'hidden',
   },
-  ctrlIcon: { fontSize: 13, color: Colors.black },
-  playPauseBtn: { backgroundColor: '#1DB954', width: 34, height: 34, borderRadius: 17 },
-  playPauseIcon: { fontSize: 13, color: '#000' },
-  pills: { flexDirection: 'row', gap: 7 },
-  pill: {
-    flex: 1, alignItems: 'center', paddingVertical: 7,
-    borderRadius: 8, borderWidth: 1, borderColor: 'rgba(29,185,84,0.3)',
+  band: {
+    position: 'absolute',
+    top: ITEM_H * 2,
+    left: 0,
+    right: 0,
+    height: ITEM_H,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(17,12,17,0.18)',
+    zIndex: 1,
   },
-  pillActive: { backgroundColor: '#1DB954', borderColor: '#1DB954' },
-  pillText: { fontFamily: Fonts.jakartaBold, fontSize: 12, color: '#1DB954' },
-  pillTextActive: { color: '#000' },
+  content: {
+    paddingVertical: ITEM_H * 2,
+  },
+  item: {
+    height: ITEM_H,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+  },
+  num: {
+    fontFamily: Fonts.monument,
+    fontSize: 36,
+    color: Colors.black,
+    letterSpacing: 1,
+    lineHeight: 44,
+  },
+  unit: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 13,
+    color: Colors.secondary,
+    marginTop: 10,
+  },
 });
 
 // ─── Linked notes styles ──────────────────────────────────────────────────────
@@ -889,37 +1022,118 @@ const modal = StyleSheet.create({
 // ─── Metronome styles ─────────────────────────────────────────────────────────
 
 const m = StyleSheet.create({
-  wrap: { paddingHorizontal: 14, paddingVertical: 10 },
-  row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  dancePill: { flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 },
-  beatDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: 'rgba(17,12,17,0.2)' },
-  danceName: { fontFamily: Fonts.jakartaMedium, fontSize: 13, color: Colors.black, flex: 1 },
+  wrap: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 14, gap: 12 },
+
+  // Row 1: dance + play
+  topRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  dancePill: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 12,
+    backgroundColor: 'rgba(17,12,17,0.05)',
+    borderWidth: 0.5,
+    borderColor: Colors.statCardBorder,
+  },
+  danceLabel: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 13,
+    color: Colors.black,
+    flex: 1,
+  },
   chevron: { fontSize: 9, color: Colors.secondary },
-  bpmRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  bpmBtn: {
-    width: 26, height: 26, borderRadius: 13,
-    backgroundColor: 'rgba(17,12,17,0.08)',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  bpmBtnText: { fontSize: 16, color: Colors.black, lineHeight: 20 },
-  bpmVal: { fontFamily: Fonts.jakartaExtraBold, fontSize: 15, color: Colors.black, minWidth: 36, textAlign: 'center' },
+
   playBtn: {
-    width: 34, height: 34, borderRadius: 17,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: Colors.black,
-    alignItems: 'center', justifyContent: 'center',
-    marginLeft: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  playBtnActive: { backgroundColor: Colors.orange },
-  playBtnText: { fontSize: 13, color: Colors.white },
-  picker: { marginTop: 10 },
+  playBtnActive: {
+    backgroundColor: Colors.orange,
+    shadowColor: Colors.orange,
+    shadowOpacity: 0.5,
+    shadowOffset: { width: 0, height: 3 },
+    shadowRadius: 10,
+    elevation: 4,
+  },
+  playIcon: { fontSize: 13, color: Colors.white },
+  playIconActive: { color: Colors.black },
+
+  // Row 2: BPM stepper
+  bpmRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  stepBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 10,
+    backgroundColor: 'rgba(17,12,17,0.06)',
+    borderWidth: 0.5,
+    borderColor: Colors.statCardBorder,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stepBtnText: {
+    fontFamily: Fonts.jakartaBold,
+    fontSize: 13,
+    color: Colors.secondary,
+    lineHeight: 16,
+  },
+  bpmDisplay: {
+    alignItems: 'center',
+    minWidth: 90,
+  },
+  bpmVal: {
+    fontFamily: Fonts.monument,
+    fontSize: 30,
+    color: Colors.black,
+    letterSpacing: 1,
+    lineHeight: 36,
+  },
+  bpmValActive: { color: Colors.orange },
+  bpmUnit: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 10,
+    color: Colors.secondary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    marginTop: 1,
+  },
+
+  // Dance picker
+  picker: {},
   pickerContent: { gap: 6, paddingBottom: 2 },
   pill: {
-    alignItems: 'center', paddingHorizontal: 12, paddingVertical: 6,
+    alignItems: 'center',
+    paddingHorizontal: 13,
+    paddingVertical: 6,
     backgroundColor: Colors.background,
-    borderRadius: 8, borderWidth: 0.5, borderColor: Colors.statCardBorder,
+    borderRadius: 8,
+    borderWidth: 0.5,
+    borderColor: Colors.statCardBorder,
   },
   pillActive: { backgroundColor: Colors.black, borderColor: Colors.black },
-  pillCat: { fontFamily: Fonts.jakartaMedium, fontSize: 9, color: Colors.secondary, textTransform: 'uppercase' },
+  pillCat: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 9,
+    color: Colors.secondary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+  },
   pillCatActive: { color: 'rgba(255,255,255,0.5)' },
   pillName: { fontFamily: Fonts.jakartaBold, fontSize: 12, color: Colors.black },
   pillNameActive: { color: Colors.white },

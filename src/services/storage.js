@@ -100,6 +100,77 @@ export async function getTrainingSessionsThisWeek() {
   return (data || []).length;
 }
 
+export async function getTrainingDaysThisWeek() {
+  try {
+    const userId = await getUserId();
+    const now = new Date();
+    const mondayOffset = (now.getDay() + 6) % 7;
+    const monday = new Date(now);
+    monday.setDate(now.getDate() - mondayOffset);
+    monday.setHours(0, 0, 0, 0);
+    const { data } = await supabase
+      .from('training_sessions')
+      .select('started_at')
+      .eq('user_id', userId)
+      .gte('started_at', monday.toISOString())
+      .not('completed_at', 'is', null);
+    const days = new Set();
+    for (const row of data || []) {
+      const idx = (new Date(row.started_at).getDay() + 6) % 7; // Mon=0…Sun=6
+      days.add(idx);
+    }
+    return days;
+  } catch {
+    return new Set();
+  }
+}
+
+export async function getWeekActivity() {
+  try {
+    const userId = await getUserId();
+    const now = new Date();
+    const mondayOffset = (now.getDay() + 6) % 7;
+    const monday = new Date(now);
+    monday.setDate(now.getDate() - mondayOffset);
+    monday.setHours(0, 0, 0, 0);
+    const mondayISO = monday.toISOString();
+    const [{ data: sessions }, { data: classes }, { data: focusPoints }] = await Promise.all([
+      supabase
+        .from('training_sessions')
+        .select('id, started_at, feeling, slot1_focus_id')
+        .eq('user_id', userId)
+        .gte('started_at', mondayISO)
+        .not('completed_at', 'is', null),
+      supabase
+        .from('class_inputs')
+        .select('id, created_at, practice_point_1, ai_primary_focus')
+        .eq('user_id', userId)
+        .eq('is_deleted', false)
+        .gte('created_at', mondayISO),
+      supabase
+        .from('focus_points')
+        .select('id, name')
+        .eq('user_id', userId),
+    ]);
+    const focusMap = {};
+    for (const fp of focusPoints || []) focusMap[fp.id] = fp.name;
+    const activity = {};
+    for (const s of sessions || []) {
+      const idx = (new Date(s.started_at).getDay() + 6) % 7;
+      if (!activity[idx]) activity[idx] = { sessions: [], classes: [] };
+      activity[idx].sessions.push({ ...s, focusName: focusMap[s.slot1_focus_id] || null });
+    }
+    for (const c of classes || []) {
+      const idx = (new Date(c.created_at).getDay() + 6) % 7;
+      if (!activity[idx]) activity[idx] = { sessions: [], classes: [] };
+      activity[idx].classes.push(c);
+    }
+    return activity;
+  } catch {
+    return {};
+  }
+}
+
 // ─── Focus Points ────────────────────────────────────────────────────────────
 
 export async function getFocusPoints() {

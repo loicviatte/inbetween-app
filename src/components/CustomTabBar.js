@@ -4,12 +4,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors, Fonts } from '../theme';
 
 const TAB_COLORS = {
-  HOME: Colors.activeHome,
+  PROFILE: Colors.activeHome,
   TRAIN: Colors.activeFocus,
   LOG: Colors.activeLog,
 };
 
-const HIDDEN_TABS = ['PROFILE'];
+const HIDDEN_TABS = [];
 
 export default function CustomTabBar({ state, navigation }) {
   const insets = useSafeAreaInsets();

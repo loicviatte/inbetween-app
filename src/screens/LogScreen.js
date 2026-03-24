@@ -9,7 +9,13 @@ import {
   KeyboardAvoidingView,
   Platform,
   PanResponder,
+  Image,
+  Animated,
+  Dimensions,
 } from 'react-native';
+
+const SCREEN_W = Dimensions.get('window').width;
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Colors, Fonts, Spacing } from '../theme';
@@ -105,25 +111,57 @@ export default function LogScreen({ navigation }) {
   const [notes, setNotes] = useState([]);
   const [search, setSearch] = useState('');
   const [modalVisible, setModalVisible] = useState(false);
+  const [photoUri, setPhotoUri] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const slideAnim = useRef(new Animated.Value(0)).current;
+  const activeTabRef = useRef('CLASS');
+  const switchTabRef = useRef(null);
 
   const panResponder = useRef(
     PanResponder.create({
       onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dx) > 10 && Math.abs(g.dy) < 20,
       onPanResponderRelease: (_, g) => {
-        if (g.dx > 60) {
-          navigation.navigate('NoteDetail', {});
+        if (g.dx > 60 && activeTabRef.current === 'NOTES') {
+          switchTabRef.current('CLASS');
+        } else if (g.dx < -60 && activeTabRef.current === 'CLASS') {
+          switchTabRef.current('NOTES');
         }
       },
     })
   ).current;
 
   async function load() {
-    const [allInputs, allNotes] = await Promise.all([getClassInputs(), getNotes()]);
-    setInputs(allInputs); // already sorted by created_at desc from Supabase
-    setNotes(allNotes);   // already sorted by updated_at desc from Supabase
+    const [allInputs, allNotes, savedPhoto] = await Promise.all([getClassInputs(), getNotes(), AsyncStorage.getItem('@profile_photo')]);
+    setInputs(allInputs);
+    setNotes(allNotes);
+    setPhotoUri(savedPhoto || null);
   }
 
-  useFocusEffect(useCallback(() => { load(); }, []));
+  function switchTab(tab) {
+    activeTabRef.current = tab;
+    setActiveTab(tab);
+    Animated.spring(slideAnim, {
+      toValue: tab === 'NOTES' ? -SCREEN_W : 0,
+      useNativeDriver: true,
+      tension: 80,
+      friction: 15,
+    }).start();
+  }
+  switchTabRef.current = switchTab;
+
+  async function handleRefresh() {
+    setRefreshing(true);
+    await load();
+    setRefreshing(false);
+  }
+
+  useFocusEffect(useCallback(() => {
+    fadeAnim.setValue(0);
+    Animated.timing(fadeAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
+    load();
+  }, []));
 
   function handleAdd() {
     if (activeTab === 'NOTES') {
@@ -149,10 +187,14 @@ export default function LogScreen({ navigation }) {
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
+      <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
       <View style={styles.header}>
         <Logo />
         <TouchableOpacity style={styles.profileIcon} onPress={() => navigation.navigate('PROFILE')} activeOpacity={0.8}>
-          <Text style={styles.profileInitial}>A</Text>
+          {photoUri
+            ? <Image source={{ uri: photoUri }} style={styles.profilePhoto} />
+            : <Text style={styles.profileInitial}>A</Text>
+          }
         </TouchableOpacity>
       </View>
 
@@ -162,7 +204,7 @@ export default function LogScreen({ navigation }) {
           <TouchableOpacity
             key={tab}
             style={[styles.tabPill, activeTab === tab && styles.tabPillActive]}
-            onPress={() => setActiveTab(tab)}
+            onPress={() => switchTab(tab)}
             activeOpacity={0.7}
           >
             <Text style={[styles.tabPillText, activeTab === tab && styles.tabPillTextActive]}>
@@ -173,30 +215,42 @@ export default function LogScreen({ navigation }) {
       </View>
 
       {/* List */}
-      <View style={{ flex: 1 }} {...(activeTab === 'NOTES' ? panResponder.panHandlers : {})}>
-        {activeTab === 'CLASS' ? (
-          <FlatList
-            data={filteredInputs}
-            keyExtractor={(item) => item.id}
-            renderItem={({ item }) => (
-              <ClassItem item={item} onPress={() => navigation.navigate('ClassDetail', { inputId: item.id })} />
-            )}
-            contentContainerStyle={styles.listContent}
-            showsVerticalScrollIndicator={false}
-            ListEmptyComponent={<EmptyState text="No class logs yet. Tap ADD to log your first session." />}
-          />
-        ) : (
-          <FlatList
-            data={filteredNotes}
-            keyExtractor={(item) => item.id}
-            renderItem={({ item }) => (
-              <NoteItem item={item} onPress={() => navigation.navigate('NoteDetail', { noteId: item.id })} />
-            )}
-            contentContainerStyle={styles.listContent}
-            showsVerticalScrollIndicator={false}
-            ListEmptyComponent={<EmptyState text="No notes yet. Tap ADD or swipe right to create one." />}
-          />
-        )}
+      <View style={{ flex: 1, overflow: 'hidden' }} {...panResponder.panHandlers}>
+        <Animated.View style={{
+          flexDirection: 'row',
+          width: SCREEN_W * 2,
+          height: '100%',
+          transform: [{ translateX: slideAnim }],
+        }}>
+          <View style={{ width: SCREEN_W, height: '100%' }}>
+            <FlatList
+              data={filteredInputs}
+              keyExtractor={(item) => item.id}
+              renderItem={({ item }) => (
+                <ClassItem item={item} onPress={() => navigation.navigate('ClassDetail', { inputId: item.id })} />
+              )}
+              contentContainerStyle={styles.listContent}
+              showsVerticalScrollIndicator={false}
+              ListEmptyComponent={<EmptyState text="No class logs yet. Tap ADD to log your first session." />}
+              refreshing={refreshing}
+              onRefresh={handleRefresh}
+            />
+          </View>
+          <View style={{ width: SCREEN_W, height: '100%' }}>
+            <FlatList
+              data={filteredNotes}
+              keyExtractor={(item) => item.id}
+              renderItem={({ item }) => (
+                <NoteItem item={item} onPress={() => navigation.navigate('NoteDetail', { noteId: item.id })} />
+              )}
+              contentContainerStyle={styles.listContent}
+              showsVerticalScrollIndicator={false}
+              ListEmptyComponent={<EmptyState text="No notes yet. Tap ADD to create one." />}
+              refreshing={refreshing}
+              onRefresh={handleRefresh}
+            />
+          </View>
+        </Animated.View>
       </View>
 
       {/* Bottom bar */}
@@ -232,6 +286,7 @@ export default function LogScreen({ navigation }) {
         onClose={() => setModalVisible(false)}
         onSubmitted={() => { setModalVisible(false); load(); }}
       />
+      </Animated.View>
     </SafeAreaView>
   );
 }
@@ -262,6 +317,7 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   profileInitial: { fontFamily: Fonts.jakartaBold, fontSize: 14, color: '#7A4A00' },
+  profilePhoto: { width: 34, height: 34, borderRadius: 17 },
 
   // Tab switcher — pill style
   tabRow: {

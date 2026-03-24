@@ -1,15 +1,13 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
-  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
-import * as Clipboard from 'expo-clipboard';
 import { Colors, Fonts, Spacing } from '../theme';
 import {
   getSlots,
@@ -17,10 +15,8 @@ import {
   getSessionLabel,
   startTrainingSession,
 } from '../services/algorithm';
-import { getFocusPoints, getRecentClassInputs, getTopFocusPointsWithCounts, getUser } from '../services/storage';
-import { generateCoachShareSummary } from '../services/anthropic';
-
-const SHARE_LOADING_MSGS = ['Gathering your notes...', 'Writing summary...', 'Almost ready...'];
+import { getFocusPoints } from '../services/storage';
+import { getActiveSession } from '../services/activeSession';
 
 function Logo() {
   return <Text style={styles.logo}>EE</Text>;
@@ -85,14 +81,9 @@ export default function FocusScreen({ navigation }) {
   const [upcoming, setUpcoming] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [starting, setStarting] = useState(null); // 1 | 2 | null
-  const [shareState, setShareState] = useState('default'); // 'default' | 'loading' | 'success'
-  const [shareLoadingMsg, setShareLoadingMsg] = useState(SHARE_LOADING_MSGS[0]);
-  const shareMsgRef = useRef(null);
 
   useFocusEffect(
     useCallback(() => {
-      setShareState('default');
-      setShareLoadingMsg(SHARE_LOADING_MSGS[0]);
       async function load() {
         setLoaded(false);
         const [{ slot1: s1, slot2: s2 }, allPoints] = await Promise.all([
@@ -115,39 +106,9 @@ export default function FocusScreen({ navigation }) {
     }, [])
   );
 
-  async function handleShare() {
-    if (shareState === 'loading') return;
-    setShareState('loading');
-    setShareLoadingMsg(SHARE_LOADING_MSGS[0]);
-    let msgIdx = 0;
-    shareMsgRef.current = setInterval(() => {
-      msgIdx = (msgIdx + 1) % SHARE_LOADING_MSGS.length;
-      setShareLoadingMsg(SHARE_LOADING_MSGS[msgIdx]);
-    }, 1500);
-    try {
-      const [recentInputs, topFocusPoints, user] = await Promise.all([
-        getRecentClassInputs(3),
-        getTopFocusPointsWithCounts(3),
-        getUser(),
-      ]);
-      const summary = await generateCoachShareSummary({
-        recentInputs,
-        topFocusPoints,
-        totalFocusWorked: user?.total_focus_worked || 0,
-        lastActiveDate: user?.last_active_date || null,
-      });
-      clearInterval(shareMsgRef.current);
-      await Clipboard.setStringAsync(summary);
-      setShareState('success');
-    } catch {
-      clearInterval(shareMsgRef.current);
-      setShareState('default');
-      Alert.alert('Something went wrong', 'Try again.');
-    }
-  }
-
   async function handleStart(slotNumber) {
     if (!slot1) return;
+    if (getActiveSession()) return;
     setStarting(slotNumber);
     const focusPointId = slotNumber === 1 ? slot1.id : slot2?.id;
     if (!focusPointId) { setStarting(null); return; }
@@ -243,36 +204,6 @@ export default function FocusScreen({ navigation }) {
           </>
         )}
 
-        <View style={styles.shareWrap}>
-          <Text style={styles.shareHint}>Generates a short summary of your recent work and corrections — ready to paste to your coach before a lesson.</Text>
-          <TouchableOpacity
-            style={[
-              styles.shareBtn,
-              shareState === 'loading' && styles.shareBtnLoading,
-              shareState === 'success' && styles.shareBtnSuccess,
-            ]}
-            onPress={handleShare}
-            activeOpacity={0.82}
-            disabled={shareState === 'loading'}
-          >
-            {shareState === 'loading' ? (
-              <View style={styles.shareInner}>
-                <ActivityIndicator size="small" color="rgba(17,12,17,0.4)" />
-                <Text style={styles.shareBtnTextLoading}>{shareLoadingMsg}</Text>
-              </View>
-            ) : shareState === 'success' ? (
-              <View style={styles.shareInner}>
-                <Text style={styles.shareBtnTextSuccess}>Copied to clipboard</Text>
-                <Text style={styles.shareCheckmark}>✓</Text>
-              </View>
-            ) : (
-              <View style={styles.shareInner}>
-                <Text style={styles.shareIconArrow}>↑</Text>
-                <Text style={styles.shareBtnText}>Share with Coach</Text>
-              </View>
-            )}
-          </TouchableOpacity>
-        </View>
       </View>
     </SafeAreaView>
   );
@@ -498,40 +429,4 @@ const styles = StyleSheet.create({
     flex: 1,
   },
 
-  // ── Share with Coach ──────────────────────────────────────────────────────
-  shareWrap: {
-    marginTop: 'auto',
-    paddingTop: 16,
-  },
-  shareBtn: {
-    borderRadius: 14,
-    paddingVertical: 15,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(17,12,17,0.18)',
-    backgroundColor: 'rgba(17,12,17,0.03)',
-  },
-  shareBtnLoading: {
-    borderColor: 'rgba(17,12,17,0.08)',
-    backgroundColor: 'transparent',
-  },
-  shareBtnSuccess: {
-    borderColor: '#22a861',
-    backgroundColor: 'rgba(34,168,97,0.06)',
-  },
-  shareInner: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  shareIconArrow: { fontSize: 14, color: 'rgba(17,12,17,0.5)' },
-  shareBtnText: { fontFamily: Fonts.jakartaBold, fontSize: 14, color: Colors.black },
-  shareBtnTextLoading: { fontFamily: Fonts.jakartaRegular, fontSize: 13, color: 'rgba(17,12,17,0.4)', marginLeft: 8 },
-  shareBtnTextSuccess: { fontFamily: Fonts.jakartaBold, fontSize: 14, color: '#22a861' },
-  shareCheckmark: { fontSize: 14, color: '#22a861' },
-  shareHint: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 11,
-    color: Colors.secondary,
-    lineHeight: 16,
-    marginBottom: 10,
-    textAlign: 'center',
-  },
 });
