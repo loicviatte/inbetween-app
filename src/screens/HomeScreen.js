@@ -333,11 +333,12 @@ export default function HomeScreen({ navigation }) {
 
       {/* ── Bottom dock ── */}
       <View style={s.bottomDock}>
-        <View style={s.dockSep} />
-
         {/* This Week heatmap */}
         <View style={s.weekSection}>
-          <Text style={s.sectionLabel}>THIS WEEK</Text>
+          <View style={s.sectionLabelRow}>
+            <Text style={s.sectionLabel}>THIS WEEK</Text>
+            <View style={s.sectionLabelLine} />
+          </View>
           <WeekHeatmap activity={weekActivity} onDayPress={(i) => setDayModal(i)} />
         </View>
 
@@ -776,13 +777,19 @@ const s = StyleSheet.create({
 
   // This Week
   weekSection: { marginBottom: 14 },
+  sectionLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 10,
+  },
+  sectionLabelLine: { flex: 1, height: 1, backgroundColor: '#EFEFEF' },
   sectionLabel: {
     fontFamily: Fonts.jakartaBold,
     fontSize: 11,
     color: '#888',
     textTransform: 'uppercase',
     letterSpacing: 0.8,
-    marginBottom: 10,
   },
 
   // Stats bar
