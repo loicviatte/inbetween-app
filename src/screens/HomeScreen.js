@@ -16,12 +16,11 @@ import {
   getUser,
   getTrainingSessionsThisWeek,
   getFocusTrainedCount,
-  getUserSummary,
   getTrainingDaysThisWeek,
   getRecentClassInputs,
   getTopFocusPointsWithCounts,
 } from '../services/storage';
-import { getSlots, refreshNudgeMessage, getSessionCountForFocus } from '../services/algorithm';
+import { getSlots, getSessionCountForFocus } from '../services/algorithm';
 import { generateCoachShareSummary } from '../services/anthropic';
 import LogModal from '../components/LogModal';
 
@@ -41,12 +40,6 @@ function ordinal(n) {
   return n + (s[(v - 20) % 10] || s[v] || s[0]);
 }
 
-function truncateSummary(text, maxChars = 110) {
-  if (!text || text.length <= maxChars) return text;
-  const cut = text.lastIndexOf(' ', maxChars);
-  return text.slice(0, cut > 0 ? cut : maxChars) + '…';
-}
-
 function WeekHeatmap({ activeDays }) {
   const todayIdx = (new Date().getDay() + 6) % 7; // Mon=0…Sun=6
   const labels = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
@@ -56,8 +49,21 @@ function WeekHeatmap({ activeDays }) {
         const done = activeDays.has(i);
         const isToday = i === todayIdx;
         return (
-          <View key={i} style={[h.cell, done && h.cellDone, isToday && !done && h.cellToday]}>
-            <Text style={[h.label, done && h.labelDone, isToday && !done && h.labelToday]}>
+          <View
+            key={i}
+            style={[
+              h.cell,
+              done && h.cellDone,
+              isToday && !done && h.cellToday,
+            ]}
+          >
+            <Text
+              style={[
+                h.label,
+                done && h.labelDone,
+                isToday && !done && h.labelToday,
+              ]}
+            >
               {label}
             </Text>
           </View>
@@ -72,42 +78,13 @@ export default function HomeScreen({ navigation }) {
   const [slot1, setSlot1] = useState(null);
   const [slot2, setSlot2] = useState(null);
   const [sessionCount, setSessionCount] = useState(0);
-  const [coachSummary, setCoachSummary] = useState('');
   const [sessionsThisWeek, setSessionsThisWeek] = useState(0);
   const [focusCount, setFocusCount] = useState(0);
   const [activeDays, setActiveDays] = useState(new Set());
   const [logModalVisible, setLogModalVisible] = useState(false);
-  const [shareState, setShareState] = useState('default');
+  const [shareState, setShareState] = useState('default'); // 'default' | 'loading' | 'success'
   const [shareLoadingMsg, setShareLoadingMsg] = useState(SHARE_LOADING_MSGS[0]);
   const shareMsgRef = useRef(null);
-
-  async function load() {
-    const [u, slots, sessions, fc, summary, days] = await Promise.all([
-      getUser(),
-      getSlots(),
-      getTrainingSessionsThisWeek(),
-      getFocusTrainedCount(),
-      getUserSummary(),
-      getTrainingDaysThisWeek(),
-    ]);
-    setUser(u);
-    setSlot1(slots.slot1);
-    setSlot2(slots.slot2);
-    setSessionsThisWeek(sessions);
-    setFocusCount(fc);
-    setActiveDays(days);
-    setCoachSummary(
-      summary || "Log your first class to receive personalized coaching insights."
-    );
-    if (slots.slot1?.id) {
-      const count = await getSessionCountForFocus(slots.slot1.id);
-      setSessionCount(count);
-    }
-    // Fire nudge refresh in background
-    refreshNudgeMessage();
-  }
-
-  useFocusEffect(useCallback(() => { load(); }, []));
 
   async function handleShare() {
     if (shareState === 'loading') return;
@@ -139,7 +116,27 @@ export default function HomeScreen({ navigation }) {
     }
   }
 
-  const heroMessage = truncateSummary(coachSummary);
+  async function load() {
+    const [u, slots, sessions, fc, days] = await Promise.all([
+      getUser(),
+      getSlots(),
+      getTrainingSessionsThisWeek(),
+      getFocusTrainedCount(),
+      getTrainingDaysThisWeek(),
+    ]);
+    setUser(u);
+    setSlot1(slots.slot1);
+    setSlot2(slots.slot2);
+    setSessionsThisWeek(sessions);
+    setFocusCount(fc);
+    setActiveDays(days || new Set());
+    if (slots.slot1?.id) {
+      const count = await getSessionCountForFocus(slots.slot1.id);
+      setSessionCount(count);
+    }
+  }
+
+  useFocusEffect(useCallback(() => { load(); }, []));
 
   return (
     <SafeAreaView style={s.safe}>
@@ -171,17 +168,17 @@ export default function HomeScreen({ navigation }) {
             <Text style={s.heroBadgeText}>TODAY'S FOCUS</Text>
           </View>
 
-          {!!heroMessage && (
-            <Text style={s.heroWhy} numberOfLines={2}>{heroMessage}</Text>
-          )}
+          <Text style={s.heroWhy} numberOfLines={2}>
+            {sessionCount > 0
+              ? `You've done this ${sessionCount} time${sessionCount !== 1 ? 's' : ''} — keep drilling here.`
+              : 'Your top priority right now. Start your first session.'}
+          </Text>
 
           <Text style={s.heroFocusName} numberOfLines={2}>
             {slot1?.name || 'No focus yet'}
           </Text>
 
-          <Text style={s.heroCount}>
-            {ordinal(sessionCount + 1)} session
-          </Text>
+          <Text style={s.heroCount}>{ordinal(sessionCount + 1)} Session</Text>
 
           <TouchableOpacity
             style={s.startBtn}
@@ -190,48 +187,34 @@ export default function HomeScreen({ navigation }) {
           >
             <Text style={s.startBtnText}>Start Now</Text>
           </TouchableOpacity>
-
         </View>
 
-        {/* ── "or" divider + alternatives ── */}
-        {slot2 && (
-          <>
-            <Text style={s.orLabel}>or</Text>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={s.altScroll}
+        {/* ── "or" + alternatives ── */}
+        <Text style={s.orLabel}>or</Text>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={s.altScroll}
+        >
+          {slot2 && (
+            <TouchableOpacity
+              style={s.altCard}
+              onPress={() => navigation.navigate('TRAIN')}
+              activeOpacity={0.8}
             >
-              <TouchableOpacity
-                style={s.altCard}
-                onPress={() => navigation.navigate('TRAIN')}
-                activeOpacity={0.8}
-              >
-                <Text style={s.altLabel}>Try instead</Text>
-                <Text style={s.altName} numberOfLines={2}>{slot2.name}</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[s.altCard, s.altCardDark]}
-                onPress={() => setLogModalVisible(true)}
-                activeOpacity={0.8}
-              >
-                <Text style={[s.altLabel, s.altLabelDark]}>Just came back</Text>
-                <Text style={[s.altName, s.altNameDark]}>Log Class</Text>
-              </TouchableOpacity>
-            </ScrollView>
-          </>
-        )}
-
-        {!slot2 && (
+              <Text style={s.altLabel}>Try instead</Text>
+              <Text style={s.altName} numberOfLines={2}>{slot2.name}</Text>
+            </TouchableOpacity>
+          )}
           <TouchableOpacity
-            style={s.logClassRow}
+            style={s.altCard}
             onPress={() => setLogModalVisible(true)}
-            activeOpacity={0.7}
+            activeOpacity={0.8}
           >
-            <Text style={s.logClassText}>Log a class →</Text>
+            <Text style={s.altLabel}>Just came back</Text>
+            <Text style={s.altName}>Log Class</Text>
           </TouchableOpacity>
-        )}
+        </ScrollView>
 
         {/* ── This Week heatmap ── */}
         <View style={s.section}>
@@ -275,15 +258,15 @@ export default function HomeScreen({ navigation }) {
         <View style={s.statsRow}>
           <View style={s.statCard}>
             <Text style={s.statValue}>{sessionsThisWeek}</Text>
-            <Text style={s.statLabel}>Sessions{'\n'}this week</Text>
-          </View>
-          <View style={s.statCard}>
-            <Text style={s.statValue}>{focusCount}</Text>
-            <Text style={s.statLabel}>Areas{'\n'}trained</Text>
+            <Text style={s.statLabel}>This Week</Text>
           </View>
           <View style={s.statCard}>
             <Text style={s.statValue}>{sessionCount}</Text>
-            <Text style={s.statLabel}>Sessions on{'\n'}top focus</Text>
+            <Text style={s.statLabel}>Total</Text>
+          </View>
+          <View style={s.statCard}>
+            <Text style={s.statValue}>{focusCount}</Text>
+            <Text style={s.statLabel}>Areas</Text>
           </View>
         </View>
       </ScrollView>
@@ -297,25 +280,33 @@ export default function HomeScreen({ navigation }) {
   );
 }
 
-// ─── Week heatmap styles ──────────────────────────────────────────────────────
+// ─── Heatmap styles ───────────────────────────────────────────────────────────
 const h = StyleSheet.create({
   row: { flexDirection: 'row', gap: 6 },
   cell: {
     flex: 1,
     aspectRatio: 1,
-    backgroundColor: 'rgba(17,12,17,0.05)',
+    backgroundColor: '#F5F5F5',
     borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  cellDone: { backgroundColor: Colors.orange },
-  cellToday: { borderWidth: 1.5, borderColor: Colors.orange, backgroundColor: Colors.white },
-  label: { fontFamily: Fonts.jakartaBold, fontSize: 12, color: 'rgba(17,12,17,0.3)' },
+  cellDone: { backgroundColor: '#F5A623' },
+  cellToday: {
+    backgroundColor: Colors.white,
+    borderWidth: 2,
+    borderColor: '#F5A623',
+  },
+  label: {
+    fontFamily: Fonts.jakartaBold,
+    fontSize: 11,
+    color: '#999',
+  },
   labelDone: { color: Colors.white },
-  labelToday: { color: Colors.orange },
+  labelToday: { color: '#F5A623' },
 });
 
-// ─── Main styles ─────────────────────────────────────────────────────────────
+// ─── Main styles ──────────────────────────────────────────────────────────────
 const s = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.background },
   scroll: { flex: 1 },
@@ -334,47 +325,48 @@ const s = StyleSheet.create({
   },
   logo: {
     fontFamily: Fonts.monument,
-    fontSize: 20,
-    color: Colors.black,
+    fontSize: 22,
+    color: '#111',
     letterSpacing: 1,
   },
   avatar: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: Colors.profileIcon,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#F5E6C8',
     alignItems: 'center',
     justifyContent: 'center',
   },
   avatarText: {
     fontFamily: Fonts.jakartaBold,
-    fontSize: 14,
-    color: '#7A4A00',
+    fontSize: 15,
+    color: '#8A6A2E',
   },
 
   // Time of day
   timeOfDay: {
     fontFamily: Fonts.jakartaBold,
-    fontSize: 11,
-    color: Colors.secondary,
-    letterSpacing: 0.8,
-    marginBottom: 14,
+    fontSize: 12,
+    color: '#999',
+    letterSpacing: 0.5,
+    marginBottom: 16,
   },
 
   // Hero card
   hero: {
-    backgroundColor: Colors.black,
+    backgroundColor: '#1A1A1A',
     borderRadius: 20,
-    padding: 22,
-    marginBottom: 14,
+    padding: 24,
+    paddingHorizontal: 20,
+    marginBottom: 16,
   },
   heroBadge: {
     alignSelf: 'flex-start',
-    backgroundColor: 'rgba(255,157,0,0.18)',
+    backgroundColor: 'rgba(245,166,35,0.2)',
     borderRadius: 6,
     paddingHorizontal: 10,
     paddingVertical: 5,
-    marginBottom: 14,
+    marginBottom: 12,
   },
   heroBadgeText: {
     fontFamily: Fonts.jakartaBold,
@@ -384,49 +376,93 @@ const s = StyleSheet.create({
   },
   heroWhy: {
     fontFamily: Fonts.jakartaRegular,
-    fontSize: 13,
-    color: 'rgba(255,255,255,0.5)',
-    lineHeight: 19,
+    fontSize: 12,
+    color: '#BBB',
+    lineHeight: 17,
     marginBottom: 10,
   },
   heroFocusName: {
     fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 28,
-    color: Colors.white,
-    lineHeight: 34,
-    marginBottom: 6,
-    letterSpacing: -0.3,
+    fontSize: 26,
+    color: '#fff',
+    lineHeight: 30,
+    marginBottom: 8,
   },
   heroCount: {
     fontFamily: Fonts.jakartaMedium,
     fontSize: 11,
-    color: 'rgba(255,255,255,0.3)',
-    letterSpacing: 0.4,
-    marginBottom: 20,
-    textTransform: 'uppercase',
+    color: '#999',
+    letterSpacing: 0.5,
+    marginBottom: 16,
   },
   startBtn: {
-    backgroundColor: Colors.orange,
+    backgroundColor: '#F5A623',
     borderRadius: 12,
-    paddingVertical: 15,
+    paddingVertical: 14,
+    paddingHorizontal: 20,
     alignItems: 'center',
   },
   startBtnText: {
     fontFamily: Fonts.jakartaExtraBold,
     fontSize: 15,
-    color: '#000',
-    letterSpacing: 0.3,
+    color: '#fff',
+    letterSpacing: 0.5,
   },
-  shareWrap: {
+
+  // "or" + alternatives
+  orLabel: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 12,
+    color: '#999',
+    textAlign: 'center',
+    marginBottom: 12,
+    letterSpacing: 0.5,
+  },
+  altScroll: {
+    gap: 10,
+    paddingBottom: 4,
+    marginBottom: 18,
+  },
+  altCard: {
+    width: 140,
+    backgroundColor: '#F8F8F8',
+    borderWidth: 1,
+    borderColor: '#E8E8E8',
+    borderRadius: 14,
+    padding: 12,
+  },
+  altLabel: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 11,
+    color: '#999',
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+    marginBottom: 4,
+  },
+  altName: {
+    fontFamily: Fonts.jakartaBold,
+    fontSize: 13,
+    color: '#111',
+    lineHeight: 18,
+  },
+
+  // This Week
+  section: {
     marginBottom: 16,
   },
-  shareHint: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 11,
-    color: Colors.secondary,
-    lineHeight: 16,
+  sectionLabel: {
+    fontFamily: Fonts.jakartaBold,
+    fontSize: 12,
+    color: '#999',
+    textTransform: 'uppercase' ,
+    letterSpacing: 0.5,
     marginBottom: 10,
-    textAlign: 'center',
+  },
+
+  // Share with Coach
+  shareWrap: {
+    paddingTop: 16,
+    marginBottom: 16,
   },
   shareBtn: {
     borderRadius: 14,
@@ -451,71 +487,13 @@ const s = StyleSheet.create({
   shareBtnTextLoading: { fontFamily: Fonts.jakartaRegular, fontSize: 13, color: 'rgba(17,12,17,0.4)', marginLeft: 8 },
   shareBtnTextSuccess: { fontFamily: Fonts.jakartaBold, fontSize: 14, color: '#22a861' },
   shareCheckmark: { fontSize: 14, color: '#22a861' },
-
-  // "or" + alternatives
-  orLabel: {
+  shareHint: {
     fontFamily: Fonts.jakartaRegular,
-    fontSize: 12,
+    fontSize: 11,
     color: Colors.secondary,
-    textAlign: 'center',
-    marginBottom: 12,
-  },
-  altScroll: {
-    gap: 10,
-    paddingBottom: 2,
-    marginBottom: 24,
-  },
-  altCard: {
-    width: 148,
-    backgroundColor: Colors.statCardBg,
-    borderWidth: 1,
-    borderColor: Colors.statCardBorder,
-    borderRadius: 14,
-    padding: 14,
-  },
-  altCardDark: {
-    backgroundColor: 'rgba(17,12,17,0.06)',
-    borderColor: 'rgba(17,12,17,0.12)',
-  },
-  altLabel: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 10,
-    color: Colors.secondary,
-    textTransform: 'uppercase',
-    letterSpacing: 0.3,
-    marginBottom: 6,
-  },
-  altLabelDark: { color: Colors.secondary },
-  altName: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 14,
-    color: Colors.black,
-    lineHeight: 19,
-  },
-  altNameDark: { color: Colors.black },
-
-  // Log class link (when no slot2)
-  logClassRow: {
-    alignItems: 'center',
-    paddingVertical: 12,
-    marginBottom: 20,
-  },
-  logClassText: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 13,
-    color: Colors.secondary,
-  },
-
-  // Sections
-  section: {
-    marginBottom: 20,
-  },
-  sectionLabel: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 10,
-    color: Colors.secondary,
-    letterSpacing: 0.8,
+    lineHeight: 16,
     marginBottom: 10,
+    textAlign: 'center',
   },
 
   // Stats
@@ -525,24 +503,22 @@ const s = StyleSheet.create({
   },
   statCard: {
     flex: 1,
-    backgroundColor: Colors.statCardBg,
-    borderWidth: 0.25,
-    borderColor: Colors.statCardBorder,
+    backgroundColor: '#F8F8F8',
     borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    alignItems: 'flex-start',
+    padding: 12,
+    alignItems: 'center',
   },
   statValue: {
     fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 22,
-    color: Colors.black,
-    marginBottom: 4,
+    fontSize: 18,
+    color: '#111',
   },
   statLabel: {
     fontFamily: Fonts.jakartaRegular,
     fontSize: 10,
-    color: Colors.secondary,
-    lineHeight: 14,
+    color: '#999',
+    marginTop: 4,
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
   },
 });
