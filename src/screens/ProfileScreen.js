@@ -6,6 +6,11 @@ import {
   TouchableOpacity,
   Image,
   Animated,
+  Modal,
+  TextInput,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -15,13 +20,33 @@ import { Colors, Fonts, Spacing } from '../theme';
 import {
   getUser,
   getClassInputs,
-  getFocusTrainedCount,
+  getFocusPoints,
   getTopFocusPointsWithCounts,
+  saveUserProfile,
 } from '../services/storage';
 import { supabase } from '../lib/supabase';
 import RadarChart from '../components/RadarChart';
 
 const AVATAR_KEY = '@profile_photo';
+
+const RADAR_CATEGORIES = ['Stability', 'Technicality', 'Strength', 'Creativity', 'Musicality'];
+// Checked in order of specificity — most specific first to avoid greedy matches
+const CATEGORY_KEYWORDS = {
+  Musicality:   ['music', 'rhythm', 'beat', 'tempo', 'phrasing', 'accent', 'musical', 'syncopation'],
+  Creativity:   ['expression', 'artistry', 'performance', 'character', 'style', 'interpret', 'emotion', 'feeling', 'presentation'],
+  Strength:     ['power', 'drive', 'energy', 'speed', 'strength', 'push', 'pull', 'force', 'endurance', 'stamina'],
+  Technicality: ['footwork', 'technique', 'step', 'action', 'rise', 'fall', 'swing', 'sway', 'rotation', 'turn', 'cbm', 'heel', 'toe', 'alignment', 'lead', 'follow', 'timing', 'contra'],
+  Stability:    ['balance', 'posture', 'hold', 'frame', 'weight', 'hip', 'standing', 'stable', 'grounding', 'position'],
+};
+const CATEGORY_CHECK_ORDER = ['Musicality', 'Creativity', 'Strength', 'Technicality', 'Stability'];
+
+function categorizeFocus(name) {
+  const lower = (name || '').toLowerCase();
+  for (const cat of CATEGORY_CHECK_ORDER) {
+    if (CATEGORY_KEYWORDS[cat].some((kw) => lower.includes(kw))) return cat;
+  }
+  return null; // unmatched — does not inflate any category
+}
 
 function Logo() { return <Text style={styles.logo}>EE</Text>; }
 
@@ -37,20 +62,55 @@ function StatBox({ value, label, showDivider }) {
   );
 }
 
-function TopFocusRow({ name, count, maxCount }) {
-  const fill = maxCount > 0 ? count / maxCount : 0;
+const PLACES_KEY = process.env.EXPO_PUBLIC_GOOGLE_PLACES_API_KEY;
+
+function PlacesInput({ value, onChangeText, onPlaceSelect }) {
+  const [suggestions, setSuggestions] = useState([]);
+  const debounceRef = useRef(null);
+
+  function handleChange(text) {
+    onChangeText(text);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (!PLACES_KEY || !text || text.length < 2) { setSuggestions([]); return; }
+    debounceRef.current = setTimeout(async () => {
+      try {
+        const url = `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(text)}&types=establishment&key=${PLACES_KEY}`;
+        const res = await fetch(url);
+        const json = await res.json();
+        setSuggestions(json.predictions?.slice(0, 5) || []);
+      } catch { setSuggestions([]); }
+    }, 350);
+  }
+
+  function handleSelect(p) {
+    const name = p.structured_formatting?.main_text || p.description;
+    onChangeText(name);
+    setSuggestions([]);
+    onPlaceSelect(name, p.place_id);
+  }
+
   return (
-    <View style={styles.focusRow}>
-      <View style={styles.focusRowTop}>
-        <Text style={styles.focusName} numberOfLines={1}>{name}</Text>
-        <View style={styles.countBadge}>
-          <Text style={styles.countBadgeText}>{count}</Text>
+    <View>
+      <TextInput
+        style={em.input}
+        value={value}
+        onChangeText={handleChange}
+        placeholder="Search for a studio or address"
+        placeholderTextColor="rgba(17,12,17,0.3)"
+        autoCorrect={false}
+      />
+      {suggestions.length > 0 && (
+        <View style={em.suggestions}>
+          {suggestions.map((p) => (
+            <TouchableOpacity key={p.place_id} style={em.suggestion} onPress={() => handleSelect(p)} activeOpacity={0.7}>
+              <Text style={em.suggestionMain} numberOfLines={1}>{p.structured_formatting?.main_text || p.description}</Text>
+              {!!p.structured_formatting?.secondary_text && (
+                <Text style={em.suggestionSub} numberOfLines={1}>{p.structured_formatting.secondary_text}</Text>
+              )}
+            </TouchableOpacity>
+          ))}
         </View>
-      </View>
-      <View style={styles.progressTrack}>
-        <View style={[styles.progressFill, { flex: fill }]} />
-        <View style={{ flex: 1 - fill }} />
-      </View>
+      )}
     </View>
   );
 }
@@ -59,7 +119,13 @@ export default function ProfileScreen({ navigation }) {
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const [user, setUser] = useState(null);
   const [stats, setStats] = useState({ totalClasses: 0, totalSessions: 0, activeFocusAreas: 0 });
-  const [topFocus, setTopFocus] = useState([]);
+  const [radarScores, setRadarScores] = useState([0, 0, 0, 0, 0]);
+  const [editVisible, setEditVisible] = useState(false);
+  const [editName, setEditName] = useState('');
+  const [editStudio, setEditStudio] = useState('');
+  const [editStudioPlaceId, setEditStudioPlaceId] = useState(null);
+  const [editStyle, setEditStyle] = useState('');
+  const [saving, setSaving] = useState(false);
   const [photoUri, setPhotoUri] = useState(null);
 
   useFocusEffect(useCallback(() => {
@@ -69,15 +135,15 @@ export default function ProfileScreen({ navigation }) {
       const [
         userData,
         classInputs,
-        activeFocusAreas,
+        activeFocusPoints,
         topFocusPoints,
         { data: { user: authUser } },
         savedPhoto,
       ] = await Promise.all([
         getUser(),
         getClassInputs(),
-        getFocusTrainedCount(),
-        getTopFocusPointsWithCounts(3),
+        getFocusPoints(),
+        getTopFocusPointsWithCounts(100),
         supabase.auth.getUser(),
         AsyncStorage.getItem(AVATAR_KEY),
       ]);
@@ -92,9 +158,18 @@ export default function ProfileScreen({ navigation }) {
         totalSessions = count ?? 0;
       }
 
+      const top = topFocusPoints ?? [];
+      // Radar: bucket completed sessions by category, then normalize
+      const catCounts = { Stability: 0, Technicality: 0, Strength: 0, Creativity: 0, Musicality: 0 };
+      for (const fp of top) {
+        catCounts[categorizeFocus(fp.name)] += fp.count;
+      }
+      const maxCat = Math.max(...Object.values(catCounts), 1);
+      const scores = RADAR_CATEGORIES.map((cat) => catCounts[cat] / maxCat);
+
       setUser(userData);
-      setStats({ totalClasses: classInputs?.length ?? 0, totalSessions, activeFocusAreas: activeFocusAreas ?? 0 });
-      setTopFocus(topFocusPoints ?? []);
+      setStats({ totalClasses: classInputs?.length ?? 0, totalSessions, activeFocusAreas: activeFocusPoints?.length ?? 0 });
+      setRadarScores(scores);
       if (savedPhoto) setPhotoUri(savedPhoto);
     }
     load();
@@ -116,11 +191,29 @@ export default function ProfileScreen({ navigation }) {
     }
   }
 
+  function openEdit() {
+    setEditName(user?.name || '');
+    setEditStudio(user?.main_studio || '');
+    setEditStudioPlaceId(user?.main_studio_place_id || null);
+    setEditStyle(user?.dance_style || '');
+    setEditVisible(true);
+  }
+
+  async function handleSaveProfile() {
+    if (saving) return;
+    setSaving(true);
+    const name = editName.trim();
+    const main_studio = editStudio.trim();
+    await saveUserProfile({ name, main_studio, main_studio_place_id: editStudioPlaceId, dance_style: editStyle });
+    setUser(prev => ({ ...prev, name, main_studio, main_studio_place_id: editStudioPlaceId, dance_style: editStyle }));
+    setSaving(false);
+    setEditVisible(false);
+  }
+
   async function handleLogout() {
     await supabase.auth.signOut();
   }
 
-  const maxCount = topFocus.length > 0 ? Math.max(...topFocus.map((f) => f.count)) : 1;
   const initials = user?.name
     ? user.name.split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase()
     : 'AL';
@@ -131,6 +224,9 @@ export default function ProfileScreen({ navigation }) {
       {/* Header */}
       <View style={styles.header}>
         <Logo />
+        <TouchableOpacity onPress={openEdit} activeOpacity={0.7} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+          <Text style={styles.editProfileBtn}>Edit</Text>
+        </TouchableOpacity>
         <TouchableOpacity style={styles.profileIcon} onPress={() => navigation.goBack()} activeOpacity={0.8}>
           {photoUri
             ? <Image source={{ uri: photoUri }} style={styles.profilePhoto} />
@@ -156,35 +252,26 @@ export default function ProfileScreen({ navigation }) {
           </TouchableOpacity>
           <Text style={styles.name}>{user?.name || 'Alexandra Lukey'}</Text>
           <Text style={styles.contact}>{user?.email || 'youremail@domain.com'}</Text>
+          {!!user?.main_studio && (
+            <Text style={styles.infoLine}>📍 {user.main_studio}</Text>
+          )}
+          {!!user?.dance_style && (
+            <Text style={styles.infoLine}>{user.dance_style}</Text>
+          )}
         </View>
 
         {/* 3-stat row */}
         <View style={styles.statCard}>
           <StatBox value={stats.totalClasses} label="Classes Logged" />
-          <StatBox value={stats.totalSessions} label="Focus Sessions" showDivider />
-          <StatBox value={stats.activeFocusAreas} label="Active Areas" showDivider />
+          <StatBox value={stats.totalSessions} label="Training Sessions" showDivider />
+          <StatBox value={stats.activeFocusAreas} label="Active Focus" showDivider />
         </View>
-
-        {/* Top focus areas */}
-        {topFocus.length > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Top Focus Areas</Text>
-            <View style={styles.focusCard}>
-              {topFocus.map((fp, i) => (
-                <View key={fp.id ?? i}>
-                  {i > 0 && <View style={styles.focusSep} />}
-                  <TopFocusRow name={fp.name} count={fp.count} maxCount={maxCount} />
-                </View>
-              ))}
-            </View>
-          </View>
-        )}
 
         {/* Radar chart */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Current Strengths</Text>
           <View style={styles.chartCard}>
-            <RadarChart scores={[0.7, 0.55, 0.82, 0.5, 0.65]} />
+            <RadarChart scores={radarScores} />
           </View>
         </View>
 
@@ -193,6 +280,78 @@ export default function ProfileScreen({ navigation }) {
           <Text style={styles.logoutText}>Log out</Text>
         </TouchableOpacity>
       </View>
+      {/* Edit Profile Modal */}
+      <Modal visible={editVisible} transparent animationType="slide" onRequestClose={() => setEditVisible(false)}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
+          <Pressable style={em.overlay} onPress={() => setEditVisible(false)}>
+            <Pressable style={em.sheet} onPress={() => {}}>
+              <View style={em.handle} />
+              <Text style={em.title}>Edit Profile</Text>
+
+              {/* Avatar */}
+              <TouchableOpacity style={em.avatarWrap} onPress={handlePickPhoto} activeOpacity={0.85}>
+                {photoUri
+                  ? <Image source={{ uri: photoUri }} style={em.avatarPhoto} />
+                  : <View style={em.avatar}><Text style={em.avatarInitials}>{initials}</Text></View>
+                }
+                <View style={em.editBadge}><Text style={em.editIcon}>✎</Text></View>
+              </TouchableOpacity>
+
+              {/* Name */}
+              <View style={em.field}>
+                <Text style={em.fieldLabel}>Name</Text>
+                <TextInput
+                  style={em.input}
+                  value={editName}
+                  onChangeText={setEditName}
+                  placeholder="Your name"
+                  placeholderTextColor="rgba(17,12,17,0.3)"
+                  autoCorrect={false}
+                />
+              </View>
+
+              {/* Main Studio */}
+              <View style={em.field}>
+                <Text style={em.fieldLabel}>Main Studio</Text>
+                <PlacesInput
+                  value={editStudio}
+                  onChangeText={setEditStudio}
+                  onPlaceSelect={(name, placeId) => {
+                    setEditStudio(name);
+                    setEditStudioPlaceId(placeId || null);
+                  }}
+                />
+              </View>
+
+              {/* Dance Style */}
+              <View style={em.field}>
+                <Text style={em.fieldLabel}>Dance Style</Text>
+                <View style={em.pillRow}>
+                  {['Latin', 'Ballroom', 'Latin & Ballroom'].map((s) => (
+                    <TouchableOpacity
+                      key={s}
+                      style={[em.pill, editStyle === s && em.pillActive]}
+                      onPress={() => setEditStyle(s)}
+                      activeOpacity={0.75}
+                    >
+                      <Text style={[em.pillText, editStyle === s && em.pillTextActive]}>{s}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+
+              {/* Actions */}
+              <TouchableOpacity style={em.saveBtn} onPress={handleSaveProfile} activeOpacity={0.88} disabled={saving}>
+                <Text style={em.saveBtnText}>{saving ? 'Saving…' : 'Save'}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={em.cancelBtn} onPress={() => setEditVisible(false)} activeOpacity={0.7}>
+                <Text style={em.cancelBtnText}>Cancel</Text>
+              </TouchableOpacity>
+            </Pressable>
+          </Pressable>
+        </KeyboardAvoidingView>
+      </Modal>
+
       </Animated.View>
     </SafeAreaView>
   );
@@ -284,6 +443,14 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: Colors.secondary,
   },
+  infoLine: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 12,
+    color: Colors.secondary,
+    opacity: 0.75,
+    marginTop: 3,
+    textAlign: 'center',
+  },
 
   statCard: {
     flexDirection: 'row',
@@ -372,6 +539,12 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
 
+  editProfileBtn: {
+    fontFamily: Fonts.jakartaBold,
+    fontSize: 14,
+    color: Colors.activeFocus,
+  },
+
   logoutBtn: {
     borderWidth: 0.25,
     borderColor: Colors.statCardBorder,
@@ -385,4 +558,112 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: Colors.secondary,
   },
+});
+
+const em = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'flex-end',
+  },
+  sheet: {
+    backgroundColor: Colors.white,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 24,
+    paddingTop: 12,
+    paddingBottom: 40,
+  },
+  handle: {
+    width: 36, height: 4,
+    backgroundColor: 'rgba(17,12,17,0.12)',
+    borderRadius: 2,
+    alignSelf: 'center',
+    marginBottom: 20,
+  },
+  title: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 18,
+    color: Colors.black,
+    marginBottom: 20,
+    textAlign: 'center',
+  },
+
+  avatarWrap: { alignSelf: 'center', position: 'relative', marginBottom: 24 },
+  avatar: {
+    width: 72, height: 72, borderRadius: 36,
+    backgroundColor: 'rgba(215,150,255,0.2)',
+    borderWidth: 3, borderColor: Colors.profileIcon,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  avatarPhoto: { width: 72, height: 72, borderRadius: 36, borderWidth: 3, borderColor: Colors.profileIcon },
+  avatarInitials: { fontFamily: Fonts.jakartaExtraBold, fontSize: 24, color: '#7A4A00' },
+  editBadge: {
+    position: 'absolute', bottom: 0, right: 0,
+    width: 24, height: 24, borderRadius: 12,
+    backgroundColor: Colors.black,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  editIcon: { color: Colors.white, fontSize: 12 },
+
+  field: { marginBottom: 16 },
+  fieldLabel: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 11,
+    color: Colors.secondary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 6,
+  },
+  input: {
+    backgroundColor: Colors.statCardBg,
+    borderWidth: 0.5,
+    borderColor: Colors.statCardBorder,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 15,
+    color: Colors.black,
+  },
+
+  pillRow: { flexDirection: 'row', gap: 8 },
+  pill: {
+    paddingHorizontal: 14, paddingVertical: 9,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: Colors.statCardBorder,
+    backgroundColor: Colors.statCardBg,
+  },
+  pillActive: { backgroundColor: Colors.black, borderColor: Colors.black },
+  pillText: { fontFamily: Fonts.jakartaMedium, fontSize: 13, color: Colors.secondary },
+  pillTextActive: { color: Colors.white },
+
+  saveBtn: {
+    backgroundColor: Colors.orange,
+    borderRadius: 14,
+    paddingVertical: 16,
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  saveBtnText: { fontFamily: Fonts.jakartaExtraBold, fontSize: 15, color: '#000' },
+  cancelBtn: { paddingVertical: 14, alignItems: 'center' },
+  cancelBtnText: { fontFamily: Fonts.jakartaMedium, fontSize: 14, color: Colors.secondary },
+
+  suggestions: {
+    backgroundColor: Colors.white,
+    borderWidth: 0.5,
+    borderColor: Colors.statCardBorder,
+    borderRadius: 12,
+    marginTop: 4,
+    overflow: 'hidden',
+  },
+  suggestion: {
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    borderBottomWidth: 0.5,
+    borderBottomColor: Colors.statCardBorder,
+  },
+  suggestionMain: { fontFamily: Fonts.jakartaMedium, fontSize: 14, color: Colors.black },
+  suggestionSub: { fontFamily: Fonts.jakartaRegular, fontSize: 11, color: Colors.secondary, marginTop: 1 },
 });

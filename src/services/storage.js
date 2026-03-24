@@ -18,6 +18,14 @@ export async function getUser() {
   return data;
 }
 
+export async function saveUserProfile({ name, main_studio, main_studio_place_id, dance_style }) {
+  const userId = await getUserId();
+  await supabase
+    .from('users')
+    .update({ name, main_studio, main_studio_place_id, dance_style })
+    .eq('id', userId);
+}
+
 export async function updateUserSummary(summary) {
   const userId = await getUserId();
   await supabase

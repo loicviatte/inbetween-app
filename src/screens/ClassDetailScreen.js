@@ -96,11 +96,17 @@ export default function ClassDetailScreen({ route, navigation }) {
 
   useEffect(() => { load(); }, [inputId]);
 
-  async function handleToggleNote(note) {
+  function handleToggleNote(note) {
     const isLinked = note.linked_class_input_id === inputId;
     const updated = { ...note, linked_class_input_id: isLinked ? null : inputId };
-    await saveNote(updated);
-    await load();
+    // Optimistic update — instant feedback, no reload
+    if (isLinked) {
+      setLinkedNotes(prev => prev.filter(n => n.id !== note.id));
+    } else {
+      setLinkedNotes(prev => [...prev, updated]);
+    }
+    setAllNotes(prev => prev.map(n => n.id === note.id ? updated : n));
+    saveNote(updated); // fire-and-forget
   }
 
   if (!item) return null;
@@ -122,45 +128,34 @@ export default function ClassDetailScreen({ route, navigation }) {
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <Text style={styles.date}>{formatDate(item.created_at)}</Text>
 
-        {/* What you worked on today */}
-        {item.takeaway ? (
-          <View style={styles.section}>
-            <Text style={styles.question}>What did you work on today?</Text>
-            <View style={styles.card}>
+        {/* ── Your Notes (user input) ── */}
+        <View style={styles.section}>
+          <Text style={styles.sectionLabel}>Your Notes</Text>
+
+          {item.takeaway ? (
+            <View style={[styles.card, { marginBottom: 10 }]}>
+              <Text style={styles.noteInputLabel}>What you worked on</Text>
               <Text style={styles.cardText}>{item.takeaway}</Text>
             </View>
-          </View>
-        ) : null}
+          ) : null}
 
-        {/* To work on */}
-        <View style={styles.section}>
-          <Text style={styles.sectionLabel}>To work on</Text>
-
-          <View style={styles.focusCard}>
-            {item.ai_primary_focus ? (
-              <View style={styles.fpBadge}>
-                <View style={styles.fpDot} />
-                <Text style={styles.fpBadgeText}>{item.ai_primary_focus}</Text>
-              </View>
-            ) : null}
-            <Text style={styles.focusText}>{item.practice_point_1}</Text>
-            {item.priority_score_1 != null && (
-              <View style={styles.urgencyRow}>
-                <Text style={styles.urgencyLabel}>Urgency</Text>
-                <UrgencyDots value={item.priority_score_1} />
-              </View>
-            )}
-          </View>
+          {item.practice_point_1 ? (
+            <View style={[styles.card, { marginBottom: item.practice_point_2 ? 10 : 0 }]}>
+              <Text style={styles.noteInputLabel}>To improve</Text>
+              <Text style={styles.cardText}>{item.practice_point_1}</Text>
+              {item.priority_score_1 != null && (
+                <View style={styles.urgencyRow}>
+                  <Text style={styles.urgencyLabel}>Urgency</Text>
+                  <UrgencyDots value={item.priority_score_1} />
+                </View>
+              )}
+            </View>
+          ) : null}
 
           {item.practice_point_2 ? (
-            <View style={[styles.focusCard, { marginTop: 10 }]}>
-              {item.ai_secondary_focus ? (
-                <View style={styles.fpBadge}>
-                  <View style={[styles.fpDot, { backgroundColor: Colors.activeFocus }]} />
-                  <Text style={styles.fpBadgeText}>{item.ai_secondary_focus}</Text>
-                </View>
-              ) : null}
-              <Text style={styles.focusText}>{item.practice_point_2}</Text>
+            <View style={styles.card}>
+              <Text style={styles.noteInputLabel}>Also to improve</Text>
+              <Text style={styles.cardText}>{item.practice_point_2}</Text>
               {item.priority_score_2 != null && (
                 <View style={styles.urgencyRow}>
                   <Text style={styles.urgencyLabel}>Urgency</Text>
@@ -170,6 +165,32 @@ export default function ClassDetailScreen({ route, navigation }) {
             </View>
           ) : null}
         </View>
+
+        {/* ── Divider ── */}
+        {(item.ai_primary_focus || item.ai_secondary_focus) ? (
+          <View style={styles.divider} />
+        ) : null}
+
+        {/* ── Linked Focus (AI generated) ── */}
+        {(item.ai_primary_focus || item.ai_secondary_focus) ? (
+          <View style={styles.section}>
+            <Text style={styles.sectionLabel}>Linked Focus</Text>
+
+            {item.ai_primary_focus ? (
+              <View style={[styles.focusChip, { marginBottom: item.ai_secondary_focus ? 8 : 0 }]}>
+                <View style={styles.fpDot} />
+                <Text style={styles.focusChipText}>{item.ai_primary_focus}</Text>
+              </View>
+            ) : null}
+
+            {item.ai_secondary_focus ? (
+              <View style={styles.focusChip}>
+                <View style={[styles.fpDot, { backgroundColor: Colors.activeFocus }]} />
+                <Text style={styles.focusChipText}>{item.ai_secondary_focus}</Text>
+              </View>
+            ) : null}
+          </View>
+        ) : null}
 
         {/* Linked notes */}
         <View style={styles.section}>
@@ -286,17 +307,37 @@ const styles = StyleSheet.create({
     lineHeight: 23,
   },
 
-  focusCard: {
+  divider: {
+    height: 1,
+    backgroundColor: Colors.statCardBorder,
+    marginBottom: 24,
+  },
+  focusChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
     backgroundColor: Colors.statCardBg,
     borderRadius: 12,
-    padding: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
     borderWidth: 0.5,
     borderColor: Colors.statCardBorder,
   },
-  fpBadge: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 },
+  focusChipText: {
+    fontFamily: Fonts.jakartaBold,
+    fontSize: 14,
+    color: Colors.black,
+    flex: 1,
+  },
+  noteInputLabel: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 11,
+    color: Colors.black,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 6,
+  },
   fpDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.activeLog },
-  fpBadgeText: { fontFamily: Fonts.jakartaBold, fontSize: 12, color: Colors.black },
-  focusText: { fontFamily: Fonts.jakartaRegular, fontSize: 15, color: Colors.black, lineHeight: 22 },
   urgencyRow: { flexDirection: 'row', alignItems: 'center', marginTop: 12, gap: 10 },
   urgencyLabel: { fontFamily: Fonts.jakartaMedium, fontSize: 11, color: Colors.secondary },
   urgencyDots: { flexDirection: 'row', gap: 5 },

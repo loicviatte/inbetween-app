@@ -135,6 +135,7 @@ export default function HomeScreen({ navigation }) {
   }
 
   useFocusEffect(useCallback(() => {
+    setShareState('default');
     fadeAnim.setValue(0);
     Animated.timing(fadeAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
     load();
