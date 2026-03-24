@@ -1,10 +1,11 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
   Image,
+  Animated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -55,12 +56,15 @@ function TopFocusRow({ name, count, maxCount }) {
 }
 
 export default function ProfileScreen({ navigation }) {
+  const fadeAnim = useRef(new Animated.Value(0)).current;
   const [user, setUser] = useState(null);
   const [stats, setStats] = useState({ totalClasses: 0, totalSessions: 0, activeFocusAreas: 0 });
   const [topFocus, setTopFocus] = useState([]);
   const [photoUri, setPhotoUri] = useState(null);
 
   useFocusEffect(useCallback(() => {
+    fadeAnim.setValue(0);
+    Animated.timing(fadeAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
     async function load() {
       const [
         userData,
@@ -123,11 +127,15 @@ export default function ProfileScreen({ navigation }) {
 
   return (
     <SafeAreaView style={styles.safe}>
+      <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
       {/* Header */}
       <View style={styles.header}>
         <Logo />
         <TouchableOpacity style={styles.profileIcon} onPress={() => navigation.goBack()} activeOpacity={0.8}>
-          <Text style={styles.profileInitial}>{user?.name ? user.name[0].toUpperCase() : 'A'}</Text>
+          {photoUri
+            ? <Image source={{ uri: photoUri }} style={styles.profilePhoto} />
+            : <Text style={styles.profileInitial}>{user?.name ? user.name[0].toUpperCase() : 'A'}</Text>
+          }
         </TouchableOpacity>
       </View>
 
@@ -185,6 +193,7 @@ export default function ProfileScreen({ navigation }) {
           <Text style={styles.logoutText}>Log out</Text>
         </TouchableOpacity>
       </View>
+      </Animated.View>
     </SafeAreaView>
   );
 }
@@ -219,6 +228,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#7A4A00',
   },
+  profilePhoto: { width: 34, height: 34, borderRadius: 17 },
 
   content: {
     flex: 1,

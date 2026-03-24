@@ -83,7 +83,7 @@ export default function NoteDetailScreen({ route, navigation }) {
   const { noteId, linked_class_input_id: initialLinkedId } = route.params || {};
   const isNew = !noteId;
 
-  const [id] = useState(noteId || null);
+  const idRef = useRef(noteId || null);
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [video_clips, setVideoClips] = useState([]);
@@ -122,13 +122,16 @@ export default function NoteDetailScreen({ route, navigation }) {
   }, [linked_class_input_id]);
 
   async function persist(data) {
-    await saveNote({
-      ...(id ? { id } : {}),
+    const savedId = await saveNote({
+      ...(idRef.current ? { id: idRef.current } : {}),
       title: data.title,
       content: data.content,
       video_clips: data.video_clips,
       linked_class_input_id: data.linked_class_input_id,
     });
+    if (!idRef.current && savedId) {
+      idRef.current = savedId;
+    }
   }
 
   function scheduleAutoSave() {
@@ -201,7 +204,8 @@ export default function NoteDetailScreen({ route, navigation }) {
         text: 'Delete', style: 'destructive',
         onPress: async () => {
           if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
-          if (!isNew) await deleteNote(id);
+          hasChanges.current = false;
+          if (idRef.current) await deleteNote(idRef.current);
           navigation.goBack();
         },
       },

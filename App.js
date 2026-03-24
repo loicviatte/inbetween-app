@@ -21,7 +21,6 @@ import {
 } from '@expo-google-fonts/montserrat';
 import { supabase } from './src/lib/supabase';
 import HomeScreen from './src/screens/HomeScreen';
-import FocusScreen from './src/screens/FocusScreen';
 import LogScreen from './src/screens/LogScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
 import ClassDetailScreen from './src/screens/ClassDetailScreen';
@@ -43,16 +42,16 @@ const AppTheme = {
 function MainTabs() {
   return (
     <Tab.Navigator
+      initialRouteName="TRAIN"
       tabBar={(props) => <CustomTabBar {...props} />}
       screenOptions={{
         headerShown: false,
         tabBarStyle: { backgroundColor: 'transparent', borderTopWidth: 0, elevation: 0 },
       }}
     >
-      <Tab.Screen name="HOME" component={HomeScreen} />
-      <Tab.Screen name="TRAIN" component={FocusScreen} />
-      <Tab.Screen name="LOG" component={LogScreen} />
       <Tab.Screen name="PROFILE" component={ProfileScreen} />
+      <Tab.Screen name="TRAIN" component={HomeScreen} />
+      <Tab.Screen name="LOG" component={LogScreen} />
     </Tab.Navigator>
   );
 }

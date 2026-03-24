@@ -16,6 +16,7 @@ import {
   startTrainingSession,
 } from '../services/algorithm';
 import { getFocusPoints } from '../services/storage';
+import { getActiveSession } from '../services/activeSession';
 
 function Logo() {
   return <Text style={styles.logo}>EE</Text>;
@@ -107,6 +108,7 @@ export default function FocusScreen({ navigation }) {
 
   async function handleStart(slotNumber) {
     if (!slot1) return;
+    if (getActiveSession()) return;
     setStarting(slotNumber);
     const focusPointId = slotNumber === 1 ? slot1.id : slot2?.id;
     if (!focusPointId) { setStarting(null); return; }

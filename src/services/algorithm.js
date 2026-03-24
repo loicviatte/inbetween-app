@@ -91,6 +91,7 @@ export async function getSessionCountForFocus(focusPointId) {
       .select('id')
       .eq('user_id', userId)
       .or(`slot1_focus_id.eq.${focusPointId},slot2_focus_id.eq.${focusPointId}`)
+      .not('completed_at', 'is', null);
     return (data || []).length;
   } catch (e) {
     return 0;
@@ -120,21 +121,6 @@ export async function startTrainingSession(slot1FocusId, slot2FocusId) {
 
     if (error) throw error;
 
-    // Increment total_focus_worked + update last_active_date
-    const { data: user } = await supabase
-      .from('users')
-      .select('total_focus_worked')
-      .eq('id', userId)
-      .single();
-
-    await supabase
-      .from('users')
-      .update({
-        total_focus_worked: (user?.total_focus_worked || 0) + 1,
-        last_active_date: new Date().toISOString().split('T')[0],
-      })
-      .eq('id', userId);
-
     return data?.id || null;
   } catch (e) {
     console.error('startTrainingSession error:', e);
@@ -147,6 +133,7 @@ export async function startTrainingSession(slot1FocusId, slot2FocusId) {
 export async function completeTrainingSession(sessionId, feeling = null, sessionNote = null) {
   try {
     if (!sessionId) return;
+    const userId = await getUserId();
     const update = { completed_at: new Date().toISOString() };
     if (feeling) update.feeling = feeling;
     if (sessionNote) update.session_note = sessionNote;
@@ -154,6 +141,20 @@ export async function completeTrainingSession(sessionId, feeling = null, session
       .from('training_sessions')
       .update(update)
       .eq('id', sessionId);
+
+    // Increment total_focus_worked + update last_active_date only on completion
+    const { data: user } = await supabase
+      .from('users')
+      .select('total_focus_worked')
+      .eq('id', userId)
+      .single();
+    await supabase
+      .from('users')
+      .update({
+        total_focus_worked: (user?.total_focus_worked || 0) + 1,
+        last_active_date: new Date().toISOString().split('T')[0],
+      })
+      .eq('id', userId);
   } catch (e) {
     console.error('completeTrainingSession error:', e);
   }
