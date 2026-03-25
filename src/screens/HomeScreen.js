@@ -20,7 +20,8 @@ import { Colors, Fonts, Spacing } from '../theme';
 import {
   getUser,
   getTrainingSessionsThisWeek,
-  getFocusTrainedCount,
+  getSessionsThisWeek,
+  getFocusTrainedThisWeek,
   getWeekActivity,
   getRecentClassInputs,
   getTopFocusPointsWithCounts,
@@ -101,7 +102,8 @@ export default function HomeScreen({ navigation }) {
   const [activeSession, setActiveSessionState] = useState(null);
   const [countdown, setCountdown] = useState(0);
   const [sessionsThisWeek, setSessionsThisWeek] = useState(0);
-  const [focusCount, setFocusCount] = useState(0);
+  const [classesThisWeek, setClassesThisWeek] = useState(0);
+  const [focusTrainedThisWeek, setFocusTrainedThisWeek] = useState(0);
   const [weekActivity, setWeekActivity] = useState({});
   const [dayModal, setDayModal] = useState(null);
   const [logModalVisible, setLogModalVisible] = useState(false);
@@ -112,11 +114,12 @@ export default function HomeScreen({ navigation }) {
   const fadeAnim = useRef(new Animated.Value(0)).current;
 
   async function load() {
-    const [u, slots, sessions, fc, wa, savedPhoto] = await Promise.all([
+    const [u, slots, sessions, classes, focusTrained, wa, savedPhoto] = await Promise.all([
       getUser(),
       getSlots(),
       getTrainingSessionsThisWeek(),
-      getFocusTrainedCount(),
+      getSessionsThisWeek(),
+      getFocusTrainedThisWeek(),
       getWeekActivity(),
       AsyncStorage.getItem('@profile_photo'),
     ]);
@@ -124,7 +127,8 @@ export default function HomeScreen({ navigation }) {
     setSlot1(slots.slot1);
     setSlot2(slots.slot2);
     setSessionsThisWeek(sessions);
-    setFocusCount(fc);
+    setClassesThisWeek(classes);
+    setFocusTrainedThisWeek(focusTrained);
     setWeekActivity(wa || {});
     setPhotoUri(savedPhoto || null);
     const [c1, c2] = await Promise.all([
@@ -348,17 +352,17 @@ export default function HomeScreen({ navigation }) {
         <View style={s.statsBar}>
           <View style={s.statItem}>
             <Text style={s.statValue}>{sessionsThisWeek}</Text>
-            <Text style={s.statLabel}>This Week</Text>
+            <Text style={s.statLabel}>Training</Text>
           </View>
           <View style={s.statSep} />
           <View style={s.statItem}>
-            <Text style={s.statValue}>{sessionCount}</Text>
-            <Text style={s.statLabel}>Total</Text>
+            <Text style={s.statValue}>{classesThisWeek}</Text>
+            <Text style={s.statLabel}>Class</Text>
           </View>
           <View style={s.statSep} />
           <View style={s.statItem}>
-            <Text style={s.statValue}>{focusCount}</Text>
-            <Text style={s.statLabel}>Zones</Text>
+            <Text style={s.statValue}>{focusTrainedThisWeek}</Text>
+            <Text style={s.statLabel}>Focus Trained</Text>
           </View>
         </View>
 
