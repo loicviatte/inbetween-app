@@ -786,46 +786,46 @@ const s = StyleSheet.create({
   },
 
   // This Week
-  weekSection: { marginBottom: 14 },
+  weekSection: { marginBottom: 16 },
   sectionLabelRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    marginBottom: 10,
+    gap: 10,
+    marginBottom: 12,
   },
   sectionLabelLine: { flex: 1, height: 1, backgroundColor: '#EFEFEF' },
   sectionLabel: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.jakartaExtraBold,
     fontSize: 11,
-    color: '#888',
+    color: '#555',
     textTransform: 'uppercase',
-    letterSpacing: 0.8,
+    letterSpacing: 1.0,
   },
 
   // Stats bar
   statsBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F2F2F2',
+    backgroundColor: '#F4F4F4',
     borderRadius: 14,
-    paddingVertical: 11,
+    paddingVertical: 13,
     marginBottom: 11,
   },
   statItem: { flex: 1, alignItems: 'center' },
   statSep: { width: 1, height: 22, backgroundColor: '#E2E2E2' },
   statValue: {
     fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 17,
+    fontSize: 19,
     color: '#111',
-    letterSpacing: -0.4,
-    marginBottom: 2,
+    letterSpacing: -0.5,
+    marginBottom: 3,
   },
   statLabel: {
     fontFamily: Fonts.jakartaBold,
     fontSize: 9,
-    color: '#C8C8C8',
+    color: '#BBBBBB',
     textTransform: 'uppercase',
-    letterSpacing: 0.6,
+    letterSpacing: 0.8,
   },
 
   // Share with Coach
