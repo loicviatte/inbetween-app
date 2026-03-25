@@ -281,6 +281,23 @@ export async function getFocusTrainedCount() {
   return ids.size;
 }
 
+export async function getFocusTrainedThisWeek() {
+  const userId = await getUserId();
+  const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString();
+  const { data } = await supabase
+    .from('training_sessions')
+    .select('slot1_focus_id, slot2_focus_id')
+    .eq('user_id', userId)
+    .gte('started_at', weekAgo)
+    .not('completed_at', 'is', null);
+  const ids = new Set();
+  for (const row of data || []) {
+    if (row.slot1_focus_id) ids.add(row.slot1_focus_id);
+    if (row.slot2_focus_id) ids.add(row.slot2_focus_id);
+  }
+  return ids.size;
+}
+
 // ─── Focus Progress ──────────────────────────────────────────────────────────
 
 export async function getFocusProgress() {
