@@ -778,7 +778,6 @@ const s = StyleSheet.create({
     flexShrink: 0,
     paddingHorizontal: 20,
     paddingTop: 16,
-    paddingBottom: 5,
     backgroundColor: '#fff',
   },
   dockSep: {
@@ -833,7 +832,7 @@ const s = StyleSheet.create({
   },
 
   // Share with Coach
-  shareSection: { paddingTop: 8 },
+  shareSection: { marginBottom: 5 },
   shareDesc: {
     fontFamily: Fonts.jakartaRegular,
     fontSize: 11,
