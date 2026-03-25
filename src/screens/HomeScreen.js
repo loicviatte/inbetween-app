@@ -112,6 +112,8 @@ export default function HomeScreen({ navigation }) {
   const [shareLoadingMsg, setShareLoadingMsg] = useState(SHARE_LOADING_MSGS[0]);
   const shareMsgRef = useRef(null);
   const fadeAnim = useRef(new Animated.Value(0)).current;
+  const [isLoading, setIsLoading] = useState(true);
+  const hasLoadedRef = useRef(false);
 
   async function load() {
     const [u, slots, sessions, classes, focusTrained, wa, savedPhoto] = await Promise.all([
@@ -141,9 +143,13 @@ export default function HomeScreen({ navigation }) {
 
   useFocusEffect(useCallback(() => {
     setShareState('default');
-    fadeAnim.setValue(0);
-    Animated.timing(fadeAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
-    load();
+    if (!hasLoadedRef.current) setIsLoading(true);
+    load().then(() => {
+      hasLoadedRef.current = true;
+      setIsLoading(false);
+      fadeAnim.setValue(0);
+      Animated.timing(fadeAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
+    });
 
     // Sync active session state
     const current = getActiveSession();
@@ -222,6 +228,14 @@ export default function HomeScreen({ navigation }) {
   const heroMessage = sessionCount > 0
     ? `You've done this ${sessionCount} times — keep drilling here.`
     : 'Your top priority right now. Start your first session.';
+
+  if (isLoading) {
+    return (
+      <View style={{ flex: 1, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' }}>
+        <Text style={{ fontFamily: Fonts.monument, fontSize: 20, color: Colors.black, letterSpacing: 1 }}>EE</Text>
+      </View>
+    );
+  }
 
   return (
     <SafeAreaView style={s.safe}>

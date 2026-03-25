@@ -114,6 +114,8 @@ export default function LogScreen({ navigation }) {
   const [photoUri, setPhotoUri] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
 
+  const [isLoading, setIsLoading] = useState(true);
+  const hasLoadedRef = useRef(false);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(0)).current;
   const activeTabRef = useRef('CLASS');
@@ -158,9 +160,13 @@ export default function LogScreen({ navigation }) {
   }
 
   useFocusEffect(useCallback(() => {
-    fadeAnim.setValue(0);
-    Animated.timing(fadeAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
-    load();
+    if (!hasLoadedRef.current) setIsLoading(true);
+    load().then(() => {
+      hasLoadedRef.current = true;
+      setIsLoading(false);
+      fadeAnim.setValue(0);
+      Animated.timing(fadeAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
+    });
   }, []));
 
   function handleAdd() {
@@ -184,6 +190,14 @@ export default function LogScreen({ navigation }) {
         return n.title?.toLowerCase().includes(q) || n.content?.toLowerCase().includes(q);
       })
     : notes;
+
+  if (isLoading) {
+    return (
+      <View style={{ flex: 1, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' }}>
+        <Text style={{ fontFamily: Fonts.monument, fontSize: 20, color: Colors.black, letterSpacing: 1 }}>EE</Text>
+      </View>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>

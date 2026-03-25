@@ -117,6 +117,8 @@ function PlacesInput({ value, onChangeText, onPlaceSelect }) {
 
 export default function ProfileScreen({ navigation }) {
   const fadeAnim = useRef(new Animated.Value(0)).current;
+  const [isLoading, setIsLoading] = useState(true);
+  const hasLoadedRef = useRef(false);
   const [user, setUser] = useState(null);
   const [stats, setStats] = useState({ totalClasses: 0, totalSessions: 0, activeFocusAreas: 0 });
   const [radarScores, setRadarScores] = useState([0, 0, 0, 0, 0]);
@@ -129,8 +131,7 @@ export default function ProfileScreen({ navigation }) {
   const [photoUri, setPhotoUri] = useState(null);
 
   useFocusEffect(useCallback(() => {
-    fadeAnim.setValue(0);
-    Animated.timing(fadeAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
+    if (!hasLoadedRef.current) setIsLoading(true);
     async function load() {
       const [
         userData,
@@ -172,7 +173,12 @@ export default function ProfileScreen({ navigation }) {
       setRadarScores(scores);
       if (savedPhoto) setPhotoUri(savedPhoto);
     }
-    load();
+    load().then(() => {
+      hasLoadedRef.current = true;
+      setIsLoading(false);
+      fadeAnim.setValue(0);
+      Animated.timing(fadeAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
+    });
   }, []));
 
   async function handlePickPhoto() {
@@ -217,6 +223,14 @@ export default function ProfileScreen({ navigation }) {
   const initials = user?.name
     ? user.name.split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase()
     : 'AL';
+
+  if (isLoading) {
+    return (
+      <View style={{ flex: 1, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' }}>
+        <Text style={{ fontFamily: Fonts.monument, fontSize: 20, color: Colors.black, letterSpacing: 1 }}>EE</Text>
+      </View>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safe}>
