@@ -11,6 +11,7 @@ import {
   Animated,
   Modal,
 } from 'react-native';
+
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Clipboard from 'expo-clipboard';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -317,6 +318,7 @@ export default function HomeScreen({ navigation }) {
                 {isSessionActive && <Text style={s.altLockIcon}>🔒</Text>}
               </View>
             </ScrollView>
+
           </View>
           <View style={s.altFixed}>
             <TouchableOpacity
@@ -732,14 +734,22 @@ const s = StyleSheet.create({
     color: '#888',
   },
   altFixed: {
+    marginLeft: -20,
     paddingLeft: 10,
-    justifyContent: 'center',
+    zIndex: 1,
+    backgroundColor: '#fff',
+    shadowColor: '#fff',
+    shadowOffset: { width: -28, height: 0 },
+    shadowOpacity: 1,
+    shadowRadius: 28,
   },
   logBtn: {
     width: 80,
-    height: 80,
+    flex: 1,
     backgroundColor: '#F2F2F2',
     borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(76,175,80,0.5)',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 5,
@@ -747,14 +757,14 @@ const s = StyleSheet.create({
   logBtnPlus: {
     fontFamily: Fonts.jakartaLight,
     fontSize: 28,
-    color: '#F5A623',
+    color: '#4CAF50',
     lineHeight: 32,
     marginTop: 2,
   },
   logBtnLabel: {
     fontFamily: Fonts.jakartaExtraBold,
     fontSize: 9,
-    color: '#C8C8C8',
+    color: '#4CAF50',
     textTransform: 'uppercase',
     letterSpacing: 0.7,
   },
