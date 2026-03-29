@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { View, ActivityIndicator } from 'react-native';
+import { View, Text } from 'react-native';
 import { NavigationContainer, DefaultTheme } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
@@ -116,8 +116,10 @@ export default function App() {
 
   if (!fontsLoaded || session === undefined) {
     return (
-      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff' }}>
-        <ActivityIndicator color="#FF9D00" />
+      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFFFFF' }}>
+        {fontsLoaded && (
+          <Text style={{ fontFamily: 'Montserrat_800ExtraBold', fontSize: 20, color: '#0D0D12', letterSpacing: 1 }}>EE</Text>
+        )}
       </View>
     );
   }

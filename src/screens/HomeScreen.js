@@ -112,6 +112,8 @@ export default function HomeScreen({ navigation }) {
   const [shareLoadingMsg, setShareLoadingMsg] = useState(SHARE_LOADING_MSGS[0]);
   const shareMsgRef = useRef(null);
   const fadeAnim = useRef(new Animated.Value(0)).current;
+  const [isLoading, setIsLoading] = useState(true);
+  const hasLoadedRef = useRef(false);
 
   async function load() {
     const [u, slots, sessions, classes, focusTrained, wa, savedPhoto] = await Promise.all([
@@ -141,9 +143,13 @@ export default function HomeScreen({ navigation }) {
 
   useFocusEffect(useCallback(() => {
     setShareState('default');
-    fadeAnim.setValue(0);
-    Animated.timing(fadeAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
-    load();
+    if (!hasLoadedRef.current) setIsLoading(true);
+    load().then(() => {
+      hasLoadedRef.current = true;
+      setIsLoading(false);
+      fadeAnim.setValue(0);
+      Animated.timing(fadeAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
+    });
 
     // Sync active session state
     const current = getActiveSession();
@@ -223,6 +229,14 @@ export default function HomeScreen({ navigation }) {
     ? `You've done this ${sessionCount} times — keep drilling here.`
     : 'Your top priority right now. Start your first session.';
 
+  if (isLoading) {
+    return (
+      <View style={{ flex: 1, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' }}>
+        <Text style={{ fontFamily: Fonts.monument, fontSize: 20, color: Colors.black, letterSpacing: 1 }}>EE</Text>
+      </View>
+    );
+  }
+
   return (
     <SafeAreaView style={s.safe}>
       <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
@@ -247,6 +261,9 @@ export default function HomeScreen({ navigation }) {
           </TouchableOpacity>
         </View>
 
+        {/* Glow behind hero — must be BEFORE hero in JSX so hero renders on top */}
+        <View pointerEvents="none" style={s.logBtnGlow} />
+
         {/* Hero card */}
         <View style={s.hero}>
           <View style={s.heroBadge}>
@@ -256,7 +273,9 @@ export default function HomeScreen({ navigation }) {
             {activeFocusName || 'No focus yet'}
           </Text>
           <Text style={s.heroSession}>{ordinal(sessionCount + 1)} Session</Text>
-          <Text style={s.heroMessage} numberOfLines={2}>{heroMessage}</Text>
+          {!isSessionActive && (
+            <Text style={s.heroMessage} numberOfLines={2}>{heroMessage}</Text>
+          )}
           {activeSession && countdown > 0 ? (
             <TouchableOpacity
               style={s.inProgressBtn}
@@ -311,15 +330,19 @@ export default function HomeScreen({ navigation }) {
                   activeOpacity={0.8}
                   disabled={starting || isSessionActive}
                 >
-                  <Text style={s.altTryLabel}>Try instead</Text>
+                  <View style={s.altCardHeader}>
+                    <Text style={s.altTryLabel}>Try instead</Text>
+                    {isSessionActive && <Text style={s.altLockIcon}>🔒</Text>}
+                  </View>
                   <Text style={s.altName} numberOfLines={2}>{slot2.name}</Text>
-                  {isSessionActive && <Text style={s.altLockIcon}>🔒</Text>}
                 </TouchableOpacity>
               )}
               <View style={[s.altCard, isSessionActive && s.altCardLocked]}>
-                <Text style={s.altTryLabel}>Coming up</Text>
+                <View style={s.altCardHeader}>
+                  <Text style={s.altTryLabel}>Coming up</Text>
+                  {isSessionActive && <Text style={s.altLockIcon}>🔒</Text>}
+                </View>
                 <Text style={s.altName}>Log a class to unlock</Text>
-                {isSessionActive && <Text style={s.altLockIcon}>🔒</Text>}
               </View>
             </ScrollView>
 
@@ -715,13 +738,18 @@ const s = StyleSheet.create({
     padding: 13,
     paddingHorizontal: 14,
   },
+  altCardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
   altTryLabel: {
     fontFamily: Fonts.jakartaBold,
     fontSize: 9,
     color: '#C8C8C8',
     textTransform: 'uppercase',
     letterSpacing: 0.8,
-    marginBottom: 6,
   },
   altName: {
     fontFamily: Fonts.jakartaExtraBold,
@@ -733,19 +761,28 @@ const s = StyleSheet.create({
     opacity: 0.4,
   },
   altLockIcon: {
-    fontSize: 10,
-    marginTop: 6,
-    color: '#888',
+    fontSize: 9,
+    color: '#C8C8C8',
   },
   altFixed: {
     marginLeft: -20,
     paddingLeft: 10,
-    zIndex: 1,
     backgroundColor: '#fff',
     shadowColor: '#fff',
     shadowOffset: { width: -28, height: 0 },
     shadowOpacity: 1,
     shadowRadius: 28,
+  },
+  logBtnGlow: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    width: 80,
+    height: 80,
+    shadowColor: '#ffffff',
+    shadowOpacity: 1,
+    shadowOffset: { width: 0, height: -30 },
+    shadowRadius: 32,
   },
   logBtn: {
     width: 80,

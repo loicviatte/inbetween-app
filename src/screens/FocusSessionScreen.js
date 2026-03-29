@@ -11,18 +11,26 @@ import {
   Pressable,
   TextInput,
   Keyboard,
+  KeyboardAvoidingView,
+  Platform,
+  useWindowDimensions,
+  PanResponder,
 } from 'react-native';
 import Slider from '@react-native-community/slider';
 import { Audio } from 'expo-av';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Colors, Fonts, Spacing } from '../theme';
-import { getFocusPoints, getClassInputsForFocus } from '../services/storage';
+import { getFocusPoints, getClassInputsForFocus, getClassInputs, getTrainingSessionsThisWeek } from '../services/storage';
+import { callClaudeChat } from '../services/anthropic';
 import { completeTrainingSession, getSessionLabel } from '../services/algorithm';
 import {
   setActiveSession,
   getActiveSession,
   clearActiveSession,
   getSessionTimeLeft,
+  getChatMessages,
+  setChatMessages as storeChatMessages,
+  clearChatMessages,
 } from '../services/activeSession';
 
 const DURATIONS = [5, 10, 15, 20, 25, 30, 45, 60, 90];
@@ -66,6 +74,16 @@ function formatDate(iso) {
 
 // ─── Class Input Detail Modal ─────────────────────────────────────────────────
 
+function UrgencyDots({ value }) {
+  return (
+    <View style={modal.urgencyDots}>
+      {[1, 2, 3, 4, 5].map((n) => (
+        <View key={n} style={[modal.urgencyDot, n <= value && { backgroundColor: Colors.activeLog }]} />
+      ))}
+    </View>
+  );
+}
+
 function ClassInputModal({ input, onClose }) {
   if (!input) return null;
   return (
@@ -74,6 +92,7 @@ function ClassInputModal({ input, onClose }) {
         <Pressable style={modal.sheet} onPress={() => {}}>
           <View style={modal.handle} />
 
+          {/* Header */}
           <View style={modal.header}>
             <Text style={modal.date}>{formatDate(input.created_at)}</Text>
             <TouchableOpacity onPress={onClose} style={modal.closeBtn} activeOpacity={0.7}>
@@ -81,51 +100,67 @@ function ClassInputModal({ input, onClose }) {
             </TouchableOpacity>
           </View>
 
-          <View style={modal.row}>
-            <Text style={modal.rowLabel}>Practice point 1</Text>
-            <Text style={modal.rowValue}>{input.practice_point_1 || '—'}</Text>
-            {!!input.priority_score_1 && (
-              <View style={modal.badge}>
-                <Text style={modal.badgeText}>Urgency {input.priority_score_1}/10</Text>
-              </View>
+          <ScrollView showsVerticalScrollIndicator={false}>
+            {/* Your Notes */}
+            <View style={modal.section}>
+              <Text style={modal.sectionLabel}>Your Notes</Text>
+
+              {!!input.takeaway && (
+                <View style={[modal.card, { marginBottom: 10 }]}>
+                  <Text style={modal.cardInputLabel}>What you worked on</Text>
+                  <Text style={modal.cardText}>{input.takeaway}</Text>
+                </View>
+              )}
+
+              {!!input.practice_point_1 && (
+                <View style={[modal.card, { marginBottom: input.practice_point_2 ? 10 : 0 }]}>
+                  <Text style={modal.cardInputLabel}>To improve</Text>
+                  <Text style={modal.cardText}>{input.practice_point_1}</Text>
+                  {input.priority_score_1 != null && (
+                    <View style={modal.urgencyRow}>
+                      <Text style={modal.urgencyLabel}>Urgency</Text>
+                      <UrgencyDots value={input.priority_score_1} />
+                    </View>
+                  )}
+                </View>
+              )}
+
+              {!!input.practice_point_2 && (
+                <View style={modal.card}>
+                  <Text style={modal.cardInputLabel}>Also to improve</Text>
+                  <Text style={modal.cardText}>{input.practice_point_2}</Text>
+                  {input.priority_score_2 != null && (
+                    <View style={modal.urgencyRow}>
+                      <Text style={modal.urgencyLabel}>Urgency</Text>
+                      <UrgencyDots value={input.priority_score_2} />
+                    </View>
+                  )}
+                </View>
+              )}
+            </View>
+
+            {/* Linked Focus */}
+            {(!!input.ai_primary_focus || !!input.ai_secondary_focus) && (
+              <>
+                <View style={modal.divider} />
+                <View style={modal.section}>
+                  <Text style={modal.sectionLabel}>Linked Focus</Text>
+                  {!!input.ai_primary_focus && (
+                    <View style={[modal.focusChip, { marginBottom: input.ai_secondary_focus ? 8 : 0 }]}>
+                      <View style={modal.fpDot} />
+                      <Text style={modal.focusChipText}>{input.ai_primary_focus}</Text>
+                    </View>
+                  )}
+                  {!!input.ai_secondary_focus && (
+                    <View style={modal.focusChip}>
+                      <View style={[modal.fpDot, { backgroundColor: Colors.activeFocus }]} />
+                      <Text style={modal.focusChipText}>{input.ai_secondary_focus}</Text>
+                    </View>
+                  )}
+                </View>
+              </>
             )}
-          </View>
-
-          {!!input.practice_point_2 && (
-            <View style={modal.row}>
-              <Text style={modal.rowLabel}>Practice point 2</Text>
-              <Text style={modal.rowValue}>{input.practice_point_2}</Text>
-              {!!input.priority_score_2 && (
-                <View style={modal.badge}>
-                  <Text style={modal.badgeText}>Urgency {input.priority_score_2}/10</Text>
-                </View>
-              )}
-            </View>
-          )}
-
-          {(!!input.ai_primary_focus || !!input.ai_secondary_focus) && (
-            <View style={modal.focusRow}>
-              {!!input.ai_primary_focus && (
-                <View style={modal.focusChip}>
-                  <Text style={modal.focusChipText}>{input.ai_primary_focus}</Text>
-                </View>
-              )}
-              {!!input.ai_secondary_focus && (
-                <View style={[modal.focusChip, modal.focusChipSecondary]}>
-                  <Text style={[modal.focusChipText, modal.focusChipTextSecondary]}>
-                    {input.ai_secondary_focus}
-                  </Text>
-                </View>
-              )}
-            </View>
-          )}
-
-          {!!input.takeaway && (
-            <View style={modal.takeawayRow}>
-              <Text style={modal.rowLabel}>Takeaway</Text>
-              <Text style={modal.takeawayText}>{input.takeaway}</Text>
-            </View>
-          )}
+          </ScrollView>
         </Pressable>
       </Pressable>
     </Modal>
@@ -167,20 +202,25 @@ function MetronomeStrip() {
   const [running, setRunning] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
   const pulseAnim = useRef(new Animated.Value(1)).current;
-  const metroRef = useRef(null);        // setTimeout handle
-  const soundPoolRef = useRef([]);      // 3 pre-loaded sound instances
+  const schedulerRef = useRef(null);   // setInterval handle for lookahead scheduler
+  const tickTimeoutsRef = useRef([]);  // pending tick setTimeout IDs
+  const nextTickAtRef = useRef(0);     // absolute ms timestamp of next tick to schedule
+  const soundPoolRef = useRef([]);
   const poolIdxRef = useRef(0);
   const bpmRef = useRef(bpm);
+  const dragStartBpm = useRef(bpm);
+  const isDragging = useRef(false);
 
+  // Keep bpmRef in sync (used by scheduler without needing restarts during drag)
   useEffect(() => { bpmRef.current = bpm; }, [bpm]);
 
   useEffect(() => {
     Audio.setAudioModeAsync({ playsInSilentModeIOS: true });
-    // Pre-load 3 instances so ticks never block on the same in-flight seek
-    Promise.all([0, 1, 2].map(() => Audio.Sound.createAsync(TICK_SOUND, { volume: 1.0 })))
+    // 4 sound instances — lookahead may schedule multiple ticks simultaneously
+    Promise.all([0, 1, 2, 3].map(() => Audio.Sound.createAsync(TICK_SOUND, { volume: 1.0 })))
       .then(results => { soundPoolRef.current = results.map(r => r.sound); });
     return () => {
-      if (metroRef.current) clearTimeout(metroRef.current);
+      stopMetro();
       soundPoolRef.current.forEach(s => s.unloadAsync());
     };
   }, []);
@@ -190,7 +230,6 @@ function MetronomeStrip() {
     if (!pool.length) return;
     const sound = pool[poolIdxRef.current];
     poolIdxRef.current = (poolIdxRef.current + 1) % pool.length;
-    // replayAsync rewinds + plays in one atomic call — no double-await lag
     sound.replayAsync().catch(() => {});
   }
 
@@ -199,33 +238,40 @@ function MetronomeStrip() {
     Animated.timing(pulseAnim, { toValue: 1, duration: 250, useNativeDriver: true }).start();
   }
 
+  // Lookahead scheduler (Chris Wilson technique):
+  // Runs every 25ms and pre-schedules all ticks within the next 100ms window.
+  // Individual ticks use setTimeout for precise delay — but since they're
+  // scheduled well in advance, JS thread jitter no longer causes audible drift.
   function startMetro(overrideBpm) {
-    const b = overrideBpm ?? bpmRef.current;
-    const intervalMs = Math.round(60000 / b);
-    const origin = Date.now();
-    let tick = 0;
+    const initialBpm = overrideBpm ?? bpmRef.current;
 
-    function schedule() {
-      tick++;
-      // Calculate exact delay to next beat, compensating for any JS event-loop drift
-      const delay = Math.max(0, origin + tick * intervalMs - Date.now());
-      metroRef.current = setTimeout(() => {
-        pulse();
-        playTick();
-        schedule();
-      }, delay);
-    }
-
-    // Fire first beat immediately, then schedule the rest
+    // First tick fires immediately
     pulse();
     playTick();
-    schedule();
+    nextTickAtRef.current = Date.now() + (60000 / initialBpm);
+
+    function scheduler() {
+      const intervalMs = 60000 / bpmRef.current; // always uses latest BPM
+      const now = Date.now();
+      // Schedule every tick that falls within the next 100ms
+      while (nextTickAtRef.current < now + 100) {
+        const delay = Math.max(0, nextTickAtRef.current - now);
+        const id = setTimeout(() => { pulse(); playTick(); }, delay);
+        tickTimeoutsRef.current.push(id);
+        nextTickAtRef.current += intervalMs;
+      }
+    }
+
+    schedulerRef.current = setInterval(scheduler, 25);
     setRunning(true);
   }
 
   function stopMetro() {
-    if (metroRef.current) clearTimeout(metroRef.current);
-    metroRef.current = null;
+    if (schedulerRef.current) clearInterval(schedulerRef.current);
+    schedulerRef.current = null;
+    // Cancel all pre-scheduled ticks
+    tickTimeoutsRef.current.forEach(id => clearTimeout(id));
+    tickTimeoutsRef.current = [];
     pulseAnim.setValue(1);
     setRunning(false);
   }
@@ -239,29 +285,78 @@ function MetronomeStrip() {
     setBpm(dance.bpm);
     setBeats(dance.beats);
     setShowPicker(false);
-    if (running) {
-      stopMetro();
-      setTimeout(() => startMetro(dance.bpm), 50);
-    }
+    if (running) { stopMetro(); setTimeout(() => startMetro(dance.bpm), 50); }
   }
 
-  function adjustBpm(delta) {
-    const v = Math.max(40, Math.min(260, bpm + delta));
-    setBpm(v);
-    if (running) { stopMetro(); setTimeout(() => startMetro(v), 50); }
-  }
+  // Pan responder: capture horizontal swipe on the BPM zone before parent ScrollView
+  const panResponder = useRef(PanResponder.create({
+    onStartShouldSetPanResponder: () => false,
+    onStartShouldSetPanResponderCapture: () => false,
+    // Capture mode: claim gesture before the parent horizontal ScrollView
+    onMoveShouldSetPanResponderCapture: (_, { dx, dy }) =>
+      Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 5,
+    onPanResponderGrant: () => {
+      isDragging.current = true;
+      dragStartBpm.current = bpmRef.current;
+    },
+    onPanResponderMove: (_, { dx }) => {
+      const newBpm = Math.max(40, Math.min(260, dragStartBpm.current + Math.round(dx / 2.5)));
+      bpmRef.current = newBpm;
+      setBpm(newBpm);
+    },
+    onPanResponderRelease: () => {
+      isDragging.current = false;
+      if (running) { stopMetro(); setTimeout(() => startMetro(bpmRef.current), 50); }
+    },
+    onPanResponderTerminate: () => { isDragging.current = false; },
+  })).current;
 
   const selected = DANCES.find(d => d.id === selectedDance);
+  const bpmProgress = (bpm - 40) / 220;
 
   return (
     <View style={m.wrap}>
-      {/* Row 1: dance selector + play button */}
       <View style={m.topRow}>
+
+        {/* Dance selector */}
         <TouchableOpacity style={m.dancePill} onPress={() => setShowPicker(v => !v)} activeOpacity={0.75}>
           <Text style={m.danceLabel} numberOfLines={1}>{selected ? selected.name : 'Select dance'}</Text>
           <Text style={m.chevron}>{showPicker ? '▲' : '▼'}</Text>
         </TouchableOpacity>
 
+        {/* BPM wheel — swipe left/right to change tempo */}
+        <View style={m.bpmDragWrap} {...panResponder.panHandlers}>
+          {/* Number wheel: show -2 to +2 neighbours */}
+          <View style={m.bpmWheel}>
+            {[-2, -1, 0, 1, 2].map((offset) => {
+              const val = Math.max(40, Math.min(260, bpm + offset));
+              const dist = Math.abs(offset);
+              const isCenter = dist === 0;
+              return (
+                <View key={offset} style={[m.bpmWheelCell, isCenter && m.bpmWheelCellCenter]}>
+                  <Text
+                    numberOfLines={1}
+                    style={[
+                      m.bpmWheelNum,
+                      isCenter && m.bpmWheelNumCenter,
+                      isCenter && running && m.bpmWheelNumActive,
+                      { opacity: dist === 0 ? 1 : dist === 1 ? 0.28 : 0.12 },
+                    ]}
+                  >
+                    {val}
+                  </Text>
+                </View>
+              );
+            })}
+          </View>
+          <Text style={m.bpmUnit}>BPM</Text>
+          {/* Progress track */}
+          <View style={m.bpmTrack}>
+            <View style={[m.bpmFill, { width: `${Math.round(bpmProgress * 100)}%` }]} />
+          </View>
+        </View>
+
+        {/* Play / Stop */}
         <TouchableOpacity
           style={[m.playBtn, running && m.playBtnActive]}
           onPress={toggleMetro}
@@ -270,28 +365,6 @@ function MetronomeStrip() {
           <Animated.View style={running && { transform: [{ scale: pulseAnim }] }}>
             <Text style={[m.playIcon, running && m.playIconActive]}>{running ? '■' : '▶'}</Text>
           </Animated.View>
-        </TouchableOpacity>
-      </View>
-
-      {/* Row 2: BPM stepper */}
-      <View style={m.bpmRow}>
-        <TouchableOpacity style={m.stepBtn} onPress={() => adjustBpm(-5)} activeOpacity={0.7}>
-          <Text style={m.stepBtnText}>−−</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={m.stepBtn} onPress={() => adjustBpm(-1)} activeOpacity={0.7}>
-          <Text style={m.stepBtnText}>−</Text>
-        </TouchableOpacity>
-
-        <View style={m.bpmDisplay}>
-          <Text style={[m.bpmVal, running && m.bpmValActive]}>{bpm}</Text>
-          <Text style={m.bpmUnit}>bpm</Text>
-        </View>
-
-        <TouchableOpacity style={m.stepBtn} onPress={() => adjustBpm(1)} activeOpacity={0.7}>
-          <Text style={m.stepBtnText}>+</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={m.stepBtn} onPress={() => adjustBpm(5)} activeOpacity={0.7}>
-          <Text style={m.stepBtnText}>++</Text>
         </TouchableOpacity>
       </View>
 
@@ -475,6 +548,164 @@ function DurationPicker({ value, onChange }) {
   );
 }
 
+// ─── Chat Page ────────────────────────────────────────────────────────────────
+
+function ChatPage({ focusPoint, sessionActive, timeLeft, duration, messages, setMessages }) {
+  const [inputText, setInputText] = useState('');
+  const [sending, setSending] = useState(false);
+  const [userData, setUserData] = useState(null);
+  const scrollRef = useRef(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const [classInputsList, focusPointsList, sessionsCount] = await Promise.all([
+          getClassInputs(),
+          getFocusPoints(),
+          getTrainingSessionsThisWeek(),
+        ]);
+        setUserData({ classInputsList, focusPointsList, sessionsCount });
+      } catch (e) {
+        console.warn('[ChatPage] loadData error', e);
+      }
+    })();
+  }, []);
+
+  function buildSystemPrompt() {
+    if (!userData) return '';
+    const { classInputsList, focusPointsList, sessionsCount } = userData;
+
+    const focusLines = focusPointsList.length
+      ? focusPointsList.map(fp => `- ${fp.name}`).join('\n')
+      : 'Aucun point de focus enregistré.';
+
+    const classLines = classInputsList.slice(0, 10).map(inp => {
+      const date = new Date(inp.created_at).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
+      const parts = [`Cours du ${date}:`];
+      if (inp.takeaway) parts.push(`Travaillé: "${inp.takeaway}"`);
+      if (inp.practice_point_1) parts.push(`À améliorer: "${inp.practice_point_1}" (urgence ${inp.priority_score_1}/10)`);
+      if (inp.practice_point_2) parts.push(`Aussi: "${inp.practice_point_2}" (urgence ${inp.priority_score_2}/10)`);
+      if (inp.ai_primary_focus) parts.push(`Focus IA: ${inp.ai_primary_focus}`);
+      return parts.join(' | ');
+    }).join('\n') || 'Aucun cours enregistré.';
+
+    return `Tu es un assistant de suivi d'entraînement pour un danseur. Tu réponds UNIQUEMENT en te basant sur les données fournies ci-dessous.
+
+Focus actuel de la session: ${focusPoint?.name ?? 'Non défini'}
+
+Points de focus de l'utilisateur:
+${focusLines}
+
+Historique des cours (10 derniers):
+${classLines}
+
+Sessions d'entraînement cette semaine: ${sessionsCount}
+
+RÈGLES STRICTES:
+- Réponds UNIQUEMENT à partir des données ci-dessus.
+- Si tu ne trouves pas l'information, réponds exactement: "Je n'ai pas cette information dans tes données."
+- N'invente rien, n'extrapole pas, ne fais aucune supposition.
+- Réponds en français, de façon concise (2-3 phrases max sauf si on te demande plus).`;
+  }
+
+  async function handleSend() {
+    const text = inputText.trim();
+    if (!text || sending) return;
+    setInputText('');
+    Keyboard.dismiss();
+    const newMessages = [...messages, { role: 'user', content: text }];
+    setMessages(newMessages);
+    storeChatMessages(newMessages);
+    setSending(true);
+    try {
+      const reply = await callClaudeChat(buildSystemPrompt(), newMessages);
+      setMessages(prev => {
+        const updated = [...prev, { role: 'assistant', content: reply }];
+        storeChatMessages(updated);
+        return updated;
+      });
+    } catch {
+      setMessages(prev => {
+        const updated = [...prev, { role: 'assistant', content: "Désolé, une erreur s'est produite. Réessaie." }];
+        storeChatMessages(updated);
+        return updated;
+      });
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return (
+    <View style={chat.wrap}>
+      {/* Session status bar */}
+      {sessionActive && (
+        <View style={chat.sessionBar}>
+          <View style={chat.sessionDot} />
+          <Text style={chat.sessionText}>
+            En cours  ·  {formatTime(timeLeft)} / {duration} min
+          </Text>
+        </View>
+      )}
+
+      <View style={chat.header}>
+        <Text style={chat.title}>Coach IA</Text>
+        <Text style={chat.subtitle}>Posez vos questions sur votre entraînement</Text>
+      </View>
+
+      <ScrollView
+        ref={scrollRef}
+        style={chat.messageList}
+        contentContainerStyle={chat.messageListContent}
+        onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: true })}
+        keyboardShouldPersistTaps="handled"
+      >
+        {messages.length === 0 && !sending && (
+          <View style={chat.emptyState}>
+            <Text style={chat.emptyText}>
+              Posez une question sur vos cours, vos points de focus, ou vos sessions de cette semaine.
+            </Text>
+          </View>
+        )}
+        {messages.map((msg, i) => (
+          <View key={i} style={[chat.bubble, msg.role === 'user' ? chat.bubbleUser : chat.bubbleBot]}>
+            <Text style={[chat.bubbleText, msg.role === 'user' ? chat.bubbleTextUser : chat.bubbleTextBot]}>
+              {msg.content}
+            </Text>
+          </View>
+        ))}
+        {sending && (
+          <View style={[chat.bubble, chat.bubbleBot]}>
+            <ActivityIndicator size="small" color={Colors.secondary} />
+          </View>
+        )}
+      </ScrollView>
+
+      <View style={chat.inputBar}>
+        <TextInput
+          style={chat.input}
+          value={inputText}
+          onChangeText={setInputText}
+          placeholder="Posez une question..."
+          placeholderTextColor={Colors.secondary}
+          multiline
+          maxLength={300}
+          returnKeyType="send"
+          onSubmitEditing={handleSend}
+          blurOnSubmit
+        />
+        <TouchableOpacity
+          style={[chat.sendBtn, (!inputText.trim() || sending) && chat.sendBtnDisabled]}
+          onPress={handleSend}
+          disabled={!inputText.trim() || sending}
+          activeOpacity={0.8}
+        >
+          <Text style={chat.sendBtnIcon}>↑</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 
 export default function FocusSessionScreen({ route, navigation }) {
@@ -489,6 +720,9 @@ export default function FocusSessionScreen({ route, navigation }) {
   const [sessionDone, setSessionDone] = useState(false);
   const [timeLeft, setTimeLeft] = useState(25 * 60);
   const [showFeelingModal, setShowFeelingModal] = useState(false);
+  const [showStopConfirm, setShowStopConfirm] = useState(false);
+  const [chatMessages, setChatMessages] = useState(() => getChatMessages());
+  const { width: screenW } = useWindowDimensions();
   const intervalRef = useRef(null);
 
   useEffect(() => {
@@ -577,6 +811,8 @@ export default function FocusSessionScreen({ route, navigation }) {
     if (intervalRef.current) clearInterval(intervalRef.current);
     setSessionActive(false);
     setSessionPaused(false);
+    clearChatMessages();
+    setChatMessages([]);
     setShowFeelingModal(true);
   }
 
@@ -601,88 +837,150 @@ export default function FocusSessionScreen({ route, navigation }) {
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
 
-      {/* ── Header ── */}
+      {/* ── Fixed header (shared across all pages) ── */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn} activeOpacity={0.7}>
           <Text style={styles.backArrow}>←</Text>
-          <Text style={styles.backLabel}>Focus</Text>
+          <Text style={styles.backLabel}>Train</Text>
         </TouchableOpacity>
         <View style={styles.slotBadge}>
           <Text style={styles.slotBadgeText}>{slotLabel}</Text>
         </View>
       </View>
 
-      {/* ── Focus Card ── */}
-      <View style={styles.focusCard}>
-        <Text style={styles.sessionLabel}>{getSessionLabel(sessionCount)}</Text>
-        <Text style={styles.focusName}>{focusPoint?.name || '—'}</Text>
-        <LinkedNotes
-          inputs={classInputs}
-          loading={notesLoading}
-          onSelect={setSelectedInput}
-        />
-      </View>
+      {/* ── Horizontal pages ── */}
+      <ScrollView
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        style={{ flex: 1 }}
+        keyboardShouldPersistTaps="handled"
+      >
+        {/* ── Page 1 : Entraînement ── */}
+        <View style={{ width: screenW, flex: 1 }}>
 
+          {/* Focus Card */}
+          <View style={styles.focusCard}>
+            <Text style={styles.sessionLabel}>{getSessionLabel(sessionCount)}</Text>
+            <Text style={styles.focusName}>{focusPoint?.name || '—'}</Text>
+            <LinkedNotes
+              inputs={classInputs}
+              loading={notesLoading}
+              onSelect={setSelectedInput}
+            />
+          </View>
+
+          {/* Timer */}
+          <View style={styles.timerSection}>
+            {sessionDone ? (
+              <View style={styles.doneWrap}>
+                <Text style={styles.doneCheck}>✓</Text>
+                <Text style={styles.doneTitle}>Session complete!</Text>
+              </View>
+            ) : sessionActive ? (
+              <>
+                <Text style={styles.timerText}>{formatTime(timeLeft)}</Text>
+                <View style={styles.progressTrack}>
+                  <View style={[styles.progressFill, { width: `${Math.round(progress * 100)}%` }]} />
+                </View>
+              </>
+            ) : (
+              <DurationPicker
+                value={duration}
+                onChange={(d) => { setDuration(d); setTimeLeft(d * 60); }}
+              />
+            )}
+          </View>
+
+          {/* Tools */}
+          <View style={styles.tools}>
+            <MetronomeStrip />
+          </View>
+
+          {/* CTA */}
+          <View style={styles.ctaWrap}>
+            {!sessionActive && !sessionDone && (
+              <TouchableOpacity style={styles.startBtn} onPress={startSession} activeOpacity={0.88}>
+                <Text style={styles.startBtnText}>START SESSION</Text>
+              </TouchableOpacity>
+            )}
+
+            {sessionActive && !sessionPaused && (
+              <TouchableOpacity style={styles.pauseBtn} onPress={pauseSession} activeOpacity={0.85}>
+                <Text style={styles.pauseBtnText}>⏸  Pause</Text>
+              </TouchableOpacity>
+            )}
+
+            {sessionActive && sessionPaused && (
+              <View style={styles.pausedRow}>
+                <TouchableOpacity style={styles.resumeBtn} onPress={resumeSession} activeOpacity={0.88}>
+                  <Text style={styles.resumeBtnText}>▶  Resume</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.stopBtn} onPress={() => setShowStopConfirm(true)} activeOpacity={0.85}>
+                  <Text style={styles.stopBtnText}>Stop</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {sessionActive && (
+              <TouchableOpacity style={styles.validateBtn} onPress={handleEndSession} activeOpacity={0.85}>
+                <Text style={styles.validateBtnText}>END SESSION</Text>
+              </TouchableOpacity>
+            )}
+
+            {/* Page indicator */}
+            <View style={styles.pageIndicator}>
+              <View style={[styles.pageDot, styles.pageDotActive]} />
+              <View style={styles.pageDot} />
+            </View>
+          </View>
+        </View>
+
+        {/* ── Page 2 : Coach IA ── */}
+        <KeyboardAvoidingView
+          style={{ width: screenW, flex: 1 }}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
+          <ChatPage
+            focusPoint={focusPoint}
+            sessionActive={sessionActive}
+            timeLeft={timeLeft}
+            duration={duration}
+            messages={chatMessages}
+            setMessages={setChatMessages}
+          />
+        </KeyboardAvoidingView>
+      </ScrollView>
+
+      {/* ── Modals (portal, position dans le tree sans importance) ── */}
       <ClassInputModal input={selectedInput} onClose={() => setSelectedInput(null)} />
 
-      {/* ── Timer ── */}
-      <View style={styles.timerSection}>
-        {sessionDone ? (
-          <View style={styles.doneWrap}>
-            <Text style={styles.doneCheck}>✓</Text>
-            <Text style={styles.doneTitle}>Session complete!</Text>
-          </View>
-        ) : sessionActive ? (
-          <>
-            <Text style={styles.timerText}>{formatTime(timeLeft)}</Text>
-            <View style={styles.progressTrack}>
-              <View style={[styles.progressFill, { width: `${Math.round(progress * 100)}%` }]} />
+      <Modal visible={showStopConfirm} transparent animationType="fade">
+        <Pressable style={styles.stopConfirmOverlay} onPress={() => setShowStopConfirm(false)}>
+          <Pressable style={styles.stopConfirmBox} onPress={() => {}}>
+            <Text style={styles.stopConfirmTitle}>Recommencer la session ?</Text>
+            <Text style={styles.stopConfirmBody}>
+              Cela va annuler la session en cours et remettre le chrono à zéro.
+            </Text>
+            <View style={styles.stopConfirmActions}>
+              <TouchableOpacity
+                style={styles.stopConfirmCancel}
+                onPress={() => setShowStopConfirm(false)}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.stopConfirmCancelText}>Annuler</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.stopConfirmConfirm}
+                onPress={() => { setShowStopConfirm(false); stopSession(); }}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.stopConfirmConfirmText}>Recommencer</Text>
+              </TouchableOpacity>
             </View>
-          </>
-        ) : (
-          <DurationPicker
-            value={duration}
-            onChange={(d) => { setDuration(d); setTimeLeft(d * 60); }}
-          />
-        )}
-      </View>
-
-      {/* ── Tools ── */}
-      <View style={styles.tools}>
-        <MetronomeStrip />
-      </View>
-
-      {/* ── CTA ── */}
-      <View style={styles.ctaWrap}>
-        {!sessionActive && !sessionDone && (
-          <TouchableOpacity style={styles.startBtn} onPress={startSession} activeOpacity={0.88}>
-            <Text style={styles.startBtnText}>START SESSION</Text>
-          </TouchableOpacity>
-        )}
-
-        {sessionActive && !sessionPaused && (
-          <TouchableOpacity style={styles.pauseBtn} onPress={pauseSession} activeOpacity={0.85}>
-            <Text style={styles.pauseBtnText}>⏸  Pause</Text>
-          </TouchableOpacity>
-        )}
-
-        {sessionActive && sessionPaused && (
-          <View style={styles.pausedRow}>
-            <TouchableOpacity style={styles.resumeBtn} onPress={resumeSession} activeOpacity={0.88}>
-              <Text style={styles.resumeBtnText}>▶  Resume</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.stopBtn} onPress={stopSession} activeOpacity={0.85}>
-              <Text style={styles.stopBtnText}>Stop</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {sessionActive && (
-          <TouchableOpacity style={styles.validateBtn} onPress={handleEndSession} activeOpacity={0.85}>
-            <Text style={styles.validateBtnText}>END SESSION</Text>
-          </TouchableOpacity>
-        )}
-      </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
 
       <SessionFeelingModal
         visible={showFeelingModal}
@@ -690,7 +988,6 @@ export default function FocusSessionScreen({ route, navigation }) {
         onSave={handleSave}
         onSkip={handleSkip}
       />
-
     </SafeAreaView>
   );
 }
@@ -829,6 +1126,78 @@ const styles = StyleSheet.create({
 
   validateBtn: { backgroundColor: Colors.black, borderRadius: 14, paddingVertical: 17, alignItems: 'center' },
   validateBtnText: { fontFamily: Fonts.jakartaExtraBold, fontSize: 15, color: Colors.white, letterSpacing: 1 },
+
+  stopConfirmOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 32,
+  },
+  stopConfirmBox: {
+    backgroundColor: Colors.white,
+    borderRadius: 20,
+    padding: 24,
+    width: '100%',
+  },
+  stopConfirmTitle: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 17,
+    color: Colors.black,
+    marginBottom: 8,
+  },
+  stopConfirmBody: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 14,
+    color: 'rgba(17,12,17,0.55)',
+    lineHeight: 20,
+    marginBottom: 24,
+  },
+  stopConfirmActions: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  stopConfirmCancel: {
+    flex: 1,
+    borderRadius: 12,
+    paddingVertical: 13,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(17,12,17,0.15)',
+  },
+  stopConfirmCancelText: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 14,
+    color: Colors.secondary,
+  },
+  stopConfirmConfirm: {
+    flex: 1,
+    borderRadius: 12,
+    paddingVertical: 13,
+    alignItems: 'center',
+    backgroundColor: Colors.black,
+  },
+  stopConfirmConfirmText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 14,
+    color: Colors.white,
+  },
+
+  pageIndicator: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 6,
+    marginTop: 12,
+  },
+  pageDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: 'rgba(17,12,17,0.15)',
+  },
+  pageDotActive: {
+    backgroundColor: Colors.black,
+  },
 });
 
 // ─── Duration Picker styles ───────────────────────────────────────────────────
@@ -925,16 +1294,17 @@ const modal = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   sheet: {
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    paddingHorizontal: 20,
-    paddingBottom: 40,
+    backgroundColor: Colors.background,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: Spacing.side,
+    paddingBottom: 44,
     paddingTop: 12,
+    maxHeight: '85%',
   },
   handle: {
     width: 36, height: 4,
-    backgroundColor: 'rgba(17,12,17,0.15)',
+    backgroundColor: 'rgba(17,12,17,0.12)',
     borderRadius: 2,
     alignSelf: 'center',
     marginBottom: 16,
@@ -949,6 +1319,7 @@ const modal = StyleSheet.create({
     fontFamily: Fonts.jakartaMedium,
     fontSize: 13,
     color: Colors.secondary,
+    letterSpacing: 0.3,
   },
   closeBtn: {
     width: 30, height: 30, borderRadius: 15,
@@ -957,107 +1328,172 @@ const modal = StyleSheet.create({
   },
   closeIcon: { fontSize: 13, color: Colors.black },
 
-  row: {
-    marginBottom: 18,
-  },
-  rowLabel: {
-    fontFamily: Fonts.jakartaMedium,
+  section: { marginBottom: 24 },
+  sectionLabel: {
+    fontFamily: Fonts.jakartaExtraBold,
     fontSize: 11,
     color: Colors.secondary,
     textTransform: 'uppercase',
-    letterSpacing: 0.4,
-    marginBottom: 4,
-  },
-  rowValue: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 14,
-    color: Colors.black,
-    lineHeight: 20,
-  },
-  badge: {
-    alignSelf: 'flex-start',
-    marginTop: 6,
-    borderWidth: 1,
-    borderColor: 'rgba(17,12,17,0.15)',
-    borderRadius: 20,
-    paddingHorizontal: 10,
-    paddingVertical: 3,
-  },
-  badgeText: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 11,
-    color: Colors.secondary,
+    letterSpacing: 0.8,
+    marginBottom: 10,
   },
 
-  focusRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: 18,
+  card: {
+    backgroundColor: Colors.statCardBg,
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 0.5,
+    borderColor: Colors.statCardBorder,
+  },
+  cardInputLabel: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 11,
+    color: Colors.black,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 6,
+  },
+  cardText: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 15,
+    color: Colors.black,
+    lineHeight: 23,
+  },
+
+  urgencyRow: { flexDirection: 'row', alignItems: 'center', marginTop: 12, gap: 10 },
+  urgencyLabel: { fontFamily: Fonts.jakartaMedium, fontSize: 11, color: Colors.secondary },
+  urgencyDots: { flexDirection: 'row', gap: 5 },
+  urgencyDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: 'rgba(17,12,17,0.12)' },
+
+  divider: {
+    height: 1,
+    backgroundColor: Colors.statCardBorder,
+    marginBottom: 24,
   },
   focusChip: {
-    backgroundColor: Colors.black,
-    borderRadius: 20,
-    paddingHorizontal: 12,
-    paddingVertical: 5,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: Colors.statCardBg,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderWidth: 0.5,
+    borderColor: Colors.statCardBorder,
   },
-  focusChipSecondary: { backgroundColor: 'rgba(17,12,17,0.08)' },
   focusChipText: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 12,
-    color: Colors.white,
-  },
-  focusChipTextSecondary: { color: Colors.black },
-
-  takeawayRow: { marginBottom: 8 },
-  takeawayText: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 13,
+    fontFamily: Fonts.jakartaBold,
+    fontSize: 14,
     color: Colors.black,
-    lineHeight: 20,
-    fontStyle: 'italic',
+    flex: 1,
   },
+  fpDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.activeLog },
 });
 
 // ─── Metronome styles ─────────────────────────────────────────────────────────
 
 const m = StyleSheet.create({
-  wrap: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 14, gap: 12 },
+  wrap: { paddingHorizontal: 16, paddingVertical: 10 },
 
-  // Row 1: dance + play
   topRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 10,
+    alignItems: 'stretch',
+    gap: 8,
   },
+
+  // Dance pill (fixed width, left)
   dancePill: {
-    flex: 1,
+    width: 110,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 12,
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    borderRadius: 10,
     backgroundColor: 'rgba(17,12,17,0.05)',
     borderWidth: 0.5,
     borderColor: Colors.statCardBorder,
   },
   danceLabel: {
     fontFamily: Fonts.jakartaMedium,
-    fontSize: 13,
+    fontSize: 12,
     color: Colors.black,
     flex: 1,
   },
-  chevron: { fontSize: 9, color: Colors.secondary },
+  chevron: { fontSize: 8, color: Colors.secondary },
 
+  // BPM wheel zone
+  bpmDragWrap: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 8,
+    paddingTop: 8,
+    paddingBottom: 12,
+    borderRadius: 10,
+    backgroundColor: 'rgba(17,12,17,0.05)',
+    borderWidth: 0.5,
+    borderColor: Colors.statCardBorder,
+    overflow: 'hidden',
+  },
+  bpmWheel: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-evenly',
+    width: '100%',
+    marginBottom: 1,
+  },
+  bpmWheelCell: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  bpmWheelCellCenter: {
+    flex: 1.6,
+  },
+  bpmWheelNum: {
+    fontFamily: Fonts.monument,
+    fontSize: 11,
+    color: Colors.black,
+    letterSpacing: 0.2,
+    textAlign: 'center',
+  },
+  bpmWheelNumCenter: {
+    fontSize: 18,
+    lineHeight: 22,
+  },
+  bpmWheelNumActive: { color: Colors.orange },
+  bpmUnit: {
+    fontFamily: Fonts.jakartaBold,
+    fontSize: 7,
+    color: Colors.secondary,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+  },
+  // Progress bar at the bottom (40–260 BPM range)
+  bpmTrack: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 2,
+    backgroundColor: 'rgba(17,12,17,0.07)',
+  },
+  bpmFill: {
+    height: 2,
+    backgroundColor: Colors.orange,
+    borderRadius: 1,
+  },
+
+  // Play button
   playBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     backgroundColor: Colors.black,
     alignItems: 'center',
     justifyContent: 'center',
+    alignSelf: 'center',
   },
   playBtnActive: {
     backgroundColor: Colors.orange,
@@ -1067,52 +1503,8 @@ const m = StyleSheet.create({
     shadowRadius: 10,
     elevation: 4,
   },
-  playIcon: { fontSize: 13, color: Colors.white },
+  playIcon: { fontSize: 12, color: Colors.white },
   playIconActive: { color: Colors.black },
-
-  // Row 2: BPM stepper
-  bpmRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-  },
-  stepBtn: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 10,
-    backgroundColor: 'rgba(17,12,17,0.06)',
-    borderWidth: 0.5,
-    borderColor: Colors.statCardBorder,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  stepBtnText: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 13,
-    color: Colors.secondary,
-    lineHeight: 16,
-  },
-  bpmDisplay: {
-    alignItems: 'center',
-    minWidth: 90,
-  },
-  bpmVal: {
-    fontFamily: Fonts.monument,
-    fontSize: 30,
-    color: Colors.black,
-    letterSpacing: 1,
-    lineHeight: 36,
-  },
-  bpmValActive: { color: Colors.orange },
-  bpmUnit: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 10,
-    color: Colors.secondary,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-    marginTop: 1,
-  },
 
   // Dance picker
   picker: {},
@@ -1228,5 +1620,144 @@ const fm = StyleSheet.create({
     fontFamily: Fonts.jakartaMedium,
     fontSize: 14,
     color: Colors.secondary,
+  },
+});
+
+// ─── Chat styles ─────────────────────────────────────────────────────────────
+
+const chat = StyleSheet.create({
+  wrap: {
+    flex: 1,
+    backgroundColor: Colors.background,
+  },
+  sessionBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: Spacing.side,
+    paddingVertical: 8,
+    backgroundColor: 'rgba(76,175,80,0.07)',
+    borderBottomWidth: 0.5,
+    borderBottomColor: 'rgba(76,175,80,0.2)',
+  },
+  sessionDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: Colors.activeLog,
+  },
+  sessionText: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 12,
+    color: Colors.activeLog,
+  },
+  header: {
+    paddingHorizontal: Spacing.side,
+    paddingTop: 16,
+    paddingBottom: 12,
+    borderBottomWidth: 0.5,
+    borderBottomColor: "rgba(17,12,17,0.08)",
+  },
+  title: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 18,
+    color: Colors.black,
+  },
+  subtitle: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 12,
+    color: Colors.secondary,
+    marginTop: 2,
+  },
+  messageList: {
+    flex: 1,
+  },
+  messageListContent: {
+    padding: Spacing.side,
+    paddingBottom: 16,
+    gap: 10,
+  },
+  emptyState: {
+    paddingTop: 40,
+    paddingHorizontal: 8,
+    alignItems: "center",
+  },
+  emptyText: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 14,
+    color: Colors.secondary,
+    textAlign: "center",
+    lineHeight: 22,
+  },
+  bubble: {
+    maxWidth: "85%",
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  bubbleUser: {
+    alignSelf: "flex-end",
+    backgroundColor: Colors.black,
+    borderBottomRightRadius: 4,
+  },
+  bubbleBot: {
+    alignSelf: "flex-start",
+    backgroundColor: Colors.statCardBg,
+    borderBottomLeftRadius: 4,
+    borderWidth: 0.5,
+    borderColor: Colors.statCardBorder,
+    minWidth: 60,
+    alignItems: "center",
+  },
+  bubbleText: {
+    fontSize: 14,
+    lineHeight: 21,
+    fontFamily: Fonts.jakartaRegular,
+  },
+  bubbleTextUser: {
+    color: Colors.white,
+  },
+  bubbleTextBot: {
+    color: Colors.black,
+  },
+  inputBar: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    gap: 10,
+    paddingHorizontal: Spacing.side,
+    paddingVertical: 12,
+    borderTopWidth: 0.5,
+    borderTopColor: "rgba(17,12,17,0.08)",
+  },
+  input: {
+    flex: 1,
+    minHeight: 42,
+    maxHeight: 100,
+    backgroundColor: Colors.statCardBg,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingTop: 11,
+    paddingBottom: 11,
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 14,
+    color: Colors.black,
+    borderWidth: 0.5,
+    borderColor: Colors.statCardBorder,
+  },
+  sendBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: Colors.black,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  sendBtnDisabled: {
+    opacity: 0.3,
+  },
+  sendBtnIcon: {
+    fontSize: 18,
+    color: Colors.white,
+    fontWeight: "bold",
   },
 });

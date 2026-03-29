@@ -4,11 +4,12 @@ import {
   Text,
   StyleSheet,
   FlatList,
+  SectionList,
+  ScrollView,
   TextInput,
   TouchableOpacity,
   KeyboardAvoidingView,
   Platform,
-  PanResponder,
   Image,
   Animated,
   Dimensions,
@@ -23,6 +24,32 @@ import { getClassInputs, getNotes } from '../services/storage';
 import LogModal from '../components/LogModal';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const MONTH_FULL = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+function getDateGroup(isoDate) {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const d = new Date(isoDate);
+  const itemDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const diffDays = Math.round((today - itemDay) / 86400000);
+  if (diffDays === 0) return 'Today';
+  if (diffDays === 1) return 'Yesterday';
+  if (diffDays < 7) return DAY_NAMES[d.getDay()];
+  if (diffDays < 30) return 'Last 30 days';
+  if (d.getFullYear() === now.getFullYear()) return MONTH_FULL[d.getMonth()];
+  return String(d.getFullYear());
+}
+
+function groupByDate(items, dateField = 'created_at') {
+  const map = new Map();
+  for (const item of items) {
+    const key = getDateGroup(item[dateField] || item.created_at);
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(item);
+  }
+  return Array.from(map.entries()).map(([title, data]) => ({ title, data }));
+}
 
 function relativeDate(isoOrTs) {
   const ts = typeof isoOrTs === 'string' ? new Date(isoOrTs).getTime() : isoOrTs;
@@ -114,23 +141,10 @@ export default function LogScreen({ navigation }) {
   const [photoUri, setPhotoUri] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
 
+  const [isLoading, setIsLoading] = useState(true);
+  const hasLoadedRef = useRef(false);
   const fadeAnim = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(0)).current;
-  const activeTabRef = useRef('CLASS');
-  const switchTabRef = useRef(null);
-
-  const panResponder = useRef(
-    PanResponder.create({
-      onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dx) > 10 && Math.abs(g.dy) < 20,
-      onPanResponderRelease: (_, g) => {
-        if (g.dx > 60 && activeTabRef.current === 'NOTES') {
-          switchTabRef.current('CLASS');
-        } else if (g.dx < -60 && activeTabRef.current === 'CLASS') {
-          switchTabRef.current('NOTES');
-        }
-      },
-    })
-  ).current;
+  const scrollRef = useRef(null);
 
   async function load() {
     const [allInputs, allNotes, savedPhoto] = await Promise.all([getClassInputs(), getNotes(), AsyncStorage.getItem('@profile_photo')]);
@@ -140,16 +154,9 @@ export default function LogScreen({ navigation }) {
   }
 
   function switchTab(tab) {
-    activeTabRef.current = tab;
     setActiveTab(tab);
-    Animated.spring(slideAnim, {
-      toValue: tab === 'NOTES' ? -SCREEN_W : 0,
-      useNativeDriver: true,
-      tension: 80,
-      friction: 15,
-    }).start();
+    scrollRef.current?.scrollTo({ x: tab === 'NOTES' ? SCREEN_W : 0, animated: true });
   }
-  switchTabRef.current = switchTab;
 
   async function handleRefresh() {
     setRefreshing(true);
@@ -158,9 +165,13 @@ export default function LogScreen({ navigation }) {
   }
 
   useFocusEffect(useCallback(() => {
-    fadeAnim.setValue(0);
-    Animated.timing(fadeAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
-    load();
+    if (!hasLoadedRef.current) setIsLoading(true);
+    load().then(() => {
+      hasLoadedRef.current = true;
+      setIsLoading(false);
+      fadeAnim.setValue(0);
+      Animated.timing(fadeAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
+    });
   }, []));
 
   function handleAdd() {
@@ -184,6 +195,17 @@ export default function LogScreen({ navigation }) {
         return n.title?.toLowerCase().includes(q) || n.content?.toLowerCase().includes(q);
       })
     : notes;
+
+  const groupedInputs = groupByDate(filteredInputs, 'created_at');
+  const groupedNotes = groupByDate(filteredNotes, 'updated_at');
+
+  if (isLoading) {
+    return (
+      <View style={{ flex: 1, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' }}>
+        <Text style={{ fontFamily: Fonts.monument, fontSize: 20, color: Colors.black, letterSpacing: 1 }}>EE</Text>
+      </View>
+    );
+  }
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
@@ -215,49 +237,67 @@ export default function LogScreen({ navigation }) {
       </View>
 
       {/* List */}
-      <View style={{ flex: 1, overflow: 'hidden' }} {...panResponder.panHandlers}>
-        <Animated.View style={{
-          flexDirection: 'row',
-          width: SCREEN_W * 2,
-          height: '100%',
-          transform: [{ translateX: slideAnim }],
-        }}>
+      <ScrollView
+        ref={scrollRef}
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        scrollEventThrottle={16}
+        onMomentumScrollEnd={(e) => {
+          const page = Math.round(e.nativeEvent.contentOffset.x / SCREEN_W);
+          setActiveTab(page === 0 ? 'CLASS' : 'NOTES');
+        }}
+        style={{ flex: 1 }}
+      >
           <View style={{ width: SCREEN_W, height: '100%' }}>
-            <FlatList
-              data={filteredInputs}
+            <SectionList
+              sections={groupedInputs}
               keyExtractor={(item) => item.id}
               renderItem={({ item }) => (
                 <ClassItem item={item} onPress={() => navigation.navigate('ClassDetail', { inputId: item.id })} />
               )}
+              renderSectionHeader={({ section: { title } }) => (
+                <View style={styles.sectionHeader}>
+                  <Text style={[styles.sectionHeaderText, { color: Colors.activeLog }]}>{title}</Text>
+                </View>
+              )}
+              ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
               contentContainerStyle={styles.listContent}
               showsVerticalScrollIndicator={false}
               ListEmptyComponent={<EmptyState text="No class logs yet. Tap ADD to log your first session." />}
               refreshing={refreshing}
               onRefresh={handleRefresh}
+              stickySectionHeadersEnabled={false}
             />
           </View>
           <View style={{ width: SCREEN_W, height: '100%' }}>
-            <FlatList
-              data={filteredNotes}
+            <SectionList
+              sections={groupedNotes}
               keyExtractor={(item) => item.id}
               renderItem={({ item }) => (
                 <NoteItem item={item} onPress={() => navigation.navigate('NoteDetail', { noteId: item.id })} />
               )}
+              renderSectionHeader={({ section: { title } }) => (
+                <View style={styles.sectionHeader}>
+                  <Text style={[styles.sectionHeaderText, { color: Colors.activeFocus }]}>{title}</Text>
+                </View>
+              )}
+              ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
               contentContainerStyle={styles.listContent}
               showsVerticalScrollIndicator={false}
               ListEmptyComponent={<EmptyState text="No notes yet. Tap ADD to create one." />}
               refreshing={refreshing}
               onRefresh={handleRefresh}
+              stickySectionHeadersEnabled={false}
             />
           </View>
-        </Animated.View>
-      </View>
+      </ScrollView>
 
       {/* Bottom bar */}
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={90}>
         <View style={styles.bottomBar}>
           <View style={styles.searchWrap}>
-            <Text style={styles.searchIcon}>⌕</Text>
+            <Text style={[styles.searchIcon, { color: activeTab === 'CLASS' ? Colors.activeLog : Colors.activeFocus }]}>⌕</Text>
             <TextInput
               style={styles.searchInput}
               value={search}
@@ -352,7 +392,16 @@ const styles = StyleSheet.create({
   listContent: {
     paddingHorizontal: Spacing.side,
     paddingBottom: 16,
-    gap: 10,
+  },
+  sectionHeader: {
+    paddingTop: 20,
+    paddingBottom: 8,
+  },
+  sectionHeaderText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 11,
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
   },
   card: {
     flexDirection: 'row',
@@ -443,7 +492,7 @@ const styles = StyleSheet.create({
     paddingRight: 12,
     gap: 10,
   },
-  searchIcon: { fontSize: 20, color: '#006FFD' },
+  searchIcon: { fontSize: 20 },
   searchInput: {
     flex: 1,
     fontFamily: Fonts.jakartaMedium,
