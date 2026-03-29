@@ -2,6 +2,30 @@ const API_KEY = process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY;
 const MODEL = 'claude-haiku-4-5-20251001';
 const API_URL = 'https://api.anthropic.com/v1/messages';
 
+export async function callClaudeChat(systemPrompt, messages, maxTokens = 500) {
+  const res = await fetch(API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': API_KEY,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true',
+    },
+    body: JSON.stringify({
+      model: MODEL,
+      max_tokens: maxTokens,
+      system: systemPrompt,
+      messages,
+    }),
+  });
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Anthropic API error: ${errText}`);
+  }
+  const data = await res.json();
+  return data.content[0].text.trim();
+}
+
 async function callClaude(prompt, maxTokens = 200) {
   console.log('[Anthropic] callClaude →', { model: MODEL, maxTokens, promptPreview: prompt.slice(0, 80) });
   const res = await fetch(API_URL, {

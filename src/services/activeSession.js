@@ -5,6 +5,13 @@
 let _session = null; // { sessionId, focusPointId, rank, sessionCount, duration, startedAt }
 const _listeners = new Set();
 
+// ─── Chat messages store (persists across navigation while session is active) ─
+let _chatMessages = [];
+
+export function getChatMessages() { return _chatMessages; }
+export function setChatMessages(msgs) { _chatMessages = msgs; }
+export function clearChatMessages() { _chatMessages = []; }
+
 export function setActiveSession(session) {
   _session = session;
   _listeners.forEach(fn => fn(_session));
