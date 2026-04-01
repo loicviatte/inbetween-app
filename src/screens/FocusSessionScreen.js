@@ -265,7 +265,7 @@ function FocusPager({ focusPoint, inputs, loading, onSelect }) {
         }}>
           <View
             style={{ width: cardWidth || '50%' }}
-            onLayout={e => setHeights(h => [e.nativeEvent.layout.height, h[1]])}
+            onLayout={e => { const h0 = e.nativeEvent.layout.height; setHeights(h => [h0, h[1]]); }}
           >
             <View style={ln.wrap}>
               <Text style={ln.heading}>Coach</Text>
@@ -274,7 +274,7 @@ function FocusPager({ focusPoint, inputs, loading, onSelect }) {
           </View>
           <View
             style={{ width: cardWidth || '50%' }}
-            onLayout={e => setHeights(h => [h[0], e.nativeEvent.layout.height])}
+            onLayout={e => { const h1 = e.nativeEvent.layout.height; setHeights(h => [h[0], h1]); }}
           >
             <LinkedClassPage inputs={inputs} loading={loading} onSelect={onSelect} />
           </View>
