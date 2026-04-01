@@ -963,7 +963,12 @@ export default function FocusSessionScreen({ route, navigation }) {
           </View>
 
           {/* Tools */}
-          <View style={styles.tools}>
+          <View
+            style={styles.tools}
+            onTouchStart={() => setOuterScrollEnabled(false)}
+            onTouchEnd={() => setOuterScrollEnabled(true)}
+            onTouchCancel={() => setOuterScrollEnabled(true)}
+          >
             <MetronomeStrip />
           </View>
 
