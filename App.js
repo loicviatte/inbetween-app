@@ -38,6 +38,7 @@ import CoachHomeScreen from './src/screens/coach/CoachHomeScreen';
 import StudentDetailScreen from './src/screens/coach/StudentDetailScreen';
 import SessionsFeedScreen from './src/screens/coach/SessionsFeedScreen';
 import CoachProfileScreen from './src/screens/coach/CoachProfileScreen';
+import CoachSessionDetailScreen from './src/screens/coach/CoachSessionDetailScreen';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -117,6 +118,11 @@ function CoachAppNavigator() {
       <CoachStack.Screen
         name="StudentDetail"
         component={StudentDetailScreen}
+        options={{ animation: 'slide_from_right' }}
+      />
+      <CoachStack.Screen
+        name="CoachSessionDetail"
+        component={CoachSessionDetailScreen}
         options={{ animation: 'slide_from_right' }}
       />
     </CoachStack.Navigator>

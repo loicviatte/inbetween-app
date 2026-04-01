@@ -125,12 +125,20 @@ export default function SessionsFeedScreen({ navigation }) {
         renderItem={({ item }) => (
           <EventCard
             event={item}
-            onPress={() =>
-              navigation.navigate('StudentDetail', {
-                studentId: item.studentId,
-                studentName: item.studentName,
-              })
-            }
+            onPress={() => {
+              if (item.type === 'training' || item.type === 'class') {
+                navigation.navigate('CoachSessionDetail', {
+                  type: item.type,
+                  sessionId: item.id,
+                  studentName: item.studentName,
+                });
+              } else {
+                navigation.navigate('StudentDetail', {
+                  studentId: item.studentId,
+                  studentName: item.studentName,
+                });
+              }
+            }}
           />
         )}
         ListEmptyComponent={() => (
