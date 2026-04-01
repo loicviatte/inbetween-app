@@ -27,7 +27,6 @@ import {
 import {
   saveClassInput,
   saveFocusPoint,
-  saveFocusProgress,
   getFocusPoints,
   getRecentClassInputs,
   updateUserSummary,
@@ -279,6 +278,37 @@ export default function LogModal({ visible, onClose, onSubmitted }) {
         created_at: createdAt,
       });
 
+      // Wire ai focus matches → FOCUS_REMENTIONED on matching focus points
+      try {
+        const { applyFocusEvent } = await import('../utils/algorithm');
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+          const { data: fps } = await supabase
+            .from('focus_points')
+            .select('id, name')
+            .eq('user_id', user.id)
+            .eq('is_deleted', false)
+            .eq('is_archived', false);
+
+          const aiFocuses = [
+            primaryFocusName,
+            secondaryFocusName,
+          ].filter(Boolean).map(f => f.toLowerCase().trim());
+
+          for (const fp of fps || []) {
+            const fpName = (fp.name || '').toLowerCase().trim();
+            if (aiFocuses.some(af => af === fpName || af.includes(fpName) || fpName.includes(af))) {
+              await applyFocusEvent(fp.id, 'FOCUS_REMENTIONED', user.id);
+              // Update last_mentioned_at on the focus point
+              await supabase
+                .from('focus_points')
+                .update({ last_mentioned_at: new Date().toISOString() })
+                .eq('id', fp.id);
+            }
+          }
+        }
+      } catch {}
+
       // Retrieve the newly created class input ID
       const { data: { user } } = await supabase.auth.getUser();
       const { data: latestInput } = await supabase
@@ -289,13 +319,6 @@ export default function LogModal({ visible, onClose, onSubmitted }) {
         .limit(1)
         .single();
       const classInputId = latestInput?.id || null;
-
-      if (primaryFpId) {
-        await saveFocusProgress({ focus_point_id: primaryFpId, class_input_id: classInputId, priority_score: priorityScore1 });
-      }
-      if (secondaryFpId) {
-        await saveFocusProgress({ focus_point_id: secondaryFpId, class_input_id: classInputId, priority_score: priorityScore2 });
-      }
 
       // Background: coaching summary + nudge refresh
       getRecentClassInputs(3).then((recent) =>

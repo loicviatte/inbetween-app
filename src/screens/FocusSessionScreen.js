@@ -615,7 +615,7 @@ function DurationPicker({ value, onChange }) {
 
 // ─── Chat Page ────────────────────────────────────────────────────────────────
 
-function ChatPage({ focusPoint, sessionActive, timeLeft, duration, messages, setMessages }) {
+function ChatPage({ focusPoint, focusPointId, sessionActive, timeLeft, duration, messages, setMessages }) {
   const [inputText, setInputText] = useState('');
   const [sending, setSending] = useState(false);
   const [userData, setUserData] = useState(null);
@@ -694,6 +694,24 @@ STRICT RULES:
     setMessages(newMessages);
     storeChatMessages(newMessages);
     setSending(true);
+
+    // Classify student message → fire question event on current focus
+    try {
+      const { applyFocusEvent } = await import('../utils/algorithm');
+      const { supabase } = await import('../services/supabase/client');
+      const { data: { user } } = await supabase.auth.getUser();
+      const msgLower = text.toLowerCase();
+      const isConfusion = /\b(don't understand|not sure|confused|what does|what is|how do|i don't get|unclear)\b/.test(msgLower);
+      const isConfirmation = /\b(right\??|correct\??|is that|so i should|did i|am i)\b/.test(msgLower);
+      const hasQuestion = msgLower.includes('?') || isConfusion || isConfirmation;
+      if (hasQuestion && focusPointId && user) {
+        const eventType = isConfusion ? 'QUESTION_CONFUSION'
+          : isConfirmation ? 'QUESTION_CONFIRMATION'
+          : 'QUESTION_CLARIFICATION';
+        await applyFocusEvent(focusPointId, eventType, user.id).catch(() => {});
+      }
+    } catch {}
+
     try {
       const reply = await callClaudeChat(buildSystemPrompt(), newMessages);
       setMessages(prev => {
@@ -1035,6 +1053,7 @@ export default function FocusSessionScreen({ route, navigation }) {
         <View style={{ width: screenW, flex: 1 }}>
           <ChatPage
             focusPoint={focusPoint}
+            focusPointId={focusPointId}
             sessionActive={sessionActive}
             timeLeft={timeLeft}
             duration={duration}

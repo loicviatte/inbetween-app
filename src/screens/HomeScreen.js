@@ -96,8 +96,10 @@ export default function HomeScreen({ navigation }) {
   const [user, setUser] = useState(null);
   const [slot1, setSlot1] = useState(null);
   const [slot2, setSlot2] = useState(null);
+  const [slot3, setSlot3] = useState(null);
   const [sessionCount, setSessionCount] = useState(0);
   const [slot2Count, setSlot2Count] = useState(0);
+  const [slot3Count, setSlot3Count] = useState(0);
   const [starting, setStarting] = useState(false);
   const [activeSession, setActiveSessionState] = useState(null);
   const [countdown, setCountdown] = useState(0);
@@ -128,17 +130,20 @@ export default function HomeScreen({ navigation }) {
     setUser(u);
     setSlot1(slots.slot1);
     setSlot2(slots.slot2);
+    setSlot3(slots.slot3);
     setSessionsThisWeek(sessions);
     setClassesThisWeek(classes);
     setFocusTrainedThisWeek(focusTrained);
     setWeekActivity(wa || {});
     setPhotoUri(savedPhoto || null);
-    const [c1, c2] = await Promise.all([
+    const [c1, c2, c3] = await Promise.all([
       slots.slot1?.id ? getSessionCountForFocus(slots.slot1.id) : Promise.resolve(0),
       slots.slot2?.id ? getSessionCountForFocus(slots.slot2.id) : Promise.resolve(0),
+      slots.slot3?.id ? getSessionCountForFocus(slots.slot3.id) : Promise.resolve(0),
     ]);
     setSessionCount(c1);
     setSlot2Count(c2);
+    setSlot3Count(c3);
   }
 
   useFocusEffect(useCallback(() => {
@@ -337,13 +342,29 @@ export default function HomeScreen({ navigation }) {
                   <Text style={s.altName} numberOfLines={2}>{slot2.name}</Text>
                 </TouchableOpacity>
               )}
-              <View style={[s.altCard, isSessionActive && s.altCardLocked]}>
-                <View style={s.altCardHeader}>
-                  <Text style={s.altTryLabel}>Coming up</Text>
-                  {isSessionActive && <Text style={s.altLockIcon}>🔒</Text>}
+              {slot3 && (
+                <TouchableOpacity
+                  style={[s.altCard, isSessionActive && s.altCardLocked]}
+                  onPress={() => handleStartSession(slot3, 2, slot3Count)}
+                  activeOpacity={0.8}
+                  disabled={starting || isSessionActive}
+                >
+                  <View style={s.altCardHeader}>
+                    <Text style={s.altTryLabel}>Also work on</Text>
+                    {isSessionActive && <Text style={s.altLockIcon}>🔒</Text>}
+                  </View>
+                  <Text style={s.altName} numberOfLines={2}>{slot3.name}</Text>
+                </TouchableOpacity>
+              )}
+              {!slot3 && (
+                <View style={[s.altCard, isSessionActive && s.altCardLocked]}>
+                  <View style={s.altCardHeader}>
+                    <Text style={s.altTryLabel}>Coming up</Text>
+                    {isSessionActive && <Text style={s.altLockIcon}>🔒</Text>}
+                  </View>
+                  <Text style={s.altName}>Log a class to unlock</Text>
                 </View>
-                <Text style={s.altName}>Log a class to unlock</Text>
-              </View>
+              )}
             </ScrollView>
 
           </View>
@@ -371,25 +392,25 @@ export default function HomeScreen({ navigation }) {
           <WeekHeatmap activity={weekActivity} onDayPress={(i) => setDayModal(i)} />
         </View>
 
-        {/* Stats bar */}
-        <View style={s.statsBar}>
-          <View style={s.statItem}>
-            <Text style={s.statValue}>{sessionsThisWeek}</Text>
-            <Text style={s.statLabel}>Training</Text>
+        /* Stats bar */}
+          <View style={s.statsBar}>
+            <View style={s.statItem}>
+              <Text style={s.statValue}>{classesThisWeek}</Text>
+              <Text style={s.statLabel}>Class</Text>
+            </View>
+            <View style={s.statSep} />
+            <View style={s.statItem}>
+              <Text style={s.statValue}>{sessionsThisWeek}</Text>
+              <Text style={s.statLabel}>Practice Sessions</Text>
+            </View>
+            <View style={s.statSep} />
+            <View style={s.statItem}>
+              <Text style={s.statValue}>{focusTrainedThisWeek}</Text>
+              <Text style={s.statLabel}>Focus Trained</Text>
+            </View>
           </View>
-          <View style={s.statSep} />
-          <View style={s.statItem}>
-            <Text style={s.statValue}>{classesThisWeek}</Text>
-            <Text style={s.statLabel}>Class</Text>
-          </View>
-          <View style={s.statSep} />
-          <View style={s.statItem}>
-            <Text style={s.statValue}>{focusTrainedThisWeek}</Text>
-            <Text style={s.statLabel}>Focus Trained</Text>
-          </View>
-        </View>
 
-        {/* Share with Coach */}
+          {/* Share with Coach */}
         <View style={s.shareSection}>
           <Text style={s.shareDesc}>
             Send your coach a quick summary of your recent sessions and focus areas.

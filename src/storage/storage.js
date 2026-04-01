@@ -218,6 +218,21 @@ export async function saveFocusPoint(fp) {
     .insert({ ...rest, user_id: userId })
     .select('id')
     .single();
+
+  // Auto-create focus_metrics row with base values for this tier
+  if (data?.id) {
+    const tier = fp.tier || 'important';
+    const baseImportance = tier === 'critical' ? 4 : tier === 'important' ? 3 : 2;
+    const baseStruggle   = tier === 'supporting' ? 0 : 1;
+    await supabase.from('focus_metrics').insert({
+      focus_id:     data.id,
+      importance:   baseImportance,
+      struggle:     baseStruggle,
+      practice:     0,
+      coach_signal: 0,
+    }).then(() => {}).catch(() => {}); // silent — metrics row may already exist
+  }
+
   return data?.id;
 }
 
@@ -239,31 +254,6 @@ export async function getClassInputsForFocus(focusName) {
     .order('created_at', { ascending: false })
     .limit(5);
   return data || [];
-}
-
-export async function cacheFocusSummary(focusPointId, summary) {
-  const payload = JSON.stringify({ summary, generated_at: new Date().toISOString() });
-  await supabase
-    .from('focus_points')
-    .update({ current_exercise: payload })
-    .eq('id', focusPointId);
-}
-
-export async function getCachedFocusSummary(focusPointId) {
-  const { data } = await supabase
-    .from('focus_points')
-    .select('current_exercise')
-    .eq('id', focusPointId)
-    .single();
-  if (!data?.current_exercise) return null;
-  try {
-    const parsed = JSON.parse(data.current_exercise);
-    const age = Date.now() - new Date(parsed.generated_at).getTime();
-    if (age > 7 * 86400000) return null; // older than 7 days
-    return parsed.summary;
-  } catch {
-    return null;
-  }
 }
 
 export async function getFocusTrainedCount() {
@@ -298,43 +288,6 @@ export async function getFocusTrainedThisWeek() {
   return ids.size;
 }
 
-// ─── Focus Progress ──────────────────────────────────────────────────────────
-
-export async function getFocusProgress() {
-  const userId = await getUserId();
-  const { data } = await supabase
-    .from('focus_progress')
-    .select('*')
-    .eq('user_id', userId);
-  return data || [];
-}
-
-export async function saveFocusProgress(entry) {
-  const userId = await getUserId();
-  await supabase
-    .from('focus_progress')
-    .insert({ ...entry, user_id: userId });
-}
-
-export async function getTopFocusPoints(n = 2) {
-  const [points, progress] = await Promise.all([getFocusPoints(), getFocusProgress()]);
-  if (!points.length) return [];
-
-  const scores = {};
-  for (const p of progress) {
-    scores[p.focus_point_id] = (scores[p.focus_point_id] || 0) + p.priority_score;
-  }
-
-  return [...points]
-    .sort((a, b) => (scores[b.id] || 0) - (scores[a.id] || 0))
-    .slice(0, n);
-}
-
-export async function getTopFocusPoint() {
-  const top = await getTopFocusPoints(1);
-  return top[0] || null;
-}
-
 export async function getTopFocusPointsWithCounts(n = 3) {
   const userId = await getUserId();
   const [points, sessions] = await Promise.all([
@@ -357,15 +310,6 @@ export async function getTopFocusPointsWithCounts(n = 3) {
     .sort((a, b) => (counts[b.id] || 0) - (counts[a.id] || 0))
     .slice(0, n)
     .map(p => ({ ...p, count: counts[p.id] || 0 }));
-}
-
-export async function saveSessionCompletion(focusPointId) {
-  await saveFocusProgress({
-    focus_point_id: focusPointId,
-    class_input_id: null,
-    priority_score: -5,
-    completed: true,
-  });
 }
 
 // ─── Notes ───────────────────────────────────────────────────────────────────
@@ -504,7 +448,9 @@ export async function getMyCoach() {
 
 // ─── Student → Coach Messages ─────────────────────────────────────────────────
 
-export async function askCoach(message) {
+// question_type: 'confirmation' | 'clarification' | 'confusion' (default: 'clarification')
+// focusPointId: optional — the focus point this question relates to
+export async function askCoach(message, question_type = 'clarification', focusPointId = null) {
   const userId = await getUserId();
 
   const { data: me } = await supabase
@@ -516,11 +462,22 @@ export async function askCoach(message) {
   if (!me?.coach_id) throw new Error('No coach linked. Add your coach first.');
 
   await supabase.from('coach_messages').insert({
-    student_id: userId,
-    coach_id: me.coach_id,
-    message: message.trim(),
-    status: 'pending',
+    student_id:    userId,
+    coach_id:      me.coach_id,
+    message:       message.trim(),
+    question_type: question_type,
+    status:        'pending',
   });
+
+  // Update struggle score on the related focus point
+  if (focusPointId) {
+    const eventType =
+      question_type === 'confirmation' ? 'QUESTION_CONFIRMATION'
+      : question_type === 'confusion'  ? 'QUESTION_CONFUSION'
+      : 'QUESTION_CLARIFICATION';
+    const { applyFocusEvent } = await import('../utils/algorithm');
+    await applyFocusEvent(focusPointId, eventType, userId).catch(() => {});
+  }
 }
 
 export async function getCoachReplies() {
