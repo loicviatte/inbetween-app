@@ -169,7 +169,7 @@ function ClassInputModal({ input, onClose }) {
 
 // ─── Linked Class Notes ───────────────────────────────────────────────────────
 
-function LinkedNotes({ inputs, loading, onSelect }) {
+function LinkedClassPage({ inputs, loading, onSelect }) {
   if (loading) {
     return (
       <View style={ln.wrap}>
@@ -178,7 +178,6 @@ function LinkedNotes({ inputs, loading, onSelect }) {
     );
   }
   if (!inputs.length) return null;
-
   return (
     <View style={ln.wrap}>
       <Text style={ln.heading}>Linked Class</Text>
@@ -189,6 +188,59 @@ function LinkedNotes({ inputs, loading, onSelect }) {
           <Text style={ln.arrow}>›</Text>
         </TouchableOpacity>
       ))}
+    </View>
+  );
+}
+
+function FocusPager({ focusPoint, inputs, loading, onSelect }) {
+  const hasNote = !!focusPoint?.coach_note;
+  const hasClasses = loading || inputs.length > 0;
+
+  const [page, setPage] = useState(0);
+  const totalPages = hasNote && hasClasses ? 2 : 1;
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponder: (_, { dx, dy }) =>
+        Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 8,
+      onPanResponderRelease: (_, { dx }) => {
+        if (dx < -30) setPage(p => Math.min(p + 1, totalPages - 1));
+        else if (dx > 30) setPage(p => Math.max(p - 1, 0));
+      },
+    })
+  ).current;
+
+  // If no coach note AND no classes: nothing to show
+  if (!hasNote && !hasClasses) return null;
+
+  // If only one type: render directly without pager chrome
+  if (totalPages === 1) {
+    if (hasNote) {
+      return (
+        <View style={ln.wrap}>
+          <Text style={ln.heading}>Coach</Text>
+          <Text style={ln.coachNoteText}>{focusPoint.coach_note}</Text>
+        </View>
+      );
+    }
+    return <LinkedClassPage inputs={inputs} loading={loading} onSelect={onSelect} />;
+  }
+
+  return (
+    <View {...panResponder.panHandlers}>
+      {page === 0 ? (
+        <View style={ln.wrap}>
+          <Text style={ln.heading}>Coach</Text>
+          <Text style={ln.coachNoteText}>{focusPoint.coach_note}</Text>
+        </View>
+      ) : (
+        <LinkedClassPage inputs={inputs} loading={loading} onSelect={onSelect} />
+      )}
+      {/* Dot indicators */}
+      <View style={ln.dots}>
+        <View style={[ln.dot, page === 0 && ln.dotActive]} />
+        <View style={[ln.dot, page === 1 && ln.dotActive]} />
+      </View>
     </View>
   );
 }
@@ -863,7 +915,8 @@ export default function FocusSessionScreen({ route, navigation }) {
           <View style={styles.focusCard}>
             <Text style={styles.sessionLabel}>{getSessionLabel(sessionCount)}</Text>
             <Text style={styles.focusName}>{focusPoint?.name || '—'}</Text>
-            <LinkedNotes
+            <FocusPager
+              focusPoint={focusPoint}
               inputs={classInputs}
               loading={notesLoading}
               onSelect={setSelectedInput}
@@ -1282,6 +1335,28 @@ const ln = StyleSheet.create({
   arrow: {
     fontSize: 14,
     color: 'rgba(255,255,255,0.3)',
+  },
+  coachNoteText: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 13,
+    color: 'rgba(255,255,255,0.85)',
+    lineHeight: 20,
+    marginTop: 4,
+  },
+  dots: {
+    flexDirection: 'row',
+    gap: 5,
+    marginTop: 10,
+    justifyContent: 'center',
+  },
+  dot: {
+    width: 5,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+  },
+  dotActive: {
+    backgroundColor: 'rgba(255,255,255,0.7)',
   },
 });
 
