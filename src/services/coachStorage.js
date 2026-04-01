@@ -72,23 +72,6 @@ export async function respondToCoachRequest(requestId, accept) {
     .update({ status })
     .eq('id', requestId)
     .eq('coach_id', coachId);
-
-  if (accept) {
-    // Get the student_id from the request
-    const { data: req } = await supabase
-      .from('coach_requests')
-      .select('student_id')
-      .eq('id', requestId)
-      .single();
-
-    if (req?.student_id) {
-      // Link the student to this coach
-      await supabase
-        .from('users')
-        .update({ coach_id: coachId })
-        .eq('id', req.student_id);
-    }
-  }
 }
 
 // ─── Students ─────────────────────────────────────────────────────────────────
@@ -96,15 +79,18 @@ export async function respondToCoachRequest(requestId, accept) {
 export async function getMyStudents() {
   const coachId = await getCoachId();
 
-  // Fetch all students linked to this coach
-  const { data: students } = await supabase
-    .from('users')
-    .select('id, name, dance_style, last_active_date')
+  // Fetch accepted requests and join student profile
+  const { data: requests } = await supabase
+    .from('coach_requests')
+    .select('student_id, users!coach_requests_student_id_fkey(id, name, dance_style, last_active_date)')
     .eq('coach_id', coachId)
-    .eq('role', 'student')
-    .order('name', { ascending: true });
+    .eq('status', 'accepted');
 
-  if (!students || students.length === 0) return [];
+  const students = (requests || [])
+    .map(r => r.users)
+    .filter(Boolean);
+
+  if (students.length === 0) return [];
 
   const studentIds = students.map(s => s.id);
 
