@@ -392,7 +392,7 @@ export default function HomeScreen({ navigation }) {
           <WeekHeatmap activity={weekActivity} onDayPress={(i) => setDayModal(i)} />
         </View>
 
-        /* Stats bar */}
+        {/* Stats bar */}
           <View style={s.statsBar}>
             <View style={s.statItem}>
               <Text style={s.statValue}>{classesThisWeek}</Text>
