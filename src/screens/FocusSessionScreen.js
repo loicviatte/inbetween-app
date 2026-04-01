@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, memo } from 'react';
+import React, { useState, useRef, useEffect, useCallback, memo } from 'react';
 import {
   View,
   Text,
@@ -19,6 +19,7 @@ import {
 import Slider from '@react-native-community/slider';
 import { Audio } from 'expo-av';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
 import { Colors, Fonts, Spacing } from '../theme';
 import { getFocusPoints, getClassInputsForFocus, getClassInputs, getTrainingSessionsThisWeek } from '../storage/storage';
 import { callClaudeChat } from '../services/ai/anthropic';
@@ -641,35 +642,35 @@ function ChatPage({ focusPoint, sessionActive, timeLeft, duration, messages, set
 
     const focusLines = focusPointsList.length
       ? focusPointsList.map(fp => `- ${fp.name}`).join('\n')
-      : 'Aucun point de focus enregistré.';
+      : 'No focus points recorded.';
 
     const classLines = classInputsList.slice(0, 10).map(inp => {
-      const date = new Date(inp.created_at).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' });
-      const parts = [`Cours du ${date}:`];
-      if (inp.takeaway) parts.push(`Travaillé: "${inp.takeaway}"`);
-      if (inp.practice_point_1) parts.push(`À améliorer: "${inp.practice_point_1}" (urgence ${inp.priority_score_1}/10)`);
-      if (inp.practice_point_2) parts.push(`Aussi: "${inp.practice_point_2}" (urgence ${inp.priority_score_2}/10)`);
-      if (inp.ai_primary_focus) parts.push(`Focus IA: ${inp.ai_primary_focus}`);
+      const date = new Date(inp.created_at).toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
+      const parts = [`Class on ${date}:`];
+      if (inp.takeaway) parts.push(`Worked on: "${inp.takeaway}"`);
+      if (inp.practice_point_1) parts.push(`To improve: "${inp.practice_point_1}" (priority ${inp.priority_score_1}/10)`);
+      if (inp.practice_point_2) parts.push(`Also: "${inp.practice_point_2}" (priority ${inp.priority_score_2}/10)`);
+      if (inp.ai_primary_focus) parts.push(`AI focus: ${inp.ai_primary_focus}`);
       return parts.join(' | ');
-    }).join('\n') || 'Aucun cours enregistré.';
+    }).join('\n') || 'No classes recorded.';
 
-    return `Tu es un assistant de suivi d'entraînement pour un danseur. Tu réponds UNIQUEMENT en te basant sur les données fournies ci-dessous.
+    return `You are a training tracking assistant for a dancer. You respond ONLY based on the data provided below.
 
-Focus actuel de la session: ${focusPoint?.name ?? 'Non défini'}
+Current session focus: ${focusPoint?.name ?? 'Not defined'}
 
-Points de focus de l'utilisateur:
+User focus points:
 ${focusLines}
 
-Historique des cours (10 derniers):
+Class history (last 10):
 ${classLines}
 
-Sessions d'entraînement cette semaine: ${sessionsCount}
+Training sessions this week: ${sessionsCount}
 
-RÈGLES STRICTES:
-- Réponds UNIQUEMENT à partir des données ci-dessus.
-- Si tu ne trouves pas l'information, réponds exactement: "Je n'ai pas cette information dans tes données."
-- N'invente rien, n'extrapole pas, ne fais aucune supposition.
-- Réponds en français, de façon concise (2-3 phrases max sauf si on te demande plus).`;
+STRICT RULES:
+- Answer ONLY from the data above.
+- If you cannot find the information, respond exactly: "I don't have that information in your data."
+- Do not invent, extrapolate, or make any assumptions.
+- Respond in English, concisely (2-3 sentences max unless asked for more).`;
   }
 
   async function handleSend() {
@@ -690,7 +691,7 @@ RÈGLES STRICTES:
       });
     } catch {
       setMessages(prev => {
-        const updated = [...prev, { role: 'assistant', content: "Désolé, une erreur s'est produite. Réessaie." }];
+        const updated = [...prev, { role: 'assistant', content: "Sorry, an error occurred. Please try again." }];
         storeChatMessages(updated);
         return updated;
       });
@@ -706,14 +707,14 @@ RÈGLES STRICTES:
         <View style={chat.sessionBar}>
           <View style={chat.sessionDot} />
           <Text style={chat.sessionText}>
-            En cours  ·  {formatTime(timeLeft)} / {duration} min
+            In progress  ·  {formatTime(timeLeft)} / {duration} min
           </Text>
         </View>
       )}
 
       <View style={chat.header}>
-        <Text style={chat.title}>Coach IA</Text>
-        <Text style={chat.subtitle}>Posez vos questions sur votre entraînement</Text>
+        <Text style={chat.title}>AI Coach</Text>
+        <Text style={chat.subtitle}>Ask questions about your training</Text>
       </View>
 
       <ScrollView
@@ -806,8 +807,9 @@ export default function FocusSessionScreen({ route, navigation }) {
       setNotesLoading(false);
     }
     loadData();
+  }, [focusPointId]);
 
-    // Resume if returning to an in-progress session
+  useFocusEffect(useCallback(() => {
     const existing = getActiveSession();
     if (existing && existing.sessionId === sessionId) {
       const remaining = Math.floor(getSessionTimeLeft());
@@ -815,12 +817,16 @@ export default function FocusSessionScreen({ route, navigation }) {
         setDuration(existing.duration);
         setTimeLeft(remaining);
         setSessionActive(true);
-        _startInterval(existing.startedAt, existing.duration);
+        if (existing.pausedRemaining !== undefined) {
+          setSessionPaused(true);
+        } else {
+          setSessionPaused(false);
+          _startInterval(existing.startedAt, existing.duration);
+        }
       }
     }
-
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
-  }, [focusPointId]);
+  }, [sessionId]));
 
   function _startInterval(startedAt, dur) {
     if (intervalRef.current) clearInterval(intervalRef.current);
@@ -922,7 +928,7 @@ export default function FocusSessionScreen({ route, navigation }) {
         keyboardShouldPersistTaps="handled"
         scrollEnabled={outerScrollEnabled}
       >
-        {/* ── Page 1 : Entraînement ── */}
+        {/* ── Page 1 : Training ── */}
         <View style={{ width: screenW, flex: 1 }}>
 
           {/* Focus Card — touching anywhere inside locks the outer page scroll */}
@@ -1035,9 +1041,9 @@ export default function FocusSessionScreen({ route, navigation }) {
       <Modal visible={showStopConfirm} transparent animationType="fade">
         <Pressable style={styles.stopConfirmOverlay} onPress={() => setShowStopConfirm(false)}>
           <Pressable style={styles.stopConfirmBox} onPress={() => {}}>
-            <Text style={styles.stopConfirmTitle}>Recommencer la session ?</Text>
+            <Text style={styles.stopConfirmTitle}>Restart the session?</Text>
             <Text style={styles.stopConfirmBody}>
-              Cela va annuler la session en cours et remettre le chrono à zéro.
+              This will cancel the current session and reset the timer.
             </Text>
             <View style={styles.stopConfirmActions}>
               <TouchableOpacity
@@ -1045,14 +1051,14 @@ export default function FocusSessionScreen({ route, navigation }) {
                 onPress={() => setShowStopConfirm(false)}
                 activeOpacity={0.8}
               >
-                <Text style={styles.stopConfirmCancelText}>Annuler</Text>
+                <Text style={styles.stopConfirmCancelText}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.stopConfirmConfirm}
                 onPress={() => { setShowStopConfirm(false); stopSession(); }}
                 activeOpacity={0.8}
               >
-                <Text style={styles.stopConfirmConfirmText}>Recommencer</Text>
+                <Text style={styles.stopConfirmConfirmText}>Restart</Text>
               </TouchableOpacity>
             </View>
           </Pressable>

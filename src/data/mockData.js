@@ -2,7 +2,7 @@ export const MOCK_USER = {
   id: 'user_1',
   name: 'Sofia',
   email: 'sofia@example.com',
-  school: 'École de Danse Contemporaine',
+  school: 'Contemporary Dance School',
 };
 
 export const MOCK_FOCUS_POINTS = [
