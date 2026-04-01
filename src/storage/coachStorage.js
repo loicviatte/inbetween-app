@@ -1,4 +1,4 @@
-import { supabase } from '../lib/supabase';
+import { supabase } from '../services/supabase/client';
 
 async function getCoachId() {
   const { data: { user } } = await supabase.auth.getUser();

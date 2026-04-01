@@ -20,9 +20,9 @@ import Slider from '@react-native-community/slider';
 import { Audio } from 'expo-av';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Colors, Fonts, Spacing } from '../theme';
-import { getFocusPoints, getClassInputsForFocus, getClassInputs, getTrainingSessionsThisWeek } from '../services/storage';
-import { callClaudeChat } from '../services/anthropic';
-import { completeTrainingSession, getSessionLabel } from '../services/algorithm';
+import { getFocusPoints, getClassInputsForFocus, getClassInputs, getTrainingSessionsThisWeek } from '../storage/storage';
+import { callClaudeChat } from '../services/ai/anthropic';
+import { completeTrainingSession, getSessionLabel } from '../utils/algorithm';
 import {
   setActiveSession,
   getActiveSession,
@@ -31,7 +31,7 @@ import {
   getChatMessages,
   setChatMessages as storeChatMessages,
   clearChatMessages,
-} from '../services/activeSession';
+} from '../storage/activeSession';
 
 const DURATIONS = [5, 10, 15, 20, 25, 30, 45, 60, 90];
 const ITEM_H = 52;

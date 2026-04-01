@@ -11,7 +11,7 @@ import {
   ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { supabase } from '../lib/supabase';
+import { supabase } from '../services/supabase/client';
 import { Colors, Fonts, Spacing } from '../theme';
 
 export default function RegisterScreen({ navigation }) {

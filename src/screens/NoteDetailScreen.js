@@ -18,7 +18,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { Colors, Fonts, Spacing } from '../theme';
-import { getNoteById, saveNote, deleteNote, getClassInputs } from '../services/storage';
+import { getNoteById, saveNote, deleteNote, getClassInputs } from '../storage/storage';
 
 let ImagePicker = null;
 try { ImagePicker = require('expo-image-picker'); } catch (_) {}

@@ -14,7 +14,7 @@ import {
   getMyStudents,
   getPendingCoachRequests,
   respondToCoachRequest,
-} from '../../services/coachStorage';
+} from '../../storage/coachStorage';
 
 function formatLastActive(dateStr) {
   if (!dateStr) return 'Never';

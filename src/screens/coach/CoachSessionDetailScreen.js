@@ -9,7 +9,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Colors, Fonts, Spacing } from '../../theme';
-import { getTrainingSessionDetail, getClassDetail } from '../../services/coachStorage';
+import { getTrainingSessionDetail, getClassDetail } from '../../storage/coachStorage';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
