@@ -192,21 +192,25 @@ function LinkedClassPage({ inputs, loading, onSelect }) {
   );
 }
 
-function FocusPager({ focusPoint, inputs, loading, onSelect }) {
+function FocusPager({ focusPoint, inputs, loading, onSelect, onSwipeStart, onSwipeEnd }) {
   const hasNote = !!focusPoint?.coach_note;
   const hasClasses = loading || inputs.length > 0;
 
   const [page, setPage] = useState(0);
-  const totalPages = hasNote && hasClasses ? 2 : 1;
+  const totalPagesRef = useRef(1);
+  totalPagesRef.current = hasNote && hasClasses ? 2 : 1;
 
   const panResponder = useRef(
     PanResponder.create({
-      onMoveShouldSetPanResponder: (_, { dx, dy }) =>
-        Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 8,
+      onMoveShouldSetPanResponderCapture: (_, { dx, dy }) =>
+        totalPagesRef.current > 1 && Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 8,
+      onPanResponderGrant: () => onSwipeStart?.(),
       onPanResponderRelease: (_, { dx }) => {
-        if (dx < -30) setPage(p => Math.min(p + 1, totalPages - 1));
+        onSwipeEnd?.();
+        if (dx < -30) setPage(p => Math.min(p + 1, totalPagesRef.current - 1));
         else if (dx > 30) setPage(p => Math.max(p - 1, 0));
       },
+      onPanResponderTerminate: () => onSwipeEnd?.(),
     })
   ).current;
 
@@ -765,6 +769,7 @@ export default function FocusSessionScreen({ route, navigation }) {
   const [focusPoint, setFocusPoint] = useState(null);
   const [classInputs, setClassInputs] = useState([]);
   const [notesLoading, setNotesLoading] = useState(true);
+  const [outerScrollEnabled, setOuterScrollEnabled] = useState(true);
   const [selectedInput, setSelectedInput] = useState(null);
   const [duration, setDuration] = useState(25);
   const [sessionActive, setSessionActive] = useState(false);
@@ -907,6 +912,7 @@ export default function FocusSessionScreen({ route, navigation }) {
         showsHorizontalScrollIndicator={false}
         style={{ flex: 1 }}
         keyboardShouldPersistTaps="handled"
+        scrollEnabled={outerScrollEnabled}
       >
         {/* ── Page 1 : Entraînement ── */}
         <View style={{ width: screenW, flex: 1 }}>
@@ -920,6 +926,8 @@ export default function FocusSessionScreen({ route, navigation }) {
               inputs={classInputs}
               loading={notesLoading}
               onSelect={setSelectedInput}
+              onSwipeStart={() => setOuterScrollEnabled(false)}
+              onSwipeEnd={() => setOuterScrollEnabled(true)}
             />
           </View>
 
