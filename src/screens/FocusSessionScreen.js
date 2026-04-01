@@ -619,7 +619,19 @@ function ChatPage({ focusPoint, sessionActive, timeLeft, duration, messages, set
   const [inputText, setInputText] = useState('');
   const [sending, setSending] = useState(false);
   const [userData, setUserData] = useState(null);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
   const scrollRef = useRef(null);
+
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const showSub = Keyboard.addListener(showEvent, (e) => {
+      setKeyboardHeight(e.endCoordinates.height);
+      setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 50);
+    });
+    const hideSub = Keyboard.addListener(hideEvent, () => setKeyboardHeight(0));
+    return () => { showSub.remove(); hideSub.remove(); };
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -701,7 +713,7 @@ STRICT RULES:
   }
 
   return (
-    <View style={chat.wrap}>
+    <View style={[chat.wrap, keyboardHeight > 0 && { paddingBottom: keyboardHeight }]}>
       {/* Session status bar */}
       {sessionActive && (
         <View style={chat.sessionBar}>
@@ -727,7 +739,7 @@ STRICT RULES:
         {messages.length === 0 && !sending && (
           <View style={chat.emptyState}>
             <Text style={chat.emptyText}>
-              Posez une question sur vos cours, vos points de focus, ou vos sessions de cette semaine.
+              Ask a question about your classes, focus points, or sessions this week.
             </Text>
           </View>
         )}
@@ -750,7 +762,7 @@ STRICT RULES:
           style={chat.input}
           value={inputText}
           onChangeText={setInputText}
-          placeholder="Posez une question..."
+          placeholder="Ask a question..."
           placeholderTextColor={Colors.secondary}
           multiline
           maxLength={300}
@@ -1019,11 +1031,8 @@ export default function FocusSessionScreen({ route, navigation }) {
           </View>
         </View>
 
-        {/* ── Page 2 : Coach IA ── */}
-        <KeyboardAvoidingView
-          style={{ width: screenW, flex: 1 }}
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        >
+        {/* ── Page 2 : AI Coach ── */}
+        <View style={{ width: screenW, flex: 1 }}>
           <ChatPage
             focusPoint={focusPoint}
             sessionActive={sessionActive}
@@ -1032,7 +1041,7 @@ export default function FocusSessionScreen({ route, navigation }) {
             messages={chatMessages}
             setMessages={setChatMessages}
           />
-        </KeyboardAvoidingView>
+        </View>
       </ScrollView>
 
       {/* ── Modals (portal, position dans le tree sans importance) ── */}
