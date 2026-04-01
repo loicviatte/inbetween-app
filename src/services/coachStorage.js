@@ -150,7 +150,7 @@ export async function getStudentFocusPoints(studentId) {
   // Get active focus points
   const { data: focusPoints } = await supabase
     .from('focus_points')
-    .select('id, name, created_at')
+    .select('id, name, coach_note, created_at')
     .eq('user_id', studentId)
     .eq('is_deleted', false)
     .eq('is_archived', false)
@@ -191,9 +191,17 @@ export async function getStudentFocusPoints(studentId) {
   return focusPoints.map(f => ({
     id: f.id,
     name: f.name,
+    coachNote: f.coach_note || null,
     weekCount: weekCounts[f.id] || 0,
     validationPending: validationMap[f.id] || null,
   }));
+}
+
+export async function updateFocusPoint(focusPointId, updates) {
+  await supabase
+    .from('focus_points')
+    .update(updates)
+    .eq('id', focusPointId);
 }
 
 export async function getStudentRecentActivity(studentId, limit = 5) {

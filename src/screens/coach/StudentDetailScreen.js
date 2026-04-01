@@ -27,6 +27,7 @@ import {
   dismissQuestion,
   respondToFocusCompletion,
   respondToFlaggedFocus,
+  updateFocusPoint,
 } from '../../services/coachStorage';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -48,13 +49,13 @@ function practiceLabel(count) {
 
 // ─── Focus Card ───────────────────────────────────────────────────────────────
 
-function FocusCard({ focus }) {
+function FocusCard({ focus, onEdit }) {
   const hasPending = !!focus.validationPending;
   const isCompletion = focus.validationPending?.type === 'completion';
   const isFlagged = focus.validationPending?.type === 'flagged';
 
   return (
-    <View style={[fc.card, hasPending && fc.cardHighlighted]}>
+    <TouchableOpacity style={[fc.card, hasPending && fc.cardHighlighted]} onPress={onEdit} activeOpacity={0.75}>
       <View style={fc.row}>
         <Text style={fc.name}>{focus.name}</Text>
         {isCompletion && (
@@ -67,9 +68,84 @@ function FocusCard({ focus }) {
             <Text style={[fc.badgeText, fc.flaggedBadgeText]}>!</Text>
           </View>
         )}
+        <Text style={fc.editHint}>Edit</Text>
       </View>
       <Text style={fc.sub}>{practiceLabel(focus.weekCount)}</Text>
-    </View>
+      {!!focus.coachNote && (
+        <Text style={fc.notePreview} numberOfLines={1}>{focus.coachNote}</Text>
+      )}
+    </TouchableOpacity>
+  );
+}
+
+// ─── Focus Edit Sheet ─────────────────────────────────────────────────────────
+
+function FocusEditSheet({ focus, visible, onClose, onSave }) {
+  const [name, setName] = useState('');
+  const [note, setNote] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (visible && focus) {
+      setName(focus.name || '');
+      setNote(focus.coachNote || '');
+    }
+  }, [visible, focus]);
+
+  async function handleSave() {
+    if (!name.trim()) return;
+    setSaving(true);
+    await onSave(focus.id, { name: name.trim(), coach_note: note.trim() || null });
+    setSaving(false);
+    onClose();
+  }
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <Pressable style={es.overlay} onPress={onClose}>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ width: '100%' }}>
+          <Pressable style={es.sheet} onPress={() => {}}>
+            <View style={es.handle} />
+            <Text style={es.title}>Edit Focus Point</Text>
+
+            <Text style={es.label}>NAME</Text>
+            <TextInput
+              style={es.input}
+              value={name}
+              onChangeText={setName}
+              placeholder="Focus point name"
+              placeholderTextColor="rgba(13,13,18,0.3)"
+              returnKeyType="next"
+              maxLength={80}
+            />
+
+            <Text style={es.label}>COACH NOTE</Text>
+            <TextInput
+              style={[es.input, es.inputMulti]}
+              value={note}
+              onChangeText={setNote}
+              placeholder="Add a tip or instruction for your student…"
+              placeholderTextColor="rgba(13,13,18,0.3)"
+              multiline
+              numberOfLines={3}
+              textAlignVertical="top"
+              maxLength={300}
+            />
+
+            <TouchableOpacity
+              style={[es.saveBtn, (!name.trim() || saving) && es.saveBtnDisabled]}
+              onPress={handleSave}
+              activeOpacity={0.8}
+            >
+              {saving
+                ? <ActivityIndicator color="#fff" size="small" />
+                : <Text style={es.saveBtnText}>Save</Text>
+              }
+            </TouchableOpacity>
+          </Pressable>
+        </KeyboardAvoidingView>
+      </Pressable>
+    </Modal>
   );
 }
 
@@ -259,6 +335,9 @@ export default function StudentDetailScreen({ route, navigation }) {
   const [activeValidation, setActiveValidation] = useState(null);
   const [validationSheetVisible, setValidationSheetVisible] = useState(false);
 
+  const [editingFocus, setEditingFocus] = useState(null);
+  const [focusEditVisible, setFocusEditVisible] = useState(false);
+
   useFocusEffect(
     useCallback(() => {
       let active = true;
@@ -296,6 +375,11 @@ export default function StudentDetailScreen({ route, navigation }) {
     setFocusPoints(fp);
     setQuestions(qs);
     setValidations(vs);
+  }
+
+  async function handleSaveFocus(focusId, updates) {
+    await updateFocusPoint(focusId, updates);
+    setFocusPoints(prev => prev.map(fp => fp.id === focusId ? { ...fp, name: updates.name, coachNote: updates.coach_note || null } : fp));
   }
 
   const displayName = profile?.name || studentName || 'Student';
@@ -356,7 +440,13 @@ export default function StudentDetailScreen({ route, navigation }) {
           {focusPoints.length === 0 ? (
             <Text style={styles.emptyLine}>Focus points will appear after your next lesson.</Text>
           ) : (
-            focusPoints.map(fp => <FocusCard key={fp.id} focus={fp} />)
+            focusPoints.map(fp => (
+              <FocusCard
+                key={fp.id}
+                focus={fp}
+                onEdit={() => { setEditingFocus(fp); setFocusEditVisible(true); }}
+              />
+            ))
           )}
         </View>
 
@@ -453,6 +543,13 @@ export default function StudentDetailScreen({ route, navigation }) {
           setValidationSheetVisible(false);
           reload();
         }}
+      />
+
+      <FocusEditSheet
+        focus={editingFocus}
+        visible={focusEditVisible}
+        onClose={() => setFocusEditVisible(false)}
+        onSave={handleSaveFocus}
       />
     </SafeAreaView>
   );
@@ -573,6 +670,85 @@ const fc = StyleSheet.create({
   completionBadgeText: { color: Colors.green },
   flaggedBadge: { backgroundColor: 'rgba(255,157,0,0.12)' },
   flaggedBadgeText: { color: Colors.orange },
+  editHint: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 11,
+    color: Colors.secondary,
+    marginLeft: 8,
+  },
+  notePreview: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 12,
+    color: Colors.activeFocus,
+    marginTop: 4,
+    fontStyle: 'italic',
+  },
+});
+
+const es = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'flex-end',
+  },
+  sheet: {
+    backgroundColor: Colors.white,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 36,
+  },
+  handle: {
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: 'rgba(13,13,18,0.15)',
+    alignSelf: 'center',
+    marginBottom: 20,
+  },
+  title: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 18,
+    color: Colors.black,
+    marginBottom: 20,
+  },
+  label: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 10,
+    color: Colors.secondary,
+    letterSpacing: 0.6,
+    marginBottom: 6,
+    marginTop: 14,
+  },
+  input: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 15,
+    color: Colors.black,
+    borderWidth: 0.5,
+    borderColor: Colors.statCardBorder,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: Colors.statCardBg,
+  },
+  inputMulti: {
+    minHeight: 80,
+    paddingTop: 10,
+  },
+  saveBtn: {
+    marginTop: 24,
+    backgroundColor: Colors.black,
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  saveBtnDisabled: { opacity: 0.4 },
+  saveBtnText: {
+    fontFamily: Fonts.jakartaBold,
+    fontSize: 15,
+    color: Colors.white,
+  },
 });
 
 const ar = StyleSheet.create({
