@@ -357,15 +357,16 @@ export async function getCoachActivityFeed() {
   const coachId = await getCoachId();
   const fourteenDaysAgo = new Date(Date.now() - 14 * 86400000).toISOString();
 
-  // Get all students
-  const { data: students } = await supabase
-    .from('users')
-    .select('id, name')
+  // Get all accepted students via coach_requests
+  const { data: requests } = await supabase
+    .from('coach_requests')
+    .select('student_id, users!coach_requests_student_id_fkey(id, name)')
     .eq('coach_id', coachId)
-    .eq('role', 'student');
+    .eq('status', 'accepted');
 
-  if (!students || students.length === 0) return [];
+  if (!requests || requests.length === 0) return [];
 
+  const students = (requests || []).map(r => r.users).filter(Boolean);
   const studentIds = students.map(s => s.id);
   const studentMap = Object.fromEntries(students.map(s => [s.id, s.name]));
 
