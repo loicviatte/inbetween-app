@@ -192,7 +192,7 @@ function LinkedClassPage({ inputs, loading, onSelect }) {
   );
 }
 
-function FocusPager({ focusPoint, inputs, loading, onSelect, onSwipeStart, onSwipeEnd }) {
+function FocusPager({ focusPoint, inputs, loading, onSelect }) {
   const hasNote = !!focusPoint?.coach_note;
   const hasClasses = loading || inputs.length > 0;
 
@@ -203,15 +203,12 @@ function FocusPager({ focusPoint, inputs, loading, onSelect, onSwipeStart, onSwi
 
   const panResponder = useRef(
     PanResponder.create({
-      onMoveShouldSetPanResponderCapture: (_, { dx, dy }) =>
+      onMoveShouldSetPanResponder: (_, { dx, dy }) =>
         totalPagesRef.current > 1 && Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 8,
-      onPanResponderGrant: () => onSwipeStart?.(),
       onPanResponderRelease: (_, { dx }) => {
-        onSwipeEnd?.();
         if (dx < -30) setPage(p => Math.min(p + 1, totalPagesRef.current - 1));
         else if (dx > 30) setPage(p => Math.max(p - 1, 0));
       },
-      onPanResponderTerminate: () => onSwipeEnd?.(),
     })
   ).current;
 
@@ -918,8 +915,13 @@ export default function FocusSessionScreen({ route, navigation }) {
         {/* ── Page 1 : Entraînement ── */}
         <View style={{ width: screenW, flex: 1 }}>
 
-          {/* Focus Card */}
-          <View style={styles.focusCard}>
+          {/* Focus Card — touching anywhere inside locks the outer page scroll */}
+          <View
+            style={styles.focusCard}
+            onTouchStart={() => setOuterScrollEnabled(false)}
+            onTouchEnd={() => setOuterScrollEnabled(true)}
+            onTouchCancel={() => setOuterScrollEnabled(true)}
+          >
             <Text style={styles.sessionLabel}>{getSessionLabel(sessionCount)}</Text>
             <Text style={styles.focusName}>{focusPoint?.name || '—'}</Text>
             <FocusPager
@@ -927,8 +929,6 @@ export default function FocusSessionScreen({ route, navigation }) {
               inputs={classInputs}
               loading={notesLoading}
               onSelect={setSelectedInput}
-              onSwipeStart={() => setOuterScrollEnabled(false)}
-              onSwipeEnd={() => setOuterScrollEnabled(true)}
             />
           </View>
 
