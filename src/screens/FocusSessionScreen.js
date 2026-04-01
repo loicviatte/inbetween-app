@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, memo } from 'react';
 import {
   View,
   Text,
@@ -257,7 +257,7 @@ function FocusPager({ focusPoint, inputs, loading, onSelect }) {
 
 // ─── Metronome ────────────────────────────────────────────────────────────────
 
-function MetronomeStrip() {
+const MetronomeStrip = memo(function MetronomeStrip() {
   const [selectedDance, setSelectedDance] = useState(null);
   const [bpm, setBpm] = useState(120);
   const [beats, setBeats] = useState(4);
@@ -301,9 +301,8 @@ function MetronomeStrip() {
   }
 
   // Lookahead scheduler (Chris Wilson technique):
-  // Runs every 25ms and pre-schedules all ticks within the next 100ms window.
-  // Individual ticks use setTimeout for precise delay — but since they're
-  // scheduled well in advance, JS thread jitter no longer causes audible drift.
+  // Runs every 50ms and pre-schedules all ticks within the next 300ms window.
+  // 300ms buffer absorbs JS thread jitter from state updates / re-renders.
   function startMetro(overrideBpm) {
     const initialBpm = overrideBpm ?? bpmRef.current;
 
@@ -313,18 +312,21 @@ function MetronomeStrip() {
     nextTickAtRef.current = Date.now() + (60000 / initialBpm);
 
     function scheduler() {
-      const intervalMs = 60000 / bpmRef.current; // always uses latest BPM
+      const intervalMs = 60000 / bpmRef.current;
       const now = Date.now();
-      // Schedule every tick that falls within the next 100ms
-      while (nextTickAtRef.current < now + 100) {
+      while (nextTickAtRef.current < now + 300) {
         const delay = Math.max(0, nextTickAtRef.current - now);
         const id = setTimeout(() => { pulse(); playTick(); }, delay);
         tickTimeoutsRef.current.push(id);
         nextTickAtRef.current += intervalMs;
       }
+      // Trim fired IDs to prevent unbounded array growth
+      if (tickTimeoutsRef.current.length > 40) {
+        tickTimeoutsRef.current = tickTimeoutsRef.current.slice(-20);
+      }
     }
 
-    schedulerRef.current = setInterval(scheduler, 25);
+    schedulerRef.current = setInterval(scheduler, 50);
     setRunning(true);
   }
 
@@ -453,7 +455,7 @@ function MetronomeStrip() {
       )}
     </View>
   );
-}
+});
 
 // ─── Feeling Slider ───────────────────────────────────────────────────────────
 
