@@ -11,6 +11,8 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  ActivityIndicator,
+  ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -23,6 +25,9 @@ import {
   getFocusPoints,
   getTopFocusPointsWithCounts,
   saveUserProfile,
+  getMyCoach,
+  linkToCoachByCode,
+  unlinkCoach,
 } from '../services/storage';
 import { supabase } from '../lib/supabase';
 import RadarChart from '../components/RadarChart';
@@ -129,6 +134,10 @@ export default function ProfileScreen({ navigation }) {
   const [editStyle, setEditStyle] = useState('');
   const [saving, setSaving] = useState(false);
   const [photoUri, setPhotoUri] = useState(null);
+  const [myCoach, setMyCoach] = useState(null);
+  const [coachCode, setCoachCode] = useState('');
+  const [coachLinking, setCoachLinking] = useState(false);
+  const [coachLinkError, setCoachLinkError] = useState('');
 
   useFocusEffect(useCallback(() => {
     if (!hasLoadedRef.current) setIsLoading(true);
@@ -140,6 +149,7 @@ export default function ProfileScreen({ navigation }) {
         topFocusPoints,
         { data: { user: authUser } },
         savedPhoto,
+        coachData,
       ] = await Promise.all([
         getUser(),
         getClassInputs(),
@@ -147,6 +157,7 @@ export default function ProfileScreen({ navigation }) {
         getTopFocusPointsWithCounts(100),
         supabase.auth.getUser(),
         AsyncStorage.getItem(AVATAR_KEY),
+        getMyCoach(),
       ]);
 
       let totalSessions = 0;
@@ -172,6 +183,7 @@ export default function ProfileScreen({ navigation }) {
       setStats({ totalClasses: classInputs?.length ?? 0, totalSessions, activeFocusAreas: activeFocusPoints?.length ?? 0 });
       setRadarScores(scores);
       if (savedPhoto) setPhotoUri(savedPhoto);
+      setMyCoach(coachData);
     }
     load().then(() => {
       hasLoadedRef.current = true;
@@ -220,6 +232,25 @@ export default function ProfileScreen({ navigation }) {
     await supabase.auth.signOut();
   }
 
+  async function handleLinkCoach() {
+    if (!coachCode.trim()) return;
+    setCoachLinking(true);
+    setCoachLinkError('');
+    try {
+      const { coach } = await linkToCoachByCode(coachCode);
+      setMyCoach(coach);
+      setCoachCode('');
+    } catch (e) {
+      setCoachLinkError(e.message || 'Could not link coach.');
+    }
+    setCoachLinking(false);
+  }
+
+  async function handleUnlinkCoach() {
+    await unlinkCoach();
+    setMyCoach(null);
+  }
+
   const initials = user?.name
     ? user.name.split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase()
     : 'AL';
@@ -249,7 +280,7 @@ export default function ProfileScreen({ navigation }) {
         </TouchableOpacity>
       </View>
 
-      <View style={styles.content}>
+      <ScrollView style={styles.content} contentContainerStyle={styles.contentInner} showsVerticalScrollIndicator={false}>
         {/* Avatar + name */}
         <View style={styles.avatarSection}>
           <TouchableOpacity style={styles.avatarWrap} onPress={handlePickPhoto} activeOpacity={0.85}>
@@ -281,6 +312,56 @@ export default function ProfileScreen({ navigation }) {
           <StatBox value={stats.activeFocusAreas} label="Active Focus" showDivider />
         </View>
 
+        {/* Main Teacher */}
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>Main Teacher</Text>
+          {myCoach ? (
+            <View style={coachStyles.linkedCard}>
+              <View style={coachStyles.linkedInfo}>
+                <Text style={coachStyles.linkedName}>{myCoach.name}</Text>
+                {!!myCoach.main_studio && (
+                  <Text style={coachStyles.linkedSub}>{myCoach.main_studio}</Text>
+                )}
+              </View>
+              <TouchableOpacity onPress={handleUnlinkCoach} activeOpacity={0.7}>
+                <Text style={coachStyles.unlinkText}>Unlink</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <View>
+              <View style={coachStyles.codeRow}>
+                <TextInput
+                  style={coachStyles.codeInput}
+                  value={coachCode}
+                  onChangeText={text => setCoachCode(text.toUpperCase())}
+                  placeholder="Coach code (e.g. MARC42)"
+                  placeholderTextColor={Colors.secondary}
+                  autoCapitalize="characters"
+                  autoCorrect={false}
+                  maxLength={8}
+                />
+                <TouchableOpacity
+                  style={[coachStyles.addBtn, !coachCode.trim() && coachStyles.addBtnDisabled]}
+                  onPress={handleLinkCoach}
+                  disabled={coachLinking || !coachCode.trim()}
+                  activeOpacity={0.85}
+                >
+                  {coachLinking
+                    ? <ActivityIndicator color={Colors.white} size="small" />
+                    : <Text style={coachStyles.addBtnText}>Add</Text>
+                  }
+                </TouchableOpacity>
+              </View>
+              {!!coachLinkError && (
+                <Text style={coachStyles.linkError}>{coachLinkError}</Text>
+              )}
+              <Text style={coachStyles.codeHint}>
+                Ask your coach for their invite code.
+              </Text>
+            </View>
+          )}
+        </View>
+
         {/* Radar chart */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Current Strengths</Text>
@@ -293,7 +374,7 @@ export default function ProfileScreen({ navigation }) {
         <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout} activeOpacity={0.8}>
           <Text style={styles.logoutText}>Log out</Text>
         </TouchableOpacity>
-      </View>
+      </ScrollView>
       {/* Edit Profile Modal */}
       <Modal visible={editVisible} transparent animationType="slide" onRequestClose={() => setEditVisible(false)}>
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
@@ -405,9 +486,11 @@ const styles = StyleSheet.create({
 
   content: {
     flex: 1,
+  },
+  contentInner: {
     paddingHorizontal: Spacing.side,
-    paddingBottom: 24,
-    justifyContent: 'space-between',
+    paddingBottom: 40,
+    gap: 20,
   },
 
   avatarSection: { alignItems: 'center' },
@@ -680,4 +763,79 @@ const em = StyleSheet.create({
   },
   suggestionMain: { fontFamily: Fonts.jakartaMedium, fontSize: 14, color: Colors.black },
   suggestionSub: { fontFamily: Fonts.jakartaRegular, fontSize: 11, color: Colors.secondary, marginTop: 1 },
+});
+
+const coachStyles = StyleSheet.create({
+  linkedCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: Colors.statCardBg,
+    borderWidth: 0.5,
+    borderColor: Colors.statCardBorder,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+  },
+  linkedInfo: { flex: 1 },
+  linkedName: {
+    fontFamily: Fonts.jakartaSemiBold,
+    fontSize: 14,
+    color: Colors.black,
+  },
+  linkedSub: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 12,
+    color: Colors.secondary,
+    marginTop: 2,
+  },
+  unlinkText: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 13,
+    color: Colors.secondary,
+  },
+  codeRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  codeInput: {
+    flex: 1,
+    backgroundColor: Colors.statCardBg,
+    borderWidth: 0.5,
+    borderColor: Colors.statCardBorder,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 15,
+    color: Colors.black,
+    letterSpacing: 1.5,
+  },
+  addBtn: {
+    backgroundColor: Colors.black,
+    borderRadius: 12,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  addBtnDisabled: {
+    backgroundColor: Colors.statCardBorder,
+  },
+  addBtnText: {
+    fontFamily: Fonts.jakartaBold,
+    fontSize: 14,
+    color: Colors.white,
+  },
+  linkError: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 12,
+    color: '#E84040',
+    marginTop: 6,
+  },
+  codeHint: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 12,
+    color: Colors.secondary,
+    marginTop: 8,
+  },
 });

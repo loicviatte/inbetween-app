@@ -435,3 +435,183 @@ export async function getNotesLinkedToClass(classInputId) {
     .eq('is_deleted', false);
   return data || [];
 }
+
+// ─── Coach Linking (student side) ─────────────────────────────────────────────
+
+// Look up a coach by their invite code and send a connection request
+export async function linkToCoachByCode(inviteCode) {
+  const userId = await getUserId();
+  const code = inviteCode.trim().toUpperCase();
+
+  const { data: coach } = await supabase
+    .from('users')
+    .select('id, name, role')
+    .eq('invite_code', code)
+    .eq('role', 'coach')
+    .maybeSingle();
+
+  if (!coach) throw new Error('Coach not found. Check the code and try again.');
+
+  // Check if a request already exists
+  const { data: existing } = await supabase
+    .from('coach_requests')
+    .select('id, status')
+    .eq('student_id', userId)
+    .eq('coach_id', coach.id)
+    .maybeSingle();
+
+  if (existing) {
+    if (existing.status === 'accepted') {
+      // Already linked — update coach_id in case it was cleared
+      await supabase.from('users').update({ coach_id: coach.id }).eq('id', userId);
+      return { coach, alreadyLinked: true };
+    }
+    if (existing.status === 'pending') return { coach, pending: true };
+  }
+
+  await supabase.from('coach_requests').insert({
+    student_id: userId,
+    coach_id: coach.id,
+    status: 'pending',
+  });
+
+  return { coach, pending: true };
+}
+
+export async function unlinkCoach() {
+  const userId = await getUserId();
+  await supabase.from('users').update({ coach_id: null }).eq('id', userId);
+}
+
+export async function getMyCoach() {
+  const userId = await getUserId();
+  const { data: me } = await supabase
+    .from('users')
+    .select('coach_id')
+    .eq('id', userId)
+    .single();
+
+  if (!me?.coach_id) return null;
+
+  const { data: coach } = await supabase
+    .from('users')
+    .select('id, name, main_studio, dance_style')
+    .eq('id', me.coach_id)
+    .single();
+
+  return coach || null;
+}
+
+// ─── Student → Coach Messages ─────────────────────────────────────────────────
+
+export async function askCoach(message) {
+  const userId = await getUserId();
+
+  const { data: me } = await supabase
+    .from('users')
+    .select('coach_id')
+    .eq('id', userId)
+    .single();
+
+  if (!me?.coach_id) throw new Error('No coach linked. Add your coach first.');
+
+  await supabase.from('coach_messages').insert({
+    student_id: userId,
+    coach_id: me.coach_id,
+    message: message.trim(),
+    status: 'pending',
+  });
+}
+
+export async function getCoachReplies() {
+  const userId = await getUserId();
+  const { data } = await supabase
+    .from('coach_messages')
+    .select('id, message, reply, status, created_at, replied_at')
+    .eq('student_id', userId)
+    .in('status', ['replied'])
+    .order('replied_at', { ascending: false })
+    .limit(10);
+  return data || [];
+}
+
+// ─── Focus Validations (student side) ────────────────────────────────────────
+
+export async function requestFocusValidation(focusPointId) {
+  const userId = await getUserId();
+
+  const { data: me } = await supabase
+    .from('users')
+    .select('coach_id')
+    .eq('id', userId)
+    .single();
+
+  if (!me?.coach_id) return; // No coach, silently skip
+
+  // Avoid duplicate pending requests
+  const { data: existing } = await supabase
+    .from('focus_validations')
+    .select('id')
+    .eq('focus_point_id', focusPointId)
+    .eq('student_id', userId)
+    .eq('type', 'completion')
+    .eq('status', 'pending')
+    .maybeSingle();
+
+  if (existing) return;
+
+  await supabase.from('focus_validations').insert({
+    focus_point_id: focusPointId,
+    student_id: userId,
+    coach_id: me.coach_id,
+    type: 'completion',
+    status: 'pending',
+  });
+}
+
+export async function flagFocusPoint(focusPointId, note) {
+  const userId = await getUserId();
+
+  const { data: me } = await supabase
+    .from('users')
+    .select('coach_id')
+    .eq('id', userId)
+    .single();
+
+  if (!me?.coach_id) return;
+
+  const { data: existing } = await supabase
+    .from('focus_validations')
+    .select('id')
+    .eq('focus_point_id', focusPointId)
+    .eq('student_id', userId)
+    .eq('type', 'flagged')
+    .eq('status', 'pending')
+    .maybeSingle();
+
+  if (existing) return;
+
+  await supabase.from('focus_validations').insert({
+    focus_point_id: focusPointId,
+    student_id: userId,
+    coach_id: me.coach_id,
+    type: 'flagged',
+    student_note: note || null,
+    status: 'pending',
+  });
+}
+
+export async function getUserRole() {
+  const userId = await getUserId();
+  const { data } = await supabase
+    .from('users')
+    .select('role')
+    .eq('id', userId)
+    .single();
+  return data?.role || 'student';
+}
+
+export async function setUserRole(role) {
+  const userId = await getUserId();
+  await supabase.from('users').update({ role }).eq('id', userId);
+}
