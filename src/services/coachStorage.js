@@ -351,6 +351,46 @@ export async function respondToFlaggedFocus(validationId, action) {
   }
 }
 
+// ─── Session / Class Detail ───────────────────────────────────────────────────
+
+export async function getTrainingSessionDetail(sessionId) {
+  const { data: session } = await supabase
+    .from('training_sessions')
+    .select('id, started_at, completed_at, feeling, session_note, slot1_focus_id, slot2_focus_id')
+    .eq('id', sessionId)
+    .single();
+
+  if (!session) return null;
+
+  const focusIds = [session.slot1_focus_id, session.slot2_focus_id].filter(Boolean);
+  let focusMap = {};
+  if (focusIds.length > 0) {
+    const { data: fps } = await supabase
+      .from('focus_points')
+      .select('id, name')
+      .in('id', focusIds);
+    for (const fp of fps || []) focusMap[fp.id] = fp.name;
+  }
+
+  return {
+    ...session,
+    durationMin: session.completed_at
+      ? Math.round((new Date(session.completed_at) - new Date(session.started_at)) / 60000)
+      : null,
+    focus1Name: session.slot1_focus_id ? focusMap[session.slot1_focus_id] || null : null,
+    focus2Name: session.slot2_focus_id ? focusMap[session.slot2_focus_id] || null : null,
+  };
+}
+
+export async function getClassDetail(classId) {
+  const { data } = await supabase
+    .from('class_inputs')
+    .select('id, created_at, title, takeaway, practice_point_1, practice_point_2, ai_primary_focus, ai_secondary_focus')
+    .eq('id', classId)
+    .single();
+  return data || null;
+}
+
 // ─── Activity Feed ────────────────────────────────────────────────────────────
 
 export async function getCoachActivityFeed() {
