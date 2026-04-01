@@ -198,33 +198,15 @@ function FocusPager({ focusPoint, inputs, loading, onSelect }) {
   const totalPages = hasNote && hasClasses ? 2 : 1;
 
   const [page, setPage] = useState(0);
-  const [cardWidth, setCardWidth] = useState(0);
-  const [heights, setHeights] = useState([0, 0]);
-
-  const pageAnim = useRef(new Animated.Value(0)).current;
-  const baseAnim = useRef(0);
+  const totalPagesRef = useRef(totalPages);
+  totalPagesRef.current = totalPages;
 
   const panResponder = useRef(PanResponder.create({
     onMoveShouldSetPanResponder: (_, { dx, dy }) =>
-      totalPages > 1 && Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 8,
-    onPanResponderGrant: () => {
-      pageAnim.stopAnimation(v => { baseAnim.current = v; });
-    },
-    onPanResponderMove: (_, { dx }) => {
-      if (!cardWidth) return;
-      pageAnim.setValue(Math.max(0, Math.min(1, baseAnim.current - dx / cardWidth)));
-    },
-    onPanResponderRelease: (_, { dx, vx }) => {
-      let target = page;
-      if (dx < -40 || vx < -0.3) target = Math.min(page + 1, totalPages - 1);
-      else if (dx > 40 || vx > 0.3) target = Math.max(page - 1, 0);
-      setPage(target);
-      Animated.spring(pageAnim, {
-        toValue: target,
-        useNativeDriver: false,
-        tension: 120,
-        friction: 14,
-      }).start();
+      totalPagesRef.current > 1 && Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 8,
+    onPanResponderRelease: (_, { dx }) => {
+      if (dx < -30) setPage(p => Math.min(p + 1, totalPagesRef.current - 1));
+      else if (dx > 30) setPage(p => Math.max(p - 1, 0));
     },
   })).current;
 
@@ -240,47 +222,31 @@ function FocusPager({ focusPoint, inputs, loading, onSelect }) {
     return <LinkedClassPage inputs={inputs} loading={loading} onSelect={onSelect} />;
   }
 
-  const animHeight = pageAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [heights[0] || 60, heights[1] || 60],
-    extrapolate: 'clamp',
-  });
-
-  const innerTranslateX = cardWidth ? pageAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, -cardWidth],
-    extrapolate: 'clamp',
-  }) : 0;
-
   return (
-    <View
-      onLayout={e => setCardWidth(e.nativeEvent.layout.width)}
-      {...panResponder.panHandlers}
-    >
-      <Animated.View style={{ height: animHeight, overflow: 'hidden' }}>
-        <Animated.View style={{
-          flexDirection: 'row',
-          width: cardWidth ? cardWidth * 2 : '200%',
-          transform: [{ translateX: innerTranslateX }],
-        }}>
-          <View
-            style={{ width: cardWidth || '50%' }}
-            onLayout={e => { const h0 = e.nativeEvent.layout.height; setHeights(h => [h0, h[1]]); }}
-          >
-            <View style={ln.wrap}>
-              <Text style={ln.heading}>Coach</Text>
-              <Text style={ln.coachNoteText}>{focusPoint.coach_note}</Text>
-            </View>
+    <View {...panResponder.panHandlers}>
+      {page === 0 ? (
+        <View style={ln.wrap}>
+          <View style={ln.pageHeader}>
+            <Text style={ln.heading}>Coach</Text>
+            <Text style={ln.swipeHint}>swipe ›</Text>
           </View>
-          <View
-            style={{ width: cardWidth || '50%' }}
-            onLayout={e => { const h1 = e.nativeEvent.layout.height; setHeights(h => [h[0], h1]); }}
-          >
-            <LinkedClassPage inputs={inputs} loading={loading} onSelect={onSelect} />
+          <Text style={ln.coachNoteText}>{focusPoint.coach_note}</Text>
+        </View>
+      ) : (
+        <View style={ln.wrap}>
+          <View style={ln.pageHeader}>
+            <Text style={ln.heading}>Linked Class</Text>
+            <Text style={ln.swipeHint}>‹ swipe</Text>
           </View>
-        </Animated.View>
-      </Animated.View>
-
+          {inputs.slice(0, 3).map((inp) => (
+            <TouchableOpacity key={inp.id} style={ln.row} onPress={() => onSelect(inp)} activeOpacity={0.7}>
+              <Text style={ln.date}>{formatDate(inp.created_at)}</Text>
+              <Text style={ln.text} numberOfLines={1}>{inp.practice_point_1}</Text>
+              <Text style={ln.arrow}>›</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
       <View style={ln.dots}>
         <View style={[ln.dot, page === 0 && ln.dotActive]} />
         <View style={[ln.dot, page === 1 && ln.dotActive]} />
@@ -1386,6 +1352,18 @@ const ln = StyleSheet.create({
   arrow: {
     fontSize: 14,
     color: 'rgba(255,255,255,0.3)',
+  },
+  pageHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 0,
+  },
+  swipeHint: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 10,
+    color: 'rgba(255,255,255,0.25)',
+    letterSpacing: 0.3,
   },
   coachNoteText: {
     fontFamily: Fonts.jakartaRegular,
