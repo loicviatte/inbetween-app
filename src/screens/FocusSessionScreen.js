@@ -195,50 +195,92 @@ function LinkedClassPage({ inputs, loading, onSelect }) {
 function FocusPager({ focusPoint, inputs, loading, onSelect }) {
   const hasNote = !!focusPoint?.coach_note;
   const hasClasses = loading || inputs.length > 0;
+  const totalPages = hasNote && hasClasses ? 2 : 1;
 
   const [page, setPage] = useState(0);
-  const totalPages = hasNote && hasClasses ? 2 : 1;
-  const totalPagesRef = useRef(totalPages);
-  totalPagesRef.current = totalPages;
+  const [cardWidth, setCardWidth] = useState(0);
+  const [heights, setHeights] = useState([0, 0]);
 
-  const panResponder = useRef(
-    PanResponder.create({
-      onMoveShouldSetPanResponder: (_, { dx, dy }) =>
-        totalPagesRef.current > 1 && Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 8,
-      onPanResponderRelease: (_, { dx }) => {
-        if (dx < -30) setPage(p => Math.min(p + 1, totalPagesRef.current - 1));
-        else if (dx > 30) setPage(p => Math.max(p - 1, 0));
-      },
-    })
-  ).current;
+  const pageAnim = useRef(new Animated.Value(0)).current;
+  const baseAnim = useRef(0);
 
-  // If no coach note AND no classes: nothing to show
+  const panResponder = useRef(PanResponder.create({
+    onMoveShouldSetPanResponder: (_, { dx, dy }) =>
+      totalPages > 1 && Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 8,
+    onPanResponderGrant: () => {
+      pageAnim.stopAnimation(v => { baseAnim.current = v; });
+    },
+    onPanResponderMove: (_, { dx }) => {
+      if (!cardWidth) return;
+      pageAnim.setValue(Math.max(0, Math.min(1, baseAnim.current - dx / cardWidth)));
+    },
+    onPanResponderRelease: (_, { dx, vx }) => {
+      let target = page;
+      if (dx < -40 || vx < -0.3) target = Math.min(page + 1, totalPages - 1);
+      else if (dx > 40 || vx > 0.3) target = Math.max(page - 1, 0);
+      setPage(target);
+      Animated.spring(pageAnim, {
+        toValue: target,
+        useNativeDriver: false,
+        tension: 120,
+        friction: 14,
+      }).start();
+    },
+  })).current;
+
   if (!hasNote && !hasClasses) return null;
 
-  // If only one type: render directly without pager chrome
   if (totalPages === 1) {
-    if (hasNote) {
-      return (
-        <View style={ln.wrap}>
-          <Text style={ln.heading}>Coach</Text>
-          <Text style={ln.coachNoteText}>{focusPoint.coach_note}</Text>
-        </View>
-      );
-    }
+    if (hasNote) return (
+      <View style={ln.wrap}>
+        <Text style={ln.heading}>Coach</Text>
+        <Text style={ln.coachNoteText}>{focusPoint.coach_note}</Text>
+      </View>
+    );
     return <LinkedClassPage inputs={inputs} loading={loading} onSelect={onSelect} />;
   }
 
+  const animHeight = pageAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [heights[0] || 60, heights[1] || 60],
+    extrapolate: 'clamp',
+  });
+
+  const innerTranslateX = cardWidth ? pageAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, -cardWidth],
+    extrapolate: 'clamp',
+  }) : 0;
+
   return (
-    <View {...panResponder.panHandlers}>
-      {page === 0 ? (
-        <View style={ln.wrap}>
-          <Text style={ln.heading}>Coach</Text>
-          <Text style={ln.coachNoteText}>{focusPoint.coach_note}</Text>
-        </View>
-      ) : (
-        <LinkedClassPage inputs={inputs} loading={loading} onSelect={onSelect} />
-      )}
-      {/* Dot indicators */}
+    <View
+      onLayout={e => setCardWidth(e.nativeEvent.layout.width)}
+      {...panResponder.panHandlers}
+    >
+      <Animated.View style={{ height: animHeight, overflow: 'hidden' }}>
+        <Animated.View style={{
+          flexDirection: 'row',
+          width: cardWidth ? cardWidth * 2 : '200%',
+          transform: [{ translateX: innerTranslateX }],
+        }}>
+          <View
+            style={{ width: cardWidth || '50%' }}
+            onLayout={e => setHeights(h => [e.nativeEvent.layout.height, h[1]])}
+          >
+            <View style={ln.wrap}>
+              <Text style={ln.heading}>Coach</Text>
+              <Text style={ln.coachNoteText}>{focusPoint.coach_note}</Text>
+            </View>
+          </View>
+          <View
+            style={{ width: cardWidth || '50%' }}
+            onLayout={e => setHeights(h => [h[0], e.nativeEvent.layout.height])}
+          >
+            <LinkedClassPage inputs={inputs} loading={loading} onSelect={onSelect} />
+          </View>
+        </Animated.View>
+      </Animated.View>
+
       <View style={ln.dots}>
         <View style={[ln.dot, page === 0 && ln.dotActive]} />
         <View style={[ln.dot, page === 1 && ln.dotActive]} />
