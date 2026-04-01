@@ -197,8 +197,9 @@ function FocusPager({ focusPoint, inputs, loading, onSelect, onSwipeStart, onSwi
   const hasClasses = loading || inputs.length > 0;
 
   const [page, setPage] = useState(0);
-  const totalPagesRef = useRef(1);
-  totalPagesRef.current = hasNote && hasClasses ? 2 : 1;
+  const totalPages = hasNote && hasClasses ? 2 : 1;
+  const totalPagesRef = useRef(totalPages);
+  totalPagesRef.current = totalPages;
 
   const panResponder = useRef(
     PanResponder.create({
