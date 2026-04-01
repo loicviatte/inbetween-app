@@ -283,7 +283,7 @@ export default function ProfileScreen({ navigation }) {
       <ScrollView style={styles.content} contentContainerStyle={styles.contentInner} showsVerticalScrollIndicator={false}>
         {/* Avatar + name */}
         <View style={styles.avatarSection}>
-          <TouchableOpacity style={styles.avatarWrap} onPress={handlePickPhoto} activeOpacity={0.85}>
+          <View style={styles.avatarWrap}>
             {photoUri ? (
               <Image source={{ uri: photoUri }} style={styles.avatarPhoto} />
             ) : (
@@ -291,10 +291,7 @@ export default function ProfileScreen({ navigation }) {
                 <Text style={styles.avatarInitials}>{initials}</Text>
               </View>
             )}
-            <View style={styles.editBadge}>
-              <Text style={styles.editIcon}>✎</Text>
-            </View>
-          </TouchableOpacity>
+          </View>
           <Text style={styles.name}>{user?.name || 'Alexandra Lukey'}</Text>
           <Text style={styles.contact}>{user?.email || 'youremail@domain.com'}</Text>
           {!!user?.main_studio && (
