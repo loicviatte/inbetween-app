@@ -16,9 +16,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import * as Clipboard2 from 'expo-clipboard';
 import { Colors, Fonts, Spacing } from '../../theme';
-import { getUser, saveUserProfile } from '../../services/storage';
-import { getOrCreateInviteCode, getMyStudents } from '../../services/coachStorage';
-import { supabase } from '../../lib/supabase';
+import { getUser, saveUserProfile } from '../../storage/storage';
+import { getOrCreateInviteCode, getMyStudents } from '../../storage/coachStorage';
+import { supabase } from '../../services/supabase/client';
 
 const PLACES_KEY = process.env.EXPO_PUBLIC_GOOGLE_PLACES_API_KEY;
 

@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Colors, Fonts, Spacing } from '../theme';
-import { getClassInputs, getNotesLinkedToClass, getNotes, saveNote } from '../services/storage';
+import { getClassInputs, getNotesLinkedToClass, getNotes, saveNote } from '../storage/storage';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 

@@ -28,7 +28,7 @@ import {
   respondToFocusCompletion,
   respondToFlaggedFocus,
   updateFocusPoint,
-} from '../../services/coachStorage';
+} from '../../storage/coachStorage';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 

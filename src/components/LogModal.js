@@ -23,7 +23,7 @@ import {
   generateClassTitle,
   generateCoachingSummary,
   normalizeLabel,
-} from '../services/anthropic';
+} from '../services/ai/anthropic';
 import {
   saveClassInput,
   saveFocusPoint,
@@ -31,8 +31,8 @@ import {
   getFocusPoints,
   getRecentClassInputs,
   updateUserSummary,
-} from '../services/storage';
-import { supabase } from '../lib/supabase';
+} from '../storage/storage';
+import { supabase } from '../services/supabase/client';
 
 const OPENAI_API_KEY = process.env.EXPO_PUBLIC_OPENAI_API_KEY;
 
@@ -301,7 +301,7 @@ export default function LogModal({ visible, onClose, onSubmitted }) {
       getRecentClassInputs(3).then((recent) =>
         generateCoachingSummary(recent).then(updateUserSummary).catch(() => {})
       );
-      import('../services/algorithm').then(({ refreshNudgeMessage }) =>
+      import('../utils/algorithm').then(({ refreshNudgeMessage }) =>
         refreshNudgeMessage().catch(() => {})
       );
 

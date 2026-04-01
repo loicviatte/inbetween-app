@@ -14,9 +14,9 @@ import {
   getSessionCountForFocus,
   getSessionLabel,
   startTrainingSession,
-} from '../services/algorithm';
-import { getFocusPoints } from '../services/storage';
-import { getActiveSession } from '../services/activeSession';
+} from '../utils/algorithm';
+import { getFocusPoints } from '../storage/storage';
+import { getActiveSession } from '../storage/activeSession';
 
 function Logo() {
   return <Text style={styles.logo}>EE</Text>;

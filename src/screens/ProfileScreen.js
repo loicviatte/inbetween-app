@@ -28,8 +28,8 @@ import {
   getMyCoach,
   linkToCoachByCode,
   unlinkCoach,
-} from '../services/storage';
-import { supabase } from '../lib/supabase';
+} from '../storage/storage';
+import { supabase } from '../services/supabase/client';
 import RadarChart from '../components/RadarChart';
 
 const AVATAR_KEY = '@profile_photo';

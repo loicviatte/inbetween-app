@@ -19,8 +19,8 @@ import {
   Montserrat_600SemiBold,
   Montserrat_800ExtraBold,
 } from '@expo-google-fonts/montserrat';
-import { supabase } from './src/lib/supabase';
-import { getOrCreateInviteCode } from './src/services/coachStorage';
+import { supabase } from './src/services/supabase/client';
+import { getOrCreateInviteCode } from './src/storage/coachStorage';
 
 // Student screens
 import HomeScreen from './src/screens/HomeScreen';

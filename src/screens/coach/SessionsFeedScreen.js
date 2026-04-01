@@ -9,7 +9,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Colors, Fonts, Spacing } from '../../theme';
-import { getCoachActivityFeed } from '../../services/coachStorage';
+import { getCoachActivityFeed } from '../../storage/coachStorage';
 
 function formatSectionTitle(date) {
   const now = new Date();

@@ -25,15 +25,15 @@ import {
   getWeekActivity,
   getRecentClassInputs,
   getTopFocusPointsWithCounts,
-} from '../services/storage';
-import { getSlots, getSessionCountForFocus, startTrainingSession } from '../services/algorithm';
+} from '../storage/storage';
+import { getSlots, getSessionCountForFocus, startTrainingSession } from '../utils/algorithm';
 import {
   getActiveSession,
   clearActiveSession,
   subscribeToActiveSession,
   getSessionTimeLeft,
-} from '../services/activeSession';
-import { generateCoachShareSummary } from '../services/anthropic';
+} from '../storage/activeSession';
+import { generateCoachShareSummary } from '../services/ai/anthropic';
 import LogModal from '../components/LogModal';
 
 const SHARE_LOADING_MSGS = ['Gathering your notes...', 'Writing summary...', 'Almost ready...'];
