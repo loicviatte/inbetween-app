@@ -20,6 +20,9 @@ import {
   Montserrat_800ExtraBold,
 } from '@expo-google-fonts/montserrat';
 import { supabase } from './src/lib/supabase';
+import { getOrCreateInviteCode } from './src/services/coachStorage';
+
+// Student screens
 import HomeScreen from './src/screens/HomeScreen';
 import LogScreen from './src/screens/LogScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
@@ -30,14 +33,23 @@ import LoginScreen from './src/screens/LoginScreen';
 import RegisterScreen from './src/screens/RegisterScreen';
 import CustomTabBar from './src/components/CustomTabBar';
 
+// Coach screens
+import CoachHomeScreen from './src/screens/coach/CoachHomeScreen';
+import StudentDetailScreen from './src/screens/coach/StudentDetailScreen';
+import SessionsFeedScreen from './src/screens/coach/SessionsFeedScreen';
+import CoachProfileScreen from './src/screens/coach/CoachProfileScreen';
+
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
 const AuthStack = createNativeStackNavigator();
+const CoachStack = createNativeStackNavigator();
 
 const AppTheme = {
   ...DefaultTheme,
   colors: { ...DefaultTheme.colors, background: '#FFFFFF' },
 };
+
+// ─── Student Navigator ────────────────────────────────────────────────────────
 
 function MainTabs() {
   return (
@@ -53,15 +65,6 @@ function MainTabs() {
       <Tab.Screen name="TRAIN" component={HomeScreen} />
       <Tab.Screen name="LOG" component={LogScreen} />
     </Tab.Navigator>
-  );
-}
-
-function AuthNavigator() {
-  return (
-    <AuthStack.Navigator screenOptions={{ headerShown: false }}>
-      <AuthStack.Screen name="Login" component={LoginScreen} />
-      <AuthStack.Screen name="Register" component={RegisterScreen} />
-    </AuthStack.Navigator>
   );
 }
 
@@ -88,8 +91,54 @@ function AppNavigator() {
   );
 }
 
+// ─── Coach Navigator ──────────────────────────────────────────────────────────
+
+function CoachMainTabs() {
+  return (
+    <Tab.Navigator
+      initialRouteName="STUDENTS"
+      tabBar={(props) => <CustomTabBar {...props} />}
+      screenOptions={{
+        headerShown: false,
+        tabBarStyle: { backgroundColor: 'transparent', borderTopWidth: 0, elevation: 0 },
+      }}
+    >
+      <Tab.Screen name="STUDENTS" component={CoachHomeScreen} />
+      <Tab.Screen name="SESSIONS" component={SessionsFeedScreen} />
+      <Tab.Screen name="PROFILE" component={CoachProfileScreen} />
+    </Tab.Navigator>
+  );
+}
+
+function CoachAppNavigator() {
+  return (
+    <CoachStack.Navigator screenOptions={{ headerShown: false }}>
+      <CoachStack.Screen name="CoachMainTabs" component={CoachMainTabs} />
+      <CoachStack.Screen
+        name="StudentDetail"
+        component={StudentDetailScreen}
+        options={{ animation: 'slide_from_right' }}
+      />
+    </CoachStack.Navigator>
+  );
+}
+
+// ─── Auth Navigator ───────────────────────────────────────────────────────────
+
+function AuthNavigator() {
+  return (
+    <AuthStack.Navigator screenOptions={{ headerShown: false }}>
+      <AuthStack.Screen name="Login" component={LoginScreen} />
+      <AuthStack.Screen name="Register" component={RegisterScreen} />
+    </AuthStack.Navigator>
+  );
+}
+
+// ─── Root ─────────────────────────────────────────────────────────────────────
+
 export default function App() {
   const [session, setSession] = useState(undefined); // undefined = loading
+  const [userRole, setUserRole] = useState(null);    // null = not yet loaded
   const [fontsLoaded] = useFonts({
     PlusJakartaSans_300Light,
     PlusJakartaSans_400Regular,
@@ -102,19 +151,56 @@ export default function App() {
     Montserrat_800ExtraBold,
   });
 
+  async function loadRole(userId) {
+    let role = null;
+    // Try DB first (available after migration)
+    try {
+      const { data } = await supabase
+        .from('users')
+        .select('role')
+        .eq('id', userId)
+        .single();
+      if (data?.role) role = data.role;
+    } catch {}
+    // Fallback: role stored in auth metadata at signup
+    if (!role) {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        role = user?.user_metadata?.role || 'student';
+      } catch {
+        role = 'student';
+      }
+    }
+    setUserRole(role);
+    // Ensure coach invite code exists as soon as they log in
+    if (role === 'coach') {
+      try { await getOrCreateInviteCode(); } catch {}
+    }
+  }
+
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session: s } }) => {
       setSession(s ?? null);
+      if (s?.user?.id) loadRole(s.user.id);
+      else if (!s) setUserRole(null);
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
       setSession(s ?? null);
+      if (s?.user?.id) {
+        loadRole(s.user.id);
+      } else {
+        setUserRole(null);
+      }
     });
 
     return () => subscription.unsubscribe();
   }, []);
 
-  if (!fontsLoaded || session === undefined) {
+  // Show loading until fonts, session, and role are all resolved
+  const isLoading = !fontsLoaded || session === undefined || (session !== null && userRole === null);
+
+  if (isLoading) {
     return (
       <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFFFFF' }}>
         {fontsLoaded && (
@@ -128,7 +214,10 @@ export default function App() {
     <SafeAreaProvider>
       <NavigationContainer theme={AppTheme}>
         <StatusBar style="dark" />
-        {session ? <AppNavigator /> : <AuthNavigator />}
+        {session
+          ? (userRole === 'coach' ? <CoachAppNavigator /> : <AppNavigator />)
+          : <AuthNavigator />
+        }
       </NavigationContainer>
     </SafeAreaProvider>
   );

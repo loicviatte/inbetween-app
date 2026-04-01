@@ -15,11 +15,18 @@ import { supabase } from '../lib/supabase';
 import { Colors, Fonts, Spacing } from '../theme';
 
 export default function RegisterScreen({ navigation }) {
+  const [step, setStep] = useState('role'); // 'role' | 'form'
+  const [role, setRole] = useState('');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  function handleRoleSelect(selected) {
+    setRole(selected);
+    setStep('form');
+  }
 
   async function handleRegister() {
     if (!name.trim() || !email.trim() || !password.trim()) {
@@ -32,13 +39,72 @@ export default function RegisterScreen({ navigation }) {
     }
     setLoading(true);
     setError('');
-    const { error: err } = await supabase.auth.signUp({
+    const { data, error: err } = await supabase.auth.signUp({
       email: email.trim(),
       password,
-      options: { data: { name: name.trim() } },
+      options: { data: { name: name.trim(), role } },
     });
+
+    if (err) {
+      setLoading(false);
+      setError(err.message);
+      return;
+    }
+
+    // If user row was auto-created by a DB trigger, update the role field.
+    // If not, this will upsert the role once the trigger runs or on next login.
+    if (data?.user?.id) {
+      await supabase
+        .from('users')
+        .update({ role })
+        .eq('id', data.user.id);
+    }
+
     setLoading(false);
-    if (err) setError(err.message);
+  }
+
+  if (step === 'role') {
+    return (
+      <SafeAreaView style={styles.safe}>
+        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+          <Text style={styles.logo}>EE</Text>
+          <Text style={styles.title}>Who are you?</Text>
+          <Text style={styles.subtitle}>We'll set up the app for you.</Text>
+
+          <View style={styles.roleCards}>
+            <TouchableOpacity
+              style={styles.roleCard}
+              onPress={() => handleRoleSelect('student')}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.roleEmoji}>🎵</Text>
+              <Text style={styles.roleTitle}>Student</Text>
+              <Text style={styles.roleDesc}>I practice between lessons</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.roleCard}
+              onPress={() => handleRoleSelect('coach')}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.roleEmoji}>🏆</Text>
+              <Text style={styles.roleTitle}>Coach</Text>
+              <Text style={styles.roleDesc}>I teach competitive dance</Text>
+            </TouchableOpacity>
+          </View>
+
+          <TouchableOpacity
+            style={styles.secondaryBtn}
+            onPress={() => navigation.navigate('Login')}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.secondaryBtnText}>
+              Already have an account? <Text style={styles.linkText}>Sign in</Text>
+            </Text>
+          </TouchableOpacity>
+        </ScrollView>
+      </SafeAreaView>
+    );
   }
 
   return (
@@ -48,9 +114,15 @@ export default function RegisterScreen({ navigation }) {
         style={styles.kv}
       >
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+          <TouchableOpacity onPress={() => setStep('role')} style={styles.backBtn} activeOpacity={0.7}>
+            <Text style={styles.backText}>← Back</Text>
+          </TouchableOpacity>
+
           <Text style={styles.logo}>EE</Text>
           <Text style={styles.title}>Create account</Text>
-          <Text style={styles.subtitle}>Start tracking your dance progress</Text>
+          <Text style={styles.subtitle}>
+            {role === 'coach' ? 'Set up your coach profile' : 'Start tracking your dance progress'}
+          </Text>
 
           <View style={styles.form}>
             <Text style={styles.label}>Full name</Text>
@@ -58,7 +130,7 @@ export default function RegisterScreen({ navigation }) {
               style={styles.input}
               value={name}
               onChangeText={setName}
-              placeholder="Alexandra Lukey"
+              placeholder={role === 'coach' ? 'Your name' : 'Alexandra Lukey'}
               placeholderTextColor={Colors.secondary}
               autoComplete="name"
             />
@@ -126,6 +198,12 @@ const styles = StyleSheet.create({
     paddingTop: 60,
     paddingBottom: 40,
   },
+  backBtn: { marginBottom: 24 },
+  backText: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 14,
+    color: Colors.secondary,
+  },
   logo: {
     fontFamily: Fonts.monument,
     fontSize: 28,
@@ -145,6 +223,35 @@ const styles = StyleSheet.create({
     color: Colors.secondary,
     marginBottom: 40,
   },
+
+  roleCards: {
+    gap: 16,
+    marginBottom: 40,
+  },
+  roleCard: {
+    backgroundColor: Colors.white,
+    borderWidth: 1.5,
+    borderColor: Colors.statCardBorder,
+    borderRadius: 16,
+    paddingVertical: 24,
+    paddingHorizontal: 20,
+  },
+  roleEmoji: {
+    fontSize: 28,
+    marginBottom: 10,
+  },
+  roleTitle: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 18,
+    color: Colors.black,
+    marginBottom: 4,
+  },
+  roleDesc: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 14,
+    color: Colors.secondary,
+  },
+
   form: { flex: 1 },
   label: {
     fontFamily: Fonts.jakartaBold,

@@ -7,6 +7,9 @@ const TAB_COLORS = {
   PROFILE: Colors.activeHome,
   TRAIN: Colors.activeFocus,
   LOG: Colors.activeLog,
+  // Coach tabs
+  STUDENTS: Colors.activeHome,
+  SESSIONS: Colors.orange,
 };
 
 const HIDDEN_TABS = [];
