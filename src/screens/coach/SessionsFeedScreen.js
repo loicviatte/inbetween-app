@@ -5,12 +5,15 @@ import {
   StyleSheet,
   SectionList,
   TouchableOpacity,
+  Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Colors, Fonts, Spacing } from '../../theme';
 import { getCoachActivityFeed } from '../../storage/coachStorage';
+import { getUser } from '../../storage/storage';
 import { SessionsFeedScreenSkeleton } from '../../components/Skeleton';
+import { Ionicons } from '@expo/vector-icons';
 
 function formatSectionTitle(date) {
   const now = new Date();
@@ -80,6 +83,7 @@ function groupByDay(events) {
 export default function SessionsFeedScreen({ navigation }) {
   const [sections, setSections] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [user, setUser] = useState(null);
 
   useFocusEffect(
     useCallback(() => {
@@ -87,8 +91,8 @@ export default function SessionsFeedScreen({ navigation }) {
       async function load() {
         setLoading(true);
         try {
-          const events = await getCoachActivityFeed();
-          if (active) setSections(groupByDay(events));
+          const [events, u] = await Promise.all([getCoachActivityFeed(), getUser()]);
+          if (active) { setSections(groupByDay(events)); setUser(u); }
         } catch {}
         if (active) setLoading(false);
       }
@@ -110,7 +114,28 @@ export default function SessionsFeedScreen({ navigation }) {
         stickySectionHeadersEnabled={false}
         ListHeaderComponent={() => (
           <View style={styles.header}>
-            <Text style={styles.logo}>EE</Text>
+            <View style={styles.headerTop}>
+              <TouchableOpacity
+                onPress={() => navigation.navigate('Notifications')}
+                style={styles.notifBtn}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="notifications-outline" size={24} color={Colors.black} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.avatar}
+                onPress={() => navigation.navigate('PROFILE')}
+                activeOpacity={0.8}
+              >
+                {user?.photo_url ? (
+                  <Image source={{ uri: user.photo_url }} style={styles.avatarPhoto} />
+                ) : (
+                  <Text style={styles.avatarText}>
+                    {user?.name ? user.name[0].toUpperCase() : 'C'}
+                  </Text>
+                )}
+              </TouchableOpacity>
+            </View>
             <Text style={styles.heading}>Recent</Text>
           </View>
         )}
@@ -160,12 +185,35 @@ const styles = StyleSheet.create({
     paddingTop: 16,
     paddingBottom: 24,
   },
-  logo: {
-    fontFamily: Fonts.monument,
-    fontSize: 20,
-    color: Colors.black,
-    letterSpacing: 1,
+  headerTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     marginBottom: 12,
+  },
+  notifBtn: {
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#F5E6C8',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatarPhoto: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+  },
+  avatarText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 14,
+    color: '#8A6A2E',
   },
   heading: {
     fontFamily: Fonts.jakartaExtraBold,

@@ -6,6 +6,7 @@ import {
   FlatList,
   TouchableOpacity,
   ActivityIndicator,
+  Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -17,6 +18,7 @@ import {
   getPendingCoachRequests,
   respondToCoachRequest,
 } from '../../storage/coachStorage';
+import { getUser } from '../../storage/storage';
 
 function formatLastActive(dateStr) {
   if (!dateStr) return 'Never';
@@ -118,6 +120,7 @@ export default function CoachHomeScreen({ navigation }) {
   const [students, setStudents] = useState([]);
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [user, setUser] = useState(null);
 
   useFocusEffect(
     useCallback(() => {
@@ -125,8 +128,8 @@ export default function CoachHomeScreen({ navigation }) {
       async function load() {
         setLoading(true);
         try {
-          const [s, r] = await Promise.all([getMyStudents(), getPendingCoachRequests()]);
-          if (active) { setStudents(s); setRequests(r); }
+          const [s, r, u] = await Promise.all([getMyStudents(), getPendingCoachRequests(), getUser()]);
+          if (active) { setStudents(s); setRequests(r); setUser(u); }
         } catch {}
         if (active) setLoading(false);
       }
@@ -161,13 +164,25 @@ export default function CoachHomeScreen({ navigation }) {
             {/* Header */}
             <View style={styles.header}>
               <View style={styles.headerTop}>
-                <Text style={styles.logo}>EE</Text>
                 <TouchableOpacity
                   onPress={() => navigation.navigate('Notifications')}
                   style={styles.notifBtn}
                   activeOpacity={0.7}
                 >
                   <Ionicons name="notifications-outline" size={24} color={Colors.black} />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.avatar}
+                  onPress={() => navigation.navigate('PROFILE')}
+                  activeOpacity={0.8}
+                >
+                  {user?.photo_url ? (
+                    <Image source={{ uri: user.photo_url }} style={styles.avatarPhoto} />
+                  ) : (
+                    <Text style={styles.avatarText}>
+                      {user?.name ? user.name[0].toUpperCase() : 'C'}
+                    </Text>
+                  )}
                 </TouchableOpacity>
               </View>
               <Text style={styles.heading}>My Students</Text>
@@ -261,6 +276,24 @@ const styles = StyleSheet.create({
     height: 36,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  avatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#F5E6C8',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatarPhoto: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+  },
+  avatarText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 14,
+    color: '#8A6A2E',
   },
   heading: {
     fontFamily: Fonts.jakartaExtraBold,
