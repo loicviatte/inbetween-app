@@ -37,6 +37,7 @@ import { generateCoachShareSummary } from '../services/ai/anthropic';
 import LogModal from '../components/LogModal';
 
 const SHARE_LOADING_MSGS = ['Gathering your notes...', 'Writing summary...', 'Almost ready...'];
+const HOME_CACHE_KEY = '@cache_home';
 
 function formatTime(seconds) {
   const s = Math.max(0, Math.floor(seconds));
@@ -139,17 +140,46 @@ export default function HomeScreen({ navigation }) {
     ]);
     setSessionCount(c1);
     setSlot2Count(c2);
+    AsyncStorage.setItem(HOME_CACHE_KEY, JSON.stringify({
+      user: u, slot1: slots.slot1, slot2: slots.slot2,
+      sessionCount: c1, slot2Count: c2,
+      sessionsThisWeek: sessions, classesThisWeek: classes,
+      focusTrainedThisWeek: focusTrained, weekActivity: wa || {},
+    })).catch(() => {});
   }
 
   useFocusEffect(useCallback(() => {
     setShareState('default');
-    if (!hasLoadedRef.current) setIsLoading(true);
-    load().then(() => {
+    const isFirst = !hasLoadedRef.current;
+    if (isFirst) setIsLoading(true);
+    async function init() {
+      if (isFirst) {
+        try {
+          const raw = await AsyncStorage.getItem(HOME_CACHE_KEY);
+          if (raw) {
+            const c = JSON.parse(raw);
+            setUser(c.user);
+            setSlot1(c.slot1);
+            setSlot2(c.slot2);
+            setSessionCount(c.sessionCount || 0);
+            setSlot2Count(c.slot2Count || 0);
+            setSessionsThisWeek(c.sessionsThisWeek || 0);
+            setClassesThisWeek(c.classesThisWeek || 0);
+            setFocusTrainedThisWeek(c.focusTrainedThisWeek || 0);
+            setWeekActivity(c.weekActivity || {});
+            setIsLoading(false);
+          }
+        } catch {}
+      }
+      try { await load(); } catch {}
       hasLoadedRef.current = true;
       setIsLoading(false);
-      fadeAnim.setValue(0);
-      Animated.timing(fadeAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
-    });
+      if (isFirst) {
+        fadeAnim.setValue(0);
+        Animated.timing(fadeAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
+      }
+    }
+    init();
 
     // Sync active session state
     const current = getActiveSession();

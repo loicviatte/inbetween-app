@@ -19,6 +19,7 @@ import { Colors, Fonts, Spacing } from '../../theme';
 import { getUser, saveUserProfile } from '../../storage/storage';
 import { getOrCreateInviteCode, getMyStudents } from '../../storage/coachStorage';
 import { supabase } from '../../services/supabase/client';
+import { CoachProfileScreenSkeleton } from '../../components/Skeleton';
 
 const PLACES_KEY = process.env.EXPO_PUBLIC_GOOGLE_PLACES_API_KEY;
 
@@ -76,6 +77,7 @@ function PlacesInput({ value, onChangeText, onPlaceSelect }) {
 export default function CoachProfileScreen() {
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const hasLoadedRef = useRef(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [user, setUser] = useState(null);
   const [studentCount, setStudentCount] = useState(0);
   const [inviteCode, setInviteCode] = useState('');
@@ -90,6 +92,7 @@ export default function CoachProfileScreen() {
   useFocusEffect(
     useCallback(() => {
       async function load() {
+        if (!hasLoadedRef.current) setIsLoading(true);
         let userData = null, students = [], code = '';
         try {
           [userData, students, code] = await Promise.all([
@@ -101,6 +104,7 @@ export default function CoachProfileScreen() {
         setUser(userData);
         setStudentCount(students.length);
         setInviteCode(code);
+        setIsLoading(false);
         fadeAnim.setValue(0);
         Animated.timing(fadeAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
         hasLoadedRef.current = true;
@@ -136,6 +140,10 @@ export default function CoachProfileScreen() {
 
   async function handleLogout() {
     await supabase.auth.signOut();
+  }
+
+  if (isLoading) {
+    return <CoachProfileScreenSkeleton />;
   }
 
   const initials = user?.name

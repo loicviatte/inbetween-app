@@ -16,6 +16,7 @@ import {
 } from 'react-native';
 
 const SCREEN_W = Dimensions.get('window').width;
+const LOG_CACHE_KEY = '@cache_log';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -152,6 +153,7 @@ export default function LogScreen({ navigation }) {
     setInputs(allInputs);
     setNotes(allNotes);
     setPhotoUri(savedPhoto || null);
+    AsyncStorage.setItem(LOG_CACHE_KEY, JSON.stringify({ inputs: allInputs, notes: allNotes })).catch(() => {});
   }
 
   function switchTab(tab) {
@@ -161,18 +163,34 @@ export default function LogScreen({ navigation }) {
 
   async function handleRefresh() {
     setRefreshing(true);
-    await load();
+    try { await load(); } catch {}
     setRefreshing(false);
   }
 
   useFocusEffect(useCallback(() => {
-    if (!hasLoadedRef.current) setIsLoading(true);
-    load().then(() => {
+    const isFirst = !hasLoadedRef.current;
+    if (isFirst) setIsLoading(true);
+    async function init() {
+      if (isFirst) {
+        try {
+          const raw = await AsyncStorage.getItem(LOG_CACHE_KEY);
+          if (raw) {
+            const { inputs: ci, notes: cn } = JSON.parse(raw);
+            setInputs(ci || []);
+            setNotes(cn || []);
+            setIsLoading(false);
+          }
+        } catch {}
+      }
+      try { await load(); } catch {}
       hasLoadedRef.current = true;
       setIsLoading(false);
-      fadeAnim.setValue(0);
-      Animated.timing(fadeAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
-    });
+      if (isFirst) {
+        fadeAnim.setValue(0);
+        Animated.timing(fadeAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
+      }
+    }
+    init();
   }, []));
 
   function handleAdd() {

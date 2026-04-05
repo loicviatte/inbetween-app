@@ -10,6 +10,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Colors, Fonts, Spacing } from '../../theme';
 import { getCoachActivityFeed } from '../../storage/coachStorage';
+import { SessionsFeedScreenSkeleton } from '../../components/Skeleton';
 
 function formatSectionTitle(date) {
   const now = new Date();
@@ -97,13 +98,7 @@ export default function SessionsFeedScreen({ navigation }) {
   );
 
   if (loading) {
-    return (
-      <SafeAreaView style={styles.safe}>
-        <View style={styles.loadingWrap}>
-          <Text style={styles.logo}>EE</Text>
-        </View>
-      </SafeAreaView>
-    );
+    return <SessionsFeedScreenSkeleton />;
   }
 
   return (

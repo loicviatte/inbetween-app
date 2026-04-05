@@ -9,7 +9,9 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
+import { Ionicons } from '@expo/vector-icons';
 import { Colors, Fonts, Spacing } from '../../theme';
+import { CoachHomeScreenSkeleton } from '../../components/Skeleton';
 import {
   getMyStudents,
   getPendingCoachRequests,
@@ -145,13 +147,7 @@ export default function CoachHomeScreen({ navigation }) {
   const needsAttention = students.filter(s => s.status !== 'on_track');
 
   if (loading) {
-    return (
-      <SafeAreaView style={styles.safe}>
-        <View style={styles.loadingWrap}>
-          <Text style={styles.logo}>EE</Text>
-        </View>
-      </SafeAreaView>
-    );
+    return <CoachHomeScreenSkeleton />;
   }
 
   return (
@@ -164,7 +160,16 @@ export default function CoachHomeScreen({ navigation }) {
           <>
             {/* Header */}
             <View style={styles.header}>
-              <Text style={styles.logo}>EE</Text>
+              <View style={styles.headerTop}>
+                <Text style={styles.logo}>EE</Text>
+                <TouchableOpacity
+                  onPress={() => navigation.navigate('Notifications')}
+                  style={styles.notifBtn}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="notifications-outline" size={24} color={Colors.black} />
+                </TouchableOpacity>
+              </View>
               <Text style={styles.heading}>My Students</Text>
             </View>
 
@@ -239,12 +244,23 @@ const styles = StyleSheet.create({
     paddingTop: 16,
     paddingBottom: 24,
   },
+  headerTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
   logo: {
     fontFamily: Fonts.monument,
     fontSize: 20,
     color: Colors.black,
     letterSpacing: 1,
-    marginBottom: 12,
+  },
+  notifBtn: {
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   heading: {
     fontFamily: Fonts.jakartaExtraBold,
