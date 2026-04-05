@@ -22,6 +22,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { Colors, Fonts, Spacing } from '../theme';
 import { getClassInputs, getNotes } from '../storage/storage';
 import LogModal from '../components/LogModal';
+import { Ionicons } from '@expo/vector-icons';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const MONTH_FULL = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -264,7 +265,7 @@ export default function LogScreen({ navigation }) {
               ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
               contentContainerStyle={styles.listContent}
               showsVerticalScrollIndicator={false}
-              ListEmptyComponent={<EmptyState text="No class logs yet. Tap ADD to log your first session." />}
+              ListEmptyComponent={<ClassEmptyState onAdd={() => setModalVisible(true)} />}
               refreshing={refreshing}
               onRefresh={handleRefresh}
               stickySectionHeadersEnabled={false}
@@ -328,6 +329,21 @@ export default function LogScreen({ navigation }) {
       />
       </Animated.View>
     </SafeAreaView>
+  );
+}
+
+function ClassEmptyState({ onAdd }) {
+  return (
+    <View style={styles.emptyCard}>
+      <View style={styles.emptyIconWrap}>
+        <Ionicons name="journal-outline" size={28} color="#ACADB9" />
+      </View>
+      <Text style={styles.emptyTitle}>Your classes will appear here</Text>
+      <Text style={styles.emptySubtitle}>After each lesson, log what your coach worked on with you.</Text>
+      <TouchableOpacity style={styles.emptyBtn} onPress={onAdd} activeOpacity={0.85}>
+        <Text style={styles.emptyBtnText}>Log your first class</Text>
+      </TouchableOpacity>
+    </View>
   );
 }
 
@@ -469,6 +485,52 @@ const styles = StyleSheet.create({
 
   empty: { alignItems: 'center', paddingTop: 60 },
   emptyText: { fontFamily: Fonts.jakartaRegular, fontSize: 14, color: Colors.secondary, textAlign: 'center', lineHeight: 22 },
+  emptyCard: {
+    marginTop: 40,
+    marginHorizontal: 20,
+    backgroundColor: Colors.white,
+    borderRadius: 20,
+    padding: 28,
+    alignItems: 'center',
+    gap: 12,
+    borderWidth: 1,
+    borderColor: '#EFEFEF',
+  },
+  emptyIconWrap: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#F5F5F5',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 4,
+  },
+  emptyTitle: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 17,
+    color: Colors.black,
+    textAlign: 'center',
+  },
+  emptySubtitle: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 14,
+    color: Colors.secondary,
+    textAlign: 'center',
+    lineHeight: 20,
+  },
+  emptyBtn: {
+    marginTop: 8,
+    backgroundColor: Colors.black,
+    borderRadius: 14,
+    paddingVertical: 13,
+    paddingHorizontal: 28,
+  },
+  emptyBtnText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 14,
+    color: Colors.white,
+    letterSpacing: 0.3,
+  },
 
   // Bottom bar
   bottomBar: {
