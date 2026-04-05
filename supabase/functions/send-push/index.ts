@@ -1,70 +1,90 @@
-import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-};
+// ─── Deno / Supabase Edge Runtime globals ────────────────────────────────────
 
-serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders });
+declare global {
+  const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void }
+}
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface NotificationRecord {
+  id: string
+  user_id: string
+  type: string
+  title: string
+  body: string
+  data: Record<string, unknown>
+}
+
+interface WebhookPayload {
+  type: 'INSERT' | 'UPDATE' | 'DELETE'
+  table: string
+  record: NotificationRecord
+}
+
+// ─── Main handler ─────────────────────────────────────────────────────────────
+
+Deno.serve(async (req: Request) => {
+  let record: NotificationRecord | null = null
+  try {
+    const payload: WebhookPayload = await req.json()
+    record = payload.record
+  } catch (err) {
+    console.error('[send-push] Failed to parse webhook payload:', err)
+    return new Response(JSON.stringify({ error: 'Invalid payload' }), { status: 400 })
+  }
+
+  // Only process INSERT events
+  EdgeRuntime.waitUntil(sendPush(record))
+
+  return new Response(JSON.stringify({ received: true }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  })
+})
+
+// ─── Push logic ───────────────────────────────────────────────────────────────
+
+async function sendPush(record: NotificationRecord): Promise<void> {
+  const supabase = createClient(
+    Deno.env.get('SUPABASE_URL')!,
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
+  )
+
+  // Fetch recipient's push token
+  const { data: userRow } = await supabase
+    .from('users')
+    .select('push_token')
+    .eq('id', record.user_id)
+    .single()
+
+  const pushToken = userRow?.push_token
+  if (!pushToken) {
+    console.log(`[send-push] No push token for user ${record.user_id} — skipping`)
+    return
   }
 
   try {
-    const { user_id, title, body, data } = await req.json();
-
-    if (!user_id || !title || !body) {
-      return new Response(JSON.stringify({ error: 'Missing required fields' }), {
-        status: 400,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-
-    // Get push token from users table
-    const supabase = createClient(
-      Deno.env.get('SUPABASE_URL')!,
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-    );
-
-    const { data: user, error } = await supabase
-      .from('users')
-      .select('push_token')
-      .eq('id', user_id)
-      .single();
-
-    if (error || !user?.push_token) {
-      console.log(`[send-push] No token for user ${user_id}`);
-      return new Response(JSON.stringify({ skipped: true }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-
-    // Send via Expo Push API
-    const response = await fetch('https://exp.host/--/api/v2/push/send', {
+    const res = await fetch('https://exp.host/--/api/v2/push/send', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        to: user.push_token,
-        title,
-        body,
+        to: pushToken,
+        title: record.title,
+        body: record.body,
+        data: record.data ?? {},
         sound: 'default',
-        data: data || {},
-        badge: 1,
       }),
-    });
+    })
 
-    const result = await response.json();
-    console.log('[send-push] Expo response:', JSON.stringify(result));
-
-    return new Response(JSON.stringify({ ok: true, result }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    if (!res.ok) {
+      const text = await res.text()
+      console.error(`[send-push] Expo API ${res.status}: ${text}`)
+    } else {
+      console.log(`[send-push] ✓ Push sent to user ${record.user_id}`)
+    }
   } catch (err) {
-    console.error('[send-push] Error:', err);
-    return new Response(JSON.stringify({ error: err.message }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    console.error(`[send-push] Fetch error:`, err)
   }
-});
+}
