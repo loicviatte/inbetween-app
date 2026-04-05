@@ -16,6 +16,7 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Colors, Fonts, Spacing } from '../../theme';
+import { supabase } from '../../services/supabase/client';
 import {
   getStudentProfile,
   getStudentFocusPoints,
@@ -341,28 +342,57 @@ export default function StudentDetailScreen({ route, navigation }) {
   useFocusEffect(
     useCallback(() => {
       let active = true;
+      let channel = null;
+
       async function load() {
         setLoading(true);
-        const [p, fp, act, qs, vs, arch] = await Promise.all([
-          getStudentProfile(studentId),
-          getStudentFocusPoints(studentId),
-          getStudentRecentActivity(studentId, 8),
-          getStudentQuestions(studentId),
-          getStudentPendingValidations(studentId),
-          getStudentArchivedFocusPoints(studentId),
-        ]);
-        if (active) {
-          setProfile(p);
-          setFocusPoints(fp);
-          setActivity(act);
-          setQuestions(qs);
-          setValidations(vs);
-          setArchivedFocuses(arch);
-          setLoading(false);
+        try {
+          const [p, fp, act, qs, vs, arch] = await Promise.all([
+            getStudentProfile(studentId),
+            getStudentFocusPoints(studentId),
+            getStudentRecentActivity(studentId, 8),
+            getStudentQuestions(studentId),
+            getStudentPendingValidations(studentId),
+            getStudentArchivedFocusPoints(studentId),
+          ]);
+          if (active) {
+            setProfile(p);
+            setFocusPoints(fp);
+            setActivity(act);
+            setQuestions(qs);
+            setValidations(vs);
+            setArchivedFocuses(arch);
+          }
+        } catch (e) {
+          console.error('StudentDetailScreen load error:', e);
         }
+        if (active) setLoading(false);
       }
-      load();
-      return () => { active = false; };
+
+      async function setup() {
+        await load();
+        if (!active) return;
+
+        // Subscribe to live updates for this student
+        channel = supabase.channel(`student-detail-${studentId}`)
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'coach_messages', filter: `student_id=eq.${studentId}` },
+            () => { if (active) reload(); })
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'focus_validations', filter: `student_id=eq.${studentId}` },
+            () => { if (active) reload(); })
+          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'training_sessions', filter: `user_id=eq.${studentId}` },
+            async () => {
+              if (!active) return;
+              const act = await getStudentRecentActivity(studentId, 8);
+              if (active) setActivity(act);
+            })
+          .subscribe();
+      }
+
+      setup();
+      return () => {
+        active = false;
+        if (channel) supabase.removeChannel(channel);
+      };
     }, [studentId])
   );
 

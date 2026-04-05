@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -15,6 +15,7 @@ import {
   getPendingCoachRequests,
   respondToCoachRequest,
 } from '../../storage/coachStorage';
+import { supabase } from '../../services/supabase/client';
 
 function formatLastActive(dateStr) {
   if (!dateStr) return 'Never';
@@ -116,20 +117,53 @@ export default function CoachHomeScreen({ navigation }) {
   const [students, setStudents] = useState([]);
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
+  const coachIdRef = useRef(null);
 
   useFocusEffect(
     useCallback(() => {
       let active = true;
+      let channel = null;
+
       async function load() {
-        setLoading(true);
         try {
           const [s, r] = await Promise.all([getMyStudents(), getPendingCoachRequests()]);
           if (active) { setStudents(s); setRequests(r); }
-        } catch {}
+        } catch (e) {
+          console.error('CoachHomeScreen load error:', e);
+        }
         if (active) setLoading(false);
       }
-      load();
-      return () => { active = false; };
+
+      async function setup() {
+        setLoading(true);
+
+        // Fetch coach ID once for subscription filters
+        if (!coachIdRef.current) {
+          const { data: { user } } = await supabase.auth.getUser();
+          coachIdRef.current = user?.id;
+        }
+
+        await load();
+
+        if (!coachIdRef.current || !active) return;
+        const cid = coachIdRef.current;
+
+        // Subscribe to any change that affects the coach's dashboard
+        channel = supabase.channel(`coach-home-${cid}`)
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'coach_requests', filter: `coach_id=eq.${cid}` },
+            () => { if (active) load(); })
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'coach_messages', filter: `coach_id=eq.${cid}` },
+            () => { if (active) load(); })
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'focus_validations', filter: `coach_id=eq.${cid}` },
+            () => { if (active) load(); })
+          .subscribe();
+      }
+
+      setup();
+      return () => {
+        active = false;
+        if (channel) supabase.removeChannel(channel);
+      };
     }, [])
   );
 

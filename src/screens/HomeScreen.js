@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { cacheSet, cacheGet } from '../storage/cache';
 import * as Clipboard from 'expo-clipboard';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -35,6 +36,8 @@ import {
 } from '../storage/activeSession';
 import { generateCoachShareSummary } from '../services/ai/anthropic';
 import LogModal from '../components/LogModal';
+import { HomeScreenSkeleton } from '../components/Skeleton';
+import { Ionicons } from '@expo/vector-icons';
 
 const SHARE_LOADING_MSGS = ['Gathering your notes...', 'Writing summary...', 'Almost ready...'];
 
@@ -115,18 +118,19 @@ export default function HomeScreen({ navigation }) {
   const shareMsgRef = useRef(null);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const [isLoading, setIsLoading] = useState(true);
+  const [isOffline, setIsOffline] = useState(false);
   const hasLoadedRef = useRef(false);
 
   async function load() {
-    const [u, slots, sessions, classes, focusTrained, wa, savedPhoto] = await Promise.all([
+    const [u, slots, sessions, classes, focusTrained, wa] = await Promise.all([
       getUser(),
       getSlots(),
       getTrainingSessionsThisWeek(),
       getSessionsThisWeek(),
       getFocusTrainedThisWeek(),
       getWeekActivity(),
-      AsyncStorage.getItem('@profile_photo'),
     ]);
+    const savedPhoto = u?.id ? await AsyncStorage.getItem('@profile_photo_' + u.id) : null;
     setUser(u);
     setSlot1(slots.slot1);
     setSlot2(slots.slot2);
@@ -144,17 +148,46 @@ export default function HomeScreen({ navigation }) {
     setSessionCount(c1);
     setSlot2Count(c2);
     setSlot3Count(c3);
+    setIsOffline(false);
+    // Save to cache for offline use
+    await cacheSet('home', { u, slots, sessions, classes, focusTrained, wa, c1, c2, c3 });
+  }
+
+  async function loadFromCache() {
+    const cached = await cacheGet('home');
+    if (!cached) return false;
+    const { u, slots, sessions, classes, focusTrained, wa, c1, c2, c3 } = cached;
+    setUser(u);
+    setSlot1(slots.slot1);
+    setSlot2(slots.slot2);
+    setSlot3(slots.slot3);
+    setSessionsThisWeek(sessions);
+    setClassesThisWeek(classes);
+    setFocusTrainedThisWeek(focusTrained);
+    setWeekActivity(wa || {});
+    setSessionCount(c1);
+    setSlot2Count(c2);
+    setSlot3Count(c3);
+    setIsOffline(true);
+    return true;
   }
 
   useFocusEffect(useCallback(() => {
     setShareState('default');
     if (!hasLoadedRef.current) setIsLoading(true);
-    load().then(() => {
-      hasLoadedRef.current = true;
-      setIsLoading(false);
-      fadeAnim.setValue(0);
-      Animated.timing(fadeAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
-    });
+    load()
+      .then(() => {
+        hasLoadedRef.current = true;
+        setIsLoading(false);
+        fadeAnim.setValue(0);
+        Animated.timing(fadeAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
+      })
+      .catch(async (e) => {
+        console.error('HomeScreen load error:', e);
+        const restored = await loadFromCache();
+        if (!restored) Alert.alert('Connection error', 'Could not load your data. Check your connection and try again.');
+        setIsLoading(false);
+      });
 
     // Sync active session state
     const current = getActiveSession();
@@ -235,22 +268,27 @@ export default function HomeScreen({ navigation }) {
     : 'Your top priority right now. Start your first session.';
 
   if (isLoading) {
-    return (
-      <View style={{ flex: 1, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' }}>
-        <Text style={{ fontFamily: Fonts.monument, fontSize: 20, color: Colors.black, letterSpacing: 1 }}>EE</Text>
-      </View>
-    );
+    return <HomeScreenSkeleton />;
   }
 
   return (
     <SafeAreaView style={s.safe}>
       <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
 
+      {/* ── Offline banner ── */}
+      {isOffline && (
+        <View style={s.offlineBanner}>
+          <Text style={s.offlineBannerText}>Offline — showing cached data</Text>
+        </View>
+      )}
+
       {/* ── Top section ── */}
       <View style={[s.scroll, s.scrollContent]}>
         {/* Header */}
         <View style={s.header}>
-          <Text style={s.logo}>EE</Text>
+          <TouchableOpacity onPress={() => navigation.navigate('Notifications')} style={s.notifBtn} activeOpacity={0.7}>
+            <Ionicons name="notifications-outline" size={24} color={Colors.black} />
+          </TouchableOpacity>
           <TouchableOpacity
             style={s.avatar}
             onPress={() => navigation.navigate('PROFILE')}
@@ -271,17 +309,33 @@ export default function HomeScreen({ navigation }) {
 
         {/* Hero card */}
         <View style={s.hero}>
-          <View style={s.heroBadge}>
-            <Text style={s.heroBadgeText}>{isSessionActive ? 'SESSION STARTED' : "TODAY'S FOCUS"}</Text>
-          </View>
-          <Text style={s.heroFocusName} numberOfLines={2}>
-            {activeFocusName || 'No focus yet'}
-          </Text>
-          <Text style={s.heroSession}>{ordinal(sessionCount + 1)} Session</Text>
-          {!isSessionActive && (
-            <Text style={s.heroMessage} numberOfLines={2}>{heroMessage}</Text>
+          {!slot1 ? (
+            <>
+              <View style={s.heroBadge}>
+                <Text style={s.heroBadgeText}>GETTING STARTED</Text>
+              </View>
+              <Text style={s.heroFocusName} numberOfLines={2}>
+                Attend your first private lesson
+              </Text>
+              <Text style={s.heroMessage}>
+                Your focus areas will appear here after your coach logs your first session.
+              </Text>
+            </>
+          ) : (
+            <>
+              <View style={s.heroBadge}>
+                <Text style={s.heroBadgeText}>{isSessionActive ? 'SESSION STARTED' : "TODAY'S FOCUS"}</Text>
+              </View>
+              <Text style={s.heroFocusName} numberOfLines={2}>
+                {activeFocusName}
+              </Text>
+              <Text style={s.heroSession}>{ordinal(sessionCount + 1)} Session</Text>
+              {!isSessionActive && (
+                <Text style={s.heroMessage} numberOfLines={2}>{heroMessage}</Text>
+              )}
+            </>
           )}
-          {activeSession && countdown > 0 ? (
+          {slot1 && (activeSession && countdown > 0 ? (
             <TouchableOpacity
               style={s.inProgressBtn}
               onPress={() => navigation.navigate('FocusSession', {
@@ -310,7 +364,7 @@ export default function HomeScreen({ navigation }) {
             >
               <Text style={s.startBtnText}>{starting ? 'Starting…' : 'Start Now'}</Text>
             </TouchableOpacity>
-          )}
+          ))}
         </View>
 
         {/* "or" divider */}
@@ -570,6 +624,16 @@ const dm = StyleSheet.create({
 // ─── Main styles ──────────────────────────────────────────────────────────────
 const s = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#fff' },
+  offlineBanner: {
+    backgroundColor: '#FFF3CD',
+    paddingVertical: 6,
+    alignItems: 'center',
+  },
+  offlineBannerText: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 12,
+    color: '#856404',
+  },
   scroll: { flex: 1 },
   scrollContent: {
     paddingHorizontal: 20,
@@ -585,11 +649,11 @@ const s = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 18,
   },
-  logo: {
-    fontFamily: Fonts.monument,
-    fontSize: 20,
-    color: Colors.black,
-    letterSpacing: 1,
+  notifBtn: {
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   avatar: {
     width: 36,

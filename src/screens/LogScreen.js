@@ -13,15 +13,20 @@ import {
   Image,
   Animated,
   Dimensions,
+  Alert,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { cacheSet, cacheGet } from '../storage/cache';
 
 const SCREEN_W = Dimensions.get('window').width;
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Colors, Fonts, Spacing } from '../theme';
 import { getClassInputs, getNotes } from '../storage/storage';
+import { supabase } from '../services/supabase/client';
 import LogModal from '../components/LogModal';
+import { Ionicons } from '@expo/vector-icons';
+import { LogScreenSkeleton } from '../components/Skeleton';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const MONTH_FULL = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
@@ -63,8 +68,12 @@ function relativeDate(isoOrTs) {
   return `${MONTHS[d.getMonth()]} ${d.getDate()}`;
 }
 
-function Logo() {
-  return <Text style={styles.logo}>EE</Text>;
+function NotifButton({ onPress }) {
+  return (
+    <TouchableOpacity onPress={onPress} style={styles.notifBtn} activeOpacity={0.7}>
+      <Ionicons name="notifications-outline" size={24} color={Colors.black} />
+    </TouchableOpacity>
+  );
 }
 
 function ClassItem({ item, onPress }) {
@@ -142,15 +151,23 @@ export default function LogScreen({ navigation }) {
   const [refreshing, setRefreshing] = useState(false);
 
   const [isLoading, setIsLoading] = useState(true);
+  const [isOffline, setIsOffline] = useState(false);
   const hasLoadedRef = useRef(false);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const scrollRef = useRef(null);
 
   async function load() {
-    const [allInputs, allNotes, savedPhoto] = await Promise.all([getClassInputs(), getNotes(), AsyncStorage.getItem('@profile_photo')]);
+    const { data: { user: authUser } } = await supabase.auth.getUser();
+    const [allInputs, allNotes, savedPhoto] = await Promise.all([
+      getClassInputs(),
+      getNotes(),
+      AsyncStorage.getItem('@profile_photo_' + (authUser?.id || 'default')),
+    ]);
     setInputs(allInputs);
     setNotes(allNotes);
     setPhotoUri(savedPhoto || null);
+    setIsOffline(false);
+    await cacheSet('log', { allInputs, allNotes });
   }
 
   function switchTab(tab) {
@@ -166,12 +183,28 @@ export default function LogScreen({ navigation }) {
 
   useFocusEffect(useCallback(() => {
     if (!hasLoadedRef.current) setIsLoading(true);
-    load().then(() => {
-      hasLoadedRef.current = true;
-      setIsLoading(false);
-      fadeAnim.setValue(0);
-      Animated.timing(fadeAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
-    });
+    load()
+      .then(() => {
+        hasLoadedRef.current = true;
+        setIsLoading(false);
+        fadeAnim.setValue(0);
+        Animated.timing(fadeAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
+      })
+      .catch(async (e) => {
+        console.error('LogScreen load error:', e);
+        const cached = await cacheGet('log');
+        if (cached) {
+          setInputs(cached.allInputs || []);
+          setNotes(cached.allNotes || []);
+          setIsOffline(true);
+        } else {
+          Alert.alert('Connection error', 'Could not load your logs. Check your connection and try again.');
+        }
+        hasLoadedRef.current = true;
+        setIsLoading(false);
+        fadeAnim.setValue(0);
+        Animated.timing(fadeAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
+      });
   }, []));
 
   function handleAdd() {
@@ -200,18 +233,22 @@ export default function LogScreen({ navigation }) {
   const groupedNotes = groupByDate(filteredNotes, 'updated_at');
 
   if (isLoading) {
-    return (
-      <View style={{ flex: 1, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' }}>
-        <Text style={{ fontFamily: Fonts.monument, fontSize: 20, color: Colors.black, letterSpacing: 1 }}>EE</Text>
-      </View>
-    );
+    return <LogScreenSkeleton />;
   }
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
+
+      {/* ── Offline banner ── */}
+      {isOffline && (
+        <View style={styles.offlineBanner}>
+          <Text style={styles.offlineBannerText}>Offline — showing cached data</Text>
+        </View>
+      )}
+
       <View style={styles.header}>
-        <Logo />
+        <NotifButton onPress={() => navigation.navigate('Notifications')} />
         <TouchableOpacity style={styles.profileIcon} onPress={() => navigation.navigate('PROFILE')} activeOpacity={0.8}>
           {photoUri
             ? <Image source={{ uri: photoUri }} style={styles.profilePhoto} />
@@ -264,7 +301,7 @@ export default function LogScreen({ navigation }) {
               ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
               contentContainerStyle={styles.listContent}
               showsVerticalScrollIndicator={false}
-              ListEmptyComponent={<EmptyState text="No class logs yet. Tap ADD to log your first session." />}
+              ListEmptyComponent={<ClassEmptyState onAdd={() => setModalVisible(true)} />}
               refreshing={refreshing}
               onRefresh={handleRefresh}
               stickySectionHeadersEnabled={false}
@@ -331,6 +368,21 @@ export default function LogScreen({ navigation }) {
   );
 }
 
+function ClassEmptyState({ onAdd }) {
+  return (
+    <View style={styles.emptyCard}>
+      <View style={styles.emptyIconWrap}>
+        <Ionicons name="journal-outline" size={28} color="#ACADB9" />
+      </View>
+      <Text style={styles.emptyTitle}>Your classes will appear here</Text>
+      <Text style={styles.emptySubtitle}>After each lesson, log what your coach worked on with you.</Text>
+      <TouchableOpacity style={styles.emptyBtn} onPress={onAdd} activeOpacity={0.85}>
+        <Text style={styles.emptyBtnText}>Log your first class</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
 function EmptyState({ text }) {
   return (
     <View style={styles.empty}>
@@ -341,6 +393,16 @@ function EmptyState({ text }) {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: Colors.background },
+  offlineBanner: {
+    backgroundColor: '#FFF3CD',
+    paddingVertical: 6,
+    alignItems: 'center',
+  },
+  offlineBannerText: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 12,
+    color: '#856404',
+  },
 
   header: {
     flexDirection: 'row',
@@ -350,7 +412,7 @@ const styles = StyleSheet.create({
     paddingTop: 16,
     paddingBottom: 14,
   },
-  logo: { fontFamily: Fonts.monument, fontSize: 20, color: Colors.black, letterSpacing: 1 },
+  notifBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
   profileIcon: {
     width: 34, height: 34, borderRadius: 17,
     backgroundColor: Colors.profileIcon,
@@ -469,6 +531,52 @@ const styles = StyleSheet.create({
 
   empty: { alignItems: 'center', paddingTop: 60 },
   emptyText: { fontFamily: Fonts.jakartaRegular, fontSize: 14, color: Colors.secondary, textAlign: 'center', lineHeight: 22 },
+  emptyCard: {
+    marginTop: 40,
+    marginHorizontal: 20,
+    backgroundColor: Colors.white,
+    borderRadius: 20,
+    padding: 28,
+    alignItems: 'center',
+    gap: 12,
+    borderWidth: 1,
+    borderColor: '#EFEFEF',
+  },
+  emptyIconWrap: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#F5F5F5',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 4,
+  },
+  emptyTitle: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 17,
+    color: Colors.black,
+    textAlign: 'center',
+  },
+  emptySubtitle: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 14,
+    color: Colors.secondary,
+    textAlign: 'center',
+    lineHeight: 20,
+  },
+  emptyBtn: {
+    marginTop: 8,
+    backgroundColor: Colors.black,
+    borderRadius: 14,
+    paddingVertical: 13,
+    paddingHorizontal: 28,
+  },
+  emptyBtnText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 14,
+    color: Colors.white,
+    letterSpacing: 0.3,
+  },
 
   // Bottom bar
   bottomBar: {

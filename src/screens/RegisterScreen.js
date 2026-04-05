@@ -13,6 +13,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { supabase } from '../services/supabase/client';
 import { Colors, Fonts, Spacing } from '../theme';
+import { Ionicons } from '@expo/vector-icons';
 
 export default function RegisterScreen({ navigation }) {
   const [step, setStep] = useState('role'); // 'role' | 'form'
@@ -51,8 +52,7 @@ export default function RegisterScreen({ navigation }) {
       return;
     }
 
-    // If user row was auto-created by a DB trigger, update the role field.
-    // If not, this will upsert the role once the trigger runs or on next login.
+    // Update role in DB (trigger may have already created the row)
     if (data?.user?.id) {
       await supabase
         .from('users')
@@ -61,6 +61,42 @@ export default function RegisterScreen({ navigation }) {
     }
 
     setLoading(false);
+
+    // If email confirmation is disabled, session is returned immediately
+    // and onAuthStateChange in App.js handles the redirect automatically.
+    // If confirmation is still enabled, session is null → show a message.
+    if (!data?.session) {
+      setStep('success');
+    }
+  }
+
+  if (step === 'success') {
+    return (
+      <SafeAreaView style={styles.safe}>
+        <View style={styles.successWrap}>
+          <View style={styles.successIconWrap}>
+            <Ionicons name="checkmark" size={32} color="#fff" />
+          </View>
+          <View style={styles.successTextWrap}>
+            <Text style={styles.successTitle}>You're in</Text>
+            <Text style={styles.successBody}>
+              Check your email and confirm your account to get started.
+            </Text>
+          </View>
+          <TouchableOpacity
+            style={styles.primaryBtn}
+            onPress={() => navigation.navigate('Login')}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.primaryBtnText}>GO TO LOGIN</Text>
+          </TouchableOpacity>
+          <View style={styles.successHint}>
+            <Ionicons name="mail-outline" size={14} color={Colors.secondary} />
+            <Text style={styles.successHintText}>No email? Check your spam folder.</Text>
+          </View>
+        </View>
+      </SafeAreaView>
+    );
   }
 
   if (step === 'role') {
@@ -302,5 +338,48 @@ const styles = StyleSheet.create({
   linkText: {
     fontFamily: Fonts.jakartaBold,
     color: Colors.black,
+  },
+  successWrap: {
+    flex: 1,
+    paddingHorizontal: Spacing.side,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 28,
+  },
+  successIconWrap: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: Colors.black,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  successTextWrap: {
+    alignItems: 'center',
+    gap: 8,
+  },
+  successTitle: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 30,
+    color: Colors.black,
+    letterSpacing: -0.5,
+  },
+  successBody: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 15,
+    color: Colors.secondary,
+    textAlign: 'center',
+    lineHeight: 22,
+    paddingHorizontal: 8,
+  },
+  successHint: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  successHintText: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 12,
+    color: Colors.secondary,
   },
 });

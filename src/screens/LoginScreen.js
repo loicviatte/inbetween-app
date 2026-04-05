@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { supabase } from '../services/supabase/client';
+import { registerPushToken } from '../services/notifications';
 import { Colors, Fonts, Spacing } from '../theme';
 
 export default function LoginScreen({ navigation }) {
@@ -27,10 +28,13 @@ export default function LoginScreen({ navigation }) {
     }
     setLoading(true);
     setError('');
-    const { error: err } = await supabase.auth.signInWithPassword({
+    const { data: authData, error: err } = await supabase.auth.signInWithPassword({
       email: email.trim(),
       password,
     });
+    if (!err && authData?.user?.id) {
+      registerPushToken(authData.user.id); // fire and forget
+    }
     setLoading(false);
     if (err) setError(err.message);
   }

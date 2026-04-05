@@ -31,6 +31,7 @@ import NoteDetailScreen from './src/screens/NoteDetailScreen';
 import FocusSessionScreen from './src/screens/FocusSessionScreen';
 import LoginScreen from './src/screens/LoginScreen';
 import RegisterScreen from './src/screens/RegisterScreen';
+import NotificationsScreen from './src/screens/NotificationsScreen';
 import CustomTabBar from './src/components/CustomTabBar';
 
 // Coach screens
@@ -87,6 +88,11 @@ function AppNavigator() {
         name="FocusSession"
         component={FocusSessionScreen}
         options={{ animation: 'slide_from_right' }}
+      />
+      <Stack.Screen
+        name="Notifications"
+        component={NotificationsScreen}
+        options={{ animation: 'slide_from_left' }}
       />
     </Stack.Navigator>
   );

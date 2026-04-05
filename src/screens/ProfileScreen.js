@@ -13,6 +13,7 @@ import {
   Pressable,
   ActivityIndicator,
   ScrollView,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -32,7 +33,7 @@ import {
 import { supabase } from '../services/supabase/client';
 import RadarChart from '../components/RadarChart';
 
-const AVATAR_KEY = '@profile_photo';
+const avatarKey = (userId) => '@profile_photo_' + (userId || 'default');
 
 const RADAR_CATEGORIES = ['Stability', 'Technicality', 'Strength', 'Creativity', 'Musicality'];
 // Checked in order of specificity — most specific first to avoid greedy matches
@@ -156,7 +157,7 @@ export default function ProfileScreen({ navigation }) {
         getFocusPoints(),
         getTopFocusPointsWithCounts(100),
         supabase.auth.getUser(),
-        AsyncStorage.getItem(AVATAR_KEY),
+        AsyncStorage.getItem(avatarKey(authUser?.id)),
         getMyCoach(),
       ]);
 
@@ -185,12 +186,18 @@ export default function ProfileScreen({ navigation }) {
       if (savedPhoto) setPhotoUri(savedPhoto);
       setMyCoach(coachData);
     }
-    load().then(() => {
-      hasLoadedRef.current = true;
-      setIsLoading(false);
-      fadeAnim.setValue(0);
-      Animated.timing(fadeAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
-    });
+    load()
+      .then(() => {
+        hasLoadedRef.current = true;
+        setIsLoading(false);
+        fadeAnim.setValue(0);
+        Animated.timing(fadeAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
+      })
+      .catch((e) => {
+        console.error('ProfileScreen load error:', e);
+        setIsLoading(false);
+        Alert.alert('Connection error', 'Could not load your profile. Check your connection and try again.');
+      });
   }, []));
 
   async function handlePickPhoto() {
@@ -205,7 +212,7 @@ export default function ProfileScreen({ navigation }) {
     if (!result.canceled && result.assets[0]?.uri) {
       const uri = result.assets[0].uri;
       setPhotoUri(uri);
-      await AsyncStorage.setItem(AVATAR_KEY, uri);
+      await AsyncStorage.setItem(avatarKey(user?.id), uri);
     }
   }
 
@@ -220,12 +227,18 @@ export default function ProfileScreen({ navigation }) {
   async function handleSaveProfile() {
     if (saving) return;
     setSaving(true);
-    const name = editName.trim();
-    const main_studio = editStudio.trim();
-    await saveUserProfile({ name, main_studio, main_studio_place_id: editStudioPlaceId, dance_style: editStyle });
-    setUser(prev => ({ ...prev, name, main_studio, main_studio_place_id: editStudioPlaceId, dance_style: editStyle }));
-    setSaving(false);
-    setEditVisible(false);
+    try {
+      const name = editName.trim();
+      const main_studio = editStudio.trim();
+      await saveUserProfile({ name, main_studio, main_studio_place_id: editStudioPlaceId, dance_style: editStyle });
+      setUser(prev => ({ ...prev, name, main_studio, main_studio_place_id: editStudioPlaceId, dance_style: editStyle }));
+      setEditVisible(false);
+    } catch (e) {
+      console.error('handleSaveProfile error:', e);
+      Alert.alert('Save failed', 'Could not save your profile. Try again.');
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function handleLogout() {
