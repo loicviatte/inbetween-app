@@ -20,6 +20,7 @@
     },
     "production": {
       "autoIncrement": true,
+      "channel": "production",
       "env": {
         "EXPO_PUBLIC_ANTHROPIC_API_KEY": "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",
         "EXPO_PUBLIC_SUPABASE_URL": "https://hhhvsjpgiehljfktevns.supabase.co",
