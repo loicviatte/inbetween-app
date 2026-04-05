@@ -20,6 +20,7 @@ import { getUser, saveUserProfile } from '../../storage/storage';
 import { getOrCreateInviteCode, getMyStudents } from '../../storage/coachStorage';
 import { supabase } from '../../services/supabase/client';
 import { CoachProfileScreenSkeleton } from '../../components/Skeleton';
+import { Ionicons } from '@expo/vector-icons';
 
 const PLACES_KEY = process.env.EXPO_PUBLIC_GOOGLE_PLACES_API_KEY;
 
@@ -74,7 +75,7 @@ function PlacesInput({ value, onChangeText, onPlaceSelect }) {
   );
 }
 
-export default function CoachProfileScreen() {
+export default function CoachProfileScreen({ navigation }) {
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const hasLoadedRef = useRef(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -159,7 +160,13 @@ export default function CoachProfileScreen() {
       >
         {/* Header */}
         <View style={styles.header}>
-          <Text style={styles.logo}>EE</Text>
+          <TouchableOpacity
+            onPress={() => navigation.navigate('Notifications')}
+            style={styles.notifBtn}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="notifications-outline" size={24} color={Colors.black} />
+          </TouchableOpacity>
           <TouchableOpacity onPress={openEdit} activeOpacity={0.7}>
             <Text style={styles.editBtn}>Edit</Text>
           </TouchableOpacity>
@@ -289,11 +296,11 @@ const styles = StyleSheet.create({
     paddingTop: 16,
     paddingBottom: 24,
   },
-  logo: {
-    fontFamily: Fonts.monument,
-    fontSize: 20,
-    color: Colors.black,
-    letterSpacing: 1,
+  notifBtn: {
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   editBtn: {
     fontFamily: Fonts.jakartaBold,

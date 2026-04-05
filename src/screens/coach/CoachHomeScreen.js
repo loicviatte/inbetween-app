@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   View,
   Text,
@@ -6,6 +6,7 @@ import {
   FlatList,
   TouchableOpacity,
   ActivityIndicator,
+  Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -17,7 +18,7 @@ import {
   getPendingCoachRequests,
   respondToCoachRequest,
 } from '../../storage/coachStorage';
-import { supabase } from '../../services/supabase/client';
+import { getUser } from '../../storage/storage';
 
 function formatLastActive(dateStr) {
   if (!dateStr) return 'Never';
@@ -119,53 +120,21 @@ export default function CoachHomeScreen({ navigation }) {
   const [students, setStudents] = useState([]);
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
-  const coachIdRef = useRef(null);
+  const [user, setUser] = useState(null);
 
   useFocusEffect(
     useCallback(() => {
       let active = true;
-      let channel = null;
-
       async function load() {
+        setLoading(true);
         try {
-          const [s, r] = await Promise.all([getMyStudents(), getPendingCoachRequests()]);
-          if (active) { setStudents(s); setRequests(r); }
-        } catch (e) {
-          console.error('CoachHomeScreen load error:', e);
-        }
+          const [s, r, u] = await Promise.all([getMyStudents(), getPendingCoachRequests(), getUser()]);
+          if (active) { setStudents(s); setRequests(r); setUser(u); }
+        } catch {}
         if (active) setLoading(false);
       }
-
-      async function setup() {
-        setLoading(true);
-
-        // Fetch coach ID once for subscription filters
-        if (!coachIdRef.current) {
-          const { data: { user } } = await supabase.auth.getUser();
-          coachIdRef.current = user?.id;
-        }
-
-        await load();
-
-        if (!coachIdRef.current || !active) return;
-        const cid = coachIdRef.current;
-
-        // Subscribe to any change that affects the coach's dashboard
-        channel = supabase.channel(`coach-home-${cid}`)
-          .on('postgres_changes', { event: '*', schema: 'public', table: 'coach_requests', filter: `coach_id=eq.${cid}` },
-            () => { if (active) load(); })
-          .on('postgres_changes', { event: '*', schema: 'public', table: 'coach_messages', filter: `coach_id=eq.${cid}` },
-            () => { if (active) load(); })
-          .on('postgres_changes', { event: '*', schema: 'public', table: 'focus_validations', filter: `coach_id=eq.${cid}` },
-            () => { if (active) load(); })
-          .subscribe();
-      }
-
-      setup();
-      return () => {
-        active = false;
-        if (channel) supabase.removeChannel(channel);
-      };
+      load();
+      return () => { active = false; };
     }, [])
   );
 
@@ -195,13 +164,25 @@ export default function CoachHomeScreen({ navigation }) {
             {/* Header */}
             <View style={styles.header}>
               <View style={styles.headerTop}>
-                <Text style={styles.logo}>EE</Text>
                 <TouchableOpacity
                   onPress={() => navigation.navigate('Notifications')}
                   style={styles.notifBtn}
                   activeOpacity={0.7}
                 >
                   <Ionicons name="notifications-outline" size={24} color={Colors.black} />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.avatar}
+                  onPress={() => navigation.navigate('PROFILE')}
+                  activeOpacity={0.8}
+                >
+                  {user?.photo_url ? (
+                    <Image source={{ uri: user.photo_url }} style={styles.avatarPhoto} />
+                  ) : (
+                    <Text style={styles.avatarText}>
+                      {user?.name ? user.name[0].toUpperCase() : 'C'}
+                    </Text>
+                  )}
                 </TouchableOpacity>
               </View>
               <Text style={styles.heading}>My Students</Text>
@@ -295,6 +276,24 @@ const styles = StyleSheet.create({
     height: 36,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  avatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#F5E6C8',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatarPhoto: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+  },
+  avatarText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 14,
+    color: '#8A6A2E',
   },
   heading: {
     fontFamily: Fonts.jakartaExtraBold,
