@@ -1,39 +1,45 @@
-import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Fonts, Spacing } from '../theme';
+import { getNotifications, markAllNotificationsRead } from '../storage/notificationsStorage';
 
-// Placeholder notifications — replace with real data when push notifications are wired up
-const MOCK_NOTIFICATIONS = [
-  {
-    id: '1',
-    icon: 'flash-outline',
-    title: 'New focus point added',
-    body: 'Your coach added a new focus point. Start training now!',
-    time: 'Just now',
-    unread: true,
-  },
-  {
-    id: '2',
-    icon: 'checkmark-circle-outline',
-    title: 'Session validated',
-    body: 'Your coach validated your last training session.',
-    time: '2h ago',
-    unread: true,
-  },
-  {
-    id: '3',
-    icon: 'chatbubble-outline',
-    title: 'New message from coach',
-    body: 'Your coach left a note on your focus point.',
-    time: 'Yesterday',
-    unread: false,
-  },
-];
+const TYPE_ICON = {
+  coach_request_accepted: 'checkmark-circle-outline',
+  coach_request_declined: 'close-circle-outline',
+};
+
+function formatTime(dateStr) {
+  if (!dateStr) return '';
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'Just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days === 1) return 'Yesterday';
+  if (days < 7) return `${days}d ago`;
+  return new Date(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
 
 export default function NotificationsScreen({ navigation }) {
-  const unreadCount = MOCK_NOTIFICATIONS.filter((n) => n.unread).length;
+  const [notifications, setNotifications] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function load() {
+      const data = await getNotifications();
+      setNotifications(data);
+      setLoading(false);
+      // Mark all as read after displaying
+      markAllNotificationsRead();
+    }
+    load();
+  }, []);
+
+  const unreadCount = notifications.filter(n => !n.read).length;
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -50,31 +56,43 @@ export default function NotificationsScreen({ navigation }) {
         )}
       </View>
 
-      <ScrollView contentContainerStyle={styles.list} showsVerticalScrollIndicator={false}>
-        {MOCK_NOTIFICATIONS.length === 0 ? (
-          <View style={styles.emptyWrap}>
-            <Ionicons name="notifications-off-outline" size={40} color="#DADADA" />
-            <Text style={styles.emptyTitle}>No notifications yet</Text>
-            <Text style={styles.emptySubtitle}>You'll be notified when your coach adds focus points or validates a session.</Text>
-          </View>
-        ) : (
-          MOCK_NOTIFICATIONS.map((notif) => (
-            <View key={notif.id} style={[styles.card, notif.unread && styles.cardUnread]}>
-              <View style={[styles.iconWrap, notif.unread && styles.iconWrapUnread]}>
-                <Ionicons name={notif.icon} size={20} color={notif.unread ? Colors.black : '#ACADB9'} />
-              </View>
-              <View style={styles.cardBody}>
-                <View style={styles.cardTop}>
-                  <Text style={styles.cardTitle}>{notif.title}</Text>
-                  <Text style={styles.cardTime}>{notif.time}</Text>
-                </View>
-                <Text style={styles.cardText}>{notif.body}</Text>
-              </View>
-              {notif.unread && <View style={styles.dot} />}
+      {loading ? (
+        <View style={styles.loadingWrap}>
+          <ActivityIndicator size="small" color={Colors.secondary} />
+        </View>
+      ) : (
+        <ScrollView contentContainerStyle={styles.list} showsVerticalScrollIndicator={false}>
+          {notifications.length === 0 ? (
+            <View style={styles.emptyWrap}>
+              <Ionicons name="notifications-off-outline" size={40} color="#DADADA" />
+              <Text style={styles.emptyTitle}>No notifications yet</Text>
+              <Text style={styles.emptySubtitle}>
+                You'll be notified when your coach accepts or declines your connection request.
+              </Text>
             </View>
-          ))
-        )}
-      </ScrollView>
+          ) : (
+            notifications.map((notif) => (
+              <View key={notif.id} style={[styles.card, !notif.read && styles.cardUnread]}>
+                <View style={[styles.iconWrap, !notif.read && styles.iconWrapUnread]}>
+                  <Ionicons
+                    name={TYPE_ICON[notif.type] ?? 'notifications-outline'}
+                    size={20}
+                    color={!notif.read ? Colors.black : '#ACADB9'}
+                  />
+                </View>
+                <View style={styles.cardBody}>
+                  <View style={styles.cardTop}>
+                    <Text style={styles.cardTitle}>{notif.title}</Text>
+                    <Text style={styles.cardTime}>{formatTime(notif.created_at)}</Text>
+                  </View>
+                  <Text style={styles.cardText}>{notif.body}</Text>
+                </View>
+                {!notif.read && <View style={styles.dot} />}
+              </View>
+            ))
+          )}
+        </ScrollView>
+      )}
     </SafeAreaView>
   );
 }
@@ -109,6 +127,11 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.jakartaExtraBold,
     fontSize: 11,
     color: Colors.white,
+  },
+  loadingWrap: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   list: {
     paddingHorizontal: Spacing.side,

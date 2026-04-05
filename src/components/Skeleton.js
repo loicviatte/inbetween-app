@@ -115,6 +115,108 @@ export function LogScreenSkeleton() {
   );
 }
 
+// ─── CoachHomeScreen skeleton ─────────────────────────────────────────────────
+
+export function CoachHomeScreenSkeleton() {
+  return (
+    <View style={s.safe}>
+      {/* Header top row: logo + bell */}
+      <View style={s.header}>
+        <SkeletonBox width={32} height={20} borderRadius={4} />
+        <SkeletonBox width={36} height={36} borderRadius={18} />
+      </View>
+
+      {/* "My Students" heading */}
+      <SkeletonBox width={160} height={26} borderRadius={6} style={{ marginBottom: 24 }} />
+
+      {/* Student cards */}
+      {[0,1,2,3].map(i => (
+        <View key={i} style={s.studentCard}>
+          <SkeletonBox width={40} height={40} borderRadius={20} />
+          <View style={{ flex: 1, gap: 7 }}>
+            <SkeletonBox width="55%" height={14} borderRadius={4} />
+            <SkeletonBox width="75%" height={11} borderRadius={4} />
+          </View>
+          <SkeletonBox width={18} height={18} borderRadius={9} />
+        </View>
+      ))}
+    </View>
+  );
+}
+
+// ─── SessionsFeedScreen skeleton ─────────────────────────────────────────────
+
+export function SessionsFeedScreenSkeleton() {
+  return (
+    <View style={s.safe}>
+      {/* Header */}
+      <View style={s.header}>
+        <SkeletonBox width={32} height={20} borderRadius={4} />
+      </View>
+
+      {/* "Recent" heading */}
+      <SkeletonBox width={100} height={26} borderRadius={6} style={{ marginBottom: 24 }} />
+
+      {/* Day label */}
+      <SkeletonBox width={60} height={11} borderRadius={4} style={{ marginBottom: 12 }} />
+
+      {/* Event cards */}
+      {[0,1,2,3,4].map(i => (
+        <View key={i} style={s.eventCard}>
+          <View style={{ flex: 1, gap: 7 }}>
+            <SkeletonBox width="45%" height={13} borderRadius={4} />
+            <SkeletonBox width="65%" height={11} borderRadius={4} />
+          </View>
+          <SkeletonBox width={44} height={11} borderRadius={4} />
+        </View>
+      ))}
+    </View>
+  );
+}
+
+// ─── CoachProfileScreen skeleton ─────────────────────────────────────────────
+
+export function CoachProfileScreenSkeleton() {
+  return (
+    <View style={s.safe}>
+      {/* Header: logo + edit */}
+      <View style={s.header}>
+        <SkeletonBox width={32} height={20} borderRadius={4} />
+        <SkeletonBox width={36} height={16} borderRadius={4} />
+      </View>
+
+      {/* Avatar + name + role */}
+      <View style={s.avatarSection}>
+        <SkeletonBox width={80} height={80} borderRadius={40} style={{ marginBottom: 14 }} />
+        <SkeletonBox width={130} height={18} borderRadius={5} style={{ marginBottom: 8 }} />
+        <SkeletonBox width={60} height={12} borderRadius={4} style={{ marginBottom: 6 }} />
+        <SkeletonBox width={100} height={11} borderRadius={4} />
+      </View>
+
+      {/* Stat card */}
+      <View style={s.statCard}>
+        <View style={{ alignItems: 'center', gap: 6 }}>
+          <SkeletonBox width={40} height={28} borderRadius={5} />
+          <SkeletonBox width={60} height={11} borderRadius={4} />
+        </View>
+      </View>
+
+      {/* Section label */}
+      <SkeletonBox width={110} height={11} borderRadius={4} style={{ marginBottom: 12 }} />
+
+      {/* Invite card */}
+      <View style={s.inviteCard}>
+        <View style={{ flex: 1, gap: 8 }}>
+          <SkeletonBox width={120} height={22} borderRadius={5} />
+          <SkeletonBox width="90%" height={11} borderRadius={4} />
+          <SkeletonBox width="70%" height={11} borderRadius={4} />
+        </View>
+        <SkeletonBox width={64} height={40} borderRadius={10} />
+      </View>
+    </View>
+  );
+}
+
 const s = StyleSheet.create({
   safe: {
     flex: 1,
@@ -172,5 +274,44 @@ const s = StyleSheet.create({
     padding: 14,
     height: 80,
     alignItems: 'center',
+  },
+  studentCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F8F8F8',
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 10,
+    gap: 12,
+  },
+  eventCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F8F8F8',
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 8,
+    gap: 8,
+  },
+  avatarSection: {
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  statCard: {
+    backgroundColor: '#F8F8F8',
+    borderRadius: 4,
+    paddingVertical: 18,
+    paddingHorizontal: 20,
+    marginBottom: 28,
+    alignItems: 'center',
+  },
+  inviteCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F8F8F8',
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    gap: 12,
   },
 });

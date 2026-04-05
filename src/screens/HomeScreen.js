@@ -13,7 +13,6 @@ import {
 } from 'react-native';
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { cacheSet, cacheGet } from '../storage/cache';
 import * as Clipboard from 'expo-clipboard';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -36,10 +35,9 @@ import {
 } from '../storage/activeSession';
 import { generateCoachShareSummary } from '../services/ai/anthropic';
 import LogModal from '../components/LogModal';
-import { HomeScreenSkeleton } from '../components/Skeleton';
-import { Ionicons } from '@expo/vector-icons';
 
 const SHARE_LOADING_MSGS = ['Gathering your notes...', 'Writing summary...', 'Almost ready...'];
+const HOME_CACHE_KEY = '@cache_home';
 
 function formatTime(seconds) {
   const s = Math.max(0, Math.floor(seconds));
@@ -99,10 +97,8 @@ export default function HomeScreen({ navigation }) {
   const [user, setUser] = useState(null);
   const [slot1, setSlot1] = useState(null);
   const [slot2, setSlot2] = useState(null);
-  const [slot3, setSlot3] = useState(null);
   const [sessionCount, setSessionCount] = useState(0);
   const [slot2Count, setSlot2Count] = useState(0);
-  const [slot3Count, setSlot3Count] = useState(0);
   const [starting, setStarting] = useState(false);
   const [activeSession, setActiveSessionState] = useState(null);
   const [countdown, setCountdown] = useState(0);
@@ -118,76 +114,72 @@ export default function HomeScreen({ navigation }) {
   const shareMsgRef = useRef(null);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const [isLoading, setIsLoading] = useState(true);
-  const [isOffline, setIsOffline] = useState(false);
   const hasLoadedRef = useRef(false);
 
   async function load() {
-    const [u, slots, sessions, classes, focusTrained, wa] = await Promise.all([
+    const [u, slots, sessions, classes, focusTrained, wa, savedPhoto] = await Promise.all([
       getUser(),
       getSlots(),
       getTrainingSessionsThisWeek(),
       getSessionsThisWeek(),
       getFocusTrainedThisWeek(),
       getWeekActivity(),
+      AsyncStorage.getItem('@profile_photo'),
     ]);
-    const savedPhoto = u?.id ? await AsyncStorage.getItem('@profile_photo_' + u.id) : null;
     setUser(u);
     setSlot1(slots.slot1);
     setSlot2(slots.slot2);
-    setSlot3(slots.slot3);
     setSessionsThisWeek(sessions);
     setClassesThisWeek(classes);
     setFocusTrainedThisWeek(focusTrained);
     setWeekActivity(wa || {});
     setPhotoUri(savedPhoto || null);
-    const [c1, c2, c3] = await Promise.all([
+    const [c1, c2] = await Promise.all([
       slots.slot1?.id ? getSessionCountForFocus(slots.slot1.id) : Promise.resolve(0),
       slots.slot2?.id ? getSessionCountForFocus(slots.slot2.id) : Promise.resolve(0),
-      slots.slot3?.id ? getSessionCountForFocus(slots.slot3.id) : Promise.resolve(0),
     ]);
     setSessionCount(c1);
     setSlot2Count(c2);
-    setSlot3Count(c3);
-    setIsOffline(false);
-    // Save to cache for offline use
-    await cacheSet('home', { u, slots, sessions, classes, focusTrained, wa, c1, c2, c3 });
-  }
-
-  async function loadFromCache() {
-    const cached = await cacheGet('home');
-    if (!cached) return false;
-    const { u, slots, sessions, classes, focusTrained, wa, c1, c2, c3 } = cached;
-    setUser(u);
-    setSlot1(slots.slot1);
-    setSlot2(slots.slot2);
-    setSlot3(slots.slot3);
-    setSessionsThisWeek(sessions);
-    setClassesThisWeek(classes);
-    setFocusTrainedThisWeek(focusTrained);
-    setWeekActivity(wa || {});
-    setSessionCount(c1);
-    setSlot2Count(c2);
-    setSlot3Count(c3);
-    setIsOffline(true);
-    return true;
+    AsyncStorage.setItem(HOME_CACHE_KEY, JSON.stringify({
+      user: u, slot1: slots.slot1, slot2: slots.slot2,
+      sessionCount: c1, slot2Count: c2,
+      sessionsThisWeek: sessions, classesThisWeek: classes,
+      focusTrainedThisWeek: focusTrained, weekActivity: wa || {},
+    })).catch(() => {});
   }
 
   useFocusEffect(useCallback(() => {
     setShareState('default');
-    if (!hasLoadedRef.current) setIsLoading(true);
-    load()
-      .then(() => {
-        hasLoadedRef.current = true;
-        setIsLoading(false);
+    const isFirst = !hasLoadedRef.current;
+    if (isFirst) setIsLoading(true);
+    async function init() {
+      if (isFirst) {
+        try {
+          const raw = await AsyncStorage.getItem(HOME_CACHE_KEY);
+          if (raw) {
+            const c = JSON.parse(raw);
+            setUser(c.user);
+            setSlot1(c.slot1);
+            setSlot2(c.slot2);
+            setSessionCount(c.sessionCount || 0);
+            setSlot2Count(c.slot2Count || 0);
+            setSessionsThisWeek(c.sessionsThisWeek || 0);
+            setClassesThisWeek(c.classesThisWeek || 0);
+            setFocusTrainedThisWeek(c.focusTrainedThisWeek || 0);
+            setWeekActivity(c.weekActivity || {});
+            setIsLoading(false);
+          }
+        } catch {}
+      }
+      try { await load(); } catch {}
+      hasLoadedRef.current = true;
+      setIsLoading(false);
+      if (isFirst) {
         fadeAnim.setValue(0);
         Animated.timing(fadeAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
-      })
-      .catch(async (e) => {
-        console.error('HomeScreen load error:', e);
-        const restored = await loadFromCache();
-        if (!restored) Alert.alert('Connection error', 'Could not load your data. Check your connection and try again.');
-        setIsLoading(false);
-      });
+      }
+    }
+    init();
 
     // Sync active session state
     const current = getActiveSession();
@@ -268,27 +260,22 @@ export default function HomeScreen({ navigation }) {
     : 'Your top priority right now. Start your first session.';
 
   if (isLoading) {
-    return <HomeScreenSkeleton />;
+    return (
+      <View style={{ flex: 1, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' }}>
+        <Text style={{ fontFamily: Fonts.monument, fontSize: 20, color: Colors.black, letterSpacing: 1 }}>EE</Text>
+      </View>
+    );
   }
 
   return (
     <SafeAreaView style={s.safe}>
       <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
 
-      {/* ── Offline banner ── */}
-      {isOffline && (
-        <View style={s.offlineBanner}>
-          <Text style={s.offlineBannerText}>Offline — showing cached data</Text>
-        </View>
-      )}
-
       {/* ── Top section ── */}
       <View style={[s.scroll, s.scrollContent]}>
         {/* Header */}
         <View style={s.header}>
-          <TouchableOpacity onPress={() => navigation.navigate('Notifications')} style={s.notifBtn} activeOpacity={0.7}>
-            <Ionicons name="notifications-outline" size={24} color={Colors.black} />
-          </TouchableOpacity>
+          <Text style={s.logo}>EE</Text>
           <TouchableOpacity
             style={s.avatar}
             onPress={() => navigation.navigate('PROFILE')}
@@ -309,33 +296,17 @@ export default function HomeScreen({ navigation }) {
 
         {/* Hero card */}
         <View style={s.hero}>
-          {!slot1 ? (
-            <>
-              <View style={s.heroBadge}>
-                <Text style={s.heroBadgeText}>GETTING STARTED</Text>
-              </View>
-              <Text style={s.heroFocusName} numberOfLines={2}>
-                Attend your first private lesson
-              </Text>
-              <Text style={s.heroMessage}>
-                Your focus areas will appear here after your coach logs your first session.
-              </Text>
-            </>
-          ) : (
-            <>
-              <View style={s.heroBadge}>
-                <Text style={s.heroBadgeText}>{isSessionActive ? 'SESSION STARTED' : "TODAY'S FOCUS"}</Text>
-              </View>
-              <Text style={s.heroFocusName} numberOfLines={2}>
-                {activeFocusName}
-              </Text>
-              <Text style={s.heroSession}>{ordinal(sessionCount + 1)} Session</Text>
-              {!isSessionActive && (
-                <Text style={s.heroMessage} numberOfLines={2}>{heroMessage}</Text>
-              )}
-            </>
+          <View style={s.heroBadge}>
+            <Text style={s.heroBadgeText}>{isSessionActive ? 'SESSION STARTED' : "TODAY'S FOCUS"}</Text>
+          </View>
+          <Text style={s.heroFocusName} numberOfLines={2}>
+            {activeFocusName || 'No focus yet'}
+          </Text>
+          <Text style={s.heroSession}>{ordinal(sessionCount + 1)} Session</Text>
+          {!isSessionActive && (
+            <Text style={s.heroMessage} numberOfLines={2}>{heroMessage}</Text>
           )}
-          {slot1 && (activeSession && countdown > 0 ? (
+          {activeSession && countdown > 0 ? (
             <TouchableOpacity
               style={s.inProgressBtn}
               onPress={() => navigation.navigate('FocusSession', {
@@ -364,7 +335,7 @@ export default function HomeScreen({ navigation }) {
             >
               <Text style={s.startBtnText}>{starting ? 'Starting…' : 'Start Now'}</Text>
             </TouchableOpacity>
-          ))}
+          )}
         </View>
 
         {/* "or" divider */}
@@ -396,29 +367,13 @@ export default function HomeScreen({ navigation }) {
                   <Text style={s.altName} numberOfLines={2}>{slot2.name}</Text>
                 </TouchableOpacity>
               )}
-              {slot3 && (
-                <TouchableOpacity
-                  style={[s.altCard, isSessionActive && s.altCardLocked]}
-                  onPress={() => handleStartSession(slot3, 2, slot3Count)}
-                  activeOpacity={0.8}
-                  disabled={starting || isSessionActive}
-                >
-                  <View style={s.altCardHeader}>
-                    <Text style={s.altTryLabel}>Also work on</Text>
-                    {isSessionActive && <Text style={s.altLockIcon}>🔒</Text>}
-                  </View>
-                  <Text style={s.altName} numberOfLines={2}>{slot3.name}</Text>
-                </TouchableOpacity>
-              )}
-              {!slot3 && (
-                <View style={[s.altCard, isSessionActive && s.altCardLocked]}>
-                  <View style={s.altCardHeader}>
-                    <Text style={s.altTryLabel}>Coming up</Text>
-                    {isSessionActive && <Text style={s.altLockIcon}>🔒</Text>}
-                  </View>
-                  <Text style={s.altName}>Log a class to unlock</Text>
+              <View style={[s.altCard, isSessionActive && s.altCardLocked]}>
+                <View style={s.altCardHeader}>
+                  <Text style={s.altTryLabel}>Coming up</Text>
+                  {isSessionActive && <Text style={s.altLockIcon}>🔒</Text>}
                 </View>
-              )}
+                <Text style={s.altName}>Log a class to unlock</Text>
+              </View>
             </ScrollView>
 
           </View>
@@ -447,24 +402,24 @@ export default function HomeScreen({ navigation }) {
         </View>
 
         {/* Stats bar */}
-          <View style={s.statsBar}>
-            <View style={s.statItem}>
-              <Text style={s.statValue}>{classesThisWeek}</Text>
-              <Text style={s.statLabel}>Class</Text>
-            </View>
-            <View style={s.statSep} />
-            <View style={s.statItem}>
-              <Text style={s.statValue}>{sessionsThisWeek}</Text>
-              <Text style={s.statLabel}>Practice Sessions</Text>
-            </View>
-            <View style={s.statSep} />
-            <View style={s.statItem}>
-              <Text style={s.statValue}>{focusTrainedThisWeek}</Text>
-              <Text style={s.statLabel}>Focus Trained</Text>
-            </View>
+        <View style={s.statsBar}>
+          <View style={s.statItem}>
+            <Text style={s.statValue}>{sessionsThisWeek}</Text>
+            <Text style={s.statLabel}>Training</Text>
           </View>
+          <View style={s.statSep} />
+          <View style={s.statItem}>
+            <Text style={s.statValue}>{classesThisWeek}</Text>
+            <Text style={s.statLabel}>Class</Text>
+          </View>
+          <View style={s.statSep} />
+          <View style={s.statItem}>
+            <Text style={s.statValue}>{focusTrainedThisWeek}</Text>
+            <Text style={s.statLabel}>Focus Trained</Text>
+          </View>
+        </View>
 
-          {/* Share with Coach */}
+        {/* Share with Coach */}
         <View style={s.shareSection}>
           <Text style={s.shareDesc}>
             Send your coach a quick summary of your recent sessions and focus areas.
@@ -624,16 +579,6 @@ const dm = StyleSheet.create({
 // ─── Main styles ──────────────────────────────────────────────────────────────
 const s = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#fff' },
-  offlineBanner: {
-    backgroundColor: '#FFF3CD',
-    paddingVertical: 6,
-    alignItems: 'center',
-  },
-  offlineBannerText: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 12,
-    color: '#856404',
-  },
   scroll: { flex: 1 },
   scrollContent: {
     paddingHorizontal: 20,
@@ -649,11 +594,11 @@ const s = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 18,
   },
-  notifBtn: {
-    width: 36,
-    height: 36,
-    alignItems: 'center',
-    justifyContent: 'center',
+  logo: {
+    fontFamily: Fonts.monument,
+    fontSize: 20,
+    color: Colors.black,
+    letterSpacing: 1,
   },
   avatar: {
     width: 36,

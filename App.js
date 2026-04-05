@@ -131,6 +131,11 @@ function CoachAppNavigator() {
         component={CoachSessionDetailScreen}
         options={{ animation: 'slide_from_right' }}
       />
+      <CoachStack.Screen
+        name="Notifications"
+        component={NotificationsScreen}
+        options={{ animation: 'slide_from_left' }}
+      />
     </CoachStack.Navigator>
   );
 }

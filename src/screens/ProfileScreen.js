@@ -13,7 +13,6 @@ import {
   Pressable,
   ActivityIndicator,
   ScrollView,
-  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -33,7 +32,8 @@ import {
 import { supabase } from '../services/supabase/client';
 import RadarChart from '../components/RadarChart';
 
-const avatarKey = (userId) => '@profile_photo_' + (userId || 'default');
+const AVATAR_KEY = '@profile_photo';
+const PROFILE_CACHE_KEY = '@cache_profile';
 
 const RADAR_CATEGORIES = ['Stability', 'Technicality', 'Strength', 'Creativity', 'Musicality'];
 // Checked in order of specificity — most specific first to avoid greedy matches
@@ -140,64 +140,79 @@ export default function ProfileScreen({ navigation }) {
   const [coachLinking, setCoachLinking] = useState(false);
   const [coachLinkError, setCoachLinkError] = useState('');
 
-  useFocusEffect(useCallback(() => {
-    if (!hasLoadedRef.current) setIsLoading(true);
-    async function load() {
-      const [
-        userData,
-        classInputs,
-        activeFocusPoints,
-        topFocusPoints,
-        { data: { user: authUser } },
-        savedPhoto,
-        coachData,
-      ] = await Promise.all([
-        getUser(),
-        getClassInputs(),
-        getFocusPoints(),
-        getTopFocusPointsWithCounts(100),
-        supabase.auth.getUser(),
-        AsyncStorage.getItem(avatarKey(authUser?.id)),
-        getMyCoach(),
-      ]);
+  async function load() {
+    const [
+      userData,
+      classInputs,
+      activeFocusPoints,
+      topFocusPoints,
+      { data: { session } },
+      savedPhoto,
+      coachData,
+    ] = await Promise.all([
+      getUser(),
+      getClassInputs(),
+      getFocusPoints(),
+      getTopFocusPointsWithCounts(100),
+      supabase.auth.getSession(),
+      AsyncStorage.getItem(AVATAR_KEY),
+      getMyCoach(),
+    ]);
 
-      let totalSessions = 0;
-      if (authUser?.id) {
-        const { count } = await supabase
-          .from('training_sessions')
-          .select('id', { count: 'exact' })
-          .eq('user_id', authUser.id)
-          .not('completed_at', 'is', null);
-        totalSessions = count ?? 0;
-      }
-
-      const top = topFocusPoints ?? [];
-      // Radar: bucket completed sessions by category, then normalize
-      const catCounts = { Stability: 0, Technicality: 0, Strength: 0, Creativity: 0, Musicality: 0 };
-      for (const fp of top) {
-        catCounts[categorizeFocus(fp.name)] += fp.count;
-      }
-      const maxCat = Math.max(...Object.values(catCounts), 1);
-      const scores = RADAR_CATEGORIES.map((cat) => catCounts[cat] / maxCat);
-
-      setUser(userData);
-      setStats({ totalClasses: classInputs?.length ?? 0, totalSessions, activeFocusAreas: activeFocusPoints?.length ?? 0 });
-      setRadarScores(scores);
-      if (savedPhoto) setPhotoUri(savedPhoto);
-      setMyCoach(coachData);
+    let totalSessions = 0;
+    if (session?.user?.id) {
+      const { count } = await supabase
+        .from('training_sessions')
+        .select('id', { count: 'exact' })
+        .eq('user_id', session.user.id)
+        .not('completed_at', 'is', null);
+      totalSessions = count ?? 0;
     }
-    load()
-      .then(() => {
-        hasLoadedRef.current = true;
-        setIsLoading(false);
+
+    const top = topFocusPoints ?? [];
+    const catCounts = { Stability: 0, Technicality: 0, Strength: 0, Creativity: 0, Musicality: 0 };
+    for (const fp of top) {
+      const cat = categorizeFocus(fp.name);
+      if (cat) catCounts[cat] += fp.count;
+    }
+    const maxCat = Math.max(...Object.values(catCounts), 1);
+    const scores = RADAR_CATEGORIES.map((cat) => catCounts[cat] / maxCat);
+
+    const stats = { totalClasses: classInputs?.length ?? 0, totalSessions, activeFocusAreas: activeFocusPoints?.length ?? 0 };
+    setUser(userData);
+    setStats(stats);
+    setRadarScores(scores);
+    if (savedPhoto) setPhotoUri(savedPhoto);
+    setMyCoach(coachData);
+    AsyncStorage.setItem(PROFILE_CACHE_KEY, JSON.stringify({ user: userData, stats, radarScores: scores, myCoach: coachData })).catch(() => {});
+  }
+
+  useFocusEffect(useCallback(() => {
+    const isFirst = !hasLoadedRef.current;
+    if (isFirst) setIsLoading(true);
+    async function init() {
+      if (isFirst) {
+        try {
+          const raw = await AsyncStorage.getItem(PROFILE_CACHE_KEY);
+          if (raw) {
+            const c = JSON.parse(raw);
+            setUser(c.user);
+            setStats(c.stats || { totalClasses: 0, totalSessions: 0, activeFocusAreas: 0 });
+            setRadarScores(c.radarScores || [0, 0, 0, 0, 0]);
+            setMyCoach(c.myCoach ?? null);
+            setIsLoading(false);
+          }
+        } catch {}
+      }
+      try { await load(); } catch {}
+      hasLoadedRef.current = true;
+      setIsLoading(false);
+      if (isFirst) {
         fadeAnim.setValue(0);
         Animated.timing(fadeAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
-      })
-      .catch((e) => {
-        console.error('ProfileScreen load error:', e);
-        setIsLoading(false);
-        Alert.alert('Connection error', 'Could not load your profile. Check your connection and try again.');
-      });
+      }
+    }
+    init();
   }, []));
 
   async function handlePickPhoto() {
@@ -212,7 +227,7 @@ export default function ProfileScreen({ navigation }) {
     if (!result.canceled && result.assets[0]?.uri) {
       const uri = result.assets[0].uri;
       setPhotoUri(uri);
-      await AsyncStorage.setItem(avatarKey(user?.id), uri);
+      await AsyncStorage.setItem(AVATAR_KEY, uri);
     }
   }
 
@@ -227,21 +242,16 @@ export default function ProfileScreen({ navigation }) {
   async function handleSaveProfile() {
     if (saving) return;
     setSaving(true);
-    try {
-      const name = editName.trim();
-      const main_studio = editStudio.trim();
-      await saveUserProfile({ name, main_studio, main_studio_place_id: editStudioPlaceId, dance_style: editStyle });
-      setUser(prev => ({ ...prev, name, main_studio, main_studio_place_id: editStudioPlaceId, dance_style: editStyle }));
-      setEditVisible(false);
-    } catch (e) {
-      console.error('handleSaveProfile error:', e);
-      Alert.alert('Save failed', 'Could not save your profile. Try again.');
-    } finally {
-      setSaving(false);
-    }
+    const name = editName.trim();
+    const main_studio = editStudio.trim();
+    await saveUserProfile({ name, main_studio, main_studio_place_id: editStudioPlaceId, dance_style: editStyle });
+    setUser(prev => ({ ...prev, name, main_studio, main_studio_place_id: editStudioPlaceId, dance_style: editStyle }));
+    setSaving(false);
+    setEditVisible(false);
   }
 
   async function handleLogout() {
+    await AsyncStorage.multiRemove(['@cache_log', HOME_CACHE_KEY, PROFILE_CACHE_KEY]);
     await supabase.auth.signOut();
   }
 
