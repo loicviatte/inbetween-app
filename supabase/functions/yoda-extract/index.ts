@@ -15,6 +15,7 @@ interface ClassInputRecord {
   raw_ai_json: unknown | null
   lesson_type: string | null
   student_ids: string[] | null
+  student_id: string | null
   status: string | null
 }
 
@@ -33,6 +34,7 @@ const SYSTEM_PROMPT = `You are Yoda Extract, a specialized AI that processes coa
 - coach_name: string
 - coach_speaker_id: string (e.g. "A")
 - students: array of { id, name }
+- existing_focus_points: array of { id, name, subtitle, tier } — focus points already in the system for each student
 - transcript: raw lesson transcript with paragraph timestamps in format [MM:SS - MM:SS] Speaker X: ...
 
 ## WHAT IS A FOCUS POINT
@@ -64,6 +66,26 @@ Rules:
 - Minimum 1, maximum 3 focus points per student
 - Only include what is genuinely important — do not force 3 if only 1 or 2 qualify
 - All remaining corrections go into other_focus_points
+
+## TIER
+Each focus point must have a tier:
+- "critical" — the most important focus point in this lesson (max 1 per student)
+- "important" — significant but secondary
+- "supporting" — worth tracking but lower priority
+
+## MERGE DETECTION
+Compare each extracted focus point against the student's existing_focus_points.
+
+- If the root cause is clearly the SAME concept (even if described differently): set merge_action = "auto_merge", existing_focus_point_id = <id of the matching existing focus point>
+- If the root cause MIGHT be the same but you are not certain: set merge_action = "notify_coach", existing_focus_point_id = <id of the most likely match>
+- If it is clearly a new concept: set merge_action = null, existing_focus_point_id = null
+
+## COACH SIGNAL
+If the coach explicitly signals progress or regression on an EXISTING focus point for a specific student:
+- Positive: "much better", "you've really improved on this", "this is looking good now" → coach_signal = "positive"
+- Negative: "still struggling with", "this is getting worse", "we really need to fix this" → coach_signal = "negative"
+- Only set this for existing focus points (include existing_focus_point_id alongside it)
+- Omit the field or set null if no explicit signal
 
 ## FOR EACH FOCUS POINT
 
@@ -136,7 +158,11 @@ Always return this exact structure:
           "drill": string | null,
           "timestamp": "MM:SS",
           "mention_count": number,
-          "explicit_priority": boolean
+          "explicit_priority": boolean,
+          "tier": "critical" | "important" | "supporting",
+          "merge_action": "auto_merge" | "notify_coach" | null,
+          "existing_focus_point_id": string | null,
+          "coach_signal": "positive" | "negative" | null
         }
       ],
       "other_focus_points": [
@@ -185,15 +211,19 @@ Deno.serve(async (req: Request) => {
 // ─── Processing logic ─────────────────────────────────────────────────────────
 
 async function processRecord(record: ClassInputRecord): Promise<void> {
-  const { id, transcript, raw_ai_json, user_id, lesson_type, student_ids } = record
+  const { id, transcript, raw_ai_json, user_id, lesson_type, student_id } = record
 
-  // Guard: skip if no transcript or already has AI output
+  // Guard: skip if no transcript or already processed/processing
   if (!transcript?.trim()) {
     console.log(`[yoda-extract] Skipping ${id}: no transcript`)
     return
   }
   if (raw_ai_json !== null) {
     console.log(`[yoda-extract] Skipping ${id}: already processed`)
+    return
+  }
+  if (record.status === 'processing' || record.status === 'extracted' || record.status === 'scored') {
+    console.log(`[yoda-extract] Skipping ${id}: status is ${record.status}`)
     return
   }
 
@@ -217,22 +247,51 @@ async function processRecord(record: ClassInputRecord): Promise<void> {
       .single()
     const coachName = coachRow?.name ?? 'Unknown'
 
-    // Resolve student names
+    // Resolve student names — private (student_id) or group (class_input_students)
     let students: { id: string; name: string }[] = []
-    if (student_ids && student_ids.length > 0) {
-      const { data: studentRows } = await supabase
+    if (student_id) {
+      const { data: studentRow } = await supabase
         .from('users')
         .select('id, name')
-        .in('id', student_ids)
-      students = (studentRows ?? []).map((u) => ({ id: u.id, name: u.name ?? u.id }))
+        .eq('id', student_id)
+        .single()
+      if (studentRow) students = [{ id: studentRow.id, name: studentRow.name ?? studentRow.id }]
+    } else {
+      const { data: junctionRows } = await supabase
+        .from('class_input_students')
+        .select('student_id, users!class_input_students_student_id_fkey(id, name)')
+        .eq('class_input_id', id)
+      if (junctionRows && junctionRows.length > 0) {
+        students = junctionRows
+          .map((r: any) => r.users)
+          .filter(Boolean)
+          .map((u: any) => ({ id: u.id, name: u.name ?? u.id }))
+      }
+    }
+
+    // Load existing focus points for each student (for merge detection)
+    const existingFPsByStudent: Record<string, any[]> = {}
+    for (const s of students) {
+      const { data: fps } = await supabase
+        .from('focus_points')
+        .select('id, name, subtitle, tier, status')
+        .eq('user_id', s.id)
+        .neq('status', 'past')
+        .eq('is_other', false)
+      existingFPsByStudent[s.id] = fps ?? []
     }
 
     // Build user message
+    const studentsWithFPs = students.map(s => ({
+      ...s,
+      existing_focus_points: existingFPsByStudent[s.id] ?? [],
+    }))
+
     const userMessage = [
       `lesson_type: ${lesson_type ?? 'private'}`,
       `coach_name: ${coachName}`,
       `coach_speaker_id: A`,
-      `students: ${JSON.stringify(students)}`,
+      `students: ${JSON.stringify(studentsWithFPs)}`,
       `transcript: ${transcript}`,
     ].join('\n')
 
@@ -245,7 +304,7 @@ async function processRecord(record: ClassInputRecord): Promise<void> {
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
+        model: 'claude-haiku-4-5',
         max_tokens: 4000,
         system: SYSTEM_PROMPT,
         messages: [{ role: 'user', content: userMessage }],
@@ -273,7 +332,7 @@ async function processRecord(record: ClassInputRecord): Promise<void> {
       throw new Error(`JSON parse failed. Raw output:\n${rawText.slice(0, 500)}`)
     }
 
-    // Write results back
+    // Write raw JSON back
     await supabase
       .from('class_inputs')
       .update({
@@ -284,7 +343,28 @@ async function processRecord(record: ClassInputRecord): Promise<void> {
       })
       .eq('id', id)
 
+    // Update practice_point_1 / practice_point_2 on class_inputs (first student's top FPs)
+    const aiData = parsed as any
+    const firstStudent = aiData.students?.[0]
+    if (firstStudent?.focus_points?.length > 0) {
+      const updates: any = {}
+      if (firstStudent.focus_points[0]) updates.practice_point_1 = firstStudent.focus_points[0].title
+      if (firstStudent.focus_points[1]) updates.practice_point_2 = firstStudent.focus_points[1].title
+      await supabase.from('class_inputs').update(updates).eq('id', id)
+    }
+
     console.log(`[yoda-extract] ✓ Extracted: ${id}`)
+
+    // Invoke yoda-score to insert focus points and seed scores
+    const { error: scoreError } = await supabase.functions.invoke('yoda-score', {
+      body: {
+        event: 'class_input',
+        class_input_id: id,
+      },
+    })
+    if (scoreError) {
+      console.error(`[yoda-extract] yoda-score error for ${id}:`, scoreError.message)
+    }
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err)
     console.error(`[yoda-extract] ✗ Error for ${id}:`, errorMsg)
