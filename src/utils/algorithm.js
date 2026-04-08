@@ -326,16 +326,15 @@ export async function completeTrainingSession(sessionId, feeling = null, session
       .update(updatePayload)
       .eq('id', sessionId);
 
-    // Apply PRACTICE_SESSION_LOG to each focus worked on
+    // Restrict all scoring to only the focus point the user actually worked on
     const focusIds = [session?.slot1_focus_id, session?.slot2_focus_id].filter(Boolean);
-    for (const fid of focusIds) {
-      await applyFocusEvent(fid, 'PRACTICE_SESSION_LOG', userId);
-    }
+    const activeFid = activeFocusPointId || focusIds[0];
 
-    // Call practice-log edge function to trigger Yoda Score algorithm
-    // Only for the focus point the user actually worked on this session
-    const practiceFocusId = activeFocusPointId || focusIds[0];
-    if (practiceFocusId) {
+    if (activeFid) {
+      // Apply PRACTICE_SESSION_LOG to the active focus point only
+      await applyFocusEvent(activeFid, 'PRACTICE_SESSION_LOG', userId);
+
+      // Call practice-log edge function to trigger Yoda Score algorithm
       const FEELING_TO_RATING = {
         Hard:      'hard',
         Struggled: 'struggled',
@@ -350,31 +349,30 @@ export async function completeTrainingSession(sessionId, feeling = null, session
 
       supabase.functions.invoke('practice-log', {
         body: {
-          focus_point_id:   practiceFocusId,
+          focus_point_id:   activeFid,
           duration_minutes: durationMinutes,
           rating,
           student_id:       userId,
         },
       }).catch(err => console.error('practice-log invoke error:', err));
-    }
 
-    // Map feeling → additional score signal
-    // Hard/Struggled → struggle increases (it's genuinely difficult)
-    // Good/Great → mild coach_signal decrease (self-assessed improvement)
-    if (feeling && focusIds.length > 0) {
-      for (const fid of focusIds) {
+      // Map feeling → additional score signal on the active focus point only
+      // Hard/Struggled → struggle increases (it's genuinely difficult)
+      // Good/Great → mild coach_signal decrease (self-assessed improvement)
+      if (feeling) {
         const { data: m } = await supabase
           .from('focus_metrics')
           .select('struggle, coach_signal')
-          .eq('focus_id', fid)
+          .eq('focus_id', activeFid)
           .single();
-        if (!m) continue;
-        let update = null;
-        if (feeling === 'Hard')      update = { struggle: (m.struggle || 0) + 1.5 };
-        if (feeling === 'Struggled') update = { struggle: (m.struggle || 0) + 1.0 };
-        if (feeling === 'Great')     update = { coach_signal: (m.coach_signal || 0) - 1 };
-        if (update) {
-          await supabase.from('focus_metrics').update(update).eq('focus_id', fid);
+        if (m) {
+          let update = null;
+          if (feeling === 'Hard')      update = { struggle: (m.struggle || 0) + 1.5 };
+          if (feeling === 'Struggled') update = { struggle: (m.struggle || 0) + 1.0 };
+          if (feeling === 'Great')     update = { coach_signal: (m.coach_signal || 0) - 1 };
+          if (update) {
+            await supabase.from('focus_metrics').update(update).eq('focus_id', activeFid);
+          }
         }
       }
     }
