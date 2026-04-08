@@ -919,14 +919,14 @@ export default function FocusSessionScreen({ route, navigation }) {
 
   async function handleSave(feeling, note) {
     // Only Save marks the session as complete in Supabase
-    await completeTrainingSession(sessionId, feeling, note);
+    await completeTrainingSession(sessionId, feeling, note, focusPointId);
     clearActiveSession();
     setShowFeelingModal(false);
     navigation.goBack();
   }
 
   async function handleSkip() {
-    await completeTrainingSession(sessionId);
+    await completeTrainingSession(sessionId, null, null, focusPointId);
     clearActiveSession();
     setShowFeelingModal(false);
     navigation.goBack();

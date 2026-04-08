@@ -305,7 +305,7 @@ export async function startTrainingSession(slot1FocusId, slot2FocusId) {
 
 // ─── Complete training session ────────────────────────────────────────────────
 
-export async function completeTrainingSession(sessionId, feeling = null, sessionNote = null) {
+export async function completeTrainingSession(sessionId, feeling = null, sessionNote = null, activeFocusPointId = null) {
   try {
     if (!sessionId) return;
     const userId = await getUserId();
@@ -333,22 +333,24 @@ export async function completeTrainingSession(sessionId, feeling = null, session
     }
 
     // Call practice-log edge function to trigger Yoda Score algorithm
-    const FEELING_TO_RATING = {
-      Hard:      'hard',
-      Struggled: 'struggled',
-      Okay:      'okay',
-      Good:      'good',
-      Great:     'great',
-    };
-    const rating = FEELING_TO_RATING[feeling] ?? 'okay';
-    const completedAt = new Date();
-    const startedAt = session?.started_at ? new Date(session.started_at) : completedAt;
-    const durationMinutes = Math.max(1, Math.round((completedAt - startedAt) / 60000));
+    // Only for the focus point the user actually worked on this session
+    const practiceFocusId = activeFocusPointId || focusIds[0];
+    if (practiceFocusId) {
+      const FEELING_TO_RATING = {
+        Hard:      'hard',
+        Struggled: 'struggled',
+        Okay:      'okay',
+        Good:      'good',
+        Great:     'great',
+      };
+      const rating = FEELING_TO_RATING[feeling] ?? 'okay';
+      const completedAt = new Date();
+      const startedAt = session?.started_at ? new Date(session.started_at) : completedAt;
+      const durationMinutes = Math.max(1, Math.round((completedAt - startedAt) / 60000));
 
-    for (const fid of focusIds) {
       supabase.functions.invoke('practice-log', {
         body: {
-          focus_point_id:   fid,
+          focus_point_id:   practiceFocusId,
           duration_minutes: durationMinutes,
           rating,
           student_id:       userId,
