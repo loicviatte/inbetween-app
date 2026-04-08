@@ -94,8 +94,8 @@ export async function getMyStudents() {
 
   const studentIds = students.map(s => s.id);
 
-  // Fetch pending questions and validations in parallel
-  const [{ data: pendingMessages }, { data: pendingValidations }] = await Promise.all([
+  // Fetch pending questions and pending_coach focus points in parallel
+  const [{ data: pendingMessages }, { data: pendingFPs }] = await Promise.all([
     supabase
       .from('coach_messages')
       .select('student_id')
@@ -103,15 +103,15 @@ export async function getMyStudents() {
       .eq('status', 'pending')
       .in('student_id', studentIds),
     supabase
-      .from('focus_validations')
-      .select('student_id')
-      .eq('coach_id', coachId)
-      .eq('status', 'pending')
-      .in('student_id', studentIds),
+      .from('focus_points')
+      .select('user_id')
+      .eq('status', 'pending_coach')
+      .eq('is_other', false)
+      .in('user_id', studentIds),
   ]);
 
   const questionStudents = new Set((pendingMessages || []).map(m => m.student_id));
-  const attentionStudents = new Set((pendingValidations || []).map(v => v.student_id));
+  const attentionStudents = new Set((pendingFPs || []).map(v => v.user_id));
 
   return students.map(s => {
     let status = 'on_track';
@@ -144,56 +144,44 @@ export async function getStudentProfile(studentId) {
 }
 
 export async function getStudentFocusPoints(studentId) {
-  const coachId = await getCoachId();
   const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString();
 
-  // Get active focus points
+  // Get active + pending_coach focus points
   const { data: focusPoints } = await supabase
     .from('focus_points')
-    .select('id, name, coach_note, created_at')
+    .select('id, name, subtitle, coach_note, created_at, status, coach_review_deadline, tier')
     .eq('user_id', studentId)
     .eq('is_deleted', false)
-    .eq('is_archived', false)
+    .eq('is_other', false)
+    .in('status', ['active', 'pending_coach', 'past_candidate'])
     .order('created_at', { ascending: true });
 
   if (!focusPoints || focusPoints.length === 0) return [];
 
+  // Count practice_logs this week for each focus
   const focusIds = focusPoints.map(f => f.id);
-
-  // Count training sessions this week for each focus
-  const { data: sessions } = await supabase
-    .from('training_sessions')
-    .select('slot1_focus_id, slot2_focus_id')
-    .eq('user_id', studentId)
-    .gte('started_at', weekAgo)
-    .not('completed_at', 'is', null);
-
-  const weekCounts = {};
-  for (const s of sessions || []) {
-    if (s.slot1_focus_id) weekCounts[s.slot1_focus_id] = (weekCounts[s.slot1_focus_id] || 0) + 1;
-    if (s.slot2_focus_id) weekCounts[s.slot2_focus_id] = (weekCounts[s.slot2_focus_id] || 0) + 1;
-  }
-
-  // Get pending validations for these focus points
-  const { data: validations } = await supabase
-    .from('focus_validations')
-    .select('focus_point_id, type, student_note')
+  const { data: logs } = await supabase
+    .from('practice_logs')
+    .select('focus_point_id')
     .eq('student_id', studentId)
-    .eq('coach_id', coachId)
-    .eq('status', 'pending')
+    .gte('created_at', weekAgo)
     .in('focus_point_id', focusIds);
 
-  const validationMap = {};
-  for (const v of validations || []) {
-    validationMap[v.focus_point_id] = { type: v.type, note: v.student_note };
+  const weekCounts = {};
+  for (const l of logs || []) {
+    weekCounts[l.focus_point_id] = (weekCounts[l.focus_point_id] || 0) + 1;
   }
 
   return focusPoints.map(f => ({
     id: f.id,
     name: f.name,
+    subtitle: f.subtitle || null,
     coachNote: f.coach_note || null,
     weekCount: weekCounts[f.id] || 0,
-    validationPending: validationMap[f.id] || null,
+    status: f.status,
+    isPendingReview: f.status === 'pending_coach',
+    reviewDeadline: f.coach_review_deadline || null,
+    tier: f.tier || null,
   }));
 }
 
@@ -256,24 +244,37 @@ export async function getStudentQuestions(studentId) {
   return data || [];
 }
 
-export async function getStudentPendingValidations(studentId) {
-  const coachId = await getCoachId();
+// Returns focus points awaiting coach review (pending_coach status)
+export async function getStudentPendingReviewFocusPoints(studentId) {
   const { data } = await supabase
-    .from('focus_validations')
-    .select('id, focus_point_id, type, student_note, created_at, focus_points(name)')
-    .eq('student_id', studentId)
-    .eq('coach_id', coachId)
-    .eq('status', 'pending')
+    .from('focus_points')
+    .select('id, name, subtitle, context, tier, coach_review_deadline, created_at')
+    .eq('user_id', studentId)
+    .eq('status', 'pending_coach')
+    .eq('is_other', false)
     .order('created_at', { ascending: false });
+  return data || [];
+}
 
-  return (data || []).map(v => ({
-    id: v.id,
-    focusPointId: v.focus_point_id,
-    focusName: v.focus_points?.name || '',
-    type: v.type,
-    studentNote: v.student_note,
-    createdAt: v.created_at,
-  }));
+// Coach approves focus point → active, notify student
+export async function approveFocusPoint(focusPointId, studentId, updates = {}) {
+  await supabase
+    .from('focus_points')
+    .update({
+      status: 'active',
+      coach_review_deadline: null,
+      ...updates,
+    })
+    .eq('id', focusPointId);
+
+  // Notify student
+  await supabase.from('notifications').insert({
+    user_id: studentId,
+    type: 'focus_point_approved',
+    title: 'New focus point',
+    body: `Your coach reviewed and confirmed: "${updates.name || ''}"`,
+    data: { focus_point_id: focusPointId },
+  });
 }
 
 export async function getStudentArchivedFocusPoints(studentId) {
@@ -308,56 +309,6 @@ export async function dismissQuestion(messageId) {
     .eq('id', messageId);
 }
 
-// Focus completion: coach approves (close focus) or rejects (keep working)
-export async function respondToFocusCompletion(validationId, approve) {
-  const status = approve ? 'approved' : 'rejected';
-  await supabase
-    .from('focus_validations')
-    .update({ status })
-    .eq('id', validationId);
-
-  if (approve) {
-    const { data: v } = await supabase
-      .from('focus_validations')
-      .select('focus_point_id')
-      .eq('id', validationId)
-      .single();
-
-    if (v?.focus_point_id) {
-      await supabase
-        .from('focus_points')
-        .update({ is_archived: true })
-        .eq('id', v.focus_point_id);
-    }
-  }
-}
-
-// Flagged focus: coach decides what to do
-// action: 'keep' | 'address' | 'dismiss'
-export async function respondToFlaggedFocus(validationId, action) {
-  let status = 'addressed';
-  if (action === 'dismiss') status = 'dismissed';
-
-  await supabase
-    .from('focus_validations')
-    .update({ status })
-    .eq('id', validationId);
-
-  if (action === 'dismiss') {
-    const { data: v } = await supabase
-      .from('focus_validations')
-      .select('focus_point_id')
-      .eq('id', validationId)
-      .single();
-
-    if (v?.focus_point_id) {
-      await supabase
-        .from('focus_points')
-        .update({ is_archived: true })
-        .eq('id', v.focus_point_id);
-    }
-  }
-}
 
 // ─── Session / Class Detail ───────────────────────────────────────────────────
 

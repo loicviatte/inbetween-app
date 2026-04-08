@@ -23,6 +23,12 @@ declare global {
 // ─── Main handler ─────────────────────────────────────────────────────────────
 
 Deno.serve(async (req: Request) => {
+  // Auth check — must be called with a valid token (user JWT or service role)
+  const authHeader = req.headers.get('Authorization')
+  if (!authHeader) {
+    return new Response(JSON.stringify({ error: 'Missing authorization header' }), { status: 401 })
+  }
+
   let payload: any
   try {
     payload = await req.json()
@@ -30,6 +36,7 @@ Deno.serve(async (req: Request) => {
     return new Response(JSON.stringify({ error: 'Invalid payload' }), { status: 400 })
   }
 
+  // Always use service role for DB operations — yoda-score touches multiple users' data
   const supabase = createClient(
     Deno.env.get('SUPABASE_URL')!,
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
@@ -121,6 +128,18 @@ async function processStudentFocusPoints(
   classInputId: string,
   now: Date,
 ): Promise<void> {
+  // 3h deadline for coach to review new focus points
+  const reviewDeadline = new Date(now.getTime() + 3 * 60 * 60 * 1000)
+
+  // Get coach_id for this student (used for notifications)
+  const { data: studentRow } = await supabase
+    .from('users')
+    .select('coach_id, name')
+    .eq('id', studentId)
+    .single()
+  const coachId: string | null = studentRow?.coach_id ?? null
+  const studentName: string = studentRow?.name ?? 'your student'
+
   // Load all non-past, non-other focus points for this student
   const { data: rows, error } = await supabase
     .from('focus_points')
@@ -218,7 +237,7 @@ async function processStudentFocusPoints(
         console.log(`[yoda-score] Created merge_request for ${existing.id} / student ${studentId}`)
       }
     } else {
-      // New focus point
+      // New focus point — start as pending_coach with 3h review window
       const { data: inserted } = await supabase
         .from('focus_points')
         .insert({
@@ -236,7 +255,8 @@ async function processStudentFocusPoints(
           first_timestamp: fpJson.timestamp ?? null,
           last_mentioned_at: now.toISOString(),
           class_input_id: classInputId,
-          status: 'active',
+          status: 'pending_coach',
+          coach_review_deadline: reviewDeadline.toISOString(),
           count: 0,
           is_archived: false,
           is_deleted: false,
@@ -247,7 +267,7 @@ async function processStudentFocusPoints(
 
       if (inserted) {
         mentionedFPIds.add(inserted.id)
-        console.log(`[yoda-score] Created focus_point ${inserted.id} (${fpJson.title}) for ${studentId}`)
+        console.log(`[yoda-score] Created focus_point ${inserted.id} (${fpJson.title}) pending_coach for ${studentId}`)
       }
     }
 
@@ -285,6 +305,19 @@ async function processStudentFocusPoints(
   if (otherRows.length > 0) {
     const { error: otherError } = await supabase.from('focus_points').insert(otherRows)
     if (otherError) console.error('[yoda-score] Error inserting other_focus_points:', otherError.message)
+  }
+
+  // Notify coach to review the new pending_coach focus points (3h window)
+  const newFPCount = (studentJson.focus_points ?? []).filter((fp: any) => !fp.merge_action).length
+  if (newFPCount > 0 && coachId) {
+    await supabase.from('notifications').insert({
+      user_id: coachId,
+      type: 'focus_points_pending_review',
+      title: 'New focus points to review',
+      body: `Yoda extracted ${newFPCount} focus point${newFPCount > 1 ? 's' : ''} for ${studentName}. Review within 3h or they'll be sent as-is.`,
+      data: { student_id: studentId, class_input_id: classInputId, deadline: reviewDeadline.toISOString() },
+    })
+    console.log(`[yoda-score] Notified coach ${coachId} to review ${newFPCount} FPs for ${studentId}`)
   }
 
   // d. Increment lessons_since_mentioned for FPs not mentioned in this lesson

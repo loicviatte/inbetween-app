@@ -22,12 +22,11 @@ import {
   getStudentFocusPoints,
   getStudentRecentActivity,
   getStudentQuestions,
-  getStudentPendingValidations,
+  getStudentPendingReviewFocusPoints,
   getStudentArchivedFocusPoints,
   replyToQuestion,
   dismissQuestion,
-  respondToFocusCompletion,
-  respondToFlaggedFocus,
+  approveFocusPoint,
   updateFocusPoint,
 } from '../../storage/coachStorage';
 
@@ -51,27 +50,25 @@ function practiceLabel(count) {
 // ─── Focus Card ───────────────────────────────────────────────────────────────
 
 function FocusCard({ focus, onEdit }) {
-  const hasPending = !!focus.validationPending;
-  const isCompletion = focus.validationPending?.type === 'completion';
-  const isFlagged = focus.validationPending?.type === 'flagged';
+  const isPending = focus.isPendingReview;
 
   return (
-    <TouchableOpacity style={[fc.card, hasPending && fc.cardHighlighted]} onPress={onEdit} activeOpacity={0.75}>
+    <TouchableOpacity style={[fc.card, isPending && fc.cardHighlighted]} onPress={onEdit} activeOpacity={0.75}>
       <View style={fc.row}>
         <Text style={fc.name}>{focus.name}</Text>
-        {isCompletion && (
-          <View style={[fc.badge, fc.completionBadge]}>
-            <Text style={[fc.badgeText, fc.completionBadgeText]}>✓</Text>
-          </View>
-        )}
-        {isFlagged && (
-          <View style={[fc.badge, fc.flaggedBadge]}>
-            <Text style={[fc.badgeText, fc.flaggedBadgeText]}>!</Text>
+        {isPending && (
+          <View style={[fc.badge, fc.pendingBadge]}>
+            <Text style={[fc.badgeText, fc.pendingBadgeText]}>Review</Text>
           </View>
         )}
         <Text style={fc.editHint}>Edit</Text>
       </View>
-      <Text style={fc.sub}>{practiceLabel(focus.weekCount)}</Text>
+      {!!focus.subtitle && (
+        <Text style={fc.sub} numberOfLines={1}>{focus.subtitle}</Text>
+      )}
+      {!focus.subtitle && (
+        <Text style={fc.sub}>{practiceLabel(focus.weekCount)}</Text>
+      )}
       {!!focus.coachNote && (
         <Text style={fc.notePreview} numberOfLines={1}>{focus.coachNote}</Text>
       )}
@@ -81,14 +78,17 @@ function FocusCard({ focus, onEdit }) {
 
 // ─── Focus Edit Sheet ─────────────────────────────────────────────────────────
 
-function FocusEditSheet({ focus, visible, onClose, onSave }) {
+function FocusEditSheet({ focus, studentId, visible, onClose, onSave, onApprove }) {
   const [name, setName] = useState('');
+  const [subtitle, setSubtitle] = useState('');
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
+  const [approving, setApproving] = useState(false);
 
   useEffect(() => {
     if (visible && focus) {
       setName(focus.name || '');
+      setSubtitle(focus.subtitle || '');
       setNote(focus.coachNote || '');
     }
   }, [visible, focus]);
@@ -96,10 +96,20 @@ function FocusEditSheet({ focus, visible, onClose, onSave }) {
   async function handleSave() {
     if (!name.trim()) return;
     setSaving(true);
-    await onSave(focus.id, { name: name.trim(), coach_note: note.trim() || null });
+    await onSave(focus.id, { name: name.trim(), subtitle: subtitle.trim() || null, coach_note: note.trim() || null });
     setSaving(false);
     onClose();
   }
+
+  async function handleApprove() {
+    if (!name.trim()) return;
+    setApproving(true);
+    await onApprove(focus.id, studentId, { name: name.trim(), subtitle: subtitle.trim() || null, coach_note: note.trim() || null });
+    setApproving(false);
+    onClose();
+  }
+
+  const isPending = focus?.isPendingReview;
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
@@ -107,7 +117,10 @@ function FocusEditSheet({ focus, visible, onClose, onSave }) {
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ width: '100%' }}>
           <Pressable style={es.sheet} onPress={() => {}}>
             <View style={es.handle} />
-            <Text style={es.title}>Edit Focus Point</Text>
+            <Text style={es.title}>{isPending ? 'Review Focus Point' : 'Edit Focus Point'}</Text>
+            {isPending && (
+              <Text style={es.pendingHint}>Yoda extracted this — edit if needed, then approve to send to your student.</Text>
+            )}
 
             <Text style={es.label}>NAME</Text>
             <TextInput
@@ -118,6 +131,17 @@ function FocusEditSheet({ focus, visible, onClose, onSave }) {
               placeholderTextColor="rgba(13,13,18,0.3)"
               returnKeyType="next"
               maxLength={80}
+            />
+
+            <Text style={es.label}>SUBTITLE</Text>
+            <TextInput
+              style={es.input}
+              value={subtitle}
+              onChangeText={setSubtitle}
+              placeholder="One-line actionable instruction…"
+              placeholderTextColor="rgba(13,13,18,0.3)"
+              returnKeyType="next"
+              maxLength={120}
             />
 
             <Text style={es.label}>COACH NOTE</Text>
@@ -133,16 +157,29 @@ function FocusEditSheet({ focus, visible, onClose, onSave }) {
               maxLength={300}
             />
 
-            <TouchableOpacity
-              style={[es.saveBtn, (!name.trim() || saving) && es.saveBtnDisabled]}
-              onPress={handleSave}
-              activeOpacity={0.8}
-            >
-              {saving
-                ? <ActivityIndicator color="#fff" size="small" />
-                : <Text style={es.saveBtnText}>Save</Text>
-              }
-            </TouchableOpacity>
+            {isPending ? (
+              <TouchableOpacity
+                style={[es.approveBtn, (!name.trim() || approving) && es.saveBtnDisabled]}
+                onPress={handleApprove}
+                activeOpacity={0.8}
+              >
+                {approving
+                  ? <ActivityIndicator color="#fff" size="small" />
+                  : <Text style={es.saveBtnText}>Approve &amp; Send to Student</Text>
+                }
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                style={[es.saveBtn, (!name.trim() || saving) && es.saveBtnDisabled]}
+                onPress={handleSave}
+                activeOpacity={0.8}
+              >
+                {saving
+                  ? <ActivityIndicator color="#fff" size="small" />
+                  : <Text style={es.saveBtnText}>Save</Text>
+                }
+              </TouchableOpacity>
+            )}
           </Pressable>
         </KeyboardAvoidingView>
       </Pressable>
@@ -163,87 +200,6 @@ function ActivityRow({ event }) {
       <Text style={ar.label}>{label}</Text>
       {!!detail && <Text style={ar.detail}>{detail}</Text>}
     </View>
-  );
-}
-
-// ─── Validation Sheet ─────────────────────────────────────────────────────────
-
-function ValidationSheet({ visible, validation, studentName, onClose, onDone }) {
-  const insets = useSafeAreaInsets();
-  const [acting, setActing] = useState(false);
-
-  if (!validation) return null;
-
-  const isCompletion = validation.type === 'completion';
-
-  async function act(action) {
-    setActing(true);
-    if (isCompletion) {
-      await respondToFocusCompletion(validation.id, action === 'approve');
-    } else {
-      await respondToFlaggedFocus(validation.id, action);
-    }
-    setActing(false);
-    onDone();
-  }
-
-  return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <Pressable style={sh.overlay} onPress={onClose}>
-        <Pressable style={[sh.sheet, { paddingBottom: insets.bottom + 20 }]} onPress={() => {}}>
-          <View style={sh.handle} />
-
-          {isCompletion ? (
-            <>
-              <Text style={sh.title}>{studentName} thinks she's got this</Text>
-              <View style={sh.focusCard}>
-                <Text style={sh.focusName}>{validation.focusName}</Text>
-              </View>
-              <Text style={sh.body}>
-                Does this match what you saw in your last lesson?
-              </Text>
-              {acting ? (
-                <ActivityIndicator color={Colors.secondary} style={{ marginTop: 20 }} />
-              ) : (
-                <View style={sh.btnRow}>
-                  <TouchableOpacity style={[sh.btn, sh.btnGreen]} onPress={() => act('approve')} activeOpacity={0.85}>
-                    <Text style={[sh.btnText, sh.btnGreenText]}>Yes, close this focus</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={[sh.btn, sh.btnOutline]} onPress={() => act('reject')} activeOpacity={0.85}>
-                    <Text style={[sh.btnText, sh.btnOutlineText]}>Keep working on it</Text>
-                  </TouchableOpacity>
-                </View>
-              )}
-            </>
-          ) : (
-            <>
-              <Text style={sh.title}>{studentName} flagged a focus</Text>
-              <View style={sh.focusCard}>
-                <Text style={sh.focusName}>{validation.focusName}</Text>
-                {!!validation.studentNote && (
-                  <Text style={sh.focusSub}>"{validation.studentNote}"</Text>
-                )}
-              </View>
-              {acting ? (
-                <ActivityIndicator color={Colors.secondary} style={{ marginTop: 20 }} />
-              ) : (
-                <View style={sh.flagActions}>
-                  <TouchableOpacity style={sh.flagBtn} onPress={() => act('keep')} activeOpacity={0.85}>
-                    <Text style={sh.flagBtnText}>This focus is correct, keep going</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={sh.flagBtn} onPress={() => act('address')} activeOpacity={0.85}>
-                    <Text style={sh.flagBtnText}>I'll address this next lesson</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={() => act('dismiss')} activeOpacity={0.7}>
-                    <Text style={sh.dismissText}>Dismiss this focus</Text>
-                  </TouchableOpacity>
-                </View>
-              )}
-            </>
-          )}
-        </Pressable>
-      </Pressable>
-    </Modal>
   );
 }
 
@@ -323,7 +279,6 @@ export default function StudentDetailScreen({ route, navigation }) {
   const [focusPoints, setFocusPoints] = useState([]);
   const [activity, setActivity] = useState([]);
   const [questions, setQuestions] = useState([]);
-  const [validations, setValidations] = useState([]);
   const [archivedFocuses, setArchivedFocuses] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -332,9 +287,6 @@ export default function StudentDetailScreen({ route, navigation }) {
 
   const [activeQuestion, setActiveQuestion] = useState(null);
   const [questionSheetVisible, setQuestionSheetVisible] = useState(false);
-
-  const [activeValidation, setActiveValidation] = useState(null);
-  const [validationSheetVisible, setValidationSheetVisible] = useState(false);
 
   const [editingFocus, setEditingFocus] = useState(null);
   const [focusEditVisible, setFocusEditVisible] = useState(false);
@@ -347,12 +299,11 @@ export default function StudentDetailScreen({ route, navigation }) {
       async function load() {
         setLoading(true);
         try {
-          const [p, fp, act, qs, vs, arch] = await Promise.all([
+          const [p, fp, act, qs, arch] = await Promise.all([
             getStudentProfile(studentId),
             getStudentFocusPoints(studentId),
             getStudentRecentActivity(studentId, 8),
             getStudentQuestions(studentId),
-            getStudentPendingValidations(studentId),
             getStudentArchivedFocusPoints(studentId),
           ]);
           if (active) {
@@ -360,7 +311,6 @@ export default function StudentDetailScreen({ route, navigation }) {
             setFocusPoints(fp);
             setActivity(act);
             setQuestions(qs);
-            setValidations(vs);
             setArchivedFocuses(arch);
           }
         } catch (e) {
@@ -377,7 +327,7 @@ export default function StudentDetailScreen({ route, navigation }) {
         channel = supabase.channel(`student-detail-${studentId}`)
           .on('postgres_changes', { event: '*', schema: 'public', table: 'coach_messages', filter: `student_id=eq.${studentId}` },
             () => { if (active) reload(); })
-          .on('postgres_changes', { event: '*', schema: 'public', table: 'focus_validations', filter: `student_id=eq.${studentId}` },
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'focus_points', filter: `user_id=eq.${studentId}` },
             () => { if (active) reload(); })
           .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'training_sessions', filter: `user_id=eq.${studentId}` },
             async () => {
@@ -397,19 +347,27 @@ export default function StudentDetailScreen({ route, navigation }) {
   );
 
   async function reload() {
-    const [fp, qs, vs] = await Promise.all([
+    const [fp, qs] = await Promise.all([
       getStudentFocusPoints(studentId),
       getStudentQuestions(studentId),
-      getStudentPendingValidations(studentId),
     ]);
     setFocusPoints(fp);
     setQuestions(qs);
-    setValidations(vs);
   }
 
   async function handleSaveFocus(focusId, updates) {
     await updateFocusPoint(focusId, updates);
-    setFocusPoints(prev => prev.map(fp => fp.id === focusId ? { ...fp, name: updates.name, coachNote: updates.coach_note || null } : fp));
+    setFocusPoints(prev => prev.map(fp =>
+      fp.id === focusId ? { ...fp, name: updates.name, subtitle: updates.subtitle || null, coachNote: updates.coach_note || null } : fp
+    ));
+  }
+
+  async function handleApproveFocus(focusId, sid, updates) {
+    await updateFocusPoint(focusId, updates);
+    await approveFocusPoint(focusId, sid, updates);
+    setFocusPoints(prev => prev.map(fp =>
+      fp.id === focusId ? { ...fp, ...updates, coachNote: updates.coach_note || null, status: 'active', isPendingReview: false } : fp
+    ));
   }
 
   const displayName = profile?.name || studentName || 'Student';
@@ -497,36 +455,6 @@ export default function StudentDetailScreen({ route, navigation }) {
           )}
         </View>
 
-        {/* Pending Action Cards */}
-        {validations.length > 0 && (
-          <View style={styles.section}>
-            {validations.map(v => (
-              <TouchableOpacity
-                key={v.id}
-                style={ac.card}
-                onPress={() => {
-                  setActiveValidation(v);
-                  setValidationSheetVisible(true);
-                }}
-                activeOpacity={0.85}
-              >
-                <View style={ac.bar} />
-                <View style={ac.body}>
-                  <Text style={ac.title}>
-                    {v.type === 'completion'
-                      ? `${displayName} thinks she's got this`
-                      : `${displayName} flagged a focus`}
-                  </Text>
-                  <Text style={ac.focusName}>{v.focusName}</Text>
-                  {!!v.studentNote && (
-                    <Text style={ac.note}>"{v.studentNote}"</Text>
-                  )}
-                  <Text style={ac.tap}>Tap to respond ›</Text>
-                </View>
-              </TouchableOpacity>
-            ))}
-          </View>
-        )}
 
         {/* Previous Focuses */}
         {archivedFocuses.length > 0 && (
@@ -564,22 +492,13 @@ export default function StudentDetailScreen({ route, navigation }) {
         }}
       />
 
-      <ValidationSheet
-        visible={validationSheetVisible}
-        validation={activeValidation}
-        studentName={displayName}
-        onClose={() => setValidationSheetVisible(false)}
-        onDone={() => {
-          setValidationSheetVisible(false);
-          reload();
-        }}
-      />
-
       <FocusEditSheet
         focus={editingFocus}
+        studentId={studentId}
         visible={focusEditVisible}
         onClose={() => setFocusEditVisible(false)}
         onSave={handleSaveFocus}
+        onApprove={handleApproveFocus}
       />
     </SafeAreaView>
   );
@@ -696,10 +615,8 @@ const fc = StyleSheet.create({
     marginLeft: 8,
   },
   badgeText: { fontFamily: Fonts.jakartaExtraBold, fontSize: 10 },
-  completionBadge: { backgroundColor: 'rgba(76,175,80,0.12)' },
-  completionBadgeText: { color: Colors.green },
-  flaggedBadge: { backgroundColor: 'rgba(255,157,0,0.12)' },
-  flaggedBadgeText: { color: Colors.orange },
+  pendingBadge: { backgroundColor: 'rgba(98,0,238,0.10)', paddingHorizontal: 8, width: 'auto', borderRadius: 8 },
+  pendingBadgeText: { color: '#6200EE' },
   editHint: {
     fontFamily: Fonts.jakartaMedium,
     fontSize: 11,
@@ -766,9 +683,24 @@ const es = StyleSheet.create({
     minHeight: 80,
     paddingTop: 10,
   },
+  pendingHint: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 13,
+    color: Colors.secondary,
+    marginBottom: 8,
+    marginTop: -12,
+    lineHeight: 18,
+  },
   saveBtn: {
     marginTop: 24,
     backgroundColor: Colors.black,
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  approveBtn: {
+    marginTop: 24,
+    backgroundColor: '#6200EE',
     borderRadius: 12,
     paddingVertical: 14,
     alignItems: 'center',
