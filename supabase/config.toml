@@ -1,0 +1,8 @@
+[functions.practice-log]
+verify_jwt = false
+
+[functions.yoda-score]
+verify_jwt = false
+
+[functions.yoda-extract]
+verify_jwt = false
