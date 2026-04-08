@@ -219,20 +219,6 @@ export async function saveFocusPoint(fp) {
     .select('id')
     .single();
 
-  // Auto-create focus_metrics row with base values for this tier
-  if (data?.id) {
-    const tier = fp.tier || 'important';
-    const baseImportance = tier === 'critical' ? 4 : tier === 'important' ? 3 : 2;
-    const baseStruggle   = tier === 'supporting' ? 0 : 1;
-    await supabase.from('focus_metrics').insert({
-      focus_id:     data.id,
-      importance:   baseImportance,
-      struggle:     baseStruggle,
-      practice:     0,
-      coach_signal: 0,
-    }).then(() => {}).catch(() => {}); // silent — metrics row may already exist
-  }
-
   return data?.id;
 }
 
