@@ -265,11 +265,10 @@ export async function getSessionCountForFocus(focusPointId) {
   try {
     const userId = await getUserId();
     const { data } = await supabase
-      .from('training_sessions')
+      .from('practice_logs')
       .select('id')
-      .eq('user_id', userId)
-      .or(`slot1_focus_id.eq.${focusPointId},slot2_focus_id.eq.${focusPointId}`)
-      .not('completed_at', 'is', null);
+      .eq('student_id', userId)
+      .eq('focus_point_id', focusPointId);
     return (data || []).length;
   } catch {
     return 0;
