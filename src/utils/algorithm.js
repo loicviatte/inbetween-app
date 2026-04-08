@@ -90,21 +90,6 @@ export async function getSlots() {
       return { slot1: null, slot2: null, slot3: null };
     }
 
-    // Auto-promote pending_coach FPs whose 3h deadline has passed
-    const expired = points.filter(
-      (p) => p.status === 'pending_coach' &&
-             p.coach_review_deadline &&
-             new Date(p.coach_review_deadline) <= now
-    );
-    if (expired.length > 0) {
-      await supabase
-        .from('focus_points')
-        .update({ status: 'active', coach_review_deadline: null })
-        .in('id', expired.map(p => p.id));
-      // Patch in-memory so scoring below sees 'active'
-      for (const p of expired) { p.status = 'active'; p.coach_review_deadline = null; }
-    }
-
     // Only consider active/cooling_down/past_candidate focuses
     const visible = points.filter(
       (p) => !p.status || p.status === 'active' || p.status === 'cooling_down' || p.status === 'past_candidate'

@@ -146,14 +146,14 @@ export async function getStudentProfile(studentId) {
 export async function getStudentFocusPoints(studentId) {
   const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString();
 
-  // Get active + pending_coach focus points
+  // Get active focus points (pending_coach removed — FPs go direct to student)
   const { data: focusPoints } = await supabase
     .from('focus_points')
-    .select('id, name, subtitle, coach_note, created_at, status, coach_review_deadline, tier')
+    .select('id, name, subtitle, coach_note, created_at, status, tier')
     .eq('user_id', studentId)
     .eq('is_deleted', false)
     .eq('is_other', false)
-    .in('status', ['active', 'pending_coach', 'past_candidate'])
+    .in('status', ['active', 'past_candidate'])
     .order('created_at', { ascending: true });
 
   if (!focusPoints || focusPoints.length === 0) return [];
@@ -179,8 +179,6 @@ export async function getStudentFocusPoints(studentId) {
     coachNote: f.coach_note || null,
     weekCount: weekCounts[f.id] || 0,
     status: f.status,
-    isPendingReview: f.status === 'pending_coach',
-    reviewDeadline: f.coach_review_deadline || null,
     tier: f.tier || null,
   }));
 }
@@ -244,38 +242,6 @@ export async function getStudentQuestions(studentId) {
   return data || [];
 }
 
-// Returns focus points awaiting coach review (pending_coach status)
-export async function getStudentPendingReviewFocusPoints(studentId) {
-  const { data } = await supabase
-    .from('focus_points')
-    .select('id, name, subtitle, context, tier, coach_review_deadline, created_at')
-    .eq('user_id', studentId)
-    .eq('status', 'pending_coach')
-    .eq('is_other', false)
-    .order('created_at', { ascending: false });
-  return data || [];
-}
-
-// Coach approves focus point → active, notify student
-export async function approveFocusPoint(focusPointId, studentId, updates = {}) {
-  await supabase
-    .from('focus_points')
-    .update({
-      status: 'active',
-      coach_review_deadline: null,
-      ...updates,
-    })
-    .eq('id', focusPointId);
-
-  // Notify student
-  await supabase.from('notifications').insert({
-    user_id: studentId,
-    type: 'focus_point_approved',
-    title: 'New focus point',
-    body: `Your coach reviewed and confirmed: "${updates.name || ''}"`,
-    data: { focus_point_id: focusPointId },
-  });
-}
 
 export async function getStudentArchivedFocusPoints(studentId) {
   const { data } = await supabase

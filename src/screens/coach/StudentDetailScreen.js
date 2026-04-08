@@ -22,11 +22,9 @@ import {
   getStudentFocusPoints,
   getStudentRecentActivity,
   getStudentQuestions,
-  getStudentPendingReviewFocusPoints,
   getStudentArchivedFocusPoints,
   replyToQuestion,
   dismissQuestion,
-  approveFocusPoint,
   updateFocusPoint,
 } from '../../storage/coachStorage';
 
@@ -50,25 +48,16 @@ function practiceLabel(count) {
 // ─── Focus Card ───────────────────────────────────────────────────────────────
 
 function FocusCard({ focus, onEdit }) {
-  const isPending = focus.isPendingReview;
-
   return (
-    <TouchableOpacity style={[fc.card, isPending && fc.cardHighlighted]} onPress={onEdit} activeOpacity={0.75}>
+    <TouchableOpacity style={fc.card} onPress={onEdit} activeOpacity={0.75}>
       <View style={fc.row}>
         <Text style={fc.name}>{focus.name}</Text>
-        {isPending && (
-          <View style={[fc.badge, fc.pendingBadge]}>
-            <Text style={[fc.badgeText, fc.pendingBadgeText]}>Review</Text>
-          </View>
-        )}
         <Text style={fc.editHint}>Edit</Text>
       </View>
-      {!!focus.subtitle && (
-        <Text style={fc.sub} numberOfLines={1}>{focus.subtitle}</Text>
-      )}
-      {!focus.subtitle && (
-        <Text style={fc.sub}>{practiceLabel(focus.weekCount)}</Text>
-      )}
+      {!!focus.subtitle
+        ? <Text style={fc.sub} numberOfLines={1}>{focus.subtitle}</Text>
+        : <Text style={fc.sub}>{practiceLabel(focus.weekCount)}</Text>
+      }
       {!!focus.coachNote && (
         <Text style={fc.notePreview} numberOfLines={1}>{focus.coachNote}</Text>
       )}
@@ -78,12 +67,11 @@ function FocusCard({ focus, onEdit }) {
 
 // ─── Focus Edit Sheet ─────────────────────────────────────────────────────────
 
-function FocusEditSheet({ focus, studentId, visible, onClose, onSave, onApprove }) {
+function FocusEditSheet({ focus, visible, onClose, onSave }) {
   const [name, setName] = useState('');
   const [subtitle, setSubtitle] = useState('');
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
-  const [approving, setApproving] = useState(false);
 
   useEffect(() => {
     if (visible && focus) {
@@ -101,26 +89,13 @@ function FocusEditSheet({ focus, studentId, visible, onClose, onSave, onApprove 
     onClose();
   }
 
-  async function handleApprove() {
-    if (!name.trim()) return;
-    setApproving(true);
-    await onApprove(focus.id, studentId, { name: name.trim(), subtitle: subtitle.trim() || null, coach_note: note.trim() || null });
-    setApproving(false);
-    onClose();
-  }
-
-  const isPending = focus?.isPendingReview;
-
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <Pressable style={es.overlay} onPress={onClose}>
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={{ width: '100%' }}>
           <Pressable style={es.sheet} onPress={() => {}}>
             <View style={es.handle} />
-            <Text style={es.title}>{isPending ? 'Review Focus Point' : 'Edit Focus Point'}</Text>
-            {isPending && (
-              <Text style={es.pendingHint}>Yoda extracted this — edit if needed, then approve to send to your student.</Text>
-            )}
+            <Text style={es.title}>Edit Focus Point</Text>
 
             <Text style={es.label}>NAME</Text>
             <TextInput
@@ -157,29 +132,16 @@ function FocusEditSheet({ focus, studentId, visible, onClose, onSave, onApprove 
               maxLength={300}
             />
 
-            {isPending ? (
-              <TouchableOpacity
-                style={[es.approveBtn, (!name.trim() || approving) && es.saveBtnDisabled]}
-                onPress={handleApprove}
-                activeOpacity={0.8}
-              >
-                {approving
-                  ? <ActivityIndicator color="#fff" size="small" />
-                  : <Text style={es.saveBtnText}>Approve &amp; Send to Student</Text>
-                }
-              </TouchableOpacity>
-            ) : (
-              <TouchableOpacity
-                style={[es.saveBtn, (!name.trim() || saving) && es.saveBtnDisabled]}
-                onPress={handleSave}
-                activeOpacity={0.8}
-              >
-                {saving
-                  ? <ActivityIndicator color="#fff" size="small" />
-                  : <Text style={es.saveBtnText}>Save</Text>
-                }
-              </TouchableOpacity>
-            )}
+            <TouchableOpacity
+              style={[es.saveBtn, (!name.trim() || saving) && es.saveBtnDisabled]}
+              onPress={handleSave}
+              activeOpacity={0.8}
+            >
+              {saving
+                ? <ActivityIndicator color="#fff" size="small" />
+                : <Text style={es.saveBtnText}>Save</Text>
+              }
+            </TouchableOpacity>
           </Pressable>
         </KeyboardAvoidingView>
       </Pressable>
@@ -362,14 +324,6 @@ export default function StudentDetailScreen({ route, navigation }) {
     ));
   }
 
-  async function handleApproveFocus(focusId, sid, updates) {
-    await updateFocusPoint(focusId, updates);
-    await approveFocusPoint(focusId, sid, updates);
-    setFocusPoints(prev => prev.map(fp =>
-      fp.id === focusId ? { ...fp, ...updates, coachNote: updates.coach_note || null, status: 'active', isPendingReview: false } : fp
-    ));
-  }
-
   const displayName = profile?.name || studentName || 'Student';
   const initials = displayName.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
   const visibleActivity = showAllActivity ? activity : activity.slice(0, 4);
@@ -494,11 +448,9 @@ export default function StudentDetailScreen({ route, navigation }) {
 
       <FocusEditSheet
         focus={editingFocus}
-        studentId={studentId}
         visible={focusEditVisible}
         onClose={() => setFocusEditVisible(false)}
         onSave={handleSaveFocus}
-        onApprove={handleApproveFocus}
       />
     </SafeAreaView>
   );
@@ -615,8 +567,6 @@ const fc = StyleSheet.create({
     marginLeft: 8,
   },
   badgeText: { fontFamily: Fonts.jakartaExtraBold, fontSize: 10 },
-  pendingBadge: { backgroundColor: 'rgba(98,0,238,0.10)', paddingHorizontal: 8, width: 'auto', borderRadius: 8 },
-  pendingBadgeText: { color: '#6200EE' },
   editHint: {
     fontFamily: Fonts.jakartaMedium,
     fontSize: 11,
@@ -683,24 +633,9 @@ const es = StyleSheet.create({
     minHeight: 80,
     paddingTop: 10,
   },
-  pendingHint: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 13,
-    color: Colors.secondary,
-    marginBottom: 8,
-    marginTop: -12,
-    lineHeight: 18,
-  },
   saveBtn: {
     marginTop: 24,
     backgroundColor: Colors.black,
-    borderRadius: 12,
-    paddingVertical: 14,
-    alignItems: 'center',
-  },
-  approveBtn: {
-    marginTop: 24,
-    backgroundColor: '#6200EE',
     borderRadius: 12,
     paddingVertical: 14,
     alignItems: 'center',
