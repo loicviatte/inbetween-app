@@ -310,10 +310,10 @@ export async function completeTrainingSession(sessionId, feeling = null, session
     if (!sessionId) return;
     const userId = await getUserId();
 
-    // Get focus ids before updating
+    // Get focus ids and timing before updating
     const { data: session } = await supabase
       .from('training_sessions')
-      .select('slot1_focus_id, slot2_focus_id')
+      .select('slot1_focus_id, slot2_focus_id, started_at')
       .eq('id', sessionId)
       .single();
 
@@ -330,6 +330,30 @@ export async function completeTrainingSession(sessionId, feeling = null, session
     const focusIds = [session?.slot1_focus_id, session?.slot2_focus_id].filter(Boolean);
     for (const fid of focusIds) {
       await applyFocusEvent(fid, 'PRACTICE_SESSION_LOG', userId);
+    }
+
+    // Call practice-log edge function to trigger Yoda Score algorithm
+    const FEELING_TO_RATING = {
+      Hard:      'hard',
+      Struggled: 'struggled',
+      Okay:      'okay',
+      Good:      'good',
+      Great:     'great',
+    };
+    const rating = FEELING_TO_RATING[feeling] ?? 'okay';
+    const completedAt = new Date();
+    const startedAt = session?.started_at ? new Date(session.started_at) : completedAt;
+    const durationMinutes = Math.max(1, Math.round((completedAt - startedAt) / 60000));
+
+    for (const fid of focusIds) {
+      supabase.functions.invoke('practice-log', {
+        body: {
+          focus_point_id:   fid,
+          duration_minutes: durationMinutes,
+          rating,
+          student_id:       userId,
+        },
+      }).catch(err => console.error('practice-log invoke error:', err));
     }
 
     // Map feeling → additional score signal
