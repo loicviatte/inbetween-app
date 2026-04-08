@@ -516,7 +516,7 @@ function SessionFeelingModal({ visible, focusName, onSave, onSkip }) {
   }
 
   return (
-    <Modal visible={visible} transparent animationType="none" onRequestClose={onSkip}>
+    <Modal visible={visible} transparent animationType="none" onRequestClose={() => {}}>
       <Animated.View style={[fm.container, { transform: [{ translateY: slideAnim }] }]} onStartShouldSetResponder={() => { Keyboard.dismiss(); return false; }}>
 
         <View style={fm.content}>
@@ -817,6 +817,7 @@ export default function FocusSessionScreen({ route, navigation }) {
   const [timeLeft, setTimeLeft] = useState(25 * 60);
   const [showFeelingModal, setShowFeelingModal] = useState(false);
   const [showStopConfirm, setShowStopConfirm] = useState(false);
+  const sessionCompletedRef = useRef(false);
   const [chatMessages, setChatMessages] = useState(() => getChatMessages());
   const { width: screenW } = useWindowDimensions();
   const intervalRef = useRef(null);
@@ -918,7 +919,8 @@ export default function FocusSessionScreen({ route, navigation }) {
   }
 
   async function handleSave(feeling, note) {
-    // Only Save marks the session as complete in Supabase
+    if (sessionCompletedRef.current) return;
+    sessionCompletedRef.current = true;
     await completeTrainingSession(sessionId, feeling, note, focusPointId);
     clearActiveSession();
     setShowFeelingModal(false);
@@ -926,6 +928,8 @@ export default function FocusSessionScreen({ route, navigation }) {
   }
 
   async function handleSkip() {
+    if (sessionCompletedRef.current) return;
+    sessionCompletedRef.current = true;
     await completeTrainingSession(sessionId, null, null, focusPointId);
     clearActiveSession();
     setShowFeelingModal(false);
