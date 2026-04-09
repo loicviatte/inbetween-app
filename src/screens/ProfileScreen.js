@@ -34,6 +34,7 @@ import RadarChart from '../components/RadarChart';
 
 const AVATAR_KEY = '@profile_photo';
 const PROFILE_CACHE_KEY = '@cache_profile';
+const HOME_CACHE_KEY = '@cache_home';
 
 const RADAR_CATEGORIES = ['Stability', 'Technicality', 'Strength', 'Creativity', 'Musicality'];
 // Checked in order of specificity — most specific first to avoid greedy matches
@@ -162,9 +163,9 @@ export default function ProfileScreen({ navigation }) {
     let totalSessions = 0;
     if (session?.user?.id) {
       const { count } = await supabase
-        .from('training_sessions')
+        .from('practice_logs')
         .select('id', { count: 'exact' })
-        .eq('user_id', session.user.id)
+        .eq('student_id', session.user.id)
         .not('completed_at', 'is', null);
       totalSessions = count ?? 0;
     }

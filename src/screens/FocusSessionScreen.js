@@ -35,7 +35,6 @@ import {
 } from '../storage/activeSession';
 
 const DURATIONS = [5, 10, 15, 20, 25, 30, 45, 60, 90];
-const ITEM_H = 52;
 const TICK_SOUND = require('../../assets/metronome_tick.wav');
 
 const FEELINGS = [
@@ -53,16 +52,16 @@ function formatTime(seconds) {
 }
 
 const DANCES = [
-  { id: 'samba',     name: 'Samba',      bpm: 100, beats: 2, category: 'L' },
-  { id: 'chacha',    name: 'Cha Cha',    bpm: 120, beats: 4, category: 'L' },
-  { id: 'rumba',     name: 'Rumba',      bpm: 104, beats: 4, category: 'L' },
-  { id: 'paso',      name: 'Paso',       bpm: 120, beats: 2, category: 'L' },
-  { id: 'jive',      name: 'Jive',       bpm: 176, beats: 4, category: 'L' },
-  { id: 'waltz',     name: 'Waltz',      bpm: 90,  beats: 3, category: 'S' },
-  { id: 'tango',     name: 'Tango',      bpm: 132, beats: 4, category: 'S' },
-  { id: 'vwaltz',    name: 'V.Waltz',    bpm: 180, beats: 3, category: 'S' },
-  { id: 'foxtrot',   name: 'Foxtrot',    bpm: 120, beats: 4, category: 'S' },
-  { id: 'quickstep', name: 'Quickstep',  bpm: 200, beats: 4, category: 'S' },
+  { id: 'samba',     name: 'Samba',      bpm: 100, beats: 2, category: 'L' }, // 50 bars/min × 2
+  { id: 'chacha',    name: 'Cha Cha',    bpm: 128, beats: 4, category: 'L' }, // 32 bars/min × 4
+  { id: 'rumba',     name: 'Rumba',      bpm: 104, beats: 4, category: 'L' }, // 26 bars/min × 4
+  { id: 'paso',      name: 'Paso Doble', bpm: 124, beats: 2, category: 'L' }, // 62 bars/min × 2
+  { id: 'jive',      name: 'Jive',       bpm: 176, beats: 4, category: 'L' }, // 44 bars/min × 4
+  { id: 'waltz',     name: 'Waltz',      bpm: 90,  beats: 3, category: 'S' }, // 30 bars/min × 3
+  { id: 'tango',     name: 'Tango',      bpm: 132, beats: 4, category: 'S' }, // 33 bars/min × 4
+  { id: 'vwaltz',    name: 'V.Waltz',    bpm: 180, beats: 3, category: 'S' }, // 60 bars/min × 3
+  { id: 'foxtrot',   name: 'Foxtrot',    bpm: 120, beats: 4, category: 'S' }, // 30 bars/min × 4
+  { id: 'quickstep', name: 'Quickstep',  bpm: 204, beats: 4, category: 'S' }, // 51 bars/min × 4
 ];
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -106,10 +105,10 @@ function ClassInputModal({ input, onClose }) {
             <View style={modal.section}>
               <Text style={modal.sectionLabel}>Your Notes</Text>
 
-              {!!input.takeaway && (
+              {!!input.class_summary && (
                 <View style={[modal.card, { marginBottom: 10 }]}>
                   <Text style={modal.cardInputLabel}>What you worked on</Text>
-                  <Text style={modal.cardText}>{input.takeaway}</Text>
+                  <Text style={modal.cardText}>{input.class_summary}</Text>
                 </View>
               )}
 
@@ -258,29 +257,34 @@ function FocusPager({ focusPoint, inputs, loading, onSelect }) {
 
 // ─── Metronome ────────────────────────────────────────────────────────────────
 
-const MetronomeStrip = memo(function MetronomeStrip() {
-  const [selectedDance, setSelectedDance] = useState(null);
-  const [bpm, setBpm] = useState(120);
-  const [beats, setBeats] = useState(4);
-  const [running, setRunning] = useState(false);
-  const [showPicker, setShowPicker] = useState(false);
-  const pulseAnim = useRef(new Animated.Value(1)).current;
-  const schedulerRef = useRef(null);   // setInterval handle for lookahead scheduler
-  const tickTimeoutsRef = useRef([]);  // pending tick setTimeout IDs
-  const nextTickAtRef = useRef(0);     // absolute ms timestamp of next tick to schedule
-  const soundPoolRef = useRef([]);
-  const poolIdxRef = useRef(0);
-  const bpmRef = useRef(bpm);
-  const dragStartBpm = useRef(bpm);
-  const isDragging = useRef(false);
+const M_ITEM_H = 38;
+const BPM_VALUES = Array.from({ length: 181 }, (_, i) => 40 + i); // 40–220 step 1
 
-  // Keep bpmRef in sync (used by scheduler without needing restarts during drag)
-  useEffect(() => { bpmRef.current = bpm; }, [bpm]);
+const MetronomeStrip = memo(function MetronomeStrip({ onRunningChange, onBeat }) {
+  const defaultBpmIdx = BPM_VALUES.indexOf(120);
+  const [bpmIdx, setBpmIdx]   = useState(defaultBpmIdx);
+  const [danceIdx, setDanceIdx] = useState(0);
+  const [running, setRunning]  = useState(false);
+  const [currentBeat, setCurrentBeat] = useState(0); // 0-based, 0 = downbeat
+
+  const bpmRef   = useRef(BPM_VALUES[defaultBpmIdx]);
+  const beatsRef = useRef(DANCES[0].beats); // beats per bar
+  const beatRef  = useRef(0);               // current beat counter
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+  const schedulerRef    = useRef(null);
+  const tickTimeoutsRef = useRef([]);
+  const nextTickAtRef   = useRef(0);
+  const soundPoolRef    = useRef([]);
+  const poolIdxRef      = useRef(0);
+  const danceScrollRef  = useRef(null);
+  const bpmScrollRef    = useRef(null);
+
+  useEffect(() => { bpmRef.current = BPM_VALUES[bpmIdx]; }, [bpmIdx]);
 
   useEffect(() => {
     Audio.setAudioModeAsync({ playsInSilentModeIOS: true });
-    // 4 sound instances — lookahead may schedule multiple ticks simultaneously
-    Promise.all([0, 1, 2, 3].map(() => Audio.Sound.createAsync(TICK_SOUND, { volume: 1.0 })))
+    // 6 sounds: 0-2 = accent (downbeat), 3-5 = soft (off-beats)
+    Promise.all([0,1,2,3,4,5].map(() => Audio.Sound.createAsync(TICK_SOUND, { volume: 1.0 })))
       .then(results => { soundPoolRef.current = results.map(r => r.sound); });
     return () => {
       stopMetro();
@@ -288,28 +292,37 @@ const MetronomeStrip = memo(function MetronomeStrip() {
     };
   }, []);
 
-  function playTick() {
+  function playTick(isDownbeat) {
     const pool = soundPoolRef.current;
     if (!pool.length) return;
-    const sound = pool[poolIdxRef.current];
-    poolIdxRef.current = (poolIdxRef.current + 1) % pool.length;
-    sound.replayAsync().catch(() => {});
+    // Accent pool: 0-2, soft pool: 3-5
+    if (isDownbeat) {
+      const idx = poolIdxRef.current % 3;
+      pool[idx].setVolumeAsync(1.0).catch(() => {});
+      pool[idx].replayAsync().catch(() => {});
+      poolIdxRef.current = (poolIdxRef.current + 1) % 3;
+    } else {
+      const idx = 3 + (poolIdxRef.current % 3);
+      pool[idx].setVolumeAsync(0.35).catch(() => {});
+      pool[idx].replayAsync().catch(() => {});
+      poolIdxRef.current = (poolIdxRef.current + 1) % 3;
+    }
   }
 
-  function pulse() {
-    pulseAnim.setValue(1.4);
-    Animated.timing(pulseAnim, { toValue: 1, duration: 250, useNativeDriver: true }).start();
+  function fireBeat(beatNum) {
+    const isDownbeat = beatNum === 0;
+    pulseAnim.setValue(isDownbeat ? 1.5 : 1.2);
+    Animated.timing(pulseAnim, { toValue: 1, duration: 180, useNativeDriver: true }).start();
+    setCurrentBeat(beatNum);
+    if (isDownbeat) onBeat?.();
+    playTick(isDownbeat);
   }
 
-  // Lookahead scheduler (Chris Wilson technique):
-  // Runs every 50ms and pre-schedules all ticks within the next 300ms window.
-  // 300ms buffer absorbs JS thread jitter from state updates / re-renders.
   function startMetro(overrideBpm) {
     const initialBpm = overrideBpm ?? bpmRef.current;
-
-    // First tick fires immediately
-    pulse();
-    playTick();
+    beatRef.current = 0;
+    fireBeat(0);
+    beatRef.current = 1;
     nextTickAtRef.current = Date.now() + (60000 / initialBpm);
 
     function scheduler() {
@@ -317,143 +330,110 @@ const MetronomeStrip = memo(function MetronomeStrip() {
       const now = Date.now();
       while (nextTickAtRef.current < now + 300) {
         const delay = Math.max(0, nextTickAtRef.current - now);
-        const id = setTimeout(() => { pulse(); playTick(); }, delay);
+        const capturedBeat = beatRef.current;
+        const id = setTimeout(() => {
+          fireBeat(capturedBeat);
+        }, delay);
         tickTimeoutsRef.current.push(id);
+        beatRef.current = (beatRef.current + 1) % beatsRef.current;
         nextTickAtRef.current += intervalMs;
       }
-      // Trim fired IDs to prevent unbounded array growth
-      if (tickTimeoutsRef.current.length > 40) {
+      if (tickTimeoutsRef.current.length > 40)
         tickTimeoutsRef.current = tickTimeoutsRef.current.slice(-20);
-      }
     }
-
     schedulerRef.current = setInterval(scheduler, 50);
-    setRunning(true);
+    setRunning(true); onRunningChange?.(true);
   }
 
   function stopMetro() {
     if (schedulerRef.current) clearInterval(schedulerRef.current);
     schedulerRef.current = null;
-    // Cancel all pre-scheduled ticks
     tickTimeoutsRef.current.forEach(id => clearTimeout(id));
     tickTimeoutsRef.current = [];
     pulseAnim.setValue(1);
-    setRunning(false);
+    beatRef.current = 0;
+    setCurrentBeat(0);
+    setRunning(false); onRunningChange?.(false);
   }
 
-  function toggleMetro() {
-    running ? stopMetro() : startMetro();
+  function toggleMetro() { running ? stopMetro() : startMetro(); }
+
+  function onDanceScrollEnd(e) {
+    const idx = Math.max(0, Math.min(DANCES.length - 1, Math.round(e.nativeEvent.contentOffset.y / M_ITEM_H)));
+    setDanceIdx(idx);
+    const dance = DANCES[idx];
+    beatsRef.current = dance.beats;
+    beatRef.current  = 0;
+    const newBpmIdx = BPM_VALUES.reduce((best, b, i) =>
+      Math.abs(b - dance.bpm) < Math.abs(BPM_VALUES[best] - dance.bpm) ? i : best, 0);
+    setBpmIdx(newBpmIdx);
+    bpmRef.current = BPM_VALUES[newBpmIdx];
+    bpmScrollRef.current?.scrollTo({ y: newBpmIdx * M_ITEM_H, animated: false });
+    if (running) { stopMetro(); setTimeout(() => startMetro(BPM_VALUES[newBpmIdx]), 50); }
   }
 
-  function pickDance(dance) {
-    setSelectedDance(dance.id);
-    setBpm(dance.bpm);
-    setBeats(dance.beats);
-    setShowPicker(false);
-    if (running) { stopMetro(); setTimeout(() => startMetro(dance.bpm), 50); }
+  function onBpmScrollEnd(e) {
+    const idx = Math.max(0, Math.min(BPM_VALUES.length - 1, Math.round(e.nativeEvent.contentOffset.y / M_ITEM_H)));
+    setBpmIdx(idx);
+    bpmRef.current = BPM_VALUES[idx];
+    if (running) { stopMetro(); setTimeout(() => startMetro(BPM_VALUES[idx]), 50); }
   }
 
-  // Pan responder: capture horizontal swipe on the BPM zone before parent ScrollView
-  const panResponder = useRef(PanResponder.create({
-    onStartShouldSetPanResponder: () => false,
-    onStartShouldSetPanResponderCapture: () => false,
-    // Capture mode: claim gesture before the parent horizontal ScrollView
-    onMoveShouldSetPanResponderCapture: (_, { dx, dy }) =>
-      Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 5,
-    onPanResponderGrant: () => {
-      isDragging.current = true;
-      dragStartBpm.current = bpmRef.current;
-    },
-    onPanResponderMove: (_, { dx }) => {
-      const newBpm = Math.max(40, Math.min(260, dragStartBpm.current + Math.round(dx / 2.5)));
-      bpmRef.current = newBpm;
-      setBpm(newBpm);
-    },
-    onPanResponderRelease: () => {
-      isDragging.current = false;
-      if (running) { stopMetro(); setTimeout(() => startMetro(bpmRef.current), 50); }
-    },
-    onPanResponderTerminate: () => { isDragging.current = false; },
-  })).current;
-
-  const selected = DANCES.find(d => d.id === selectedDance);
-  const bpmProgress = (bpm - 40) / 220;
+  const beats = DANCES[danceIdx]?.beats ?? 4;
 
   return (
     <View style={m.wrap}>
-      <View style={m.topRow}>
-
-        {/* Dance selector */}
-        <TouchableOpacity style={m.dancePill} onPress={() => setShowPicker(v => !v)} activeOpacity={0.75}>
-          <Text style={m.danceLabel} numberOfLines={1}>{selected ? selected.name : 'Select dance'}</Text>
-          <Text style={m.chevron}>{showPicker ? '▲' : '▼'}</Text>
-        </TouchableOpacity>
-
-        {/* BPM wheel — swipe left/right to change tempo */}
-        <View style={m.bpmDragWrap} {...panResponder.panHandlers}>
-          {/* Number wheel: show -2 to +2 neighbours */}
-          <View style={m.bpmWheel}>
-            {[-2, -1, 0, 1, 2].map((offset) => {
-              const val = Math.max(40, Math.min(260, bpm + offset));
-              const dist = Math.abs(offset);
-              const isCenter = dist === 0;
-              return (
-                <View key={offset} style={[m.bpmWheelCell, isCenter && m.bpmWheelCellCenter]}>
-                  <Text
-                    numberOfLines={1}
-                    style={[
-                      m.bpmWheelNum,
-                      isCenter && m.bpmWheelNumCenter,
-                      isCenter && running && m.bpmWheelNumActive,
-                      { opacity: dist === 0 ? 1 : dist === 1 ? 0.28 : 0.12 },
-                    ]}
-                  >
-                    {val}
-                  </Text>
-                </View>
-              );
-            })}
+      {/* Dance scroll */}
+      <ScrollView
+        ref={danceScrollRef}
+        style={m.col}
+        showsVerticalScrollIndicator={false}
+        snapToInterval={M_ITEM_H}
+        decelerationRate="fast"
+        contentOffset={{ x: 0, y: danceIdx * M_ITEM_H }}
+        onMomentumScrollEnd={onDanceScrollEnd}
+        contentContainerStyle={m.scrollContent}
+      >
+        {DANCES.map((d, i) => (
+          <View key={d.id} style={m.item}>
+            <Text style={[m.danceText, danceIdx === i && m.itemActive]}>{d.name}</Text>
           </View>
-          <Text style={m.bpmUnit}>BPM</Text>
-          {/* Progress track */}
-          <View style={m.bpmTrack}>
-            <View style={[m.bpmFill, { width: `${Math.round(bpmProgress * 100)}%` }]} />
-          </View>
-        </View>
+        ))}
+      </ScrollView>
 
-        {/* Play / Stop */}
+      {/* Separator */}
+      <View style={m.sep} />
+
+      {/* BPM scroll */}
+      <ScrollView
+        ref={bpmScrollRef}
+        style={m.colBpm}
+        showsVerticalScrollIndicator={false}
+        snapToInterval={M_ITEM_H}
+        decelerationRate="fast"
+        contentOffset={{ x: 0, y: bpmIdx * M_ITEM_H }}
+        onMomentumScrollEnd={onBpmScrollEnd}
+        contentContainerStyle={m.scrollContent}
+      >
+        {BPM_VALUES.map((b, i) => (
+          <View key={b} style={m.item}>
+            <Text style={[m.bpmText, bpmIdx === i && m.itemActive]}>{b}</Text>
+          </View>
+        ))}
+      </ScrollView>
+
+      {/* Beat dots + play */}
+      <View style={m.right}>
         <TouchableOpacity
           style={[m.playBtn, running && m.playBtnActive]}
           onPress={toggleMetro}
           activeOpacity={0.8}
         >
-          <Animated.View style={running && { transform: [{ scale: pulseAnim }] }}>
+          <Animated.View style={running ? { transform: [{ scale: pulseAnim }] } : undefined}>
             <Text style={[m.playIcon, running && m.playIconActive]}>{running ? '■' : '▶'}</Text>
           </Animated.View>
         </TouchableOpacity>
       </View>
-
-      {/* Dance picker */}
-      {showPicker && (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={m.picker}
-          contentContainerStyle={m.pickerContent}
-        >
-          {DANCES.map(d => (
-            <TouchableOpacity
-              key={d.id}
-              style={[m.pill, selectedDance === d.id && m.pillActive]}
-              onPress={() => pickDance(d)}
-              activeOpacity={0.75}
-            >
-              <Text style={[m.pillCat, selectedDance === d.id && m.pillCatActive]}>{d.category}</Text>
-              <Text style={[m.pillName, selectedDance === d.id && m.pillNameActive]}>{d.name}</Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
-      )}
     </View>
   );
 });
@@ -555,6 +535,8 @@ function SessionFeelingModal({ visible, focusName, onSave, onSkip }) {
 
 // ─── Duration Picker ─────────────────────────────────────────────────────────
 
+const ITEM_H = 40;
+
 function DurationPicker({ value, onChange }) {
   const defaultIdx = Math.max(0, DURATIONS.indexOf(value));
   const scrollY = useRef(new Animated.Value(defaultIdx * ITEM_H)).current;
@@ -566,49 +548,53 @@ function DurationPicker({ value, onChange }) {
   }
 
   return (
-    <View style={dp.wrap}>
-      {/* Selection band — two hairlines around the center slot */}
-      <View pointerEvents="none" style={dp.band} />
-      <ScrollView
-        showsVerticalScrollIndicator={false}
-        snapToInterval={ITEM_H}
-        decelerationRate="fast"
-        contentOffset={{ x: 0, y: defaultIdx * ITEM_H }}
-        onMomentumScrollEnd={onScrollEnd}
-        scrollEventThrottle={16}
-        onScroll={Animated.event(
-          [{ nativeEvent: { contentOffset: { y: scrollY } } }],
-          { useNativeDriver: false }
-        )}
-        contentContainerStyle={dp.content}
-      >
-        {DURATIONS.map((d, i) => {
-          const center = i * ITEM_H;
-          const inputRange = [
-            center - ITEM_H * 2,
-            center - ITEM_H,
-            center,
-            center + ITEM_H,
-            center + ITEM_H * 2,
-          ];
-          const opacity = scrollY.interpolate({
-            inputRange,
-            outputRange: [0.1, 0.28, 1, 0.28, 0.1],
-            extrapolate: 'clamp',
-          });
-          const scale = scrollY.interpolate({
-            inputRange,
-            outputRange: [0.68, 0.82, 1, 0.82, 0.68],
-            extrapolate: 'clamp',
-          });
-          return (
-            <Animated.View key={d} style={[dp.item, { opacity, transform: [{ scale }] }]}>
-              <Text style={dp.num}>{d}</Text>
-              <Text style={dp.unit}>min</Text>
-            </Animated.View>
-          );
-        })}
-      </ScrollView>
+    <View style={dp.row}>
+      <View>
+        <Text style={dp.labelSmall}>Focus training</Text>
+        <Text style={dp.labelBig}>time</Text>
+      </View>
+      <View style={dp.wheel}>
+        <View pointerEvents="none" style={dp.selectionLine} />
+        <View pointerEvents="none" style={[dp.selectionLine, dp.selectionLineBottom]} />
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          snapToInterval={ITEM_H}
+          decelerationRate="fast"
+          contentOffset={{ x: 0, y: defaultIdx * ITEM_H }}
+          onMomentumScrollEnd={onScrollEnd}
+          scrollEventThrottle={16}
+          onScroll={Animated.event(
+            [{ nativeEvent: { contentOffset: { y: scrollY } } }],
+            { useNativeDriver: false }
+          )}
+          contentContainerStyle={dp.content}
+        >
+          {DURATIONS.map((d, i) => {
+            const center = i * ITEM_H;
+            const inputRange = [
+              center - ITEM_H,
+              center,
+              center + ITEM_H,
+            ];
+            const opacity = scrollY.interpolate({
+              inputRange,
+              outputRange: [0.2, 1, 0.2],
+              extrapolate: 'clamp',
+            });
+            const scale = scrollY.interpolate({
+              inputRange,
+              outputRange: [0.78, 1, 0.78],
+              extrapolate: 'clamp',
+            });
+            return (
+              <Animated.View key={d} style={[dp.item, { opacity, transform: [{ scale }] }]}>
+                <Text style={dp.num}>{d}</Text>
+                <Text style={dp.unit}>min</Text>
+              </Animated.View>
+            );
+          })}
+        </ScrollView>
+      </View>
     </View>
   );
 }
@@ -659,7 +645,7 @@ function ChatPage({ focusPoint, focusPointId, sessionActive, timeLeft, duration,
     const classLines = classInputsList.slice(0, 10).map(inp => {
       const date = new Date(inp.created_at).toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
       const parts = [`Class on ${date}:`];
-      if (inp.takeaway) parts.push(`Worked on: "${inp.takeaway}"`);
+      if (inp.class_summary) parts.push(`Worked on: "${inp.class_summary}"`);
       if (inp.practice_point_1) parts.push(`To improve: "${inp.practice_point_1}" (priority ${inp.priority_score_1}/10)`);
       if (inp.practice_point_2) parts.push(`Also: "${inp.practice_point_2}" (priority ${inp.priority_score_2}/10)`);
       if (inp.ai_primary_focus) parts.push(`AI focus: ${inp.ai_primary_focus}`);
@@ -814,6 +800,33 @@ export default function FocusSessionScreen({ route, navigation }) {
   const [sessionActive, setSessionActive] = useState(false);
   const [sessionPaused, setSessionPaused] = useState(false);
   const [sessionDone, setSessionDone] = useState(false);
+  const [contextExpanded, setContextExpanded] = useState(false);
+  const contextExpandedRef = useRef(false);
+  const contextAnim = useRef(new Animated.Value(0)).current;
+  const [contextHeight, setContextHeight] = useState(0);
+
+  function toggleContext(forceTo) {
+    // Use ref to avoid stale closure issues (onTouchEnd re-renders can cause stale contextExpanded)
+    const next = forceTo !== undefined ? forceTo : !contextExpandedRef.current;
+    contextExpandedRef.current = next;
+    setContextExpanded(next);
+    Animated.spring(contextAnim, {
+      toValue: next ? 1 : 0,
+      useNativeDriver: false,
+      bounciness: 0,
+      speed: 16,
+    }).start();
+  }
+
+  const [metroOpen, setMetroOpen] = useState(false);
+  const [metroRunning, setMetroRunning] = useState(false);
+  const metroAnim = useRef(new Animated.Value(0)).current;
+  const beatAnim  = useRef(new Animated.Value(0)).current;
+
+  function handleBeat() {
+    beatAnim.setValue(1);
+    Animated.timing(beatAnim, { toValue: 0, duration: 200, useNativeDriver: false }).start();
+  }
   const [timeLeft, setTimeLeft] = useState(25 * 60);
   const [showFeelingModal, setShowFeelingModal] = useState(false);
   const [showStopConfirm, setShowStopConfirm] = useState(false);
@@ -909,6 +922,23 @@ export default function FocusSessionScreen({ route, navigation }) {
     clearActiveSession();
   }
 
+  function closeMetro() {
+    if (!metroOpen) return;
+    setMetroOpen(false);
+    Animated.spring(metroAnim, { toValue: 0, useNativeDriver: false, bounciness: 4, speed: 14 }).start();
+  }
+
+  function toggleMetroPanel() {
+    const toValue = metroOpen ? 0 : 1;
+    setMetroOpen(!metroOpen);
+    Animated.spring(metroAnim, {
+      toValue,
+      useNativeDriver: false,
+      bounciness: 4,
+      speed: 14,
+    }).start();
+  }
+
   function handleEndSession() {
     if (intervalRef.current) clearInterval(intervalRef.current);
     setSessionActive(false);
@@ -921,7 +951,8 @@ export default function FocusSessionScreen({ route, navigation }) {
   async function handleSave(feeling, note) {
     if (sessionCompletedRef.current) return;
     sessionCompletedRef.current = true;
-    await completeTrainingSession(sessionId, feeling, note, focusPointId);
+    const startedAtMs = getActiveSession()?.startedAt ?? null;
+    await completeTrainingSession(sessionId, feeling, note, focusPointId, startedAtMs);
     clearActiveSession();
     setShowFeelingModal(false);
     navigation.goBack();
@@ -930,7 +961,8 @@ export default function FocusSessionScreen({ route, navigation }) {
   async function handleSkip() {
     if (sessionCompletedRef.current) return;
     sessionCompletedRef.current = true;
-    await completeTrainingSession(sessionId, null, null, focusPointId);
+    const startedAtMs = getActiveSession()?.startedAt ?? null;
+    await completeTrainingSession(sessionId, null, null, focusPointId, startedAtMs);
     clearActiveSession();
     setShowFeelingModal(false);
     navigation.goBack();
@@ -974,6 +1006,43 @@ export default function FocusSessionScreen({ route, navigation }) {
           >
             <Text style={styles.sessionLabel}>{getSessionLabel(sessionCount)}</Text>
             <Text style={styles.focusName}>{focusPoint?.name || '—'}</Text>
+            {focusPoint?.subtitle ? (
+              <View style={styles.subtitleWrap}>
+                <Text style={styles.focusSubtitle}>{focusPoint.subtitle}</Text>
+                {focusPoint?.context ? (
+                  <TouchableOpacity
+                    onPress={() => { closeMetro(); toggleContext(); }}
+                    activeOpacity={0.7}
+                    style={styles.readMoreBtn}
+                  >
+                    <Text style={styles.readMoreText}>
+                      {contextExpanded ? 'Read less ↑' : 'Read more ↓'}
+                    </Text>
+                  </TouchableOpacity>
+                ) : null}
+                {focusPoint?.context ? (
+                  <>
+                    {/* Invisible measure pass */}
+                    <Text
+                      style={[styles.focusContext, { position: 'absolute', opacity: 0, zIndex: -1 }]}
+                      onLayout={e => { if (!contextHeight) setContextHeight(e.nativeEvent.layout.height + 4); }}
+                    >
+                      {focusPoint.context}
+                    </Text>
+                    <Animated.View style={{
+                      height: contextAnim.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [0, contextHeight || 200],
+                        extrapolate: 'clamp',
+                      }),
+                      overflow: 'hidden',
+                    }}>
+                      <Text style={styles.focusContext}>{focusPoint.context}</Text>
+                    </Animated.View>
+                  </>
+                ) : null}
+              </View>
+            ) : null}
             <FocusPager
               focusPoint={focusPoint}
               inputs={classInputs}
@@ -982,7 +1051,19 @@ export default function FocusSessionScreen({ route, navigation }) {
             />
           </View>
 
-          {/* Timer */}
+          {/* Drill card */}
+          {!sessionDone && focusPoint?.drill ? (
+            <View style={styles.drillCard}>
+              <View style={styles.drillHeader}>
+                <View style={styles.drillPill}>
+                  <Text style={styles.drillPillText}>DRILL</Text>
+                </View>
+              </View>
+              <Text style={styles.drillText}>{focusPoint.drill}</Text>
+            </View>
+          ) : null}
+
+          {/* Timer / Duration — centre de l'écran */}
           <View style={styles.timerSection}>
             {sessionDone ? (
               <View style={styles.doneWrap}>
@@ -999,23 +1080,50 @@ export default function FocusSessionScreen({ route, navigation }) {
             ) : (
               <DurationPicker
                 value={duration}
-                onChange={(d) => { setDuration(d); setTimeLeft(d * 60); }}
+                onChange={(d) => { closeMetro(); setDuration(d); setTimeLeft(d * 60); }}
               />
             )}
           </View>
 
-          {/* Tools */}
-          <View
-            style={styles.tools}
-            onTouchStart={() => setOuterScrollEnabled(false)}
-            onTouchEnd={() => setOuterScrollEnabled(true)}
-            onTouchCancel={() => setOuterScrollEnabled(true)}
-          >
-            <MetronomeStrip />
-          </View>
-
           {/* CTA */}
           <View style={styles.ctaWrap}>
+            {/* Metronome pill */}
+            {!sessionDone && (
+              <Animated.View
+                style={[
+                  styles.metroPill,
+                  {
+                    width: metroAnim.interpolate({ inputRange: [0, 1], outputRange: [48, screenW - Spacing.side * 2] }),
+                    borderRadius: metroAnim.interpolate({ inputRange: [0, 1], outputRange: [24, 16] }),
+                  },
+                ]}
+              >
+                {/* Circle tap zone — always visible */}
+                <TouchableOpacity
+                  onPress={toggleMetroPanel}
+                  activeOpacity={0.8}
+                  style={styles.metroPillCircle}
+                >
+                  <Animated.Text style={[styles.metroPillIcon, metroRunning && {
+                    color: beatAnim.interpolate({ inputRange: [0, 1], outputRange: ['#FFFFFF', Colors.orange] }),
+                  }]}>
+                    ♩
+                  </Animated.Text>
+                </TouchableOpacity>
+
+                {/* Always mounted — never unmounts so audio keeps playing */}
+                <Animated.View
+                  style={[styles.metroPillContent, { opacity: metroAnim }]}
+                  pointerEvents={metroOpen ? 'auto' : 'none'}
+                  onTouchStart={() => setOuterScrollEnabled(false)}
+                  onTouchEnd={() => setOuterScrollEnabled(true)}
+                  onTouchCancel={() => setOuterScrollEnabled(true)}
+                >
+                  <MetronomeStrip onRunningChange={setMetroRunning} onBeat={handleBeat} />
+                </Animated.View>
+              </Animated.View>
+            )}
+
             {!sessionActive && !sessionDone && (
               <TouchableOpacity style={styles.startBtn} onPress={startSession} activeOpacity={0.88}>
                 <Text style={styles.startBtnText}>START SESSION</Text>
@@ -1151,6 +1259,68 @@ const styles = StyleSheet.create({
     color: Colors.white,
     lineHeight: 30,
   },
+  subtitleWrap: {
+    marginTop: 8,
+  },
+  focusSubtitle: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 13,
+    color: '#FFFFFF',
+    lineHeight: 19,
+  },
+  readMoreBtn: {
+    marginTop: 6,
+    alignSelf: 'flex-start',
+  },
+  readMoreText: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 12,
+    color: 'rgba(255, 157, 0, 0.7)',
+    letterSpacing: 0.3,
+  },
+  focusContext: {
+    marginTop: 10,
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 13,
+    color: 'rgba(255,255,255,0.75)',
+    lineHeight: 20,
+  },
+  drillCard: {
+    marginHorizontal: Spacing.side,
+    marginTop: 10,
+    borderRadius: 18,
+    paddingHorizontal: 20,
+    paddingTop: 14,
+    paddingBottom: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(17,12,17,0.1)',
+    backgroundColor: '#FAFAFA',
+  },
+  drillHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  drillPill: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    borderWidth: 1,
+    borderColor: 'rgba(17,12,17,0.12)',
+  },
+  drillPillText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 9,
+    color: Colors.black,
+    letterSpacing: 1.5,
+  },
+  drillText: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 14,
+    color: Colors.black,
+    lineHeight: 22,
+  },
 
   timerSection: {
     flex: 1,
@@ -1194,10 +1364,53 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     marginBottom: 14,
   },
+  metroPill: {
+    backgroundColor: '#1A1A1A',
+    height: 48,
+    overflow: 'hidden',
+    flexDirection: 'row',
+    alignItems: 'center',
+    position: 'relative',
+  },
+  metroPillCircle: {
+    width: 48,
+    height: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  metroPillIcon: {
+    fontSize: 20,
+    color: '#FFFFFF',
+  },
+  metroPulse: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: Colors.orange,
+  },
+  metroPillContent: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  metroPillClose: {
+    position: 'absolute',
+    top: 8,
+    right: 10,
+    width: 28,
+    height: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  metroPillCloseText: {
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.4)',
+  },
   ctaWrap: {
     paddingHorizontal: Spacing.side,
     paddingBottom: 8,
-    gap: 10,
+    gap: 16,
   },
   startBtn: {
     backgroundColor: '#FF9D00',
@@ -1318,45 +1531,72 @@ const styles = StyleSheet.create({
 // ─── Duration Picker styles ───────────────────────────────────────────────────
 
 const dp = StyleSheet.create({
-  wrap: {
-    height: ITEM_H * 5,
-    width: 200,
-    alignSelf: 'center',
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: Spacing.side,
+    marginBottom: 10,
+    overflow: 'hidden',
+    gap: 80,
+  },
+  labelSmall: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 11,
+    color: Colors.secondary,
+    letterSpacing: 1.8,
+    textTransform: 'uppercase',
+    marginBottom: 2,
+  },
+  labelBig: {
+    fontFamily: Fonts.monument,
+    fontSize: 26,
+    color: Colors.black,
+    letterSpacing: -0.5,
+    lineHeight: 30,
+    textTransform: 'uppercase',
+  },
+  wheel: {
+    height: ITEM_H * 3,
+    width: 120,
     overflow: 'hidden',
   },
-  band: {
+  selectionLine: {
     position: 'absolute',
-    top: ITEM_H * 2,
-    left: 0,
-    right: 0,
-    height: ITEM_H,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(17,12,17,0.18)',
+    top: ITEM_H,
+    left: 8,
+    right: 8,
+    height: 1,
+    backgroundColor: Colors.orange,
+    opacity: 0.7,
     zIndex: 1,
   },
+  selectionLineBottom: {
+    top: ITEM_H * 2 - 1,
+  },
   content: {
-    paddingVertical: ITEM_H * 2,
+    paddingVertical: ITEM_H,
   },
   item: {
     height: ITEM_H,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 7,
+    gap: 4,
   },
   num: {
     fontFamily: Fonts.monument,
-    fontSize: 36,
+    fontSize: 32,
     color: Colors.black,
     letterSpacing: 1,
-    lineHeight: 44,
+    lineHeight: 40,
   },
   unit: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 13,
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 12,
     color: Colors.secondary,
-    marginTop: 10,
+    marginTop: 8,
+    letterSpacing: 0.5,
   },
 });
 
@@ -1541,143 +1781,104 @@ const modal = StyleSheet.create({
 
 // ─── Metronome styles ─────────────────────────────────────────────────────────
 
+const PILL_H_OPEN = M_ITEM_H * 3 + 20; // 134
+
 const m = StyleSheet.create({
-  wrap: { paddingHorizontal: 16, paddingVertical: 10 },
-
-  topRow: {
-    flexDirection: 'row',
-    alignItems: 'stretch',
-    gap: 8,
-  },
-
-  // Dance pill (fixed width, left)
-  dancePill: {
-    width: 110,
+  wrap: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 10,
-    paddingVertical: 9,
-    borderRadius: 10,
-    backgroundColor: 'rgba(17,12,17,0.05)',
-    borderWidth: 0.5,
-    borderColor: Colors.statCardBorder,
+    paddingRight: 12,
   },
-  danceLabel: {
+  band: {
+    display: 'none',
+  },
+  col: {
+    flex: 2,
+    height: M_ITEM_H,
+  },
+  colBpm: {
+    flex: 1,
+    height: M_ITEM_H,
+  },
+  scrollContent: {
+    paddingVertical: 0,
+  },
+  item: {
+    height: M_ITEM_H,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  danceText: {
     fontFamily: Fonts.jakartaMedium,
-    fontSize: 12,
-    color: Colors.black,
-    flex: 1,
+    fontSize: 13,
+    color: 'rgba(255,255,255,0.4)',
+    letterSpacing: 0.3,
   },
-  chevron: { fontSize: 8, color: Colors.secondary },
-
-  // BPM wheel zone
-  bpmDragWrap: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 8,
-    paddingTop: 8,
-    paddingBottom: 12,
-    borderRadius: 10,
-    backgroundColor: 'rgba(17,12,17,0.05)',
-    borderWidth: 0.5,
-    borderColor: Colors.statCardBorder,
-    overflow: 'hidden',
-  },
-  bpmWheel: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-evenly',
-    width: '100%',
-    marginBottom: 1,
-  },
-  bpmWheelCell: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  bpmWheelCellCenter: {
-    flex: 1.6,
-  },
-  bpmWheelNum: {
+  bpmText: {
     fontFamily: Fonts.monument,
-    fontSize: 11,
-    color: Colors.black,
-    letterSpacing: 0.2,
-    textAlign: 'center',
-  },
-  bpmWheelNumCenter: {
     fontSize: 18,
-    lineHeight: 22,
+    color: 'rgba(255,255,255,0.4)',
+    letterSpacing: 0.5,
   },
-  bpmWheelNumActive: { color: Colors.orange },
-  bpmUnit: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 7,
-    color: Colors.secondary,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
+  itemActive: {
+    color: '#FFFFFF',
   },
-  // Progress bar at the bottom (40–260 BPM range)
-  bpmTrack: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    height: 2,
-    backgroundColor: 'rgba(17,12,17,0.07)',
+  sep: {
+    width: StyleSheet.hairlineWidth,
+    height: M_ITEM_H,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    alignSelf: 'center',
+    marginHorizontal: 4,
   },
-  bpmFill: {
-    height: 2,
-    backgroundColor: Colors.orange,
-    borderRadius: 1,
-  },
-
-  // Play button
-  playBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: Colors.black,
+  right: {
+    flexDirection: 'column',
     alignItems: 'center',
     justifyContent: 'center',
-    alignSelf: 'center',
+    gap: 6,
+    paddingRight: 4,
+    marginLeft: 8,
+    flexShrink: 0,
+  },
+  beatDots: {
+    flexDirection: 'row',
+    gap: 4,
+    alignItems: 'center',
+  },
+  dot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+  },
+  dotActive: {
+    backgroundColor: '#FFFFFF',
+  },
+  dotAccent: {
+    backgroundColor: Colors.orange,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  playBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
   },
   playBtnActive: {
     backgroundColor: Colors.orange,
     shadowColor: Colors.orange,
-    shadowOpacity: 0.5,
+    shadowOpacity: 0.6,
     shadowOffset: { width: 0, height: 3 },
-    shadowRadius: 10,
+    shadowRadius: 8,
     elevation: 4,
   },
-  playIcon: { fontSize: 12, color: Colors.white },
-  playIconActive: { color: Colors.black },
-
-  // Dance picker
-  picker: {},
-  pickerContent: { gap: 6, paddingBottom: 2 },
-  pill: {
-    alignItems: 'center',
-    paddingHorizontal: 13,
-    paddingVertical: 6,
-    backgroundColor: Colors.background,
-    borderRadius: 8,
-    borderWidth: 0.5,
-    borderColor: Colors.statCardBorder,
-  },
-  pillActive: { backgroundColor: Colors.black, borderColor: Colors.black },
-  pillCat: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 9,
-    color: Colors.secondary,
-    textTransform: 'uppercase',
-    letterSpacing: 0.3,
-  },
-  pillCatActive: { color: 'rgba(255,255,255,0.5)' },
-  pillName: { fontFamily: Fonts.jakartaBold, fontSize: 12, color: Colors.black },
-  pillNameActive: { color: Colors.white },
+  playIcon: { fontSize: 13, color: '#FFFFFF' },
+  playIconActive: { color: '#000' },
 });
 
 // ─── Feeling slider styles ────────────────────────────────────────────────────

@@ -12,6 +12,20 @@ function ordinal(n) {
   return n + (s[(v - 20) % 10] || s[v] || s[0]);
 }
 
+const FEELING_TO_RATING = {
+  Hard:      'hard',
+  Struggled: 'struggled',
+  Okay:      'okay',
+  Good:      'good',
+  Great:     'great',
+};
+
+export function urgencyToTier(score) {
+  if (score >= 8) return 'critical';
+  if (score >= 5) return 'important';
+  return 'supporting';
+}
+
 // ─── Priority Score Engine ────────────────────────────────────────────────────
 // Formula: priority = base_score - (practice_count × practiceWeight[tier])
 //                   + recency + tierModifier[tier] + coach_signal + inactionPenalty
@@ -122,9 +136,9 @@ export async function getQuestionMultiplier(userId) {
         .eq('student_id', userId)
         .gte('created_at', windowStart),
       supabase
-        .from('training_sessions')
+        .from('practice_logs')
         .select('id')
-        .eq('user_id', userId)
+        .eq('student_id', userId)
         .not('completed_at', 'is', null)
         .gte('started_at', windowStart),
       supabase
@@ -205,7 +219,7 @@ export async function applyFocusEvent(focusId, eventType, userId) {
         };
         break;
       case 'FOCUS_REMENTIONED':
-        update = { base_score: Math.min(20, (fp.base_score || 5) + 2) };
+        update = { base_score: Math.min(20, (fp.base_score || 5) + 2), last_mentioned_at: new Date().toISOString() };
         break;
       default:
         return;
@@ -250,80 +264,58 @@ export function getSessionLabel(count) {
 }
 
 // ─── Start training session ───────────────────────────────────────────────────
+// No longer inserts to DB — row is only created when the session is completed.
+// Returns a local identifier used to track the in-progress session in memory.
 
 export async function startTrainingSession(slot1FocusId, slot2FocusId) {
-  try {
-    const userId = await getUserId();
-    const { data, error } = await supabase
-      .from('training_sessions')
-      .insert({
-        user_id:        userId,
-        slot1_focus_id: slot1FocusId || null,
-        slot2_focus_id: slot2FocusId || null,
-        started_at:     new Date().toISOString(),
-      })
-      .select()
-      .single();
-    if (error) throw error;
-    return data?.id || null;
-  } catch (e) {
-    console.error('startTrainingSession error:', e);
-    return null;
-  }
+  return `local_${Date.now()}`;
 }
 
 // ─── Complete training session ────────────────────────────────────────────────
+// Inserts a new practice_log row only at this point (end of session).
 
-export async function completeTrainingSession(sessionId, feeling = null, sessionNote = null, activeFocusPointId = null) {
+export async function completeTrainingSession(sessionId, feeling = null, sessionNote = null, activeFocusPointId = null, startedAtMs = null) {
   try {
-    if (!sessionId) return;
     const userId = await getUserId();
 
-    // Get focus ids and timing before updating
-    const { data: session } = await supabase
-      .from('training_sessions')
-      .select('slot1_focus_id, slot2_focus_id, started_at')
-      .eq('id', sessionId)
+    const rating          = FEELING_TO_RATING[feeling] ?? 'okay';
+    const completedAt     = new Date();
+    const startedAt       = startedAtMs ? new Date(startedAtMs) : completedAt;
+    const durationMinutes = Math.max(1, Math.round((completedAt - startedAt) / 60000));
+    const activeFid       = activeFocusPointId || null;
+
+    // INSERT a fresh row — no row was created at session start
+    const insertPayload = {
+      student_id:       userId,
+      focus_point_id:   activeFid,
+      started_at:       startedAt.toISOString(),
+      completed_at:     completedAt.toISOString(),
+      duration_minutes: durationMinutes,
+      rating,
+    };
+    if (feeling)     insertPayload.feeling      = feeling;
+    if (sessionNote) insertPayload.session_note = sessionNote;
+
+    const { data: inserted, error } = await supabase
+      .from('practice_logs')
+      .insert(insertPayload)
+      .select('id')
       .single();
+    if (error) throw error;
 
-    const updatePayload = { completed_at: new Date().toISOString() };
-    if (feeling)     updatePayload.feeling      = feeling;
-    if (sessionNote) updatePayload.session_note = sessionNote;
-
-    await supabase
-      .from('training_sessions')
-      .update(updatePayload)
-      .eq('id', sessionId);
-
-    // Restrict all scoring to only the focus point the user actually worked on
-    const focusIds = [session?.slot1_focus_id, session?.slot2_focus_id].filter(Boolean);
-    const activeFid = activeFocusPointId || focusIds[0];
+    const newLogId = inserted?.id;
 
     if (activeFid) {
-      // Apply PRACTICE_SESSION_LOG to the active focus point only
+      // Apply immediate score update to focus_points
       await applyFocusEvent(activeFid, 'PRACTICE_SESSION_LOG', userId);
 
-      // Call practice-log edge function to trigger Yoda Score algorithm
-      const FEELING_TO_RATING = {
-        Hard:      'hard',
-        Struggled: 'struggled',
-        Okay:      'okay',
-        Good:      'good',
-        Great:     'great',
-      };
-      const rating = FEELING_TO_RATING[feeling] ?? 'okay';
-      const completedAt = new Date();
-      const startedAt = session?.started_at ? new Date(session.started_at) : completedAt;
-      const durationMinutes = Math.max(1, Math.round((completedAt - startedAt) / 60000));
-
-      supabase.functions.invoke('practice-log', {
+      // Invoke yoda-score for full algorithm processing (fire-and-forget)
+      supabase.functions.invoke('yoda-score', {
         body: {
-          focus_point_id:   activeFid,
-          duration_minutes: durationMinutes,
-          rating,
-          student_id:       userId,
+          event:           'practice_log',
+          practice_log_id: newLogId,
         },
-      }).catch(err => console.error('practice-log invoke error:', err));
+      }).catch(err => console.error('yoda-score invoke error:', err));
 
       // Map feeling → score update on the active focus point only
       // Hard/Struggled → base_score increases (still difficult)

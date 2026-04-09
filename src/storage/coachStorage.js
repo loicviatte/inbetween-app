@@ -67,11 +67,31 @@ export async function respondToCoachRequest(requestId, accept) {
   const coachId = await getCoachId();
   const status = accept ? 'accepted' : 'declined';
 
-  await supabase
+  // Update the request status
+  const { data: req } = await supabase
     .from('coach_requests')
     .update({ status })
     .eq('id', requestId)
-    .eq('coach_id', coachId);
+    .eq('coach_id', coachId)
+    .select('student_id')
+    .single();
+
+  // When accepting, write coach_id onto the student's user record
+  if (accept && req?.student_id) {
+    await supabase
+      .from('users')
+      .update({ coach_id: coachId })
+      .eq('id', req.student_id);
+  }
+
+  // When declining, clear coach_id if it was pointing to this coach
+  if (!accept && req?.student_id) {
+    await supabase
+      .from('users')
+      .update({ coach_id: null })
+      .eq('id', req.student_id)
+      .eq('coach_id', coachId);
+  }
 }
 
 // ─── Students ─────────────────────────────────────────────────────────────────
@@ -193,9 +213,9 @@ export async function updateFocusPoint(focusPointId, updates) {
 export async function getStudentRecentActivity(studentId, limit = 5) {
   const [{ data: sessions }, { data: classes }] = await Promise.all([
     supabase
-      .from('training_sessions')
+      .from('practice_logs')
       .select('id, started_at, completed_at')
-      .eq('user_id', studentId)
+      .eq('student_id', studentId)
       .not('completed_at', 'is', null)
       .order('started_at', { ascending: false })
       .limit(limit),
@@ -280,21 +300,21 @@ export async function dismissQuestion(messageId) {
 
 export async function getTrainingSessionDetail(sessionId) {
   const { data: session } = await supabase
-    .from('training_sessions')
-    .select('id, started_at, completed_at, feeling, session_note, slot1_focus_id, slot2_focus_id')
+    .from('practice_logs')
+    .select('id, started_at, completed_at, feeling, session_note, focus_point_id')
     .eq('id', sessionId)
     .single();
 
   if (!session) return null;
 
-  const focusIds = [session.slot1_focus_id, session.slot2_focus_id].filter(Boolean);
-  let focusMap = {};
-  if (focusIds.length > 0) {
-    const { data: fps } = await supabase
+  let focusName = null;
+  if (session.focus_point_id) {
+    const { data: fp } = await supabase
       .from('focus_points')
-      .select('id, name')
-      .in('id', focusIds);
-    for (const fp of fps || []) focusMap[fp.id] = fp.name;
+      .select('name')
+      .eq('id', session.focus_point_id)
+      .single();
+    focusName = fp?.name || null;
   }
 
   return {
@@ -302,15 +322,15 @@ export async function getTrainingSessionDetail(sessionId) {
     durationMin: session.completed_at
       ? Math.round((new Date(session.completed_at) - new Date(session.started_at)) / 60000)
       : null,
-    focus1Name: session.slot1_focus_id ? focusMap[session.slot1_focus_id] || null : null,
-    focus2Name: session.slot2_focus_id ? focusMap[session.slot2_focus_id] || null : null,
+    focus1Name: focusName,
+    focus2Name: null,
   };
 }
 
 export async function getClassDetail(classId) {
   const { data } = await supabase
     .from('class_inputs')
-    .select('id, created_at, title, takeaway, practice_point_1, practice_point_2, ai_primary_focus, ai_secondary_focus')
+    .select('id, created_at, title, class_summary, practice_point_1, practice_point_2, ai_primary_focus, ai_secondary_focus')
     .eq('id', classId)
     .single();
   return data || null;
@@ -341,9 +361,9 @@ export async function getCoachActivityFeed() {
     { data: messages },
   ] = await Promise.all([
     supabase
-      .from('training_sessions')
-      .select('id, user_id, started_at, completed_at')
-      .in('user_id', studentIds)
+      .from('practice_logs')
+      .select('id, student_id, started_at, completed_at')
+      .in('student_id', studentIds)
       .not('completed_at', 'is', null)
       .gte('started_at', fourteenDaysAgo)
       .order('started_at', { ascending: false })
@@ -370,8 +390,8 @@ export async function getCoachActivityFeed() {
   const events = [
     ...(sessions || []).map(s => ({
       id: s.id,
-      studentId: s.user_id,
-      studentName: studentMap[s.user_id] || 'Student',
+      studentId: s.student_id,
+      studentName: studentMap[s.student_id] || 'Student',
       type: 'training',
       date: new Date(s.started_at),
       durationMin: s.completed_at

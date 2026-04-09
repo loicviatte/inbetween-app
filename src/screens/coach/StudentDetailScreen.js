@@ -291,7 +291,7 @@ export default function StudentDetailScreen({ route, navigation }) {
             () => { if (active) reload(); })
           .on('postgres_changes', { event: '*', schema: 'public', table: 'focus_points', filter: `user_id=eq.${studentId}` },
             () => { if (active) reload(); })
-          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'training_sessions', filter: `user_id=eq.${studentId}` },
+          .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'practice_logs', filter: `student_id=eq.${studentId}` },
             async () => {
               if (!active) return;
               const act = await getStudentRecentActivity(studentId, 8);

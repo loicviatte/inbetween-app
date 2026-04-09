@@ -132,10 +132,10 @@ export default function ClassDetailScreen({ route, navigation }) {
         <View style={styles.section}>
           <Text style={styles.sectionLabel}>Your Notes</Text>
 
-          {item.takeaway ? (
+          {item.class_summary ? (
             <View style={[styles.card, { marginBottom: 10 }]}>
               <Text style={styles.noteInputLabel}>What you worked on</Text>
-              <Text style={styles.cardText}>{item.takeaway}</Text>
+              <Text style={styles.cardText}>{item.class_summary}</Text>
             </View>
           ) : null}
 
