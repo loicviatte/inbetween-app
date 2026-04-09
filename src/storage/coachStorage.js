@@ -67,11 +67,31 @@ export async function respondToCoachRequest(requestId, accept) {
   const coachId = await getCoachId();
   const status = accept ? 'accepted' : 'declined';
 
-  await supabase
+  // Update the request status
+  const { data: req } = await supabase
     .from('coach_requests')
     .update({ status })
     .eq('id', requestId)
-    .eq('coach_id', coachId);
+    .eq('coach_id', coachId)
+    .select('student_id')
+    .single();
+
+  // When accepting, write coach_id onto the student's user record
+  if (accept && req?.student_id) {
+    await supabase
+      .from('users')
+      .update({ coach_id: coachId })
+      .eq('id', req.student_id);
+  }
+
+  // When declining, clear coach_id if it was pointing to this coach
+  if (!accept && req?.student_id) {
+    await supabase
+      .from('users')
+      .update({ coach_id: null })
+      .eq('id', req.student_id)
+      .eq('coach_id', coachId);
+  }
 }
 
 // ─── Students ─────────────────────────────────────────────────────────────────
@@ -94,8 +114,8 @@ export async function getMyStudents() {
 
   const studentIds = students.map(s => s.id);
 
-  // Fetch pending questions and validations in parallel
-  const [{ data: pendingMessages }, { data: pendingValidations }] = await Promise.all([
+  // Fetch pending questions and pending_coach focus points in parallel
+  const [{ data: pendingMessages }, { data: pendingFPs }] = await Promise.all([
     supabase
       .from('coach_messages')
       .select('student_id')
@@ -103,15 +123,15 @@ export async function getMyStudents() {
       .eq('status', 'pending')
       .in('student_id', studentIds),
     supabase
-      .from('focus_validations')
-      .select('student_id')
-      .eq('coach_id', coachId)
-      .eq('status', 'pending')
-      .in('student_id', studentIds),
+      .from('focus_points')
+      .select('user_id')
+      .eq('status', 'pending_coach')
+      .eq('is_other', false)
+      .in('user_id', studentIds),
   ]);
 
   const questionStudents = new Set((pendingMessages || []).map(m => m.student_id));
-  const attentionStudents = new Set((pendingValidations || []).map(v => v.student_id));
+  const attentionStudents = new Set((pendingFPs || []).map(v => v.user_id));
 
   return students.map(s => {
     let status = 'on_track';
@@ -144,56 +164,42 @@ export async function getStudentProfile(studentId) {
 }
 
 export async function getStudentFocusPoints(studentId) {
-  const coachId = await getCoachId();
   const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString();
 
-  // Get active focus points
+  // Get active focus points (pending_coach removed — FPs go direct to student)
   const { data: focusPoints } = await supabase
     .from('focus_points')
-    .select('id, name, coach_note, created_at')
+    .select('id, name, subtitle, coach_note, created_at, status, tier')
     .eq('user_id', studentId)
     .eq('is_deleted', false)
-    .eq('is_archived', false)
+    .eq('is_other', false)
+    .in('status', ['active', 'past_candidate'])
     .order('created_at', { ascending: true });
 
   if (!focusPoints || focusPoints.length === 0) return [];
 
+  // Count practice_logs this week for each focus
   const focusIds = focusPoints.map(f => f.id);
-
-  // Count training sessions this week for each focus
-  const { data: sessions } = await supabase
-    .from('training_sessions')
-    .select('slot1_focus_id, slot2_focus_id')
-    .eq('user_id', studentId)
-    .gte('started_at', weekAgo)
-    .not('completed_at', 'is', null);
-
-  const weekCounts = {};
-  for (const s of sessions || []) {
-    if (s.slot1_focus_id) weekCounts[s.slot1_focus_id] = (weekCounts[s.slot1_focus_id] || 0) + 1;
-    if (s.slot2_focus_id) weekCounts[s.slot2_focus_id] = (weekCounts[s.slot2_focus_id] || 0) + 1;
-  }
-
-  // Get pending validations for these focus points
-  const { data: validations } = await supabase
-    .from('focus_validations')
-    .select('focus_point_id, type, student_note')
+  const { data: logs } = await supabase
+    .from('practice_logs')
+    .select('focus_point_id')
     .eq('student_id', studentId)
-    .eq('coach_id', coachId)
-    .eq('status', 'pending')
+    .gte('created_at', weekAgo)
     .in('focus_point_id', focusIds);
 
-  const validationMap = {};
-  for (const v of validations || []) {
-    validationMap[v.focus_point_id] = { type: v.type, note: v.student_note };
+  const weekCounts = {};
+  for (const l of logs || []) {
+    weekCounts[l.focus_point_id] = (weekCounts[l.focus_point_id] || 0) + 1;
   }
 
   return focusPoints.map(f => ({
     id: f.id,
     name: f.name,
+    subtitle: f.subtitle || null,
     coachNote: f.coach_note || null,
     weekCount: weekCounts[f.id] || 0,
-    validationPending: validationMap[f.id] || null,
+    status: f.status,
+    tier: f.tier || null,
   }));
 }
 
@@ -207,9 +213,9 @@ export async function updateFocusPoint(focusPointId, updates) {
 export async function getStudentRecentActivity(studentId, limit = 5) {
   const [{ data: sessions }, { data: classes }] = await Promise.all([
     supabase
-      .from('training_sessions')
+      .from('practice_logs')
       .select('id, started_at, completed_at')
-      .eq('user_id', studentId)
+      .eq('student_id', studentId)
       .not('completed_at', 'is', null)
       .order('started_at', { ascending: false })
       .limit(limit),
@@ -256,25 +262,6 @@ export async function getStudentQuestions(studentId) {
   return data || [];
 }
 
-export async function getStudentPendingValidations(studentId) {
-  const coachId = await getCoachId();
-  const { data } = await supabase
-    .from('focus_validations')
-    .select('id, focus_point_id, type, student_note, created_at, focus_points(name)')
-    .eq('student_id', studentId)
-    .eq('coach_id', coachId)
-    .eq('status', 'pending')
-    .order('created_at', { ascending: false });
-
-  return (data || []).map(v => ({
-    id: v.id,
-    focusPointId: v.focus_point_id,
-    focusName: v.focus_points?.name || '',
-    type: v.type,
-    studentNote: v.student_note,
-    createdAt: v.created_at,
-  }));
-}
 
 export async function getStudentArchivedFocusPoints(studentId) {
   const { data } = await supabase
@@ -308,76 +295,26 @@ export async function dismissQuestion(messageId) {
     .eq('id', messageId);
 }
 
-// Focus completion: coach approves (close focus) or rejects (keep working)
-export async function respondToFocusCompletion(validationId, approve) {
-  const status = approve ? 'approved' : 'rejected';
-  await supabase
-    .from('focus_validations')
-    .update({ status })
-    .eq('id', validationId);
-
-  if (approve) {
-    const { data: v } = await supabase
-      .from('focus_validations')
-      .select('focus_point_id')
-      .eq('id', validationId)
-      .single();
-
-    if (v?.focus_point_id) {
-      await supabase
-        .from('focus_points')
-        .update({ is_archived: true })
-        .eq('id', v.focus_point_id);
-    }
-  }
-}
-
-// Flagged focus: coach decides what to do
-// action: 'keep' | 'address' | 'dismiss'
-export async function respondToFlaggedFocus(validationId, action) {
-  let status = 'addressed';
-  if (action === 'dismiss') status = 'dismissed';
-
-  await supabase
-    .from('focus_validations')
-    .update({ status })
-    .eq('id', validationId);
-
-  if (action === 'dismiss') {
-    const { data: v } = await supabase
-      .from('focus_validations')
-      .select('focus_point_id')
-      .eq('id', validationId)
-      .single();
-
-    if (v?.focus_point_id) {
-      await supabase
-        .from('focus_points')
-        .update({ is_archived: true })
-        .eq('id', v.focus_point_id);
-    }
-  }
-}
 
 // ─── Session / Class Detail ───────────────────────────────────────────────────
 
 export async function getTrainingSessionDetail(sessionId) {
   const { data: session } = await supabase
-    .from('training_sessions')
-    .select('id, started_at, completed_at, feeling, session_note, slot1_focus_id, slot2_focus_id')
+    .from('practice_logs')
+    .select('id, started_at, completed_at, feeling, session_note, focus_point_id')
     .eq('id', sessionId)
     .single();
 
   if (!session) return null;
 
-  const focusIds = [session.slot1_focus_id, session.slot2_focus_id].filter(Boolean);
-  let focusMap = {};
-  if (focusIds.length > 0) {
-    const { data: fps } = await supabase
+  let focusName = null;
+  if (session.focus_point_id) {
+    const { data: fp } = await supabase
       .from('focus_points')
-      .select('id, name')
-      .in('id', focusIds);
-    for (const fp of fps || []) focusMap[fp.id] = fp.name;
+      .select('name')
+      .eq('id', session.focus_point_id)
+      .single();
+    focusName = fp?.name || null;
   }
 
   return {
@@ -385,15 +322,15 @@ export async function getTrainingSessionDetail(sessionId) {
     durationMin: session.completed_at
       ? Math.round((new Date(session.completed_at) - new Date(session.started_at)) / 60000)
       : null,
-    focus1Name: session.slot1_focus_id ? focusMap[session.slot1_focus_id] || null : null,
-    focus2Name: session.slot2_focus_id ? focusMap[session.slot2_focus_id] || null : null,
+    focus1Name: focusName,
+    focus2Name: null,
   };
 }
 
 export async function getClassDetail(classId) {
   const { data } = await supabase
     .from('class_inputs')
-    .select('id, created_at, title, takeaway, practice_point_1, practice_point_2, ai_primary_focus, ai_secondary_focus')
+    .select('id, created_at, title, class_summary, practice_point_1, practice_point_2, ai_primary_focus, ai_secondary_focus')
     .eq('id', classId)
     .single();
   return data || null;
@@ -424,9 +361,9 @@ export async function getCoachActivityFeed() {
     { data: messages },
   ] = await Promise.all([
     supabase
-      .from('training_sessions')
-      .select('id, user_id, started_at, completed_at')
-      .in('user_id', studentIds)
+      .from('practice_logs')
+      .select('id, student_id, started_at, completed_at')
+      .in('student_id', studentIds)
       .not('completed_at', 'is', null)
       .gte('started_at', fourteenDaysAgo)
       .order('started_at', { ascending: false })
@@ -453,8 +390,8 @@ export async function getCoachActivityFeed() {
   const events = [
     ...(sessions || []).map(s => ({
       id: s.id,
-      studentId: s.user_id,
-      studentName: studentMap[s.user_id] || 'Student',
+      studentId: s.student_id,
+      studentName: studentMap[s.student_id] || 'Student',
       type: 'training',
       date: new Date(s.started_at),
       durationMin: s.completed_at

@@ -136,7 +136,7 @@ export async function generateCoachingSummary(recentInputs) {
   const lines = recentInputs.map((inp, i) => {
     const parts = [`Session ${i + 1}: "${inp.practice_point_1}" (urgency ${inp.priority_score_1}/5)`];
     if (inp.practice_point_2) parts.push(`Also: "${inp.practice_point_2}" (urgency ${inp.priority_score_2}/5)`);
-    if (inp.takeaway) parts.push(`Worked on: "${inp.takeaway}"`);
+    if (inp.class_summary) parts.push(`Worked on: "${inp.class_summary}"`);
     return parts.join('. ');
   });
 
@@ -162,7 +162,7 @@ export async function generateFocusSummary(focusName, classNotes) {
     const parts = [];
     if (inp.practice_point_1) parts.push(inp.practice_point_1);
     if (inp.practice_point_2) parts.push(inp.practice_point_2);
-    if (inp.takeaway) parts.push(inp.takeaway);
+    if (inp.class_summary) parts.push(inp.class_summary);
     return `Note ${i + 1}: ${parts.join('. ')}`;
   }).join('\n');
 
@@ -219,8 +219,8 @@ Rules:
 
 // ─── Class title ──────────────────────────────────────────────────────────────
 
-export async function generateClassTitle(takeaway, practicePoint1) {
-  const source = takeaway?.trim() || practicePoint1;
+export async function generateClassTitle(class_summary, practicePoint1) {
+  const source = class_summary?.trim() || practicePoint1;
   const prompt = `A dance student described their class: "${source}"\n\nGenerate a 2-4 word keyword title summarising what they worked on (e.g. "Stability & Creativity", "Jump Power Class", "Hip Flow Drills"). Capitalize each word. Return ONLY the title, nothing else.`;
 
   try {

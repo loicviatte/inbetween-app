@@ -15,7 +15,8 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.loicviatte.inbetweenapp",
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSMicrophoneUsageDescription": "InBetween uses the microphone to let you dictate your class notes."
       }
     },
     "android": {
@@ -24,13 +25,20 @@
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
-      }
+      },
+      "permissions": ["android.permission.RECORD_AUDIO"]
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
       "expo-font",
+      [
+        "expo-av",
+        {
+          "microphonePermission": "InBetween uses the microphone to let you dictate your class notes."
+        }
+      ],
       "@react-native-community/datetimepicker",
       [
         "expo-notifications",

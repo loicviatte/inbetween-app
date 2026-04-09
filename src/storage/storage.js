@@ -52,7 +52,7 @@ export async function getClassInputs() {
     .from('class_inputs')
     .select('*')
     .eq('user_id', userId)
-    .eq('is_deleted', false)
+    .not('is_deleted', 'is', true)
     .order('created_at', { ascending: false });
   return data || [];
 }
@@ -61,7 +61,7 @@ export async function saveClassInput(input) {
   const userId = await getUserId();
   const { error } = await supabase
     .from('class_inputs')
-    .insert({ ...input, user_id: userId });
+    .insert({ status: 'pending', ...input, user_id: userId, is_deleted: false });
   if (error) throw error;
 }
 
@@ -78,7 +78,7 @@ export async function getRecentClassInputs(limit = 3) {
     .from('class_inputs')
     .select('*')
     .eq('user_id', userId)
-    .eq('is_deleted', false)
+    .not('is_deleted', 'is', true)
     .order('created_at', { ascending: false })
     .limit(limit);
   return data || [];
@@ -91,7 +91,7 @@ export async function getSessionsThisWeek() {
     .from('class_inputs')
     .select('id')
     .eq('user_id', userId)
-    .eq('is_deleted', false)
+    .not('is_deleted', 'is', true)
     .gte('created_at', weekAgo);
   return (data || []).length;
 }
@@ -100,9 +100,9 @@ export async function getTrainingSessionsThisWeek() {
   const userId = await getUserId();
   const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString();
   const { data } = await supabase
-    .from('training_sessions')
+    .from('practice_logs')
     .select('id')
-    .eq('user_id', userId)
+    .eq('student_id', userId)
     .gte('started_at', weekAgo)
     .not('completed_at', 'is', null);
   return (data || []).length;
@@ -117,9 +117,9 @@ export async function getTrainingDaysThisWeek() {
     monday.setDate(now.getDate() - mondayOffset);
     monday.setHours(0, 0, 0, 0);
     const { data } = await supabase
-      .from('training_sessions')
+      .from('practice_logs')
       .select('started_at')
-      .eq('user_id', userId)
+      .eq('student_id', userId)
       .gte('started_at', monday.toISOString())
       .not('completed_at', 'is', null);
     const days = new Set();
@@ -144,16 +144,16 @@ export async function getWeekActivity() {
     const mondayISO = monday.toISOString();
     const [{ data: sessions }, { data: classes }, { data: focusPoints }] = await Promise.all([
       supabase
-        .from('training_sessions')
-        .select('id, started_at, feeling, slot1_focus_id')
-        .eq('user_id', userId)
+        .from('practice_logs')
+        .select('id, started_at, feeling, focus_point_id')
+        .eq('student_id', userId)
         .gte('started_at', mondayISO)
         .not('completed_at', 'is', null),
       supabase
         .from('class_inputs')
         .select('id, created_at, practice_point_1, ai_primary_focus')
         .eq('user_id', userId)
-        .eq('is_deleted', false)
+        .not('is_deleted', 'is', true)
         .gte('created_at', mondayISO),
       supabase
         .from('focus_points')
@@ -166,7 +166,7 @@ export async function getWeekActivity() {
     for (const s of sessions || []) {
       const idx = (new Date(s.started_at).getDay() + 6) % 7;
       if (!activity[idx]) activity[idx] = { sessions: [], classes: [] };
-      activity[idx].sessions.push({ ...s, focusName: focusMap[s.slot1_focus_id] || null });
+      activity[idx].sessions.push({ ...s, focusName: focusMap[s.focus_point_id] || null });
     }
     for (const c of classes || []) {
       const idx = (new Date(c.created_at).getDay() + 6) % 7;
@@ -219,20 +219,6 @@ export async function saveFocusPoint(fp) {
     .select('id')
     .single();
 
-  // Auto-create focus_metrics row with base values for this tier
-  if (data?.id) {
-    const tier = fp.tier || 'important';
-    const baseImportance = tier === 'critical' ? 4 : tier === 'important' ? 3 : 2;
-    const baseStruggle   = tier === 'supporting' ? 0 : 1;
-    await supabase.from('focus_metrics').insert({
-      focus_id:     data.id,
-      importance:   baseImportance,
-      struggle:     baseStruggle,
-      practice:     0,
-      coach_signal: 0,
-    }).then(() => {}).catch(() => {}); // silent — metrics row may already exist
-  }
-
   return data?.id;
 }
 
@@ -247,9 +233,9 @@ export async function getClassInputsForFocus(focusName) {
   const userId = await getUserId();
   const { data } = await supabase
     .from('class_inputs')
-    .select('id, created_at, practice_point_1, practice_point_2, priority_score_1, priority_score_2, takeaway, ai_primary_focus, ai_secondary_focus')
+    .select('id, created_at, practice_point_1, practice_point_2, priority_score_1, priority_score_2, class_summary, ai_primary_focus, ai_secondary_focus')
     .eq('user_id', userId)
-    .eq('is_deleted', false)
+    .not('is_deleted', 'is', true)
     .or(`ai_primary_focus.eq.${focusName},ai_secondary_focus.eq.${focusName}`)
     .order('created_at', { ascending: false })
     .limit(5);
@@ -259,15 +245,12 @@ export async function getClassInputsForFocus(focusName) {
 export async function getFocusTrainedCount() {
   const userId = await getUserId();
   const { data } = await supabase
-    .from('training_sessions')
-    .select('slot1_focus_id, slot2_focus_id')
-    .eq('user_id', userId)
-    .not('completed_at', 'is', null);
-  const ids = new Set();
-  for (const row of data || []) {
-    if (row.slot1_focus_id) ids.add(row.slot1_focus_id);
-    if (row.slot2_focus_id) ids.add(row.slot2_focus_id);
-  }
+    .from('practice_logs')
+    .select('focus_point_id')
+    .eq('student_id', userId)
+    .not('completed_at', 'is', null)
+    .not('focus_point_id', 'is', null);
+  const ids = new Set((data || []).map(r => r.focus_point_id));
   return ids.size;
 }
 
@@ -275,16 +258,13 @@ export async function getFocusTrainedThisWeek() {
   const userId = await getUserId();
   const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString();
   const { data } = await supabase
-    .from('training_sessions')
-    .select('slot1_focus_id, slot2_focus_id')
-    .eq('user_id', userId)
+    .from('practice_logs')
+    .select('focus_point_id')
+    .eq('student_id', userId)
     .gte('started_at', weekAgo)
-    .not('completed_at', 'is', null);
-  const ids = new Set();
-  for (const row of data || []) {
-    if (row.slot1_focus_id) ids.add(row.slot1_focus_id);
-    if (row.slot2_focus_id) ids.add(row.slot2_focus_id);
-  }
+    .not('completed_at', 'is', null)
+    .not('focus_point_id', 'is', null);
+  const ids = new Set((data || []).map(r => r.focus_point_id));
   return ids.size;
 }
 
@@ -293,17 +273,17 @@ export async function getTopFocusPointsWithCounts(n = 3) {
   const [points, sessions] = await Promise.all([
     getFocusPoints(),
     supabase
-      .from('training_sessions')
-      .select('slot1_focus_id, slot2_focus_id')
-      .eq('user_id', userId)
+      .from('practice_logs')
+      .select('focus_point_id')
+      .eq('student_id', userId)
       .not('completed_at', 'is', null)
+      .not('focus_point_id', 'is', null)
       .then(({ data }) => data || []),
   ]);
 
   const counts = {};
   for (const s of sessions) {
-    if (s.slot1_focus_id) counts[s.slot1_focus_id] = (counts[s.slot1_focus_id] || 0) + 1;
-    if (s.slot2_focus_id) counts[s.slot2_focus_id] = (counts[s.slot2_focus_id] || 0) + 1;
+    if (s.focus_point_id) counts[s.focus_point_id] = (counts[s.focus_point_id] || 0) + 1;
   }
 
   return [...points]
@@ -492,71 +472,6 @@ export async function getCoachReplies() {
   return data || [];
 }
 
-// ─── Focus Validations (student side) ────────────────────────────────────────
-
-export async function requestFocusValidation(focusPointId) {
-  const userId = await getUserId();
-
-  const { data: me } = await supabase
-    .from('users')
-    .select('coach_id')
-    .eq('id', userId)
-    .single();
-
-  if (!me?.coach_id) return; // No coach, silently skip
-
-  // Avoid duplicate pending requests
-  const { data: existing } = await supabase
-    .from('focus_validations')
-    .select('id')
-    .eq('focus_point_id', focusPointId)
-    .eq('student_id', userId)
-    .eq('type', 'completion')
-    .eq('status', 'pending')
-    .maybeSingle();
-
-  if (existing) return;
-
-  await supabase.from('focus_validations').insert({
-    focus_point_id: focusPointId,
-    student_id: userId,
-    coach_id: me.coach_id,
-    type: 'completion',
-    status: 'pending',
-  });
-}
-
-export async function flagFocusPoint(focusPointId, note) {
-  const userId = await getUserId();
-
-  const { data: me } = await supabase
-    .from('users')
-    .select('coach_id')
-    .eq('id', userId)
-    .single();
-
-  if (!me?.coach_id) return;
-
-  const { data: existing } = await supabase
-    .from('focus_validations')
-    .select('id')
-    .eq('focus_point_id', focusPointId)
-    .eq('student_id', userId)
-    .eq('type', 'flagged')
-    .eq('status', 'pending')
-    .maybeSingle();
-
-  if (existing) return;
-
-  await supabase.from('focus_validations').insert({
-    focus_point_id: focusPointId,
-    student_id: userId,
-    coach_id: me.coach_id,
-    type: 'flagged',
-    student_note: note || null,
-    status: 'pending',
-  });
-}
 
 export async function getUserRole() {
   const userId = await getUserId();

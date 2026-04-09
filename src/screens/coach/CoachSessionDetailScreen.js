@@ -105,9 +105,9 @@ function ClassDetail({ cls }) {
         {cls.title ? <Row label="Title" value={cls.title} /> : null}
       </Section>
 
-      {cls.takeaway ? (
-        <Section title="KEY TAKEAWAY">
-          <Text style={s.noteText}>{cls.takeaway}</Text>
+      {cls.class_summary ? (
+        <Section title="CLASS SUMMARY">
+          <Text style={s.noteText}>{cls.class_summary}</Text>
         </Section>
       ) : null}
 

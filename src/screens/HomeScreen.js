@@ -255,9 +255,7 @@ export default function HomeScreen({ navigation }) {
     ? (activeSession.focusPointName ?? slot1?.name)
     : slot1?.name;
 
-  const heroMessage = sessionCount > 0
-    ? `You've done this ${sessionCount} times — keep drilling here.`
-    : 'Your top priority right now. Start your first session.';
+  const heroMessage = slot1?.subtitle || null;
 
   if (isLoading) {
     return (
@@ -303,9 +301,9 @@ export default function HomeScreen({ navigation }) {
             {activeFocusName || 'No focus yet'}
           </Text>
           <Text style={s.heroSession}>{ordinal(sessionCount + 1)} Session</Text>
-          {!isSessionActive && (
-            <Text style={s.heroMessage} numberOfLines={2}>{heroMessage}</Text>
-          )}
+          {!isSessionActive && heroMessage ? (
+            <Text style={s.heroMessage} numberOfLines={3}>{heroMessage}</Text>
+          ) : null}
           {activeSession && countdown > 0 ? (
             <TouchableOpacity
               style={s.inProgressBtn}
@@ -664,7 +662,7 @@ const s = StyleSheet.create({
   heroMessage: {
     fontFamily: Fonts.jakartaRegular,
     fontSize: 13,
-    color: 'rgba(255,255,255,0.5)',
+    color: '#FFFFFF',
     lineHeight: 20,
     marginBottom: 18,
   },

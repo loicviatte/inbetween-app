@@ -10,6 +10,12 @@ Deno.serve(async (req: Request) => {
     return new Response(JSON.stringify({ error: 'Invalid payload' }), { status: 400 })
   }
 
+  // Auth check — request must come from an authenticated user
+  const authHeader = req.headers.get('Authorization')
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 })
+  }
+
   const { focus_point_id, duration_minutes, rating, student_id } = body
 
   if (!focus_point_id || !duration_minutes || !rating || !student_id) {
@@ -27,6 +33,7 @@ Deno.serve(async (req: Request) => {
     )
   }
 
+  // Service role client for all DB operations and invoking yoda-score
   const supabase = createClient(
     Deno.env.get('SUPABASE_URL')!,
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,

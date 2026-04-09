@@ -12,17 +12,31 @@ function ordinal(n) {
   return n + (s[(v - 20) % 10] || s[v] || s[0]);
 }
 
+const FEELING_TO_RATING = {
+  Hard:      'hard',
+  Struggled: 'struggled',
+  Okay:      'okay',
+  Good:      'good',
+  Great:     'great',
+};
+
+export function urgencyToTier(score) {
+  if (score >= 8) return 'critical';
+  if (score >= 5) return 'important';
+  return 'supporting';
+}
+
 // ─── Priority Score Engine ────────────────────────────────────────────────────
-// Formula: priority = importance + struggle - (practice × practiceWeight[tier])
+// Formula: priority = base_score - (practice_count × practiceWeight[tier])
 //                   + recency + tierModifier[tier] + coach_signal + inactionPenalty
+// All data lives on focus_points — no focus_metrics join needed.
 // Clamped to [0..20]
 
-const TIER_MODIFIER     = { critical: 3, important: 2, supporting: 1 };
-const PRACTICE_WEIGHT   = { critical: 0.8, important: 1.0, supporting: 1.2 };
-const GRACE_DAYS        = { critical: 4, important: 7, supporting: 999 };
-const INACTION_DELTA    = { critical: 1.0, important: 0.5, supporting: 0.0 };
-const BASE_IMPORTANCE   = { critical: 4, important: 3, supporting: 2 };
-const BASE_STRUGGLE     = { critical: 1, important: 1, supporting: 0 };
+const TIER_MODIFIER   = { critical: 3, important: 2, supporting: 1 };
+const PRACTICE_WEIGHT = { critical: 0.8, important: 1.0, supporting: 1.2 };
+const GRACE_DAYS      = { critical: 4, important: 7, supporting: 999 };
+const INACTION_DELTA  = { critical: 1.0, important: 0.5, supporting: 0.0 };
+const BASE_SCORE      = { critical: 10, important: 7, supporting: 5 };
 
 function computeRecency(daysSince) {
   if (daysSince === 0) return 3;
@@ -38,7 +52,9 @@ function computeInactionPenalty(tier, daysSincePractice) {
   return Math.min(3, delta * weeks);
 }
 
-function computePriority(focus, metrics, now) {
+// focus_points now holds all needed fields: base_score, practice_count,
+// coach_signal, last_exposed_at, last_mentioned_at, tier
+function computePriority(focus, now) {
   const tier = focus.tier || 'important';
 
   const refDate = focus.last_mentioned_at
@@ -46,49 +62,27 @@ function computePriority(focus, metrics, now) {
     : new Date(focus.created_at);
   const daysSinceMentioned = Math.floor((now - refDate) / 86400000);
 
-  const lastPracticed = metrics.last_practiced_at
-    ? new Date(metrics.last_practiced_at)
+  const lastPracticed = focus.last_exposed_at
+    ? new Date(focus.last_exposed_at)
     : null;
   const daysSincePractice = lastPracticed
     ? Math.floor((now - lastPracticed) / 86400000)
     : 999;
 
-  const recency   = computeRecency(daysSinceMentioned);
-  const tierMod   = TIER_MODIFIER[tier] ?? 2;
-  const w         = PRACTICE_WEIGHT[tier] ?? 1.0;
-  const inaction  = computeInactionPenalty(tier, daysSincePractice);
+  const recency  = computeRecency(daysSinceMentioned);
+  const tierMod  = TIER_MODIFIER[tier] ?? 2;
+  const w        = PRACTICE_WEIGHT[tier] ?? 1.0;
+  const inaction = computeInactionPenalty(tier, daysSincePractice);
 
   const raw =
-    (metrics.importance   ?? BASE_IMPORTANCE[tier] ?? 3)
-    + (metrics.struggle   ?? BASE_STRUGGLE[tier]   ?? 1)
-    - ((metrics.practice  ?? 0) * w)
+    (focus.base_score      ?? BASE_SCORE[tier] ?? 7)
+    - ((focus.practice_count ?? 0) * w)
     + recency
     + tierMod
-    + (metrics.coach_signal ?? 0)
+    + (focus.coach_signal  ?? 0)
     + inaction;
 
   return Math.max(0, Math.min(20, raw));
-}
-
-// ─── Ensure focus_metrics row exists ─────────────────────────────────────────
-
-async function ensureMetrics(focusId, tier) {
-  const { data: existing } = await supabase
-    .from('focus_metrics')
-    .select('focus_id')
-    .eq('focus_id', focusId)
-    .maybeSingle();
-
-  if (!existing) {
-    const t = tier || 'important';
-    await supabase.from('focus_metrics').insert({
-      focus_id:     focusId,
-      importance:   BASE_IMPORTANCE[t] ?? 3,
-      struggle:     BASE_STRUGGLE[t]   ?? 1,
-      practice:     0,
-      coach_signal: 0,
-    });
-  }
 }
 
 // ─── Top-3 slot selection ─────────────────────────────────────────────────────
@@ -103,28 +97,20 @@ export async function getSlots() {
       .select('*')
       .eq('user_id', userId)
       .eq('is_deleted', false)
-      .eq('is_archived', false)
+      .eq('is_other', false)
       .is('alias_of', null);
 
     if (!points || points.length === 0) {
       return { slot1: null, slot2: null, slot3: null };
     }
 
-    // Only consider active/cooling_down focuses (cooling_down can still show)
+    // Only consider active/cooling_down/past_candidate focuses
     const visible = points.filter(
-      (p) => !p.status || p.status === 'active' || p.status === 'cooling_down'
+      (p) => !p.status || p.status === 'active' || p.status === 'cooling_down' || p.status === 'past_candidate'
     );
 
-    const { data: metricsRows } = await supabase
-      .from('focus_metrics')
-      .select('*')
-      .in('focus_id', visible.map((p) => p.id));
-
-    const metricsMap = {};
-    for (const m of metricsRows || []) metricsMap[m.focus_id] = m;
-
     const scored = visible
-      .map((p) => ({ ...p, _priority: computePriority(p, metricsMap[p.id] || {}, now) }))
+      .map((p) => ({ ...p, _priority: computePriority(p, now) }))
       .sort((a, b) => b._priority - a._priority);
 
     return {
@@ -150,9 +136,9 @@ export async function getQuestionMultiplier(userId) {
         .eq('student_id', userId)
         .gte('created_at', windowStart),
       supabase
-        .from('training_sessions')
+        .from('practice_logs')
         .select('id')
-        .eq('user_id', userId)
+        .eq('student_id', userId)
         .not('completed_at', 'is', null)
         .gte('started_at', windowStart),
       supabase
@@ -175,83 +161,81 @@ export async function getQuestionMultiplier(userId) {
   }
 }
 
-// ─── Apply focus event → update metrics ──────────────────────────────────────
+// ─── Apply focus event → update focus_points directly ────────────────────────
+// All metrics now live on focus_points:
+//   struggle / importance → base_score
+//   practice              → practice_count
+//   coach_signal          → coach_signal
+//   last_practiced_at     → last_exposed_at
 
 export async function applyFocusEvent(focusId, eventType, userId) {
   try {
-    await ensureMetrics(focusId);
-
-    const { data: m } = await supabase
-      .from('focus_metrics')
-      .select('*')
-      .eq('focus_id', focusId)
+    const { data: fp } = await supabase
+      .from('focus_points')
+      .select('base_score, practice_count, coach_signal, tier, status')
+      .eq('id', focusId)
       .single();
+
+    if (!fp) return;
 
     const now    = new Date().toISOString();
     let update   = {};
 
     switch (eventType) {
       case 'PRACTICE_SESSION_LOG':
-        update = { practice: (m.practice || 0) + 2, last_practiced_at: now };
+        update = { practice_count: (fp.practice_count || 0) + 2, last_exposed_at: now };
         break;
       case 'PRACTICE_QUICK_LOG':
-        update = { practice: (m.practice || 0) + 1, last_practiced_at: now };
+        update = { practice_count: (fp.practice_count || 0) + 1, last_exposed_at: now };
         break;
       case 'QUESTION_CONFIRMATION': {
         const mult = userId ? await getQuestionMultiplier(userId) : 1.0;
-        update = { struggle: (m.struggle || 0) + 0.5 * mult, last_question_at: now };
+        update = { base_score: Math.min(20, (fp.base_score || 5) + 0.5 * mult) };
         break;
       }
       case 'QUESTION_CLARIFICATION': {
         const mult = userId ? await getQuestionMultiplier(userId) : 1.0;
-        update = { struggle: (m.struggle || 0) + 1.0 * mult, last_question_at: now };
+        update = { base_score: Math.min(20, (fp.base_score || 5) + 1.0 * mult) };
         break;
       }
       case 'QUESTION_CONFUSION': {
         const mult = userId ? await getQuestionMultiplier(userId) : 1.0;
-        update = { struggle: (m.struggle || 0) + 2.0 * mult, last_question_at: now };
+        update = { base_score: Math.min(20, (fp.base_score || 5) + 2.0 * mult) };
         break;
       }
       case 'COACH_IMPROVED_MODERATE':
-        update = { coach_signal: (m.coach_signal || 0) - 2 };
+        update = { coach_signal: (fp.coach_signal || 0) - 2 };
         break;
       case 'COACH_IMPROVED_STRONG':
-        update = { coach_signal: (m.coach_signal || 0) - 4 };
+        update = { coach_signal: (fp.coach_signal || 0) - 4 };
         break;
       case 'COACH_FIXED':
-        update = { coach_signal: (m.coach_signal || 0) - 5 };
+        update = { coach_signal: (fp.coach_signal || 0) - 5 };
         break;
       case 'COACH_ESCALATION':
         update = {
-          coach_signal: (m.coach_signal || 0) + 2,
-          importance:   (m.importance   || 3) + 2,
+          coach_signal: (fp.coach_signal || 0) + 2,
+          base_score:   Math.min(20, (fp.base_score || 5) + 2),
         };
         break;
       case 'FOCUS_REMENTIONED':
-        update = { importance: (m.importance || 3) + 2 };
+        update = { base_score: Math.min(20, (fp.base_score || 5) + 2), last_mentioned_at: new Date().toISOString() };
         break;
       default:
         return;
     }
 
-    await supabase.from('focus_metrics').update(update).eq('focus_id', focusId);
+    await supabase.from('focus_points').update(update).eq('id', focusId);
 
-    // Lifecycle: coach_signal <= -5 and priority low → cooling_down
-    const merged = { ...m, ...update };
+    // Lifecycle: coach_signal <= -5 and priority low → past_candidate
+    const merged = { ...fp, ...update };
     if ((merged.coach_signal || 0) <= -5) {
-      const { data: fp } = await supabase
-        .from('focus_points')
-        .select('*')
-        .eq('id', focusId)
-        .single();
-      if (fp && (!fp.status || fp.status === 'active')) {
-        const priority = computePriority(fp, merged, new Date());
-        if (priority <= 5) {
-          await supabase
-            .from('focus_points')
-            .update({ status: 'cooling_down' })
-            .eq('id', focusId);
-        }
+      const priority = computePriority(merged, new Date());
+      if (priority <= 5 && (!merged.status || merged.status === 'active')) {
+        await supabase
+          .from('focus_points')
+          .update({ status: 'past_candidate' })
+          .eq('id', focusId);
       }
     }
   } catch (e) {
@@ -280,97 +264,75 @@ export function getSessionLabel(count) {
 }
 
 // ─── Start training session ───────────────────────────────────────────────────
+// No longer inserts to DB — row is only created when the session is completed.
+// Returns a local identifier used to track the in-progress session in memory.
 
 export async function startTrainingSession(slot1FocusId, slot2FocusId) {
-  try {
-    const userId = await getUserId();
-    const { data, error } = await supabase
-      .from('training_sessions')
-      .insert({
-        user_id:        userId,
-        slot1_focus_id: slot1FocusId || null,
-        slot2_focus_id: slot2FocusId || null,
-        started_at:     new Date().toISOString(),
-      })
-      .select()
-      .single();
-    if (error) throw error;
-    return data?.id || null;
-  } catch (e) {
-    console.error('startTrainingSession error:', e);
-    return null;
-  }
+  return `local_${Date.now()}`;
 }
 
 // ─── Complete training session ────────────────────────────────────────────────
+// Inserts a new practice_log row only at this point (end of session).
 
-export async function completeTrainingSession(sessionId, feeling = null, sessionNote = null, activeFocusPointId = null) {
+export async function completeTrainingSession(sessionId, feeling = null, sessionNote = null, activeFocusPointId = null, startedAtMs = null) {
   try {
-    if (!sessionId) return;
     const userId = await getUserId();
 
-    // Get focus ids and timing before updating
-    const { data: session } = await supabase
-      .from('training_sessions')
-      .select('slot1_focus_id, slot2_focus_id, started_at')
-      .eq('id', sessionId)
+    const rating          = FEELING_TO_RATING[feeling] ?? 'okay';
+    const completedAt     = new Date();
+    const startedAt       = startedAtMs ? new Date(startedAtMs) : completedAt;
+    const durationMinutes = Math.max(1, Math.round((completedAt - startedAt) / 60000));
+    const activeFid       = activeFocusPointId || null;
+
+    // INSERT a fresh row — no row was created at session start
+    const insertPayload = {
+      student_id:       userId,
+      focus_point_id:   activeFid,
+      started_at:       startedAt.toISOString(),
+      completed_at:     completedAt.toISOString(),
+      duration_minutes: durationMinutes,
+      rating,
+    };
+    if (feeling)     insertPayload.feeling      = feeling;
+    if (sessionNote) insertPayload.session_note = sessionNote;
+
+    const { data: inserted, error } = await supabase
+      .from('practice_logs')
+      .insert(insertPayload)
+      .select('id')
       .single();
+    if (error) throw error;
 
-    const updatePayload = { completed_at: new Date().toISOString() };
-    if (feeling)     updatePayload.feeling      = feeling;
-    if (sessionNote) updatePayload.session_note = sessionNote;
-
-    await supabase
-      .from('training_sessions')
-      .update(updatePayload)
-      .eq('id', sessionId);
-
-    // Restrict all scoring to only the focus point the user actually worked on
-    const focusIds = [session?.slot1_focus_id, session?.slot2_focus_id].filter(Boolean);
-    const activeFid = activeFocusPointId || focusIds[0];
+    const newLogId = inserted?.id;
 
     if (activeFid) {
-      // Apply PRACTICE_SESSION_LOG to the active focus point only
+      // Apply immediate score update to focus_points
       await applyFocusEvent(activeFid, 'PRACTICE_SESSION_LOG', userId);
 
-      // Call practice-log edge function to trigger Yoda Score algorithm
-      const FEELING_TO_RATING = {
-        Hard:      'hard',
-        Struggled: 'struggled',
-        Okay:      'okay',
-        Good:      'good',
-        Great:     'great',
-      };
-      const rating = FEELING_TO_RATING[feeling] ?? 'okay';
-      const completedAt = new Date();
-      const startedAt = session?.started_at ? new Date(session.started_at) : completedAt;
-      const durationMinutes = Math.max(1, Math.round((completedAt - startedAt) / 60000));
-
-      supabase.functions.invoke('practice-log', {
+      // Invoke yoda-score for full algorithm processing (fire-and-forget)
+      supabase.functions.invoke('yoda-score', {
         body: {
-          focus_point_id:   activeFid,
-          duration_minutes: durationMinutes,
-          rating,
-          student_id:       userId,
+          event:           'practice_log',
+          practice_log_id: newLogId,
         },
-      }).catch(err => console.error('practice-log invoke error:', err));
+      }).catch(err => console.error('yoda-score invoke error:', err));
 
-      // Map feeling → additional score signal on the active focus point only
-      // Hard/Struggled → struggle increases (it's genuinely difficult)
-      // Good/Great → mild coach_signal decrease (self-assessed improvement)
+      // Map feeling → score update on the active focus point only
+      // Hard/Struggled → base_score increases (still difficult)
+      // Great → coach_signal decreases (self-assessed improvement)
       if (feeling) {
-        const { data: m } = await supabase
-          .from('focus_metrics')
-          .select('struggle, coach_signal')
-          .eq('focus_id', activeFid)
+        const { data: fp } = await supabase
+          .from('focus_points')
+          .select('base_score, coach_signal')
+          .eq('id', activeFid)
           .single();
-        if (m) {
+        if (fp) {
           let update = null;
-          if (feeling === 'Hard')      update = { struggle: (m.struggle || 0) + 1.5 };
-          if (feeling === 'Struggled') update = { struggle: (m.struggle || 0) + 1.0 };
-          if (feeling === 'Great')     update = { coach_signal: (m.coach_signal || 0) - 1 };
+          if (feeling === 'Hard')      update = { base_score: Math.min(20, (fp.base_score || 5) + 1.5) };
+          if (feeling === 'Struggled') update = { base_score: Math.min(20, (fp.base_score || 5) + 1.0) };
+          if (feeling === 'Great')     update = { coach_signal: (fp.coach_signal || 0) - 1 };
           if (update) {
-            await supabase.from('focus_metrics').update(update).eq('focus_id', activeFid);
+            await supabase.from('focus_points').update(update).eq('id', activeFid);
           }
         }
       }
