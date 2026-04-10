@@ -15,6 +15,7 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
+import { Ionicons } from '@expo/vector-icons';
 import { Colors, Fonts, Spacing } from '../../theme';
 import { supabase } from '../../services/supabase/client';
 import {
@@ -26,6 +27,7 @@ import {
   replyToQuestion,
   dismissQuestion,
   updateFocusPoint,
+  getPendingFocusPoints,
 } from '../../storage/coachStorage';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -252,6 +254,7 @@ export default function StudentDetailScreen({ route, navigation }) {
 
   const [editingFocus, setEditingFocus] = useState(null);
   const [focusEditVisible, setFocusEditVisible] = useState(false);
+  const [pendingFPs, setPendingFPs] = useState([]);
 
   useFocusEffect(
     useCallback(() => {
@@ -261,12 +264,13 @@ export default function StudentDetailScreen({ route, navigation }) {
       async function load() {
         setLoading(true);
         try {
-          const [p, fp, act, qs, arch] = await Promise.all([
+          const [p, fp, act, qs, arch, pfp] = await Promise.all([
             getStudentProfile(studentId),
             getStudentFocusPoints(studentId),
             getStudentRecentActivity(studentId, 8),
             getStudentQuestions(studentId),
             getStudentArchivedFocusPoints(studentId),
+            getPendingFocusPoints(studentId),
           ]);
           if (active) {
             setProfile(p);
@@ -274,6 +278,7 @@ export default function StudentDetailScreen({ route, navigation }) {
             setActivity(act);
             setQuestions(qs);
             setArchivedFocuses(arch);
+            setPendingFPs(pfp);
           }
         } catch (e) {
           console.error('StudentDetailScreen load error:', e);
@@ -373,6 +378,25 @@ export default function StudentDetailScreen({ route, navigation }) {
               <Text style={qb.preview} numberOfLines={1}>{questions[0].message}</Text>
             </View>
             <Text style={qb.cta}>Reply ›</Text>
+          </TouchableOpacity>
+        )}
+
+        {/* Pending FP Review Banner */}
+        {pendingFPs.length > 0 && (
+          <TouchableOpacity
+            style={pendingStyles.banner}
+            onPress={() => navigation.navigate('FocusValidation', { studentId, studentName })}
+            activeOpacity={0.85}
+          >
+            <View style={pendingStyles.bannerLeft}>
+              <Text style={pendingStyles.bannerTitle}>{pendingFPs.length} focus point{pendingFPs.length > 1 ? 's' : ''} pending review</Text>
+              <Text style={pendingStyles.bannerSub}>
+                {pendingFPs[0]?.coach_review_deadline
+                  ? `Auto-publishes in ${Math.max(0, Math.ceil((new Date(pendingFPs[0].coach_review_deadline) - Date.now()) / 3600000))}h`
+                  : 'Tap to review'}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={Colors.orange} />
           </TouchableOpacity>
         )}
 
@@ -895,6 +919,23 @@ const sh = StyleSheet.create({
     textAlign: 'center',
     paddingVertical: 10,
   },
+});
+
+const pendingStyles = StyleSheet.create({
+  banner: {
+    marginBottom: 12,
+    backgroundColor: 'rgba(255,157,0,0.08)',
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 0.5,
+    borderColor: 'rgba(255,157,0,0.25)',
+  },
+  bannerLeft: { flex: 1 },
+  bannerTitle: { fontFamily: Fonts.jakartaSemiBold, fontSize: 14, color: Colors.orange },
+  bannerSub: { fontFamily: Fonts.jakartaRegular, fontSize: 12, color: Colors.orange, opacity: 0.7, marginTop: 2 },
 });
 
 const qs = StyleSheet.create({

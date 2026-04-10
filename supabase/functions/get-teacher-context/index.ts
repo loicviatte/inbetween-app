@@ -22,15 +22,37 @@ Deno.serve(async (req: Request) => {
   }
   const studentId = user.id
 
-  // ── 1. Get student profile (name + coach_id) ─────────────────────────────────
+  const LATIN_DANCES = ['Cha Cha', 'Samba', 'Rumba', 'Paso Doble', 'Jive']
+
+  // ── 1. Get student profile ────────────────────────────────────────────────────
   const { data: studentProfile } = await serviceClient
     .from('users')
-    .select('id, name, coach_id')
+    .select('id, name, latin_coach_id, ballroom_coach_id')
     .eq('id', studentId)
     .single()
 
-  const coachId: string | null = studentProfile?.coach_id ?? null
   const studentName: string = studentProfile?.name ?? 'the student'
+
+  // ── 1b. Determine relevant coach from the most recent class's dance ───────────
+  const { data: lastClass } = await serviceClient
+    .from('class_inputs')
+    .select('dance')
+    .eq('user_id', studentId)
+    .not('is_deleted', 'is', true)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  let coachId: string | null = null
+  if (lastClass?.dance && lastClass.dance.length > 0) {
+    const isLatin = lastClass.dance.some((d: string) => LATIN_DANCES.includes(d))
+    coachId = isLatin
+      ? (studentProfile?.latin_coach_id ?? studentProfile?.ballroom_coach_id ?? null)
+      : (studentProfile?.ballroom_coach_id ?? studentProfile?.latin_coach_id ?? null)
+  } else {
+    // No recent class — use whichever coach is linked
+    coachId = studentProfile?.latin_coach_id ?? studentProfile?.ballroom_coach_id ?? null
+  }
 
   // ── 2. Get coach profile (name) ───────────────────────────────────────────────
   let coachName: string | null = null

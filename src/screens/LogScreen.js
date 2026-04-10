@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useRef } from 'react';
 import {
+  Alert,
   View,
   Text,
   StyleSheet,
@@ -84,6 +85,15 @@ function relativeDate(isoOrTs) {
 }
 
 
+function formatCountdown(isoDeadline) {
+  const ms = new Date(isoDeadline) - Date.now();
+  if (ms <= 0) return null;
+  const totalMinutes = Math.floor(ms / 60000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return `${hours}h${minutes > 0 ? ` ${minutes}m` : ''}`;
+}
+
 function getDanceAbbrs(item) {
   // Primary: dance field on class_input (single string)
   if (item.dance) {
@@ -111,9 +121,36 @@ function ClassItem({ item, onPress }) {
   const teacherName = item.teacher_name || item._teacher_fallback || null;
   const lessonType = item.lesson_type || null;
   const isGroup = lessonType === 'group';
+  const countdown = item._pendingDeadline ? formatCountdown(item._pendingDeadline) : null;
+  const isAnalysing = !item._pendingDeadline && (item.status === 'processing' || item.status === 'extracted' || item.status === 'pending');
+  const showPendingBadge = !!countdown || isAnalysing || !!item._hasPendingFPs;
+
+  function handlePress() {
+    if (isAnalysing) {
+      Alert.alert(
+        'Being analysed',
+        "Your coach's notes are being processed. Focus points will appear shortly.",
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+    if (item._hasPendingFPs) {
+      Alert.alert(
+        'Coach review in progress',
+        'Your coach is reviewing the focus points from this class before they\'re shared with you.',
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+    onPress();
+  }
 
   return (
-    <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.75}>
+    <TouchableOpacity
+      style={[styles.card, showPendingBadge && styles.cardDisabled]}
+      onPress={handlePress}
+      activeOpacity={0.75}
+    >
       <View style={[styles.cardAccent, { backgroundColor: Colors.activeLog }]} />
       <View style={styles.cardBody}>
         <View style={styles.cardHeader}>
@@ -131,9 +168,20 @@ function ClassItem({ item, onPress }) {
           )}
         </View>
         <Text style={styles.cardFocus}>{item.title || item.ai_primary_focus || item.practice_point_1?.split(' ').slice(0, 4).join(' ')}</Text>
-        <Text style={styles.cardInput} numberOfLines={2}>{item.practice_point_1}</Text>
-        {hasTwo && (
+        {!showPendingBadge && <Text style={styles.cardInput} numberOfLines={2}>{item.practice_point_1}</Text>}
+        {hasTwo && !showPendingBadge && (
           <Text style={styles.cardSecondary} numberOfLines={1}>+ {item.ai_secondary_focus}</Text>
+        )}
+        {showPendingBadge && (
+          <View style={styles.pendingBadge}>
+            <Text style={styles.pendingBadgeText}>
+              {isAnalysing
+                ? 'Analysing class…'
+                : countdown
+                  ? `Focus creation in progress · ready in ${countdown}`
+                  : 'Pending coach approval'}
+            </Text>
+          </View>
         )}
       </View>
     </TouchableOpacity>
@@ -333,7 +381,7 @@ export default function LogScreen({ navigation }) {
               ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
               contentContainerStyle={styles.listContent}
               showsVerticalScrollIndicator={false}
-              ListEmptyComponent={<ClassEmptyState onAdd={() => setModalVisible(true)} />}
+              ListEmptyComponent={<ClassEmptyState />}
               refreshing={refreshing}
               onRefresh={handleRefresh}
               stickySectionHeadersEnabled={false}
@@ -434,17 +482,14 @@ export default function LogScreen({ navigation }) {
   );
 }
 
-function ClassEmptyState({ onAdd }) {
+function ClassEmptyState() {
   return (
     <View style={styles.emptyCard}>
       <View style={styles.emptyIconWrap}>
         <Ionicons name="journal-outline" size={28} color="#ACADB9" />
       </View>
       <Text style={styles.emptyTitle}>Your classes will appear here</Text>
-      <Text style={styles.emptySubtitle}>After each lesson, log what your coach worked on with you.</Text>
-      <TouchableOpacity style={styles.emptyBtn} onPress={onAdd} activeOpacity={0.85}>
-        <Text style={styles.emptyBtnText}>Log your first class</Text>
-      </TouchableOpacity>
+      <Text style={styles.emptySubtitle}>Once your coach submits a class, it'll show up here, even while the focus points are still being generated.</Text>
     </View>
   );
 }
@@ -510,6 +555,7 @@ const styles = StyleSheet.create({
   // Cards
   listContent: {
     paddingHorizontal: Spacing.side,
+    paddingTop: 12,
     paddingBottom: 16,
   },
   sectionHeader: {
@@ -534,6 +580,9 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 2 },
     shadowRadius: 8,
     elevation: 1,
+  },
+  cardDisabled: {
+    opacity: 0.5,
   },
   cardAccent: {
     width: 4,
@@ -615,6 +664,21 @@ const styles = StyleSheet.create({
     color: Colors.secondary,
     marginTop: 4,
     fontStyle: 'italic',
+  },
+  pendingBadge: {
+    alignSelf: 'flex-start',
+    backgroundColor: 'rgba(255,157,0,0.10)',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    marginTop: 4,
+    borderWidth: 0.5,
+    borderColor: 'rgba(255,157,0,0.25)',
+  },
+  pendingBadgeText: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 11,
+    color: Colors.orange,
   },
 
   empty: { alignItems: 'center', paddingTop: 60 },

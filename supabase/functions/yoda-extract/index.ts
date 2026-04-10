@@ -123,7 +123,7 @@ If the coach explicitly signals progress or regression on an EXISTING focus poin
 - explicit_priority: true if coach used words like "most important", "above all", "focus on this", "before anything else"
 
 ## CLASS SUMMARY
-For each student, write a `class_summary`: one sentence (max 20 words) summarizing what was worked on overall during this lesson. It should read naturally, like a note a student would write after class. Focus on the main themes, not individual corrections.
+For each student, write a "class_summary": one sentence (max 20 words) summarizing what was worked on overall during this lesson. It should read naturally, like a note a student would write after class. Focus on the main themes, not individual corrections.
 Examples: "Worked mainly on hip action in Rumba and maintaining back connection throughout the Cha-cha.", "Focus on footwork timing in Quickstep and posture in Waltz."
 
 ## OTHER FOCUS POINTS
@@ -213,6 +213,210 @@ Deno.serve(async (req: Request) => {
   })
 })
 
+// ─── Group class attendance notification ──────────────────────────────────────
+
+async function notifyGroupClassAttendance(
+  supabase: ReturnType<typeof createClient>,
+  classInputId: string,
+  coachId: string,
+  coachName: string,
+  classDate: string,
+): Promise<void> {
+  // Get all students connected to this coach
+  const { data: requests } = await supabase
+    .from('coach_requests')
+    .select('student_id')
+    .eq('coach_id', coachId)
+    .eq('status', 'accepted')
+
+  const studentIds: string[] = (requests ?? []).map((r: any) => r.student_id)
+  if (studentIds.length === 0) return
+
+  // Insert class_input_students rows for attendance tracking
+  const cisRows = studentIds.map((sid: string) => ({
+    class_input_id: classInputId,
+    student_id: sid,
+    attendance: 'pending',
+  }))
+  await supabase.from('class_input_students').upsert(cisRows, { onConflict: 'class_input_id,student_id' })
+
+  // Send attendance notification to each student
+  const notifications = studentIds.map((sid: string) => ({
+    user_id: sid,
+    type: 'group_class_attendance',
+    title: `Were you at ${coachName}'s group class?`,
+    body: `Class on ${classDate} — confirm your attendance to receive your focus points.`,
+    data: { class_input_id: classInputId, coach_name: coachName, class_date: classDate },
+  }))
+  const { error } = await supabase.from('notifications').insert(notifications)
+  if (error) console.error('[yoda-extract] Failed to insert attendance notifications:', error.message)
+  else console.log(`[yoda-extract] ✓ Sent attendance notifications to ${studentIds.length} students for class ${classInputId}`)
+}
+
+// ─── Generate alternative versions for each focus point ──────────────────────
+
+async function generateAlternatives(
+  supabase: ReturnType<typeof createClient>,
+  classInputId: string,
+  studentId: string,
+  focusPoints: any[],
+): Promise<void> {
+  if (!focusPoints || focusPoints.length === 0) return
+
+  const simplifiedFPs = focusPoints.map(fp => ({
+    title: fp.title,
+    subtitle: fp.subtitle,
+    context: fp.context,
+    drill: fp.drill ?? null,
+    dance: fp.dance ?? [],
+  }))
+
+  const altPrompt = `You are generating alternative phrasings for dance lesson focus points, for a human trainer to evaluate and improve the AI.
+
+For each focus point given:
+1. Add a "reasoning" field to the original — a 1-sentence explanation of why this phrasing was chosen (angle, emphasis, word choice).
+2. Produce exactly 2 alternative versions, each also with a "reasoning" field explaining its different angle or approach.
+Same root cause across all 3. Keep the same "dance" array. Vary title (1-2 words), subtitle (one short actionable sentence), context (second person), drill if present.
+
+Input focus points:
+${JSON.stringify(simplifiedFPs)}
+
+Return ONLY a JSON object with this structure:
+{
+  "originals": [
+    { "title": "...", "subtitle": "...", "context": "...", "drill": "...", "dance": [...], "reasoning": "Chosen because..." },
+    ...
+  ],
+  "alternatives": [
+    [
+      { "title": "...", "subtitle": "...", "context": "...", "drill": "...", "dance": [...], "reasoning": "Takes a more X approach..." },
+      { "title": "...", "subtitle": "...", "context": "...", "drill": "...", "dance": [...], "reasoning": "Focuses on Y instead..." }
+    ],
+    ...
+  ]
+}
+No markdown, no explanation.`
+
+  const altRes = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': Deno.env.get('ANTHROPIC_API_KEY')!,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model: 'claude-haiku-4-5',
+      max_tokens: 3000,
+      messages: [{ role: 'user', content: altPrompt }],
+    }),
+  })
+
+  if (!altRes.ok) {
+    throw new Error(`Alternatives API ${altRes.status}: ${await altRes.text()}`)
+  }
+
+  const altData = await altRes.json()
+  const rawAltText: string = (altData.content?.[0]?.text ?? '').trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim()
+
+  let parsed: { originals: any[]; alternatives: any[][] }
+  try {
+    parsed = JSON.parse(rawAltText)
+  } catch {
+    throw new Error(`Failed to parse alternatives JSON: ${rawAltText.slice(0, 300)}`)
+  }
+
+  // Insert one row per focus point
+  const rows = simplifiedFPs.map((chosenFP, fpIndex) => {
+    const enrichedChosen = { ...chosenFP, reasoning: parsed.originals?.[fpIndex]?.reasoning ?? null }
+    const alts = parsed.alternatives?.[fpIndex] ?? []
+    const alt1 = alts[0] ?? { ...chosenFP, reasoning: null }
+    const alt2 = alts[1] ?? { ...chosenFP, reasoning: null }
+    return {
+      class_input_id: classInputId,
+      student_id: studentId,
+      focus_point_index: fpIndex,
+      versions: [enrichedChosen, alt1, alt2],
+      chosen_index: 0,
+      reviewed: false,
+    }
+  })
+
+  const { error } = await supabase.from('ai_training_candidates').insert(rows)
+  if (error) {
+    throw new Error(`ai_training_candidates insert error: ${error.message}`)
+  }
+
+  console.log(`[yoda-extract] ✓ Stored ${rows.length} training candidates for class ${classInputId}, student ${studentId}`)
+}
+
+// ─── Load recent trainer feedback to inject as examples ───────────────────────
+
+async function loadTrainerFeedback(supabase: ReturnType<typeof createClient>): Promise<string> {
+  const { data, error } = await supabase
+    .from('ai_feedback')
+    .select(`
+      rating,
+      comment,
+      version_index,
+      ai_training_candidates!inner(versions)
+    `)
+    .order('created_at', { ascending: false })
+    .limit(20)
+
+  if (error || !data || data.length === 0) return ''
+
+  const lines: string[] = []
+  for (const row of data) {
+    const versions = (row.ai_training_candidates as any)?.versions
+    if (!Array.isArray(versions)) continue
+    const version = versions[row.version_index]
+    if (!version) continue
+    const label = row.rating.toUpperCase()
+    const commentPart = row.comment ? `, comment: "${row.comment}"` : ''
+    lines.push(`[${label}] title: "${version.title}", subtitle: "${version.subtitle}"${commentPart}`)
+  }
+
+  if (lines.length === 0) return ''
+
+  let result = `\n\n## TRAINER FEEDBACK — learn from these rated examples:\n${lines.join('\n')}`
+
+  // Also load score decision feedback
+  const { data: scoreData, error: scoreError } = await supabase
+    .from('yoda_score_feedback')
+    .select(`
+      rating,
+      comment,
+      decision_index,
+      yoda_score_decisions!inner(decisions)
+    `)
+    .order('created_at', { ascending: false })
+    .limit(20)
+
+  if (!scoreError && scoreData && scoreData.length > 0) {
+    const scoreLines: string[] = []
+    for (const row of scoreData) {
+      const decisions = (row.yoda_score_decisions as any)?.decisions
+      if (!Array.isArray(decisions)) continue
+      const decision = decisions[row.decision_index]
+      if (!decision) continue
+      const label = `SCORE-${row.rating.toUpperCase()}`
+      const commentPart = row.comment ? `, comment: "${row.comment}"` : ''
+      let detail = `action: "${decision.action}", fp: "${decision.fp_name}"`
+      if (decision.existing_fp_name) detail += ` → existing: "${decision.existing_fp_name}"`
+      if (decision.tier) detail += `, tier: "${decision.tier}"`
+      scoreLines.push(`[${label}] ${detail}${commentPart}`)
+    }
+    if (scoreLines.length > 0) {
+      result += `\n\n## SCORE DECISIONS FEEDBACK — learn from these validated decisions:\n${scoreLines.join('\n')}`
+    }
+  }
+
+  return result
+}
+
 // ─── Processing logic ─────────────────────────────────────────────────────────
 
 async function processRecord(record: ClassInputRecord): Promise<void> {
@@ -236,6 +440,17 @@ async function processRecord(record: ClassInputRecord): Promise<void> {
     Deno.env.get('SUPABASE_URL')!,
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
   )
+
+  // Load trainer feedback to enrich the system prompt
+  let trainerFeedbackSection = ''
+  try {
+    trainerFeedbackSection = await loadTrainerFeedback(supabase)
+  } catch (err) {
+    console.warn('[yoda-extract] Could not load trainer feedback:', err)
+  }
+  const effectiveSystemPrompt = trainerFeedbackSection
+    ? SYSTEM_PROMPT + trainerFeedbackSection
+    : SYSTEM_PROMPT
 
   // Mark as processing
   await supabase
@@ -320,7 +535,7 @@ async function processRecord(record: ClassInputRecord): Promise<void> {
       body: JSON.stringify({
         model: 'claude-haiku-4-5',
         max_tokens: 4000,
-        system: SYSTEM_PROMPT,
+        system: effectiveSystemPrompt,
         messages: [{ role: 'user', content: userMessage }],
       }),
     })
@@ -406,6 +621,16 @@ async function processRecord(record: ClassInputRecord): Promise<void> {
     }
 
     console.log(`[yoda-extract] ✓ Extracted: ${id}`)
+
+    // Notify group class students to confirm attendance
+    if (lesson_type === 'public' || lesson_type === 'group') {
+      try {
+        const classDate = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+        await notifyGroupClassAttendance(supabase, id, user_id, coachName, classDate)
+      } catch (err) {
+        console.error('[yoda-extract] attendance notification error:', err)
+      }
+    }
 
     // Insert coach knowledge entries (principles, tips, metaphors, drills)
     // Only insert entries that are genuinely new — not already covered by existing knowledge
@@ -494,6 +719,19 @@ Return ONLY a JSON array of numbers, e.g. [1, 3]. No explanation.`,
     })
     if (scoreError) {
       console.error(`[yoda-extract] yoda-score error for ${id}:`, scoreError.message)
+    }
+
+    // Fire-and-forget: generate alternative focus point versions for trainer review
+    // This runs after yoda-score and must not affect the student experience
+    try {
+      const aiData2 = parsed as any
+      for (const studentResult of aiData2.students ?? []) {
+        const fps = studentResult.focus_points ?? []
+        if (fps.length === 0) continue
+        await generateAlternatives(supabase, id, studentResult.student_id, fps)
+      }
+    } catch (altErr) {
+      console.warn(`[yoda-extract] Alternatives generation failed for ${id} (non-fatal):`, altErr)
     }
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err)

@@ -8,6 +8,8 @@ import { getNotifications, markAllNotificationsRead } from '../storage/notificat
 const TYPE_ICON = {
   coach_request_accepted: 'checkmark-circle-outline',
   coach_request_declined: 'close-circle-outline',
+  group_class_attendance: 'people-outline',
+  focus_points_added: 'star-outline',
 };
 
 function formatTime(dateStr) {
@@ -27,6 +29,22 @@ function formatTime(dateStr) {
 export default function NotificationsScreen({ navigation }) {
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
+
+  function handleNotificationPress(notif) {
+    if (!notif.data) return;
+    if (notif.type === 'group_class_attendance') {
+      navigation.navigate('AttendanceConfirm', {
+        classInputId: notif.data.class_input_id,
+        coachName: notif.data.coach_name,
+        classDate: notif.data.class_date,
+      });
+    } else if (notif.type === 'focus_points_added' && notif.data?.student_id) {
+      navigation.navigate('FocusValidation', {
+        studentId: notif.data.student_id,
+        studentName: notif.data.student_name ?? 'Student',
+      });
+    }
+  }
 
   useEffect(() => {
     async function load() {
@@ -72,7 +90,7 @@ export default function NotificationsScreen({ navigation }) {
             </View>
           ) : (
             notifications.map((notif) => (
-              <View key={notif.id} style={[styles.card, !notif.read && styles.cardUnread]}>
+              <TouchableOpacity key={notif.id} style={[styles.card, !notif.read && styles.cardUnread]} onPress={() => handleNotificationPress(notif)} activeOpacity={0.8}>
                 <View style={[styles.iconWrap, !notif.read && styles.iconWrapUnread]}>
                   <Ionicons
                     name={TYPE_ICON[notif.type] ?? 'notifications-outline'}
@@ -88,7 +106,7 @@ export default function NotificationsScreen({ navigation }) {
                   <Text style={styles.cardText}>{notif.body}</Text>
                 </View>
                 {!notif.read && <View style={styles.dot} />}
-              </View>
+              </TouchableOpacity>
             ))
           )}
         </ScrollView>
