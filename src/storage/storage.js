@@ -6,25 +6,6 @@ async function getUserId() {
   return session.user.id;
 }
 
-// ─── In-memory cache (speeds up stack screens that reuse tab data) ───────────
-const _cache = {};
-const CACHE_TTL = 15000; // 15s — fresh enough, avoids duplicate network calls
-
-function cached(key, fetcher) {
-  return async function (...args) {
-    const entry = _cache[key];
-    if (entry && Date.now() - entry.ts < CACHE_TTL) return entry.data;
-    const data = await fetcher(...args);
-    _cache[key] = { data, ts: Date.now() };
-    return data;
-  };
-}
-
-export function invalidateCache(key) {
-  if (key) delete _cache[key];
-  else Object.keys(_cache).forEach((k) => delete _cache[k]);
-}
-
 // ─── User ────────────────────────────────────────────────────────────────────
 
 export async function getUser() {
@@ -63,46 +44,16 @@ export async function getUserSummary() {
   return data?.current_summary || null;
 }
 
-// ─── AI Coach Context ─────────────────────────────────────────────────────────
-
-export async function getTeacherContextForAI() {
-  const { data, error } = await supabase.functions.invoke('get-teacher-context');
-  if (error) throw error;
-  return data;
-}
-
 // ─── Class Inputs ────────────────────────────────────────────────────────────
 
-async function _getClassInputs() {
-  const userId = await getUserId();
+export async function getClassInputs() {
   const { data } = await supabase
     .from('class_inputs')
-    .select('*, focus_points(id, name, subtitle, context, drill, dance, tier)')
-    .or(`user_id.eq.${userId},student_id.eq.${userId}`)
+    .select('*')
     .not('is_deleted', 'is', true)
     .order('created_at', { ascending: false });
-
-  const inputs = data || [];
-
-  // Batch-resolve teacher name from user_id for classes missing teacher_name
-  const missingIds = [...new Set(
-    inputs.filter(i => !i.teacher_name && i.user_id).map(i => i.user_id)
-  )];
-  let userNameMap = {};
-  if (missingIds.length > 0) {
-    const { data: users } = await supabase
-      .from('users')
-      .select('id, name')
-      .in('id', missingIds);
-    userNameMap = Object.fromEntries((users || []).map(u => [u.id, u.name]));
-  }
-
-  return inputs.map(i => ({
-    ...i,
-    _teacher_fallback: !i.teacher_name ? (userNameMap[i.user_id] || null) : null,
-  }));
+  return data || [];
 }
-export const getClassInputs = cached('classInputs', _getClassInputs);
 
 export async function saveClassInput(input) {
   const userId = await getUserId();
@@ -110,7 +61,6 @@ export async function saveClassInput(input) {
     .from('class_inputs')
     .insert({ status: 'pending', ...input, user_id: userId, is_deleted: false });
   if (error) throw error;
-  invalidateCache('classInputs');
 }
 
 export async function deleteClassInput(id) {
@@ -118,7 +68,6 @@ export async function deleteClassInput(id) {
     .from('class_inputs')
     .update({ is_deleted: true })
     .eq('id', id);
-  invalidateCache('classInputs');
 }
 
 export async function getRecentClassInputs(limit = 3) {
@@ -139,33 +88,10 @@ export async function getSessionsThisWeek() {
   const { data } = await supabase
     .from('class_inputs')
     .select('id')
-    .or(`user_id.eq.${userId},student_id.eq.${userId}`)
+    .eq('user_id', userId)
     .not('is_deleted', 'is', true)
     .gte('created_at', weekAgo);
   return (data || []).length;
-}
-
-// ─── AI Coach Chats ───────────────────────────────────────────────────────────
-
-export async function loadAIChat(focusPointId) {
-  const userId = await getUserId();
-  const { data } = await supabase
-    .from('focus_ai_chats')
-    .select('messages')
-    .eq('student_id', userId)
-    .eq('focus_point_id', focusPointId)
-    .single();
-  return data?.messages || [];
-}
-
-export async function saveAIChat(focusPointId, messages) {
-  const userId = await getUserId();
-  await supabase
-    .from('focus_ai_chats')
-    .upsert(
-      { student_id: userId, focus_point_id: focusPointId, messages, updated_at: new Date().toISOString() },
-      { onConflict: 'student_id,focus_point_id' }
-    );
 }
 
 export async function getTrainingSessionsThisWeek() {
@@ -224,7 +150,7 @@ export async function getWeekActivity() {
       supabase
         .from('class_inputs')
         .select('id, created_at, practice_point_1, ai_primary_focus')
-        .or(`user_id.eq.${userId},student_id.eq.${userId}`)
+        .eq('user_id', userId)
         .not('is_deleted', 'is', true)
         .gte('created_at', mondayISO),
       supabase
@@ -261,8 +187,6 @@ export async function getFocusPoints() {
     .eq('user_id', userId)
     .eq('is_deleted', false)
     .eq('is_archived', false)
-    .eq('status', 'active')
-    .eq('is_other', false)
     .order('created_at', { ascending: true });
   return data || [];
 }
@@ -368,7 +292,7 @@ export async function getTopFocusPointsWithCounts(n = 3) {
 
 // ─── Notes ───────────────────────────────────────────────────────────────────
 
-async function _getNotes() {
+export async function getNotes() {
   const userId = await getUserId();
   const { data } = await supabase
     .from('notes')
@@ -378,7 +302,6 @@ async function _getNotes() {
     .order('updated_at', { ascending: false });
   return data || [];
 }
-export const getNotes = cached('notes', _getNotes);
 
 export async function getNoteById(id) {
   const { data } = await supabase
@@ -405,7 +328,6 @@ export async function saveNote(note) {
         .from('notes')
         .update(rest)
         .eq('id', id);
-      invalidateCache('notes');
       return id;
     }
   }
@@ -415,7 +337,6 @@ export async function saveNote(note) {
     .insert({ ...rest, user_id: userId })
     .select('id')
     .single();
-  invalidateCache('notes');
   return data?.id;
 }
 
@@ -424,7 +345,6 @@ export async function deleteNote(id) {
     .from('notes')
     .update({ is_deleted: true })
     .eq('id', id);
-  invalidateCache('notes');
 }
 
 export async function getNotesLinkedToClass(classInputId) {
