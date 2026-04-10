@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import TabHeader from '../components/TabHeader';
 import * as Clipboard from 'expo-clipboard';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -35,6 +36,7 @@ import {
 } from '../storage/activeSession';
 import { generateCoachShareSummary } from '../services/ai/anthropic';
 import LogModal from '../components/LogModal';
+import HomeSkeleton from '../components/HomeSkeleton';
 
 const SHARE_LOADING_MSGS = ['Gathering your notes...', 'Writing summary...', 'Almost ready...'];
 const HOME_CACHE_KEY = '@cache_home';
@@ -97,11 +99,14 @@ export default function HomeScreen({ navigation }) {
   const [user, setUser] = useState(null);
   const [slot1, setSlot1] = useState(null);
   const [slot2, setSlot2] = useState(null);
+  const [slot3, setSlot3] = useState(null);
   const [sessionCount, setSessionCount] = useState(0);
   const [slot2Count, setSlot2Count] = useState(0);
+  const [comingUpModal, setComingUpModal] = useState(false);
   const [starting, setStarting] = useState(false);
   const [activeSession, setActiveSessionState] = useState(null);
   const [countdown, setCountdown] = useState(0);
+  const [homeOverTime, setHomeOverTime] = useState(0);
   const [sessionsThisWeek, setSessionsThisWeek] = useState(0);
   const [classesThisWeek, setClassesThisWeek] = useState(0);
   const [focusTrainedThisWeek, setFocusTrainedThisWeek] = useState(0);
@@ -129,6 +134,7 @@ export default function HomeScreen({ navigation }) {
     setUser(u);
     setSlot1(slots.slot1);
     setSlot2(slots.slot2);
+    setSlot3(slots.slot3);
     setSessionsThisWeek(sessions);
     setClassesThisWeek(classes);
     setFocusTrainedThisWeek(focusTrained);
@@ -141,7 +147,7 @@ export default function HomeScreen({ navigation }) {
     setSessionCount(c1);
     setSlot2Count(c2);
     AsyncStorage.setItem(HOME_CACHE_KEY, JSON.stringify({
-      user: u, slot1: slots.slot1, slot2: slots.slot2,
+      user: u, slot1: slots.slot1, slot2: slots.slot2, slot3: slots.slot3,
       sessionCount: c1, slot2Count: c2,
       sessionsThisWeek: sessions, classesThisWeek: classes,
       focusTrainedThisWeek: focusTrained, weekActivity: wa || {},
@@ -161,6 +167,7 @@ export default function HomeScreen({ navigation }) {
             setUser(c.user);
             setSlot1(c.slot1);
             setSlot2(c.slot2);
+            setSlot3(c.slot3 || null);
             setSessionCount(c.sessionCount || 0);
             setSlot2Count(c.slot2Count || 0);
             setSessionsThisWeek(c.sessionsThisWeek || 0);
@@ -196,7 +203,12 @@ export default function HomeScreen({ navigation }) {
       if (s) {
         const tl = Math.floor(getSessionTimeLeft());
         setCountdown(tl);
-        if (tl <= 0) clearActiveSession();
+        if (tl <= 0) {
+          const over = Math.floor((Date.now() - s.startedAt) / 1000 - s.duration * 60);
+          setHomeOverTime(Math.max(0, over));
+        } else {
+          setHomeOverTime(0);
+        }
       }
     }, 1000);
 
@@ -250,7 +262,7 @@ export default function HomeScreen({ navigation }) {
     });
   }
 
-  const isSessionActive = !!(activeSession && countdown > 0);
+  const isSessionActive = !!activeSession;
   const activeFocusName = isSessionActive
     ? (activeSession.focusPointName ?? slot1?.name)
     : slot1?.name;
@@ -258,39 +270,17 @@ export default function HomeScreen({ navigation }) {
   const heroMessage = slot1?.subtitle || null;
 
   if (isLoading) {
-    return (
-      <View style={{ flex: 1, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' }}>
-        <Text style={{ fontFamily: Fonts.monument, fontSize: 20, color: Colors.black, letterSpacing: 1 }}>EE</Text>
-      </View>
-    );
+    return <HomeSkeleton />;
   }
 
   return (
-    <SafeAreaView style={s.safe}>
+    <SafeAreaView style={s.safe} edges={['top', 'left', 'right']}>
       <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
+
+      <TabHeader navigation={navigation} />
 
       {/* ── Top section ── */}
       <View style={[s.scroll, s.scrollContent]}>
-        {/* Header */}
-        <View style={s.header}>
-          <Text style={s.logo}>EE</Text>
-          <TouchableOpacity
-            style={s.avatar}
-            onPress={() => navigation.navigate('PROFILE')}
-            activeOpacity={0.8}
-          >
-            {photoUri ? (
-              <Image source={{ uri: photoUri }} style={s.avatarPhoto} />
-            ) : (
-              <Text style={s.avatarText}>
-                {user?.name ? user.name[0].toUpperCase() : 'A'}
-              </Text>
-            )}
-          </TouchableOpacity>
-        </View>
-
-        {/* Glow behind hero — must be BEFORE hero in JSX so hero renders on top */}
-        <View pointerEvents="none" style={s.logBtnGlow} />
 
         {/* Hero card */}
         <View style={s.hero}>
@@ -304,7 +294,7 @@ export default function HomeScreen({ navigation }) {
           {!isSessionActive && heroMessage ? (
             <Text style={s.heroMessage} numberOfLines={3}>{heroMessage}</Text>
           ) : null}
-          {activeSession && countdown > 0 ? (
+          {activeSession ? (
             <TouchableOpacity
               style={s.inProgressBtn}
               onPress={() => navigation.navigate('FocusSession', {
@@ -320,7 +310,13 @@ export default function HomeScreen({ navigation }) {
                 <Text style={s.inProgressLabel}>In Progress</Text>
               </View>
               <View style={s.inProgressRight}>
-                <Text style={s.inProgressTimer}>{formatTime(countdown)}</Text>
+                {countdown > 0 ? (
+                  <Text style={s.inProgressTimer}>{formatTime(countdown)}</Text>
+                ) : (
+                  <Text style={[s.inProgressTimer, { color: '#FF9D00' }]}>
+                    + {formatTime(homeOverTime)}
+                  </Text>
+                )}
                 <Text style={s.inProgressArrow}>›</Text>
               </View>
             </TouchableOpacity>
@@ -343,7 +339,7 @@ export default function HomeScreen({ navigation }) {
           <View style={s.orLine} />
         </View>
 
-        {/* Alt row: scrollable cards + fixed Log Class */}
+        {/* Alt row: scrollable cards + All Focus Points */}
         <View style={s.altRow}>
           <View style={s.altScrollWrap}>
             <ScrollView
@@ -365,24 +361,27 @@ export default function HomeScreen({ navigation }) {
                   <Text style={s.altName} numberOfLines={2}>{slot2.name}</Text>
                 </TouchableOpacity>
               )}
-              <View style={[s.altCard, isSessionActive && s.altCardLocked]}>
+              <TouchableOpacity
+                style={[s.altCard, s.altCardComingUp]}
+                onPress={() => setComingUpModal(true)}
+                activeOpacity={0.8}
+              >
                 <View style={s.altCardHeader}>
                   <Text style={s.altTryLabel}>Coming up</Text>
-                  {isSessionActive && <Text style={s.altLockIcon}>🔒</Text>}
                 </View>
-                <Text style={s.altName}>Log a class to unlock</Text>
-              </View>
+                <Text style={s.altName} numberOfLines={2}>
+                  {slot3 ? slot3.name : '—'}
+                </Text>
+              </TouchableOpacity>
             </ScrollView>
-
           </View>
           <View style={s.altFixed}>
             <TouchableOpacity
-              style={s.logBtn}
-              onPress={() => setLogModalVisible(true)}
+              style={s.allFocusBtn}
+              onPress={() => navigation.navigate('AllFocusPoints')}
               activeOpacity={0.8}
             >
-              <Text style={s.logBtnPlus}>+</Text>
-              <Text style={s.logBtnLabel}>LOG CLASS</Text>
+              <Text style={s.allFocusBtnText}>All focus{'\n'}points</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -417,38 +416,6 @@ export default function HomeScreen({ navigation }) {
           </View>
         </View>
 
-        {/* Share with Coach */}
-        <View style={s.shareSection}>
-          <Text style={s.shareDesc}>
-            Send your coach a quick summary of your recent sessions and focus areas.
-          </Text>
-          <TouchableOpacity
-            style={[
-              s.shareBtn,
-              shareState === 'loading' && s.shareBtnLoading,
-              shareState === 'success' && s.shareBtnSuccess,
-            ]}
-            onPress={handleShare}
-            activeOpacity={0.82}
-            disabled={shareState === 'loading'}
-          >
-            {shareState === 'loading' ? (
-              <View style={s.shareInner}>
-                <ActivityIndicator size="small" color="rgba(17,12,17,0.4)" />
-                <Text style={s.shareBtnTextLoading}>{shareLoadingMsg}</Text>
-              </View>
-            ) : shareState === 'success' ? (
-              <View style={s.shareInner}>
-                <Text style={s.shareBtnTextSuccess}>Copied to clipboard  ✓</Text>
-              </View>
-            ) : (
-              <View style={s.shareInner}>
-                <Text style={s.shareIconArrow}>↑</Text>
-                <Text style={s.shareBtnText}>Share with coach</Text>
-              </View>
-            )}
-          </TouchableOpacity>
-        </View>
       </View>
 
       <LogModal
@@ -456,6 +423,19 @@ export default function HomeScreen({ navigation }) {
         onClose={() => setLogModalVisible(false)}
         onSubmitted={() => { setLogModalVisible(false); load(); }}
       />
+
+      <Modal visible={comingUpModal} transparent animationType="fade" onRequestClose={() => setComingUpModal(false)}>
+        <TouchableOpacity style={s.comingUpOverlay} activeOpacity={1} onPress={() => setComingUpModal(false)}>
+          <TouchableOpacity style={s.comingUpSheet} activeOpacity={1} onPress={() => {}}>
+            <Text style={s.comingUpEmoji}>🎯</Text>
+            <Text style={s.comingUpTitle}>Work on the most important focus first</Text>
+            <Text style={s.comingUpBody}>Complete your primary focus point before moving to the next one. Focused repetition builds mastery faster.</Text>
+            <TouchableOpacity style={s.comingUpDismiss} onPress={() => setComingUpModal(false)} activeOpacity={0.8}>
+              <Text style={s.comingUpDismissText}>Got it</Text>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
 
       <Modal visible={dayModal !== null} transparent animationType="slide" onRequestClose={() => setDayModal(null)}>
         <TouchableOpacity style={dm.overlay} activeOpacity={1} onPress={() => setDayModal(null)}>
@@ -577,12 +557,10 @@ const dm = StyleSheet.create({
 // ─── Main styles ──────────────────────────────────────────────────────────────
 const s = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#fff' },
-  scroll: { flex: 1 },
+  scroll: {},
   scrollContent: {
     paddingHorizontal: 20,
-    paddingTop: 16,
-    paddingBottom: 4,
-    justifyContent: 'space-between',
+    paddingBottom: 8,
   },
 
   // Header
@@ -591,6 +569,12 @@ const s = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 18,
+  },
+  notifBtn: {
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   logo: {
     fontFamily: Fonts.monument,
@@ -623,7 +607,7 @@ const s = StyleSheet.create({
     borderRadius: 20,
     padding: 20,
     paddingBottom: 18,
-    marginBottom: 0,
+    marginBottom: 12,
     shadowColor: '#000',
     shadowOpacity: 0.09,
     shadowOffset: { width: 0, height: 2 },
@@ -736,7 +720,7 @@ const s = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    marginBottom: 0,
+    marginBottom: 12,
   },
   orLine: { flex: 1, height: 1, backgroundColor: '#EFEFEF' },
   orText: {
@@ -793,56 +777,83 @@ const s = StyleSheet.create({
     color: '#C8C8C8',
   },
   altFixed: {
-    marginLeft: -20,
-    paddingLeft: 10,
-    backgroundColor: '#fff',
-    shadowColor: '#fff',
-    shadowOffset: { width: -28, height: 0 },
-    shadowOpacity: 1,
-    shadowRadius: 28,
+    marginLeft: 9,
   },
-  logBtnGlow: {
-    position: 'absolute',
-    bottom: 0,
-    right: 0,
-    width: 80,
-    height: 80,
-    shadowColor: '#ffffff',
-    shadowOpacity: 1,
-    shadowOffset: { width: 0, height: -30 },
-    shadowRadius: 32,
+  altCardComingUp: {
+    opacity: 0.6,
   },
-  logBtn: {
+  allFocusBtn: {
     width: 80,
     flex: 1,
     backgroundColor: '#F2F2F2',
     borderRadius: 14,
-    borderWidth: 1,
-    borderColor: 'rgba(76,175,80,0.5)',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 5,
   },
-  logBtnPlus: {
-    fontFamily: Fonts.jakartaLight,
-    fontSize: 28,
-    color: '#4CAF50',
-    lineHeight: 32,
-    marginTop: 2,
-  },
-  logBtnLabel: {
+  allFocusBtnText: {
     fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 9,
-    color: '#4CAF50',
+    fontSize: 10,
+    color: '#888',
     textTransform: 'uppercase',
-    letterSpacing: 0.7,
+    letterSpacing: 0.6,
+    textAlign: 'center',
+    lineHeight: 14,
+  },
+
+  // Coming up modal
+  comingUpOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 32,
+  },
+  comingUpSheet: {
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    padding: 28,
+    alignItems: 'center',
+    width: '100%',
+  },
+  comingUpEmoji: {
+    fontSize: 36,
+    marginBottom: 14,
+  },
+  comingUpTitle: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 17,
+    color: '#111',
+    textAlign: 'center',
+    letterSpacing: -0.3,
+    marginBottom: 10,
+  },
+  comingUpBody: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 13,
+    color: '#888',
+    textAlign: 'center',
+    lineHeight: 20,
+    marginBottom: 24,
+  },
+  comingUpDismiss: {
+    backgroundColor: '#111',
+    borderRadius: 12,
+    paddingVertical: 13,
+    paddingHorizontal: 32,
+    alignSelf: 'stretch',
+    alignItems: 'center',
+  },
+  comingUpDismissText: {
+    fontFamily: Fonts.jakartaBold,
+    fontSize: 15,
+    color: '#fff',
   },
 
   // Bottom dock
   bottomDock: {
     flexShrink: 0,
     paddingHorizontal: 20,
-    paddingTop: 16,
+    paddingTop: 14,
     backgroundColor: '#fff',
   },
   dockSep: {

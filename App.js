@@ -32,6 +32,7 @@ import FocusSessionScreen from './src/screens/FocusSessionScreen';
 import LoginScreen from './src/screens/LoginScreen';
 import RegisterScreen from './src/screens/RegisterScreen';
 import NotificationsScreen from './src/screens/NotificationsScreen';
+import AllFocusPointsScreen from './src/screens/AllFocusPointsScreen';
 import CustomTabBar from './src/components/CustomTabBar';
 
 // Coach screens
@@ -60,6 +61,7 @@ function MainTabs() {
       tabBar={(props) => <CustomTabBar {...props} />}
       screenOptions={{
         headerShown: false,
+        lazy: false,
         tabBarStyle: { backgroundColor: 'transparent', borderTopWidth: 0, elevation: 0 },
       }}
     >
@@ -72,7 +74,7 @@ function MainTabs() {
 
 function AppNavigator() {
   return (
-    <Stack.Navigator screenOptions={{ headerShown: false }}>
+    <Stack.Navigator screenOptions={{ headerShown: false, detachInactiveScreens: false }}>
       <Stack.Screen name="MainTabs" component={MainTabs} />
       <Stack.Screen
         name="ClassDetail"
@@ -93,6 +95,11 @@ function AppNavigator() {
         name="Notifications"
         component={NotificationsScreen}
         options={{ animation: 'slide_from_left' }}
+      />
+      <Stack.Screen
+        name="AllFocusPoints"
+        component={AllFocusPointsScreen}
+        options={{ animation: 'slide_from_right' }}
       />
     </Stack.Navigator>
   );

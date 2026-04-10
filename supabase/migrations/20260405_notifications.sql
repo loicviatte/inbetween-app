@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS public.notifications (
 ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
 
 -- Users can only access their own notifications
+DROP POLICY IF EXISTS "users_own_notifications" ON public.notifications;
 CREATE POLICY "users_own_notifications" ON public.notifications
   FOR ALL USING (auth.uid() = user_id);
 
@@ -54,6 +55,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
+DROP TRIGGER IF EXISTS on_coach_request_response ON public.coach_requests;
 CREATE TRIGGER on_coach_request_response
   AFTER UPDATE OF status ON public.coach_requests
   FOR EACH ROW EXECUTE FUNCTION public.notify_coach_request_response();

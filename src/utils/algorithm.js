@@ -85,6 +85,34 @@ function computePriority(focus, now) {
   return Math.max(0, Math.min(20, raw));
 }
 
+// ─── All focus points ranked by priority ──────────────────────────────────────
+
+export async function getAllFocusPointsRanked() {
+  try {
+    const userId = await getUserId();
+    const now = new Date();
+
+    const { data: points } = await supabase
+      .from('focus_points')
+      .select('*, class_inputs(id, created_at, class_summary, dance, teacher_name)')
+      .eq('user_id', userId)
+      .eq('is_deleted', false)
+      .eq('is_archived', false)
+      .eq('status', 'active')
+      .eq('is_other', false)
+      .is('alias_of', null);
+
+    if (!points || points.length === 0) return [];
+
+    return points
+      .map((p) => ({ ...p, _priority: computePriority(p, now) }))
+      .sort((a, b) => b._priority - a._priority);
+  } catch (e) {
+    console.error('getAllFocusPointsRanked error:', e);
+    return [];
+  }
+}
+
 // ─── Top-3 slot selection ─────────────────────────────────────────────────────
 
 export async function getSlots() {

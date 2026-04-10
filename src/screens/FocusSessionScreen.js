@@ -15,13 +15,19 @@ import {
   Platform,
   useWindowDimensions,
   PanResponder,
+  LayoutAnimation,
+  UIManager,
 } from 'react-native';
+
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 import Slider from '@react-native-community/slider';
 import { Audio } from 'expo-av';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Colors, Fonts, Spacing } from '../theme';
-import { getFocusPoints, getClassInputsForFocus, getClassInputs, getTrainingSessionsThisWeek } from '../storage/storage';
+import { getFocusPoints, getClassInputsForFocus, getClassInputs, getTrainingSessionsThisWeek, getTeacherContextForAI } from '../storage/storage';
 import { callClaudeChat } from '../services/ai/anthropic';
 import { completeTrainingSession, getSessionLabel } from '../utils/algorithm';
 import {
@@ -29,12 +35,9 @@ import {
   getActiveSession,
   clearActiveSession,
   getSessionTimeLeft,
-  getChatMessages,
-  setChatMessages as storeChatMessages,
-  clearChatMessages,
 } from '../storage/activeSession';
 
-const DURATIONS = [5, 10, 15, 20, 25, 30, 45, 60, 90];
+const DURATIONS = [0.17, 5, 10, 15, 20, 25, 30, 45, 60, 90]; // 0.17 ≈ 10s for testing
 const TICK_SOUND = require('../../assets/metronome_tick.wav');
 
 const FEELINGS = [
@@ -51,18 +54,51 @@ function formatTime(seconds) {
   return `${m}:${s}`;
 }
 
+// WDSF competition tempos — BPM = bars/min × beats/bar
 const DANCES = [
+  { id: 'chacha',    name: 'Cha Cha',    bpm: 120, beats: 4, category: 'L' }, // 30 bars/min × 4
   { id: 'samba',     name: 'Samba',      bpm: 100, beats: 2, category: 'L' }, // 50 bars/min × 2
-  { id: 'chacha',    name: 'Cha Cha',    bpm: 128, beats: 4, category: 'L' }, // 32 bars/min × 4
-  { id: 'rumba',     name: 'Rumba',      bpm: 104, beats: 4, category: 'L' }, // 26 bars/min × 4
+  { id: 'rumba',     name: 'Rumba',      bpm: 100, beats: 4, category: 'L' }, // 25 bars/min × 4
   { id: 'paso',      name: 'Paso Doble', bpm: 124, beats: 2, category: 'L' }, // 62 bars/min × 2
   { id: 'jive',      name: 'Jive',       bpm: 176, beats: 4, category: 'L' }, // 44 bars/min × 4
   { id: 'waltz',     name: 'Waltz',      bpm: 90,  beats: 3, category: 'S' }, // 30 bars/min × 3
   { id: 'tango',     name: 'Tango',      bpm: 132, beats: 4, category: 'S' }, // 33 bars/min × 4
   { id: 'vwaltz',    name: 'V.Waltz',    bpm: 180, beats: 3, category: 'S' }, // 60 bars/min × 3
   { id: 'foxtrot',   name: 'Foxtrot',    bpm: 120, beats: 4, category: 'S' }, // 30 bars/min × 4
-  { id: 'quickstep', name: 'Quickstep',  bpm: 204, beats: 4, category: 'S' }, // 51 bars/min × 4
+  { id: 'quickstep', name: 'Quickstep',  bpm: 200, beats: 4, category: 'S' }, // 50 bars/min × 4
 ];
+
+// ─── Session Skeleton Bones (renders INSIDE the focus card) ──────────────────
+
+function SessionSkeletonBones() {
+  const pulse = useRef(new Animated.Value(0.3)).current;
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, { toValue: 0.8, duration: 800, useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 0.3, duration: 800, useNativeDriver: true }),
+      ])
+    ).start();
+  }, []);
+
+  const Bone = ({ width, height, radius = 8, style }) => (
+    <View style={[{ width, height, borderRadius: radius, backgroundColor: 'rgba(255,255,255,0.08)' }, style]} />
+  );
+
+  return (
+    <Animated.View style={{ opacity: pulse }}>
+      <Bone width={80} height={12} radius={4} style={{ marginBottom: 14 }} />
+      <Bone width="75%" height={26} radius={6} style={{ marginBottom: 10 }} />
+      <Bone width="100%" height={14} radius={4} style={{ marginBottom: 6 }} />
+      <Bone width="65%" height={14} radius={4} style={{ marginBottom: 16 }} />
+      <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 6, marginTop: 4 }}>
+        <Bone width={18} height={4} radius={2} />
+        <Bone width={4} height={4} radius={2} />
+        <Bone width={4} height={4} radius={2} />
+      </View>
+    </Animated.View>
+  );
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -260,12 +296,17 @@ function FocusPager({ focusPoint, inputs, loading, onSelect }) {
 const M_ITEM_H = 38;
 const BPM_VALUES = Array.from({ length: 181 }, (_, i) => 40 + i); // 40–220 step 1
 
-const MetronomeStrip = memo(function MetronomeStrip({ onRunningChange, onBeat }) {
+const MetronomeStrip = memo(function MetronomeStrip({ onRunningChange, onBeat, focusDances }) {
   const defaultBpmIdx = BPM_VALUES.indexOf(120);
   const [bpmIdx, setBpmIdx]   = useState(defaultBpmIdx);
   const [danceIdx, setDanceIdx] = useState(0);
+  const [hasScrolledDance, setHasScrolledDance] = useState(false);
   const [running, setRunning]  = useState(false);
   const [currentBeat, setCurrentBeat] = useState(0); // 0-based, 0 = downbeat
+
+  // Resolve which dance to pick when BPM matches multiple dances
+  // Priority: dance linked to the focus point > random pick
+  const focusDanceNames = (Array.isArray(focusDances) ? focusDances : []).map(d => (d || '').toLowerCase());
 
   const bpmRef   = useRef(BPM_VALUES[defaultBpmIdx]);
   const beatsRef = useRef(DANCES[0].beats); // beats per bar
@@ -278,6 +319,7 @@ const MetronomeStrip = memo(function MetronomeStrip({ onRunningChange, onBeat })
   const poolIdxRef      = useRef(0);
   const danceScrollRef  = useRef(null);
   const bpmScrollRef    = useRef(null);
+  const bpmScrollIsAuto = useRef(false);
 
   useEffect(() => { bpmRef.current = BPM_VALUES[bpmIdx]; }, [bpmIdx]);
 
@@ -361,6 +403,8 @@ const MetronomeStrip = memo(function MetronomeStrip({ onRunningChange, onBeat })
   function onDanceScrollEnd(e) {
     const idx = Math.max(0, Math.min(DANCES.length - 1, Math.round(e.nativeEvent.contentOffset.y / M_ITEM_H)));
     setDanceIdx(idx);
+    if (!hasScrolledDance) setHasScrolledDance(true);
+    setIsCustomBpm(false);
     const dance = DANCES[idx];
     beatsRef.current = dance.beats;
     beatRef.current  = 0;
@@ -372,10 +416,34 @@ const MetronomeStrip = memo(function MetronomeStrip({ onRunningChange, onBeat })
     if (running) { stopMetro(); setTimeout(() => startMetro(BPM_VALUES[newBpmIdx]), 50); }
   }
 
+  const [isCustomBpm, setIsCustomBpm] = useState(false);
+
+  function resolveDanceForBpm(bpm) {
+    const matches = DANCES.map((d, i) => ({ ...d, idx: i })).filter(d => d.bpm === bpm);
+    if (matches.length === 0) return null;
+    if (matches.length === 1) return matches[0];
+    // Multiple dances share this BPM — prefer the one linked to focus point
+    const linked = matches.find(d => focusDanceNames.includes(d.name.toLowerCase()));
+    return linked || matches[Math.floor(Math.random() * matches.length)];
+  }
+
   function onBpmScrollEnd(e) {
     const idx = Math.max(0, Math.min(BPM_VALUES.length - 1, Math.round(e.nativeEvent.contentOffset.y / M_ITEM_H)));
     setBpmIdx(idx);
     bpmRef.current = BPM_VALUES[idx];
+
+    const matched = resolveDanceForBpm(BPM_VALUES[idx]);
+    if (matched) {
+      setDanceIdx(matched.idx);
+      beatsRef.current = matched.beats;
+      beatRef.current = 0;
+      setHasScrolledDance(true);
+      setIsCustomBpm(false);
+      danceScrollRef.current?.scrollTo({ y: matched.idx * M_ITEM_H, animated: false });
+    } else {
+      setIsCustomBpm(true);
+    }
+
     if (running) { stopMetro(); setTimeout(() => startMetro(BPM_VALUES[idx]), 50); }
   }
 
@@ -394,11 +462,25 @@ const MetronomeStrip = memo(function MetronomeStrip({ onRunningChange, onBeat })
         onMomentumScrollEnd={onDanceScrollEnd}
         contentContainerStyle={m.scrollContent}
       >
-        {DANCES.map((d, i) => (
-          <View key={d.id} style={m.item}>
-            <Text style={[m.danceText, danceIdx === i && m.itemActive]}>{d.name}</Text>
-          </View>
-        ))}
+        {DANCES.map((d, i) => {
+          const dist = Math.abs(i - danceIdx);
+          const isCenter = dist === 0;
+          const label = isCenter && isCustomBpm
+            ? 'Custom BPM'
+            : (isCenter && !hasScrolledDance)
+              ? 'Scroll to select'
+              : d.name;
+          const isPlaceholder = isCenter && (isCustomBpm || !hasScrolledDance);
+          return (
+            <View key={d.id} style={m.item}>
+              <Text style={[
+                m.danceText,
+                isCenter && m.itemActive,
+                isPlaceholder && m.itemPlaceholder,
+              ]}>{label}</Text>
+            </View>
+          );
+        })}
       </ScrollView>
 
       {/* Separator */}
@@ -415,11 +497,14 @@ const MetronomeStrip = memo(function MetronomeStrip({ onRunningChange, onBeat })
         onMomentumScrollEnd={onBpmScrollEnd}
         contentContainerStyle={m.scrollContent}
       >
-        {BPM_VALUES.map((b, i) => (
-          <View key={b} style={m.item}>
-            <Text style={[m.bpmText, bpmIdx === i && m.itemActive]}>{b}</Text>
-          </View>
-        ))}
+        {BPM_VALUES.map((b, i) => {
+          const dist = Math.abs(i - bpmIdx);
+          return (
+            <View key={b} style={m.item}>
+              <Text style={[m.bpmText, dist === 0 && m.itemActive]}>{b}</Text>
+            </View>
+          );
+        })}
       </ScrollView>
 
       {/* Beat dots + play */}
@@ -599,194 +684,6 @@ function DurationPicker({ value, onChange }) {
   );
 }
 
-// ─── Chat Page ────────────────────────────────────────────────────────────────
-
-function ChatPage({ focusPoint, focusPointId, sessionActive, timeLeft, duration, messages, setMessages }) {
-  const [inputText, setInputText] = useState('');
-  const [sending, setSending] = useState(false);
-  const [userData, setUserData] = useState(null);
-  const [keyboardHeight, setKeyboardHeight] = useState(0);
-  const scrollRef = useRef(null);
-
-  useEffect(() => {
-    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
-    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
-    const showSub = Keyboard.addListener(showEvent, (e) => {
-      setKeyboardHeight(e.endCoordinates.height);
-      setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 50);
-    });
-    const hideSub = Keyboard.addListener(hideEvent, () => setKeyboardHeight(0));
-    return () => { showSub.remove(); hideSub.remove(); };
-  }, []);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const [classInputsList, focusPointsList, sessionsCount] = await Promise.all([
-          getClassInputs(),
-          getFocusPoints(),
-          getTrainingSessionsThisWeek(),
-        ]);
-        setUserData({ classInputsList, focusPointsList, sessionsCount });
-      } catch (e) {
-        console.warn('[ChatPage] loadData error', e);
-      }
-    })();
-  }, []);
-
-  function buildSystemPrompt() {
-    if (!userData) return '';
-    const { classInputsList, focusPointsList, sessionsCount } = userData;
-
-    const focusLines = focusPointsList.length
-      ? focusPointsList.map(fp => `- ${fp.name}`).join('\n')
-      : 'No focus points recorded.';
-
-    const classLines = classInputsList.slice(0, 10).map(inp => {
-      const date = new Date(inp.created_at).toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
-      const parts = [`Class on ${date}:`];
-      if (inp.class_summary) parts.push(`Worked on: "${inp.class_summary}"`);
-      if (inp.practice_point_1) parts.push(`To improve: "${inp.practice_point_1}" (priority ${inp.priority_score_1}/10)`);
-      if (inp.practice_point_2) parts.push(`Also: "${inp.practice_point_2}" (priority ${inp.priority_score_2}/10)`);
-      if (inp.ai_primary_focus) parts.push(`AI focus: ${inp.ai_primary_focus}`);
-      return parts.join(' | ');
-    }).join('\n') || 'No classes recorded.';
-
-    return `You are a training tracking assistant for a dancer. You respond ONLY based on the data provided below.
-
-Current session focus: ${focusPoint?.name ?? 'Not defined'}
-
-User focus points:
-${focusLines}
-
-Class history (last 10):
-${classLines}
-
-Training sessions this week: ${sessionsCount}
-
-STRICT RULES:
-- Answer ONLY from the data above.
-- If you cannot find the information, respond exactly: "I don't have that information in your data."
-- Do not invent, extrapolate, or make any assumptions.
-- Respond in English, concisely (2-3 sentences max unless asked for more).`;
-  }
-
-  async function handleSend() {
-    const text = inputText.trim();
-    if (!text || sending) return;
-    setInputText('');
-    Keyboard.dismiss();
-    const newMessages = [...messages, { role: 'user', content: text }];
-    setMessages(newMessages);
-    storeChatMessages(newMessages);
-    setSending(true);
-
-    // Classify student message → fire question event on current focus
-    try {
-      const { applyFocusEvent } = await import('../utils/algorithm');
-      const { supabase } = await import('../services/supabase/client');
-      const { data: { user } } = await supabase.auth.getUser();
-      const msgLower = text.toLowerCase();
-      const isConfusion = /\b(don't understand|not sure|confused|what does|what is|how do|i don't get|unclear)\b/.test(msgLower);
-      const isConfirmation = /\b(right\??|correct\??|is that|so i should|did i|am i)\b/.test(msgLower);
-      const hasQuestion = msgLower.includes('?') || isConfusion || isConfirmation;
-      if (hasQuestion && focusPointId && user) {
-        const eventType = isConfusion ? 'QUESTION_CONFUSION'
-          : isConfirmation ? 'QUESTION_CONFIRMATION'
-          : 'QUESTION_CLARIFICATION';
-        await applyFocusEvent(focusPointId, eventType, user.id).catch(() => {});
-      }
-    } catch {}
-
-    try {
-      const reply = await callClaudeChat(buildSystemPrompt(), newMessages);
-      setMessages(prev => {
-        const updated = [...prev, { role: 'assistant', content: reply }];
-        storeChatMessages(updated);
-        return updated;
-      });
-    } catch {
-      setMessages(prev => {
-        const updated = [...prev, { role: 'assistant', content: "Sorry, an error occurred. Please try again." }];
-        storeChatMessages(updated);
-        return updated;
-      });
-    } finally {
-      setSending(false);
-    }
-  }
-
-  return (
-    <View style={[chat.wrap, keyboardHeight > 0 && { paddingBottom: keyboardHeight }]}>
-      {/* Session status bar */}
-      {sessionActive && (
-        <View style={chat.sessionBar}>
-          <View style={chat.sessionDot} />
-          <Text style={chat.sessionText}>
-            In progress  ·  {formatTime(timeLeft)} / {duration} min
-          </Text>
-        </View>
-      )}
-
-      <View style={chat.header}>
-        <Text style={chat.title}>AI Coach</Text>
-        <Text style={chat.subtitle}>Ask questions about your training</Text>
-      </View>
-
-      <ScrollView
-        ref={scrollRef}
-        style={chat.messageList}
-        contentContainerStyle={chat.messageListContent}
-        onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: true })}
-        keyboardShouldPersistTaps="handled"
-      >
-        {messages.length === 0 && !sending && (
-          <View style={chat.emptyState}>
-            <Text style={chat.emptyText}>
-              Ask a question about your classes, focus points, or sessions this week.
-            </Text>
-          </View>
-        )}
-        {messages.map((msg, i) => (
-          <View key={i} style={[chat.bubble, msg.role === 'user' ? chat.bubbleUser : chat.bubbleBot]}>
-            <Text style={[chat.bubbleText, msg.role === 'user' ? chat.bubbleTextUser : chat.bubbleTextBot]}>
-              {msg.content}
-            </Text>
-          </View>
-        ))}
-        {sending && (
-          <View style={[chat.bubble, chat.bubbleBot]}>
-            <ActivityIndicator size="small" color={Colors.secondary} />
-          </View>
-        )}
-      </ScrollView>
-
-      <View style={chat.inputBar}>
-        <TextInput
-          style={chat.input}
-          value={inputText}
-          onChangeText={setInputText}
-          placeholder="Ask a question..."
-          placeholderTextColor={Colors.secondary}
-          multiline
-          maxLength={300}
-          returnKeyType="send"
-          onSubmitEditing={handleSend}
-          blurOnSubmit
-        />
-        <TouchableOpacity
-          style={[chat.sendBtn, (!inputText.trim() || sending) && chat.sendBtnDisabled]}
-          onPress={handleSend}
-          disabled={!inputText.trim() || sending}
-          activeOpacity={0.8}
-        >
-          <Text style={chat.sendBtnIcon}>↑</Text>
-        </TouchableOpacity>
-      </View>
-    </View>
-  );
-}
-
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 
 export default function FocusSessionScreen({ route, navigation }) {
@@ -794,7 +691,6 @@ export default function FocusSessionScreen({ route, navigation }) {
   const [focusPoint, setFocusPoint] = useState(null);
   const [classInputs, setClassInputs] = useState([]);
   const [notesLoading, setNotesLoading] = useState(true);
-  const [outerScrollEnabled, setOuterScrollEnabled] = useState(true);
   const [selectedInput, setSelectedInput] = useState(null);
   const [duration, setDuration] = useState(25);
   const [sessionActive, setSessionActive] = useState(false);
@@ -823,17 +719,31 @@ export default function FocusSessionScreen({ route, navigation }) {
   const metroAnim = useRef(new Animated.Value(0)).current;
   const beatAnim  = useRef(new Animated.Value(0)).current;
 
+  const [aiOpen, setAiOpen] = useState(false);
+  const aiAnim = useRef(new Animated.Value(0)).current;
+  const aiIsAnimatingRef = useRef(false);
+  const [aiChatHeight, setAiChatHeight] = useState(0);
+  const [aiQuestion, setAiQuestion] = useState('');
+  const [aiMessages, setAiMessages] = useState([]);
+  const [aiSending, setAiSending] = useState(false);
+  const [aiContext, setAiContext] = useState(null);
+  const aiScrollRef = useRef(null);
+
   function handleBeat() {
     beatAnim.setValue(1);
     Animated.timing(beatAnim, { toValue: 0, duration: 200, useNativeDriver: false }).start();
   }
   const [timeLeft, setTimeLeft] = useState(25 * 60);
+  const [overTime, setOverTime] = useState(0);
+  const overTimeRef = useRef(0);
   const [showFeelingModal, setShowFeelingModal] = useState(false);
   const [showStopConfirm, setShowStopConfirm] = useState(false);
   const sessionCompletedRef = useRef(false);
-  const [chatMessages, setChatMessages] = useState(() => getChatMessages());
+  const stopHoldAnim = useRef(new Animated.Value(0)).current;
+  const stopHoldTimerRef = useRef(null);
   const { width: screenW } = useWindowDimensions();
   const intervalRef = useRef(null);
+  const contentFade = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     if (sessionDone) setShowFeelingModal(true);
@@ -843,8 +753,17 @@ export default function FocusSessionScreen({ route, navigation }) {
     async function loadData() {
       const points = await getFocusPoints();
       const fp = points.find(p => p.id === focusPointId) || null;
-      setFocusPoint(fp);
       if (fp) {
+        // Smooth height transition from skeleton → real content
+        LayoutAnimation.configureNext({
+          duration: 300,
+          update: { type: LayoutAnimation.Types.easeInEaseOut },
+          create: { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity },
+          delete: { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity },
+        });
+        contentFade.setValue(0);
+        setFocusPoint(fp);
+        Animated.timing(contentFade, { toValue: 1, duration: 300, useNativeDriver: true }).start();
         const inputs = await getClassInputsForFocus(fp.name);
         setClassInputs(inputs);
       }
@@ -853,37 +772,54 @@ export default function FocusSessionScreen({ route, navigation }) {
     loadData();
   }, [focusPointId]);
 
+  useEffect(() => {
+    (async () => {
+      try {
+        const [teacherContext, sessionsCount] = await Promise.all([
+          getTeacherContextForAI().catch(() => null),
+          getTrainingSessionsThisWeek(),
+        ]);
+        setAiContext({ teacherContext, sessionsCount });
+      } catch {}
+    })();
+  }, []);
+
   useFocusEffect(useCallback(() => {
     const existing = getActiveSession();
     if (existing && existing.sessionId === sessionId) {
       const remaining = Math.floor(getSessionTimeLeft());
-      if (remaining > 0) {
-        setDuration(existing.duration);
-        setTimeLeft(remaining);
-        setSessionActive(true);
-        if (existing.pausedRemaining !== undefined) {
-          setSessionPaused(true);
-        } else {
-          setSessionPaused(false);
-          _startInterval(existing.startedAt, existing.duration);
-        }
+      setDuration(existing.duration);
+      setTimeLeft(Math.max(0, remaining));
+      setSessionActive(true);
+      if (existing.pausedRemaining !== undefined) {
+        setSessionPaused(true);
+      } else {
+        setSessionPaused(false);
+        _startInterval(existing.startedAt, existing.duration);
       }
     }
     return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
   }, [sessionId]));
+
+  function _stopOverTime() {
+    overTimeRef.current = 0;
+    setOverTime(0);
+  }
 
   function _startInterval(startedAt, dur) {
     if (intervalRef.current) clearInterval(intervalRef.current);
     const totalSeconds = dur * 60;
     intervalRef.current = setInterval(() => {
       const elapsed = (Date.now() - startedAt) / 1000;
-      const remaining = Math.max(0, totalSeconds - elapsed);
-      setTimeLeft(Math.floor(remaining));
-      if (remaining <= 0) {
-        clearInterval(intervalRef.current);
-        setSessionActive(false);
-        setSessionDone(true);
-        clearActiveSession();
+      const remaining = totalSeconds - elapsed;
+      if (remaining > 0) {
+        setTimeLeft(Math.floor(remaining));
+        setOverTime(0);
+      } else {
+        setTimeLeft(0);
+        const over = Math.floor(-remaining);
+        overTimeRef.current = over;
+        setOverTime(over);
       }
     }, 1000);
   }
@@ -894,6 +830,7 @@ export default function FocusSessionScreen({ route, navigation }) {
     setSessionActive(true);
     setSessionDone(false);
     setTimeLeft(duration * 60);
+    _stopOverTime();
     _startInterval(startedAt, duration);
   }
 
@@ -916,6 +853,7 @@ export default function FocusSessionScreen({ route, navigation }) {
 
   function stopSession() {
     if (intervalRef.current) clearInterval(intervalRef.current);
+    _stopOverTime();
     setSessionActive(false);
     setSessionPaused(false);
     setTimeLeft(duration * 60);
@@ -930,21 +868,172 @@ export default function FocusSessionScreen({ route, navigation }) {
 
   function toggleMetroPanel() {
     const toValue = metroOpen ? 0 : 1;
+    if (!metroOpen) setAiOpen(false);
     setMetroOpen(!metroOpen);
-    Animated.spring(metroAnim, {
-      toValue,
-      useNativeDriver: false,
-      bounciness: 4,
-      speed: 14,
-    }).start();
+    Animated.spring(metroAnim, { toValue, useNativeDriver: false, bounciness: 4, speed: 14 }).start();
+  }
+
+  function toggleAiPanel() {
+    if (!aiOpen) closeMetro();
+    const opening = !aiOpen;
+    LayoutAnimation.configureNext({
+      duration: 250,
+      update: { type: LayoutAnimation.Types.easeInEaseOut },
+      create: { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity },
+      delete: { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity },
+    });
+    setAiOpen(opening);
+  }
+
+  function buildAiSystemPrompt() {
+    if (!aiContext) return '';
+    const { teacherContext, sessionsCount } = aiContext;
+
+    const studentName = teacherContext?.studentName ?? 'the student';
+    const coachName = teacherContext?.coachName ?? null;
+    const focusPoints = teacherContext?.focusPoints ?? [];
+    const classInputs = teacherContext?.studentClassInputs ?? [];
+    const coachKnowledge = teacherContext?.coachKnowledge ?? [];
+
+    const focusLines = focusPoints.length
+      ? focusPoints.map(fp => {
+          const parts = [`• ${fp.name} [${fp.tier ?? 'important'} / ${fp.status ?? 'active'}]`];
+          if (fp.coach_note) parts.push(`  Coach note: ${fp.coach_note}`);
+          if (fp.drill) parts.push(`  Drill: ${fp.drill}`);
+          return parts.join('\n');
+        }).join('\n')
+      : 'No focus points recorded.';
+
+    const classLines = classInputs.slice(0, 15).map(inp => {
+      const date = new Date(inp.created_at).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
+      const lines = [`--- Class: ${inp.title ?? date} (${date}) ---`];
+      if (inp.class_summary) lines.push(`Summary: ${inp.class_summary}`);
+      if (inp.practice_point_1) lines.push(`Primary point: ${inp.practice_point_1} (priority ${inp.priority_score_1}/10)`);
+      if (inp.practice_point_2) lines.push(`Secondary point: ${inp.practice_point_2} (priority ${inp.priority_score_2}/10)`);
+      if (inp.ai_primary_focus) lines.push(`Focus extracted: ${inp.ai_primary_focus}${inp.ai_secondary_focus ? `, ${inp.ai_secondary_focus}` : ''}`);
+      if (inp.dance) lines.push(`Dance: ${inp.dance}`);
+      if (inp.raw_ai_json) {
+        try {
+          const parsed = typeof inp.raw_ai_json === 'string' ? JSON.parse(inp.raw_ai_json) : inp.raw_ai_json;
+          const fps = parsed?.students?.[0]?.focus_points ?? [];
+          if (fps.length) {
+            lines.push('Extracted focus points:');
+            fps.forEach((fp) => {
+              lines.push(`  • ${fp.title}: ${fp.subtitle}`);
+              if (fp.context) lines.push(`    Context: ${fp.context}`);
+              if (fp.drill) lines.push(`    Drill: ${fp.drill}`);
+            });
+          }
+        } catch {}
+      }
+      if (inp.transcript) lines.push(`Transcript:\n${inp.transcript}`);
+      return lines.join('\n');
+    }).join('\n\n') || 'No classes recorded.';
+
+    const groupedKnowledge = coachKnowledge.reduce((acc, k) => {
+      if (!acc[k.type]) acc[k.type] = [];
+      acc[k.type].push(k.content);
+      return acc;
+    }, {});
+    const knowledgeBlock = Object.keys(groupedKnowledge).length
+      ? Object.entries(groupedKnowledge).map(([type, items]) =>
+          `${type.toUpperCase()}S:\n${items.map(c => `  - ${c}`).join('\n')}`
+        ).join('\n\n')
+      : null;
+
+    const coachLine = coachName
+      ? `You are the training assistant of ${coachName}, helping their student ${studentName}.`
+      : `You are the training assistant helping ${studentName}.`;
+
+    const currentFocusBlock = focusPoint ? [
+      `Name: ${focusPoint.name}`,
+      focusPoint.subtitle ? `Subtitle: ${focusPoint.subtitle}` : null,
+      focusPoint.context  ? `Context: ${focusPoint.context}`   : null,
+      focusPoint.coach_note ? `Coach note: ${focusPoint.coach_note}` : null,
+      focusPoint.drill    ? `Drill: ${focusPoint.drill}`        : null,
+      focusPoint.tier     ? `Tier: ${focusPoint.tier}`          : null,
+    ].filter(Boolean).join('\n') : 'Not defined';
+
+    return `${coachLine}
+${coachName && knowledgeBlock ? `You know ${coachName}'s teaching style, principles, and cues deeply. Use this knowledge when answering, but speak as their assistant, not as the coach.` : ''}
+
+Training sessions this week: ${sessionsCount}
+
+════════════════════════════════════════
+CURRENT SESSION FOCUS POINT
+════════════════════════════════════════
+${currentFocusBlock}
+
+════════════════════════════════════════
+STUDENT DATA — answer primarily from this
+════════════════════════════════════════
+
+ALL FOCUS POINTS:
+${focusLines}
+
+CLASS HISTORY (with transcripts):
+${classLines}
+${knowledgeBlock ? `
+
+════════════════════════════════════════
+${coachName ? `${coachName.toUpperCase()}'S` : 'COACH'} KNOWLEDGE BASE
+(principles, tips, metaphors and drills from all lessons — use to answer questions not covered in student data)
+════════════════════════════════════════
+
+${knowledgeBlock}` : ''}
+
+════════════════════════════════════════
+RULES
+════════════════════════════════════════
+1. Answer from the student's own data first.
+2. If no direct answer exists there, use the coach knowledge base to provide an answer in ${coachName ? `${coachName}'s` : 'the coach\'s'} style.
+3. NEVER mention other students or reveal any information about them.
+4. Speak as the coach's assistant — not as the coach.
+5. If you truly cannot answer from any of the above data, say: "I don't have that information in your data."
+6. Be concise (2-3 sentences unless more is asked).
+7. Plain text only — no markdown, no **, no bullet symbols, no headers.`;
+  }
+
+  async function handleAiSend() {
+    const text = aiQuestion.trim();
+    if (!text || aiSending) return;
+    setAiQuestion('');
+    Keyboard.dismiss();
+    const newMessages = [...aiMessages, { role: 'user', content: text }];
+    setAiMessages(newMessages);
+    setAiSending(true);
+    setTimeout(() => aiScrollRef.current?.scrollToEnd({ animated: true }), 50);
+
+    try {
+      const { applyFocusEvent } = await import('../utils/algorithm');
+      const { supabase } = await import('../services/supabase/client');
+      const { data: { user } } = await supabase.auth.getUser();
+      const msgLower = text.toLowerCase();
+      const isConfusion = /\b(don't understand|not sure|confused|what does|what is|how do|i don't get|unclear)\b/.test(msgLower);
+      const isConfirmation = /\b(right\??|correct\??|is that|so i should|did i|am i)\b/.test(msgLower);
+      const hasQuestion = msgLower.includes('?') || isConfusion || isConfirmation;
+      if (hasQuestion && focusPointId && user) {
+        const eventType = isConfusion ? 'QUESTION_CONFUSION' : isConfirmation ? 'QUESTION_CONFIRMATION' : 'QUESTION_CLARIFICATION';
+        await applyFocusEvent(focusPointId, eventType, user.id).catch(() => {});
+      }
+    } catch {}
+
+    try {
+      const reply = await callClaudeChat(buildAiSystemPrompt(), newMessages);
+      setAiMessages(prev => [...prev, { role: 'assistant', content: reply }]);
+      setTimeout(() => aiScrollRef.current?.scrollToEnd({ animated: true }), 50);
+    } catch {
+      setAiMessages(prev => [...prev, { role: 'assistant', content: 'Sorry, an error occurred. Please try again.' }]);
+    } finally {
+      setAiSending(false);
+    }
   }
 
   function handleEndSession() {
     if (intervalRef.current) clearInterval(intervalRef.current);
+    _stopOverTime();
     setSessionActive(false);
     setSessionPaused(false);
-    clearChatMessages();
-    setChatMessages([]);
     setShowFeelingModal(true);
   }
 
@@ -971,6 +1060,8 @@ export default function FocusSessionScreen({ route, navigation }) {
   const progress = sessionActive ? 1 - timeLeft / (duration * 60) : sessionDone ? 1 : 0;
   const slotLabel = rank === 0 ? 'Main Focus' : 'Secondary Focus';
 
+  const dataReady = !!focusPoint;
+
   return (
     <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
 
@@ -985,195 +1076,207 @@ export default function FocusSessionScreen({ route, navigation }) {
         </View>
       </View>
 
-      {/* ── Horizontal pages ── */}
-      <ScrollView
-        horizontal
-        pagingEnabled
-        showsHorizontalScrollIndicator={false}
-        style={{ flex: 1 }}
-        keyboardShouldPersistTaps="handled"
-        scrollEnabled={outerScrollEnabled}
-      >
-        {/* ── Page 1 : Training ── */}
-        <View style={{ width: screenW, flex: 1 }}>
+      {/* ── Training screen ── */}
+      <View style={{ flex: 1 }}>
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
 
-          {/* Focus Card — touching anywhere inside locks the outer page scroll */}
-          <View
-            style={styles.focusCard}
-            onTouchStart={() => setOuterScrollEnabled(false)}
-            onTouchEnd={() => setOuterScrollEnabled(true)}
-            onTouchCancel={() => setOuterScrollEnabled(true)}
-          >
+          {/* Focus Card — expands downward to include AI chat, same as "read more" */}
+          <View style={styles.focusCard}>
+
+            {/* "?" toggle — always visible, absolute positioned */}
+            {dataReady && (
+              <TouchableOpacity style={styles.aiToggleBtn} onPress={toggleAiPanel} activeOpacity={0.7} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+                <Text style={styles.aiToggleIcon}>{aiOpen ? '✕' : 'Ask Assistant'}</Text>
+              </TouchableOpacity>
+            )}
+
+            {/* Skeleton bones — visible while loading */}
+            {!dataReady && <SessionSkeletonBones />}
+
+            {/* Real content — fades in when data arrives */}
+            {dataReady && (
+            <Animated.View style={{ opacity: contentFade }}>
+
             <Text style={styles.sessionLabel}>{getSessionLabel(sessionCount)}</Text>
             <Text style={styles.focusName}>{focusPoint?.name || '—'}</Text>
-            {focusPoint?.subtitle ? (
-              <View style={styles.subtitleWrap}>
-                <Text style={styles.focusSubtitle}>{focusPoint.subtitle}</Text>
-                {focusPoint?.context ? (
-                  <TouchableOpacity
-                    onPress={() => { closeMetro(); toggleContext(); }}
-                    activeOpacity={0.7}
-                    style={styles.readMoreBtn}
-                  >
-                    <Text style={styles.readMoreText}>
-                      {contextExpanded ? 'Read less ↑' : 'Read more ↓'}
-                    </Text>
-                  </TouchableOpacity>
-                ) : null}
-                {focusPoint?.context ? (
-                  <>
-                    {/* Invisible measure pass */}
-                    <Text
-                      style={[styles.focusContext, { position: 'absolute', opacity: 0, zIndex: -1 }]}
-                      onLayout={e => { if (!contextHeight) setContextHeight(e.nativeEvent.layout.height + 4); }}
-                    >
-                      {focusPoint.context}
-                    </Text>
-                    <Animated.View style={{
-                      height: contextAnim.interpolate({
-                        inputRange: [0, 1],
-                        outputRange: [0, contextHeight || 200],
-                        extrapolate: 'clamp',
-                      }),
-                      overflow: 'hidden',
-                    }}>
-                      <Text style={styles.focusContext}>{focusPoint.context}</Text>
-                    </Animated.View>
-                  </>
-                ) : null}
+
+            {/* Subtitle/pager — hidden when AI open */}
+            {!aiOpen && (
+            <View>
+              {focusPoint?.subtitle ? (
+                <View style={styles.subtitleWrap}>
+                  <Text style={styles.focusSubtitle}>{focusPoint.subtitle}</Text>
+                  {focusPoint?.context ? (
+                    <TouchableOpacity onPress={() => { closeMetro(); toggleContext(); }} activeOpacity={0.7} style={styles.readMoreBtn}>
+                      <Text style={styles.readMoreText}>{contextExpanded ? 'Read less ↑' : 'Read more ↓'}</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                  {focusPoint?.context ? (
+                    <>
+                      <Text style={[styles.focusContext, { position: 'absolute', opacity: 0, zIndex: -1 }]} onLayout={e => { if (!contextHeight) setContextHeight(e.nativeEvent.layout.height + 4); }}>
+                        {focusPoint.context}
+                      </Text>
+                      <Animated.View style={{ height: contextAnim.interpolate({ inputRange: [0, 1], outputRange: [0, contextHeight || 200], extrapolate: 'clamp' }), overflow: 'hidden' }}>
+                        <Text style={styles.focusContext}>{focusPoint.context}</Text>
+                      </Animated.View>
+                    </>
+                  ) : null}
+                </View>
+              ) : null}
+              <FocusPager focusPoint={focusPoint} inputs={classInputs} loading={notesLoading} onSelect={setSelectedInput} />
+            </View>
+            )}
+
+            {/* AI chat — shown when AI panel open */}
+            {aiOpen && (
+            <View style={{ height: (aiChatHeight || 300) * 0.6 }}>
+            <ScrollView
+              ref={aiScrollRef}
+              style={styles.aiCardMessages}
+              contentContainerStyle={styles.aiCardMessagesContent}
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode="on-drag"
+              onContentSizeChange={() => aiScrollRef.current?.scrollToEnd({ animated: true })}
+            >
+              {aiMessages.length === 0 && !aiSending && (
+                <Text style={styles.aiCardEmptyText}>Ask a question about your focus point or training.</Text>
+              )}
+              {aiMessages.map((msg, i) => (
+                <View key={i} style={[styles.aiCardBubble, msg.role === 'user' ? styles.aiCardBubbleUser : styles.aiCardBubbleBot]}>
+                  <Text style={[styles.aiCardBubbleText, msg.role === 'user' ? styles.aiCardBubbleTextUser : styles.aiCardBubbleTextBot]}>
+                    {msg.content}
+                  </Text>
+                </View>
+              ))}
+              {aiSending && (
+                <View style={[styles.aiCardBubble, styles.aiCardBubbleBot]}>
+                  <ActivityIndicator size="small" color="rgba(255,255,255,0.5)" />
+                </View>
+              )}
+            </ScrollView>
+            <View style={styles.aiCardInputRow}>
+              <TextInput
+                style={styles.aiCardInput}
+                value={aiQuestion}
+                onChangeText={setAiQuestion}
+                placeholder="Ask about focus point"
+                placeholderTextColor="rgba(255,255,255,0.3)"
+                returnKeyType="send"
+                onSubmitEditing={handleAiSend}
+                blurOnSubmit
+              />
+              <TouchableOpacity onPress={handleAiSend} disabled={!aiQuestion.trim() || aiSending} style={[styles.aiCardSendBtn, (!aiQuestion.trim() || aiSending) && { opacity: 0.35 }]} activeOpacity={0.7}>
+                <Text style={styles.aiCardSendIcon}>↑</Text>
+              </TouchableOpacity>
+            </View>
+            </View>
+            )}
+            </Animated.View>
+            )}
+          </View>
+
+          {/* Middle area: drill + timer — overflow:hidden clips as focusCard expands, same as "read more" */}
+          <View
+            style={{ flex: 1, overflow: 'hidden' }}
+            pointerEvents={aiOpen ? 'none' : 'auto'}
+            onLayout={e => { if (!aiOpen && e.nativeEvent.layout.height > 0) setAiChatHeight(e.nativeEvent.layout.height); }}
+          >
+            {!sessionDone && focusPoint?.drill ? (
+              <View style={styles.drillCard}>
+                <View style={styles.drillHeader}>
+                  <View style={styles.drillPill}><Text style={styles.drillPillText}>DRILL</Text></View>
+                </View>
+                <Text style={styles.drillText}>{focusPoint.drill}</Text>
               </View>
             ) : null}
-            <FocusPager
-              focusPoint={focusPoint}
-              inputs={classInputs}
-              loading={notesLoading}
-              onSelect={setSelectedInput}
-            />
-          </View>
 
-          {/* Drill card */}
-          {!sessionDone && focusPoint?.drill ? (
-            <View style={styles.drillCard}>
-              <View style={styles.drillHeader}>
-                <View style={styles.drillPill}>
-                  <Text style={styles.drillPillText}>DRILL</Text>
+            <View style={styles.timerSection}>
+              {sessionDone ? (
+                <View style={styles.doneWrap}>
+                  <Text style={styles.doneCheck}>✓</Text>
+                  <Text style={styles.doneTitle}>Session complete!</Text>
                 </View>
-              </View>
-              <Text style={styles.drillText}>{focusPoint.drill}</Text>
+              ) : sessionActive ? (
+                <>
+                  <Text style={styles.timerText}>{formatTime(timeLeft)}</Text>
+                  {overTime > 0 && (
+                    <Text style={styles.overTimeText}>+ {formatTime(overTime)}</Text>
+                  )}
+                  <View style={styles.progressTrack}>
+                    <View style={[styles.progressFill, { width: `${Math.round(progress * 100)}%` }]} />
+                  </View>
+                </>
+              ) : (
+                <DurationPicker value={duration} onChange={(d) => { closeMetro(); setDuration(d); setTimeLeft(d * 60); }} />
+              )}
             </View>
-          ) : null}
-
-          {/* Timer / Duration — centre de l'écran */}
-          <View style={styles.timerSection}>
-            {sessionDone ? (
-              <View style={styles.doneWrap}>
-                <Text style={styles.doneCheck}>✓</Text>
-                <Text style={styles.doneTitle}>Session complete!</Text>
-              </View>
-            ) : sessionActive ? (
-              <>
-                <Text style={styles.timerText}>{formatTime(timeLeft)}</Text>
-                <View style={styles.progressTrack}>
-                  <View style={[styles.progressFill, { width: `${Math.round(progress * 100)}%` }]} />
-                </View>
-              </>
-            ) : (
-              <DurationPicker
-                value={duration}
-                onChange={(d) => { closeMetro(); setDuration(d); setTimeLeft(d * 60); }}
-              />
-            )}
           </View>
+        </KeyboardAvoidingView>
 
-          {/* CTA */}
-          <View style={styles.ctaWrap}>
-            {/* Metronome pill */}
-            {!sessionDone && (
-              <Animated.View
-                style={[
-                  styles.metroPill,
-                  {
-                    width: metroAnim.interpolate({ inputRange: [0, 1], outputRange: [48, screenW - Spacing.side * 2] }),
-                    borderRadius: metroAnim.interpolate({ inputRange: [0, 1], outputRange: [24, 16] }),
-                  },
-                ]}
-              >
-                {/* Circle tap zone — always visible */}
-                <TouchableOpacity
-                  onPress={toggleMetroPanel}
-                  activeOpacity={0.8}
-                  style={styles.metroPillCircle}
-                >
-                  <Animated.Text style={[styles.metroPillIcon, metroRunning && {
-                    color: beatAnim.interpolate({ inputRange: [0, 1], outputRange: ['#FFFFFF', Colors.orange] }),
-                  }]}>
-                    ♩
-                  </Animated.Text>
-                </TouchableOpacity>
-
-                {/* Always mounted — never unmounts so audio keeps playing */}
-                <Animated.View
-                  style={[styles.metroPillContent, { opacity: metroAnim }]}
-                  pointerEvents={metroOpen ? 'auto' : 'none'}
-                  onTouchStart={() => setOuterScrollEnabled(false)}
-                  onTouchEnd={() => setOuterScrollEnabled(true)}
-                  onTouchCancel={() => setOuterScrollEnabled(true)}
-                >
-                  <MetronomeStrip onRunningChange={setMetroRunning} onBeat={handleBeat} />
-                </Animated.View>
+        {/* CTA — outside KAV, toujours collé en bas */}
+        <View style={styles.ctaWrap}>
+          {!sessionDone && (
+            <Animated.View style={[styles.metroPill, {
+              width: metroAnim.interpolate({ inputRange: [0, 1], outputRange: [48, screenW - Spacing.side * 2] }),
+              borderRadius: metroAnim.interpolate({ inputRange: [0, 1], outputRange: [24, 16] }),
+            }]}>
+              <TouchableOpacity onPress={toggleMetroPanel} activeOpacity={0.8} style={styles.metroPillCircle}>
+                <Animated.Text style={[styles.metroPillIcon, metroRunning && {
+                  color: beatAnim.interpolate({ inputRange: [0, 1], outputRange: ['#FFFFFF', Colors.orange] }),
+                }]}>♩</Animated.Text>
+              </TouchableOpacity>
+              <Animated.View style={[styles.metroPillContent, { opacity: metroAnim }]} pointerEvents={metroOpen ? 'auto' : 'none'}>
+                <MetronomeStrip onRunningChange={setMetroRunning} onBeat={handleBeat} focusDances={focusPoint?.dance} />
               </Animated.View>
-            )}
+            </Animated.View>
+          )}
 
-            {!sessionActive && !sessionDone && (
-              <TouchableOpacity style={styles.startBtn} onPress={startSession} activeOpacity={0.88}>
-                <Text style={styles.startBtnText}>START SESSION</Text>
-              </TouchableOpacity>
-            )}
+          {!sessionActive && !sessionDone && (
+            <TouchableOpacity style={styles.startBtn} onPress={startSession} activeOpacity={0.88}>
+              <Text style={styles.startBtnText}>START SESSION</Text>
+            </TouchableOpacity>
+          )}
 
-            {sessionActive && !sessionPaused && (
-              <TouchableOpacity style={styles.pauseBtn} onPress={pauseSession} activeOpacity={0.85}>
-                <Text style={styles.pauseBtnText}>⏸  Pause</Text>
-              </TouchableOpacity>
-            )}
-
-            {sessionActive && sessionPaused && (
-              <View style={styles.pausedRow}>
-                <TouchableOpacity style={styles.resumeBtn} onPress={resumeSession} activeOpacity={0.88}>
-                  <Text style={styles.resumeBtnText}>▶  Resume</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.stopBtn} onPress={() => setShowStopConfirm(true)} activeOpacity={0.85}>
-                  <Text style={styles.stopBtnText}>Stop</Text>
-                </TouchableOpacity>
+          {sessionActive && !sessionPaused && (
+            <TouchableOpacity style={styles.pauseBtn} onPress={pauseSession} activeOpacity={0.85}>
+              <View style={styles.pauseIcon}>
+                <View style={styles.pauseBar} />
+                <View style={styles.pauseBar} />
               </View>
-            )}
+              <Text style={styles.pauseBtnText}>Pause</Text>
+            </TouchableOpacity>
+          )}
 
-            {sessionActive && (
-              <TouchableOpacity style={styles.validateBtn} onPress={handleEndSession} activeOpacity={0.85}>
-                <Text style={styles.validateBtnText}>END SESSION</Text>
+          {sessionActive && sessionPaused && (
+            <View style={styles.pausedRow}>
+              <TouchableOpacity style={styles.resumeBtn} onPress={resumeSession} activeOpacity={0.88}>
+                <Text style={styles.resumeBtnText}>▶  Resume</Text>
               </TouchableOpacity>
-            )}
-
-            {/* Page indicator */}
-            <View style={styles.pageIndicator}>
-              <View style={[styles.pageDot, styles.pageDotActive]} />
-              <View style={styles.pageDot} />
+              <TouchableOpacity style={styles.stopBtn} onPress={() => setShowStopConfirm(true)} activeOpacity={0.85}>
+                <Text style={styles.stopBtnText}>Stop</Text>
+              </TouchableOpacity>
             </View>
-          </View>
-        </View>
+          )}
 
-        {/* ── Page 2 : AI Coach ── */}
-        <View style={{ width: screenW, flex: 1 }}>
-          <ChatPage
-            focusPoint={focusPoint}
-            focusPointId={focusPointId}
-            sessionActive={sessionActive}
-            timeLeft={timeLeft}
-            duration={duration}
-            messages={chatMessages}
-            setMessages={setChatMessages}
-          />
+          {sessionActive && (
+            <Pressable
+              style={styles.validateBtn}
+              onPressIn={() => {
+                Animated.timing(stopHoldAnim, { toValue: 1, duration: 2000, useNativeDriver: false }).start(({ finished }) => {
+                  if (finished) { handleEndSession(); stopHoldAnim.setValue(0); }
+                });
+              }}
+              onPressOut={() => {
+                stopHoldAnim.stopAnimation();
+                Animated.timing(stopHoldAnim, { toValue: 0, duration: 200, useNativeDriver: false }).start();
+              }}
+            >
+              <Animated.View style={[styles.validateBtnFill, { width: stopHoldAnim.interpolate({ inputRange: [0, 1], outputRange: ['0%', '100%'] }) }]} />
+              <Text style={styles.validateBtnText}>Hold to end session</Text>
+            </Pressable>
+          )}
         </View>
-      </ScrollView>
+      </View>
 
       {/* ── Modals (portal, position dans le tree sans importance) ── */}
       <ClassInputModal input={selectedInput} onClose={() => setSelectedInput(null)} />
@@ -1233,11 +1336,14 @@ const styles = StyleSheet.create({
   backBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   backArrow: { fontSize: 18, color: Colors.activeFocus },
   backLabel: { fontFamily: Fonts.jakartaMedium, fontSize: 15, color: Colors.activeFocus },
-  slotBadge: {
-    borderWidth: 1, borderColor: 'rgba(17,12,17,0.15)',
-    borderRadius: 20, paddingHorizontal: 12, paddingVertical: 4,
+  slotBadge: {},
+  slotBadgeText: {
+    fontFamily: Fonts.jakartaBold,
+    fontSize: 10,
+    color: '#ACADB9',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
   },
-  slotBadgeText: { fontFamily: Fonts.jakartaMedium, fontSize: 12, color: Colors.secondary },
 
   focusCard: {
     backgroundColor: '#1A1A1A',
@@ -1271,6 +1377,8 @@ const styles = StyleSheet.create({
   readMoreBtn: {
     marginTop: 6,
     alignSelf: 'flex-start',
+    paddingVertical: 6,
+    paddingRight: 16,
   },
   readMoreText: {
     fontFamily: Fonts.jakartaMedium,
@@ -1333,6 +1441,13 @@ const styles = StyleSheet.create({
     fontSize: 64,
     color: Colors.black,
     letterSpacing: 2,
+  },
+  overTimeText: {
+    fontFamily: Fonts.monument,
+    fontSize: 22,
+    color: Colors.orange,
+    letterSpacing: 1,
+    marginTop: -8,
   },
   timerIdle: { color: 'rgba(17,12,17,0.2)' },
   timerHint: {
@@ -1424,8 +1539,22 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     paddingVertical: 14,
     alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 8,
     borderWidth: 1,
     borderColor: 'rgba(17,12,17,0.15)',
+  },
+  pauseIcon: {
+    flexDirection: 'row',
+    gap: 3,
+    alignItems: 'center',
+  },
+  pauseBar: {
+    width: 3,
+    height: 13,
+    borderRadius: 2,
+    backgroundColor: Colors.secondary,
   },
   pauseBtnText: { fontFamily: Fonts.jakartaMedium, fontSize: 14, color: Colors.secondary },
 
@@ -1449,10 +1578,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderWidth: 1,
     borderColor: 'rgba(17,12,17,0.15)',
+    overflow: 'hidden',
+  },
+  stopBtnFill: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    backgroundColor: Colors.orange,
+    borderRadius: 14,
   },
   stopBtnText: { fontFamily: Fonts.jakartaMedium, fontSize: 14, color: Colors.secondary },
 
-  validateBtn: { backgroundColor: Colors.black, borderRadius: 14, paddingVertical: 17, alignItems: 'center' },
+  validateBtn: { backgroundColor: Colors.black, borderRadius: 14, paddingVertical: 17, alignItems: 'center', overflow: 'hidden' },
+  validateBtnFill: { position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: Colors.orange, borderRadius: 14 },
   validateBtnText: { fontFamily: Fonts.jakartaExtraBold, fontSize: 15, color: Colors.white, letterSpacing: 1 },
 
   stopConfirmOverlay: {
@@ -1490,41 +1629,118 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     paddingVertical: 13,
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(17,12,17,0.15)',
+    backgroundColor: Colors.black,
   },
   stopConfirmCancelText: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.jakartaExtraBold,
     fontSize: 14,
-    color: Colors.secondary,
+    color: Colors.white,
   },
   stopConfirmConfirm: {
     flex: 1,
     borderRadius: 12,
     paddingVertical: 13,
     alignItems: 'center',
-    backgroundColor: Colors.black,
+    borderWidth: 1,
+    borderColor: 'rgba(17,12,17,0.15)',
   },
   stopConfirmConfirmText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.jakartaMedium,
     fontSize: 14,
-    color: Colors.white,
+    color: Colors.secondary,
   },
 
-  pageIndicator: {
-    flexDirection: 'row',
+  // ── AI card (inside focusCard, inherits its padding/bg) ──
+  aiCard: {
+    paddingBottom: 8,
+  },
+  aiToggleBtn: {
+    position: 'absolute',
+    top: 14,
+    right: 14,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
+    zIndex: 1,
+  },
+  aiToggleIcon: {
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.55)',
+    fontFamily: Fonts.jakartaBold,
+  },
+  aiCardMessages: {
+    flex: 1,
     marginTop: 12,
   },
-  pageDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: 'rgba(17,12,17,0.15)',
+  aiCardMessagesContent: {
+    gap: 8,
+    flexGrow: 1,
+    paddingBottom: 4,
   },
-  pageDotActive: {
-    backgroundColor: Colors.black,
+  aiCardEmptyText: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 13,
+    color: 'rgba(255,255,255,0.3)',
+    lineHeight: 20,
+  },
+  aiCardBubble: {
+    maxWidth: '90%',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  aiCardBubbleUser: {
+    alignSelf: 'flex-end',
+    backgroundColor: 'rgba(255,255,255,0.12)',
+  },
+  aiCardBubbleBot: {
+    alignSelf: 'flex-start',
+  },
+  aiCardBubbleText: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 13,
+    lineHeight: 20,
+  },
+  aiCardBubbleTextUser: {
+    color: 'rgba(255,255,255,0.85)',
+  },
+  aiCardBubbleTextBot: {
+    color: 'rgba(255,255,255,0.65)',
+  },
+  aiCardInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.08)',
+  },
+  aiCardInput: {
+    flex: 1,
+    minHeight: 36,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderRadius: 18,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 13,
+    color: '#FFFFFF',
+  },
+  aiCardSendBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  aiCardSendIcon: {
+    fontSize: 15,
+    color: Colors.orange,
   },
 });
 
@@ -1795,14 +2011,14 @@ const m = StyleSheet.create({
   },
   col: {
     flex: 2,
-    height: M_ITEM_H,
+    height: M_ITEM_H * 3,
   },
   colBpm: {
     flex: 1,
-    height: M_ITEM_H,
+    height: M_ITEM_H * 3,
   },
   scrollContent: {
-    paddingVertical: 0,
+    paddingVertical: M_ITEM_H,
   },
   item: {
     height: M_ITEM_H,
@@ -1824,12 +2040,24 @@ const m = StyleSheet.create({
   itemActive: {
     color: '#FFFFFF',
   },
+  itemPlaceholder: {
+    fontSize: 11,
+    color: 'rgba(255,255,255,0.35)',
+    fontStyle: 'italic',
+  },
   sep: {
     width: StyleSheet.hairlineWidth,
-    height: M_ITEM_H,
+    height: M_ITEM_H * 3,
     backgroundColor: 'rgba(255,255,255,0.15)',
     alignSelf: 'center',
     marginHorizontal: 4,
+  },
+  itemAdjacent: {
+    fontSize: 10,
+    color: 'rgba(255,255,255,0.25)',
+  },
+  itemFar: {
+    color: 'rgba(255,255,255,0)',
   },
   right: {
     flexDirection: 'column',

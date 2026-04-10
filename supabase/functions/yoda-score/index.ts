@@ -290,7 +290,7 @@ async function processStudentFocusPoints(
     tier: 'supporting' as Tier,
     base_score: 5,
     class_input_id: classInputId,
-    status: 'active',
+    status: 'past',
     is_other: true,
     count: 0,
     is_archived: false,

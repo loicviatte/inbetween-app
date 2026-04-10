@@ -1,3 +1,6 @@
+[functions.get-teacher-context]
+verify_jwt = false
+
 [functions.practice-log]
 verify_jwt = false
 

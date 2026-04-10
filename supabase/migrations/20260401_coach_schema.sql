@@ -104,17 +104,7 @@ CREATE POLICY "focus_points_read" ON focus_points
     )
   );
 
--- training_sessions: own rows, or sessions of my students
-DROP POLICY IF EXISTS "training_sessions_read" ON training_sessions;
-CREATE POLICY "training_sessions_read" ON training_sessions
-  FOR SELECT USING (
-    user_id = auth.uid()
-    OR EXISTS (
-      SELECT 1 FROM users u
-      WHERE u.id = training_sessions.user_id
-        AND u.coach_id = auth.uid()
-    )
-  );
+-- training_sessions: skipped — table no longer exists (replaced by practice_logs)
 
 -- class_inputs: own rows, or class inputs of my students
 DROP POLICY IF EXISTS "class_inputs_read" ON class_inputs;

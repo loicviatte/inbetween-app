@@ -15,6 +15,9 @@ import {
   ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
+import TabHeader from '../components/TabHeader';
+import ProfileSkeleton from '../components/ProfileSkeleton';
 import { useFocusEffect } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -55,7 +58,6 @@ function categorizeFocus(name) {
   return null; // unmatched — does not inflate any category
 }
 
-function Logo() { return <Text style={styles.logo}>EE</Text>; }
 
 function StatBox({ value, label, showDivider }) {
   return (
@@ -183,7 +185,15 @@ export default function ProfileScreen({ navigation }) {
     setUser(userData);
     setStats(stats);
     setRadarScores(scores);
-    if (savedPhoto) setPhotoUri(savedPhoto);
+    // Prefer remote avatar_url from DB; fallback to cached local URI
+    const remoteAvatar = userData?.avatar_url
+      ? `${userData.avatar_url}?t=${Math.floor(Date.now() / 60000)}` // 1-min cache busting
+      : null;
+    const avatarToShow = remoteAvatar || savedPhoto || null;
+    if (avatarToShow) {
+      setPhotoUri(avatarToShow);
+      if (remoteAvatar) await AsyncStorage.setItem(AVATAR_KEY, remoteAvatar).catch(() => {});
+    }
     setMyCoach(coachData);
     AsyncStorage.setItem(PROFILE_CACHE_KEY, JSON.stringify({ user: userData, stats, radarScores: scores, myCoach: coachData })).catch(() => {});
   }
@@ -225,10 +235,43 @@ export default function ProfileScreen({ navigation }) {
       aspect: [1, 1],
       quality: 0.8,
     });
-    if (!result.canceled && result.assets[0]?.uri) {
-      const uri = result.assets[0].uri;
-      setPhotoUri(uri);
-      await AsyncStorage.setItem(AVATAR_KEY, uri);
+    if (result.canceled || !result.assets[0]?.uri) return;
+
+    const localUri = result.assets[0].uri;
+    setPhotoUri(localUri); // optimistic update
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const userId = session?.user?.id;
+      if (!userId) throw new Error('Not authenticated');
+
+      // Read file as blob
+      const response = await fetch(localUri);
+      const blob = await response.blob();
+      const ext = localUri.split('.').pop()?.toLowerCase() || 'jpg';
+      const path = `${userId}/avatar.${ext}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from('avatars')
+        .upload(path, blob, { upsert: true, contentType: `image/${ext}` });
+
+      if (uploadError) throw uploadError;
+
+      const { data: { publicUrl } } = supabase.storage
+        .from('avatars')
+        .getPublicUrl(path);
+
+      // Bust cache by appending timestamp
+      const urlWithCache = `${publicUrl}?t=${Date.now()}`;
+
+      // Save to DB and local cache
+      await supabase.from('users').update({ avatar_url: publicUrl }).eq('id', userId);
+      await AsyncStorage.setItem(AVATAR_KEY, urlWithCache);
+      setPhotoUri(urlWithCache);
+    } catch (e) {
+      console.error('Avatar upload failed:', e);
+      // Keep the optimistic local URI on failure
+      await AsyncStorage.setItem(AVATAR_KEY, localUri);
     }
   }
 
@@ -280,29 +323,13 @@ export default function ProfileScreen({ navigation }) {
     : 'AL';
 
   if (isLoading) {
-    return (
-      <View style={{ flex: 1, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' }}>
-        <Text style={{ fontFamily: Fonts.monument, fontSize: 20, color: Colors.black, letterSpacing: 1 }}>EE</Text>
-      </View>
-    );
+    return <ProfileSkeleton />;
   }
 
   return (
     <SafeAreaView style={styles.safe}>
       <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
-      {/* Header */}
-      <View style={styles.header}>
-        <Logo />
-        <TouchableOpacity onPress={openEdit} activeOpacity={0.7} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-          <Text style={styles.editProfileBtn}>Edit</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.profileIcon} onPress={() => navigation.goBack()} activeOpacity={0.8}>
-          {photoUri
-            ? <Image source={{ uri: photoUri }} style={styles.profilePhoto} />
-            : <Text style={styles.profileInitial}>{user?.name ? user.name[0].toUpperCase() : 'A'}</Text>
-          }
-        </TouchableOpacity>
-      </View>
+      <TabHeader navigation={navigation} onProfilePress={openEdit} editMode />
 
       <ScrollView style={styles.content} contentContainerStyle={styles.contentInner} showsVerticalScrollIndicator={false}>
         {/* Avatar + name */}
@@ -484,6 +511,7 @@ const styles = StyleSheet.create({
     paddingTop: 16,
     paddingBottom: 12,
   },
+  notifBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
   logo: {
     fontFamily: Fonts.monument,
     fontSize: 20,

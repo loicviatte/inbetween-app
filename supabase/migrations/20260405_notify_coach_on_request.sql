@@ -20,6 +20,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
+DROP TRIGGER IF EXISTS on_coach_request_received ON public.coach_requests;
 CREATE TRIGGER on_coach_request_received
   AFTER INSERT ON public.coach_requests
   FOR EACH ROW EXECUTE FUNCTION public.notify_coach_on_new_request();
