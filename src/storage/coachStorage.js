@@ -67,30 +67,38 @@ export async function respondToCoachRequest(requestId, accept) {
   const coachId = await getCoachId();
   const status = accept ? 'accepted' : 'declined';
 
-  // Update the request status
+  // Update the request status and retrieve category + student_id
   const { data: req } = await supabase
     .from('coach_requests')
     .update({ status })
     .eq('id', requestId)
     .eq('coach_id', coachId)
-    .select('student_id')
+    .select('student_id, category')
     .single();
 
-  // When accepting, write coach_id onto the student's user record
-  if (accept && req?.student_id) {
-    await supabase
-      .from('users')
-      .update({ coach_id: coachId })
-      .eq('id', req.student_id);
-  }
+  if (!req?.student_id) return;
 
-  // When declining, clear coach_id if it was pointing to this coach
-  if (!accept && req?.student_id) {
-    await supabase
-      .from('users')
-      .update({ coach_id: null })
-      .eq('id', req.student_id)
-      .eq('coach_id', coachId);
+  // Determine which coach column(s) to write.
+  // category === null means general/no-style-split → set both columns.
+  const isLatin    = req.category === 'latin';
+  const isBallroom = req.category === 'ballroom';
+  const isBoth     = !isLatin && !isBallroom; // null or unknown → treat as both
+
+  if (accept) {
+    const updates = {};
+    if (isLatin  || isBoth) updates.latin_coach_id    = coachId;
+    if (isBallroom || isBoth) updates.ballroom_coach_id = coachId;
+    await supabase.from('users').update(updates).eq('id', req.student_id);
+  } else {
+    // Clear only the relevant column(s) if they were pointing to this coach
+    if (isLatin || isBoth) {
+      await supabase.from('users').update({ latin_coach_id: null })
+        .eq('id', req.student_id).eq('latin_coach_id', coachId);
+    }
+    if (isBallroom || isBoth) {
+      await supabase.from('users').update({ ballroom_coach_id: null })
+        .eq('id', req.student_id).eq('ballroom_coach_id', coachId);
+    }
   }
 }
 
@@ -334,6 +342,141 @@ export async function getClassDetail(classId) {
     .eq('id', classId)
     .single();
   return data || null;
+}
+
+// ─── Focus Point Validation ───────────────────────────────────────────────────
+
+export async function getPendingFocusPoints(studentId) {
+  if (studentId) {
+    const { data, error } = await supabase
+      .from('focus_points')
+      .select('id, name, subtitle, context, drill, tier, coach_review_deadline, group_fp, source_class_input_id, created_at')
+      .eq('user_id', studentId)
+      .eq('status', 'pending_coach')
+      .eq('is_other', false)
+      .eq('is_deleted', false)
+      .order('created_at', { ascending: true });
+    if (error) throw error;
+    return data ?? [];
+  }
+
+  // No studentId — load all pending FPs for all coach's students
+  const coachId = await getCoachId();
+  const { data: requests } = await supabase
+    .from('coach_requests')
+    .select('student_id')
+    .eq('coach_id', coachId)
+    .eq('status', 'accepted');
+  const studentIds = (requests ?? []).map(r => r.student_id);
+  if (studentIds.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from('focus_points')
+    .select('id, name, subtitle, context, drill, tier, coach_review_deadline, group_fp, source_class_input_id, created_at, user_id')
+    .in('user_id', studentIds)
+    .eq('status', 'pending_coach')
+    .eq('is_other', false)
+    .eq('is_deleted', false)
+    .order('created_at', { ascending: true });
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function getPendingFocusPointsCount() {
+  const coachId = await getCoachId();
+  // Get all student IDs for this coach
+  const { data: requests } = await supabase
+    .from('coach_requests')
+    .select('student_id')
+    .eq('coach_id', coachId)
+    .eq('status', 'accepted');
+  const studentIds = (requests ?? []).map(r => r.student_id);
+  if (studentIds.length === 0) return 0;
+  const { count } = await supabase
+    .from('focus_points')
+    .select('id', { count: 'exact' })
+    .eq('status', 'pending_coach')
+    .eq('is_other', false)
+    .eq('is_deleted', false)
+    .in('user_id', studentIds);
+  return count ?? 0;
+}
+
+export async function approveFocusPoint(fpId) {
+  const { error } = await supabase
+    .from('focus_points')
+    .update({ status: 'active', coach_review_deadline: null })
+    .eq('id', fpId);
+  if (error) throw error;
+}
+
+export async function editAndApproveFocusPoint(fpId, updates) {
+  const allowed = ['name', 'subtitle', 'context', 'drill', 'tier'];
+  const filtered = Object.fromEntries(Object.entries(updates).filter(([k]) => allowed.includes(k)));
+  const { error } = await supabase
+    .from('focus_points')
+    .update({ ...filtered, status: 'active', coach_review_deadline: null })
+    .eq('id', fpId);
+  if (error) throw error;
+}
+
+export async function deletePendingFocusPoint(fpId) {
+  const { error } = await supabase
+    .from('focus_points')
+    .update({ is_deleted: true, status: 'past' })
+    .eq('id', fpId);
+  if (error) throw error;
+}
+
+export async function approveAllPendingForStudent(studentId) {
+  const { error } = await supabase
+    .from('focus_points')
+    .update({ status: 'active', coach_review_deadline: null })
+    .eq('user_id', studentId)
+    .eq('status', 'pending_coach')
+    .eq('is_deleted', false);
+  if (error) throw error;
+}
+
+export async function autoPublishExpiredFPs() {
+  try {
+    const coachId = await getCoachId();
+    const { data: requests } = await supabase
+      .from('coach_requests')
+      .select('student_id')
+      .eq('coach_id', coachId)
+      .eq('status', 'accepted');
+    const studentIds = (requests ?? []).map(r => r.student_id);
+    if (studentIds.length === 0) return;
+
+    const now = new Date().toISOString();
+    const { data: expired } = await supabase
+      .from('focus_points')
+      .select('id, user_id, group_fp, source_class_input_id')
+      .eq('status', 'pending_coach')
+      .eq('is_deleted', false)
+      .lte('coach_review_deadline', now)
+      .in('user_id', studentIds);
+
+    for (const fp of expired ?? []) {
+      if (fp.group_fp && fp.source_class_input_id) {
+        const { data: cis } = await supabase
+          .from('class_input_students')
+          .select('student_id, attendance')
+          .eq('class_input_id', fp.source_class_input_id);
+        const excluded = new Set((cis ?? []).filter(r => r.attendance === 'no').map(r => r.student_id));
+        if (excluded.has(fp.user_id)) {
+          await supabase.from('focus_points').update({ is_deleted: true, status: 'past' }).eq('id', fp.id);
+        } else {
+          await supabase.from('focus_points').update({ status: 'active', coach_review_deadline: null }).eq('id', fp.id);
+        }
+      } else {
+        await supabase.from('focus_points').update({ status: 'active', coach_review_deadline: null }).eq('id', fp.id);
+      }
+    }
+  } catch (err) {
+    console.error('[autoPublishExpiredFPs]', err);
+  }
 }
 
 // ─── Activity Feed ────────────────────────────────────────────────────────────

@@ -94,7 +94,7 @@ export async function getAllFocusPointsRanked() {
 
     const { data: points } = await supabase
       .from('focus_points')
-      .select('*, class_inputs(id, created_at, class_summary, dance, teacher_name)')
+      .select('*, class_inputs!focus_points_class_input_id_fkey(id, created_at, class_summary, dance, teacher_name)')
       .eq('user_id', userId)
       .eq('is_deleted', false)
       .eq('is_archived', false)

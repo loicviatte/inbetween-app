@@ -465,7 +465,9 @@ export default function HomeScreen({ navigation }) {
                     <View style={[dm.dot, dm.dotClass]} />
                     <View style={{ flex: 1 }}>
                       <Text style={dm.rowText}>{fmtTime(c.created_at)}</Text>
-                      {!!c.practice_point_1 && <Text style={dm.rowSub} numberOfLines={1}>{c.practice_point_1}</Text>}
+                      {!!(c.title || c.ai_primary_focus || c.practice_point_1) && (
+                        <Text style={dm.rowSub} numberOfLines={1}>{c.title || c.ai_primary_focus || c.practice_point_1}</Text>
+                      )}
                     </View>
                   </View>
                 ))}
@@ -560,6 +562,7 @@ const s = StyleSheet.create({
   scroll: {},
   scrollContent: {
     paddingHorizontal: 20,
+    paddingTop: 12,
     paddingBottom: 8,
   },
 

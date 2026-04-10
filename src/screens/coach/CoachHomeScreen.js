@@ -17,6 +17,8 @@ import {
   getMyStudents,
   getPendingCoachRequests,
   respondToCoachRequest,
+  autoPublishExpiredFPs,
+  getPendingFocusPointsCount,
 } from '../../storage/coachStorage';
 import { getUser } from '../../storage/storage';
 
@@ -121,15 +123,17 @@ export default function CoachHomeScreen({ navigation }) {
   const [requests, setRequests] = useState([]);
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState(null);
+  const [pendingCount, setPendingCount] = useState(0);
 
   useFocusEffect(
     useCallback(() => {
       let active = true;
       async function load() {
         setLoading(true);
+        autoPublishExpiredFPs().catch(() => {}); // fire-and-forget
         try {
-          const [s, r, u] = await Promise.all([getMyStudents(), getPendingCoachRequests(), getUser()]);
-          if (active) { setStudents(s); setRequests(r); setUser(u); }
+          const [s, r, u, pc] = await Promise.all([getMyStudents(), getPendingCoachRequests(), getUser(), getPendingFocusPointsCount()]);
+          if (active) { setStudents(s); setRequests(r); setUser(u); setPendingCount(pc); }
         } catch {}
         if (active) setLoading(false);
       }
@@ -187,6 +191,19 @@ export default function CoachHomeScreen({ navigation }) {
               </View>
               <Text style={styles.heading}>My Students</Text>
             </View>
+
+            {/* Pending FP Review Banner */}
+            {pendingCount > 0 && (
+              <TouchableOpacity
+                style={phStyles.banner}
+                onPress={() => navigation.navigate('FocusValidation', {})}
+                activeOpacity={0.85}
+              >
+                <Ionicons name="star-outline" size={18} color={Colors.orange} />
+                <Text style={phStyles.bannerText}>{pendingCount} focus point{pendingCount > 1 ? 's' : ''} awaiting your review</Text>
+                <Ionicons name="chevron-forward" size={16} color={Colors.orange} />
+              </TouchableOpacity>
+            )}
 
             {/* Pending connection requests */}
             {requests.length > 0 && (
@@ -421,6 +438,22 @@ const attn = StyleSheet.create({
     fontSize: 12,
     color: Colors.secondary,
   },
+});
+
+const phStyles = StyleSheet.create({
+  banner: {
+    marginBottom: 16,
+    backgroundColor: 'rgba(255,157,0,0.08)',
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderWidth: 0.5,
+    borderColor: 'rgba(255,157,0,0.25)',
+  },
+  bannerText: { flex: 1, fontFamily: Fonts.jakartaSemiBold, fontSize: 14, color: Colors.orange },
 });
 
 const rq = StyleSheet.create({

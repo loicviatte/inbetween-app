@@ -21,6 +21,7 @@ import {
 } from '@expo-google-fonts/montserrat';
 import { supabase } from './src/services/supabase/client';
 import { getOrCreateInviteCode } from './src/storage/coachStorage';
+import { ProfileProvider } from './src/context/ProfileContext';
 
 // Student screens
 import HomeScreen from './src/screens/HomeScreen';
@@ -34,9 +35,12 @@ import RegisterScreen from './src/screens/RegisterScreen';
 import NotificationsScreen from './src/screens/NotificationsScreen';
 import AllFocusPointsScreen from './src/screens/AllFocusPointsScreen';
 import CustomTabBar from './src/components/CustomTabBar';
+import TrainerReviewScreen from './src/screens/TrainerReviewScreen';
+import AttendanceConfirmScreen from './src/screens/AttendanceConfirmScreen';
 
 // Coach screens
 import CoachHomeScreen from './src/screens/coach/CoachHomeScreen';
+import FocusValidationScreen from './src/screens/coach/FocusValidationScreen';
 import StudentDetailScreen from './src/screens/coach/StudentDetailScreen';
 import SessionsFeedScreen from './src/screens/coach/SessionsFeedScreen';
 import CoachProfileScreen from './src/screens/coach/CoachProfileScreen';
@@ -46,6 +50,9 @@ const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
 const AuthStack = createNativeStackNavigator();
 const CoachStack = createNativeStackNavigator();
+const TrainerStack = createNativeStackNavigator();
+
+const TRAINER_EMAIL = 'loic@danceuniteduk.com';
 
 const AppTheme = {
   ...DefaultTheme,
@@ -101,6 +108,12 @@ function AppNavigator() {
         component={AllFocusPointsScreen}
         options={{ animation: 'slide_from_right' }}
       />
+      <Stack.Screen
+        name="TrainerReview"
+        component={TrainerReviewScreen}
+        options={{ animation: 'slide_from_right' }}
+      />
+      <Stack.Screen name="AttendanceConfirm" component={AttendanceConfirmScreen} options={{ animation: 'slide_from_bottom', presentation: 'modal' }} />
     </Stack.Navigator>
   );
 }
@@ -143,7 +156,18 @@ function CoachAppNavigator() {
         component={NotificationsScreen}
         options={{ animation: 'slide_from_left' }}
       />
+      <CoachStack.Screen name="FocusValidation" component={FocusValidationScreen} options={{ animation: 'slide_from_right' }} />
     </CoachStack.Navigator>
+  );
+}
+
+// ─── Trainer Navigator ───────────────────────────────────────────────────────
+
+function TrainerNavigator() {
+  return (
+    <TrainerStack.Navigator screenOptions={{ headerShown: false }}>
+      <TrainerStack.Screen name="TrainerReview" component={TrainerReviewScreen} />
+    </TrainerStack.Navigator>
   );
 }
 
@@ -163,6 +187,7 @@ function AuthNavigator() {
 export default function App() {
   const [session, setSession] = useState(undefined); // undefined = loading
   const [userRole, setUserRole] = useState(null);    // null = not yet loaded
+  const [userEmail, setUserEmail] = useState(null);
   const [fontsLoaded] = useFonts({
     PlusJakartaSans_300Light,
     PlusJakartaSans_400Regular,
@@ -205,12 +230,14 @@ export default function App() {
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session: s } }) => {
       setSession(s ?? null);
+      setUserEmail(s?.user?.email ?? null);
       if (s?.user?.id) loadRole(s.user.id);
       else if (!s) setUserRole(null);
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
       setSession(s ?? null);
+      setUserEmail(s?.user?.email ?? null);
       if (s?.user?.id) {
         loadRole(s.user.id);
       } else {
@@ -235,14 +262,20 @@ export default function App() {
   }
 
   return (
-    <SafeAreaProvider>
-      <NavigationContainer theme={AppTheme}>
-        <StatusBar style="dark" />
-        {session
-          ? (userRole === 'coach' ? <CoachAppNavigator /> : <AppNavigator />)
-          : <AuthNavigator />
-        }
-      </NavigationContainer>
-    </SafeAreaProvider>
+    <ProfileProvider>
+      <SafeAreaProvider>
+        <NavigationContainer theme={AppTheme}>
+          <StatusBar style="dark" />
+          {session
+            ? (userEmail === TRAINER_EMAIL
+                ? <TrainerNavigator />
+                : userRole === 'coach'
+                  ? <CoachAppNavigator />
+                  : <AppNavigator />)
+            : <AuthNavigator />
+          }
+        </NavigationContainer>
+      </SafeAreaProvider>
+    </ProfileProvider>
   );
 }

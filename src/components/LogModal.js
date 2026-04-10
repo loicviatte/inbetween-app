@@ -329,10 +329,10 @@ export default function LogModal({ visible, onClose, onSubmitted }) {
         const { data: { user } } = await supabase.auth.getUser();
         if (!user) return;
 
-        // Single query — join on coach foreign key to get coach name in one shot
+        // Load profile with both category coaches
         const { data: profile, error: profileErr } = await supabase
           .from('users')
-          .select('dance_style, coach_id, coach:coach_id(name)')
+          .select('dance_style, latin_coach_id, ballroom_coach_id, latinCoach:latin_coach_id(name), ballroomCoach:ballroom_coach_id(name)')
           .eq('id', user.id)
           .single();
 
@@ -340,26 +340,35 @@ export default function LogModal({ visible, onClose, onSubmitted }) {
 
         setAvailableDances(getDancesForStyle(profile?.dance_style));
 
-        // coach join result can be an object or array depending on Supabase version
-        const coachName =
-          (Array.isArray(profile?.coach) ? profile.coach[0]?.name : profile?.coach?.name) || null;
+        const latinName =
+          (Array.isArray(profile?.latinCoach) ? profile.latinCoach[0]?.name : profile?.latinCoach?.name) || null;
+        const ballroomName =
+          (Array.isArray(profile?.ballroomCoach) ? profile.ballroomCoach[0]?.name : profile?.ballroomCoach?.name) || null;
 
-        if (coachName) {
-          setLinkedCoachName(coachName);
-          setTeacherName(coachName);
+        // Pre-fill with the coach from the OPPOSITE category of the last logged class
+        // so the teacher name alternates naturally between lessons.
+        let defaultCoachName = null;
+        const { data: lastClass } = await supabase
+          .from('class_inputs')
+          .select('dance')
+          .eq('user_id', user.id)
+          .not('is_deleted', 'is', true)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (lastClass?.dance?.length > 0) {
+          const lastWasLatin = lastClass.dance.some(d => LATIN_DANCES.includes(d));
+          // Suggest the opposite category's coach
+          defaultCoachName = lastWasLatin ? ballroomName : latinName;
+        }
+        // If opposite coach not set, fall back to whichever is available
+        defaultCoachName = defaultCoachName ?? latinName ?? ballroomName;
+
+        if (defaultCoachName) {
+          setLinkedCoachName(defaultCoachName);
+          setTeacherName(defaultCoachName);
           setTeacherEditing(false);
-        } else if (profile?.coach_id) {
-          // Fallback: separate query (handles cases where FK join is blocked by RLS)
-          const { data: coach } = await supabase
-            .from('users')
-            .select('name')
-            .eq('id', profile.coach_id)
-            .single();
-          if (coach?.name) {
-            setLinkedCoachName(coach.name);
-            setTeacherName(coach.name);
-            setTeacherEditing(false);
-          }
         }
       } catch (e) {
         console.warn('[LogModal] profile load error:', e);

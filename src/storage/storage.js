@@ -39,10 +39,7 @@ export async function getUser() {
 
 export async function saveUserProfile({ name, main_studio, main_studio_place_id, dance_style }) {
   const userId = await getUserId();
-  await supabase
-    .from('users')
-    .update({ name, main_studio, main_studio_place_id, dance_style })
-    .eq('id', userId);
+  await supabase.from('users').update({ name, main_studio, main_studio_place_id, dance_style }).eq('id', userId);
 }
 
 export async function updateUserSummary(summary) {
@@ -75,12 +72,13 @@ export async function getTeacherContextForAI() {
 
 async function _getClassInputs() {
   const userId = await getUserId();
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('class_inputs')
-    .select('*, focus_points(id, name, subtitle, context, drill, dance, tier)')
-    .or(`user_id.eq.${userId},student_id.eq.${userId}`)
+    .select('*, focus_points!focus_points_class_input_id_fkey(id, name, subtitle, context, drill, dance, tier, status)')
     .not('is_deleted', 'is', true)
     .order('created_at', { ascending: false });
+
+  if (error) console.warn('[getClassInputs] error:', error.message);
 
   const inputs = data || [];
 
@@ -97,12 +95,41 @@ async function _getClassInputs() {
     userNameMap = Object.fromEntries((users || []).map(u => [u.id, u.name]));
   }
 
-  return inputs.map(i => ({
-    ...i,
-    _teacher_fallback: !i.teacher_name ? (userNameMap[i.user_id] || null) : null,
-  }));
+  return inputs.map(i => {
+    const hasPendingFPs = (i.focus_points ?? []).some(fp => fp.status === 'pending_coach');
+    const isProcessing   = i.status === 'processing' || i.status === 'extracted' || i.status === 'pending';
+    const deadline       = (hasPendingFPs || isProcessing)
+      ? new Date(new Date(i.created_at).getTime() + 18 * 60 * 60 * 1000).toISOString()
+      : null;
+    return {
+      ...i,
+      _teacher_fallback: !i.teacher_name ? (userNameMap[i.user_id] || null) : null,
+      _pendingDeadline:  deadline,
+      _hasPendingFPs:    hasPendingFPs,
+    };
+  });
 }
 export const getClassInputs = cached('classInputs', _getClassInputs);
+
+export async function respondToAttendance(classInputId, response) {
+  const userId = await getUserId();
+  const { error } = await supabase
+    .from('class_input_students')
+    .update({ attendance: response, responded_at: new Date().toISOString() })
+    .eq('class_input_id', classInputId)
+    .eq('student_id', userId);
+  if (error) throw error;
+
+  if (response === 'no') {
+    // Remove pending or active FPs from this class for this student
+    await supabase
+      .from('focus_points')
+      .update({ is_deleted: true, status: 'past' })
+      .eq('source_class_input_id', classInputId)
+      .eq('user_id', userId)
+      .in('status', ['pending_coach', 'active']);
+  }
+}
 
 export async function saveClassInput(input) {
   const userId = await getUserId();
@@ -223,7 +250,7 @@ export async function getWeekActivity() {
         .not('completed_at', 'is', null),
       supabase
         .from('class_inputs')
-        .select('id, created_at, practice_point_1, ai_primary_focus')
+        .select('id, created_at, title, practice_point_1, ai_primary_focus')
         .or(`user_id.eq.${userId},student_id.eq.${userId}`)
         .not('is_deleted', 'is', true)
         .gte('created_at', mondayISO),
@@ -440,10 +467,26 @@ export async function getNotesLinkedToClass(classInputId) {
 
 // ─── Coach Linking (student side) ─────────────────────────────────────────────
 
-// Look up a coach by their invite code and send a connection request
-export async function linkToCoachByCode(inviteCode) {
-  const userId = await getUserId();
+const LATIN_DANCES = ['Cha Cha', 'Samba', 'Rumba', 'Paso Doble', 'Jive'];
+
+// Derive 'latin' | 'ballroom' from a dance_style string
+function categoryFromStyle(danceStyle) {
+  const ds = (danceStyle || '').toLowerCase();
+  if (ds === 'latin') return 'latin';
+  if (ds === 'ballroom' || ds === 'standard') return 'ballroom';
+  return null;
+}
+
+// Derive 'latin' | 'ballroom' from an array of dance names
+function categoryFromDances(dances) {
+  if (!dances || dances.length === 0) return null;
+  return LATIN_DANCES.some(d => dances.includes(d)) ? 'latin' : 'ballroom';
+}
+
+// Internal: link by invite code for a given category
+async function _linkToCoachByCategory(userId, inviteCode, category) {
   const code = inviteCode.trim().toUpperCase();
+  const coachIdField = category === 'latin' ? 'latin_coach_id' : 'ballroom_coach_id';
 
   const { data: coach } = await supabase
     .from('users')
@@ -454,18 +497,17 @@ export async function linkToCoachByCode(inviteCode) {
 
   if (!coach) throw new Error('Coach not found. Check the code and try again.');
 
-  // Check if a request already exists
   const { data: existing } = await supabase
     .from('coach_requests')
     .select('id, status')
     .eq('student_id', userId)
     .eq('coach_id', coach.id)
+    .eq('category', category)
     .maybeSingle();
 
   if (existing) {
     if (existing.status === 'accepted') {
-      // Already linked — update coach_id in case it was cleared
-      await supabase.from('users').update({ coach_id: coach.id }).eq('id', userId);
+      await supabase.from('users').update({ [coachIdField]: coach.id }).eq('id', userId);
       return { coach, alreadyLinked: true };
     }
     if (existing.status === 'pending') return { coach, pending: true };
@@ -475,30 +517,98 @@ export async function linkToCoachByCode(inviteCode) {
     student_id: userId,
     coach_id: coach.id,
     status: 'pending',
+    category,
   });
 
   return { coach, pending: true };
 }
 
-export async function unlinkCoach() {
+// For single-style students (Latin or Ballroom) — category derived from dance_style
+export async function linkToCoachByCode(inviteCode) {
   const userId = await getUserId();
-  await supabase.from('users').update({ coach_id: null }).eq('id', userId);
+  const { data: me } = await supabase.from('users').select('dance_style').eq('id', userId).single();
+  const category = categoryFromStyle(me?.dance_style);
+  if (!category) throw new Error('Set your dance style before linking a coach.');
+  return _linkToCoachByCategory(userId, inviteCode, category);
 }
 
+// For 'Latin & Ballroom' students — explicit category ('latin' | 'ballroom')
+export async function linkToCoachByCodeForCategory(inviteCode, category) {
+  const userId = await getUserId();
+  return _linkToCoachByCategory(userId, inviteCode, category);
+}
+
+// For single-style students
+export async function unlinkCoach() {
+  const userId = await getUserId();
+  const { data: me } = await supabase.from('users').select('dance_style').eq('id', userId).single();
+  const category = categoryFromStyle(me?.dance_style);
+  if (!category) return;
+  const field = category === 'latin' ? 'latin_coach_id' : 'ballroom_coach_id';
+  await supabase.from('users').update({ [field]: null }).eq('id', userId);
+}
+
+// For 'Latin & Ballroom' students
+export async function unlinkCoachForCategory(category) {
+  const userId = await getUserId();
+  const field = category === 'latin' ? 'latin_coach_id' : 'ballroom_coach_id';
+  await supabase.from('users').update({ [field]: null }).eq('id', userId);
+}
+
+// For single-style students
 export async function getMyCoach() {
   const userId = await getUserId();
   const { data: me } = await supabase
     .from('users')
-    .select('coach_id')
+    .select('dance_style, latin_coach_id, ballroom_coach_id')
     .eq('id', userId)
     .single();
 
-  if (!me?.coach_id) return null;
+  const category = categoryFromStyle(me?.dance_style);
+  let coachId = category === 'latin' ? me?.latin_coach_id : me?.ballroom_coach_id;
+
+  // Fallback: if columns not yet backfilled, check coach_requests directly
+  if (!coachId) {
+    const { data: req } = await supabase
+      .from('coach_requests')
+      .select('coach_id')
+      .eq('student_id', userId)
+      .eq('status', 'accepted')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    coachId = req?.coach_id ?? null;
+  }
+
+  if (!coachId) return null;
 
   const { data: coach } = await supabase
     .from('users')
     .select('id, name, main_studio, dance_style')
-    .eq('id', me.coach_id)
+    .eq('id', coachId)
+    .single();
+
+  return coach || null;
+}
+
+// For 'Latin & Ballroom' students
+export async function getMyCoachForCategory(category) {
+  const userId = await getUserId();
+  const field = category === 'latin' ? 'latin_coach_id' : 'ballroom_coach_id';
+
+  const { data: me } = await supabase
+    .from('users')
+    .select(field)
+    .eq('id', userId)
+    .single();
+
+  const coachId = me?.[field];
+  if (!coachId) return null;
+
+  const { data: coach } = await supabase
+    .from('users')
+    .select('id, name, main_studio, dance_style')
+    .eq('id', coachId)
     .single();
 
   return coach || null;
@@ -513,15 +623,36 @@ export async function askCoach(message, question_type = 'clarification', focusPo
 
   const { data: me } = await supabase
     .from('users')
-    .select('coach_id')
+    .select('dance_style, latin_coach_id, ballroom_coach_id')
     .eq('id', userId)
     .single();
 
-  if (!me?.coach_id) throw new Error('No coach linked. Add your coach first.');
+  // Determine which coach to route to:
+  // If a focus point is provided, use its dance to pick the matching coach.
+  // Otherwise fall back to the student's dance_style.
+  let coachId = null;
+  if (focusPointId) {
+    const { data: fp } = await supabase
+      .from('focus_points')
+      .select('dance')
+      .eq('id', focusPointId)
+      .single();
+    const category = categoryFromDances(fp?.dance);
+    coachId = category === 'latin' ? me?.latin_coach_id : me?.ballroom_coach_id;
+  }
+  if (!coachId) {
+    // Fallback: use dance_style, then whichever coach is set
+    const category = categoryFromStyle(me?.dance_style);
+    coachId = category === 'latin'
+      ? (me?.latin_coach_id ?? me?.ballroom_coach_id)
+      : (me?.ballroom_coach_id ?? me?.latin_coach_id);
+  }
+
+  if (!coachId) throw new Error('No coach linked. Add your coach first.');
 
   await supabase.from('coach_messages').insert({
     student_id:    userId,
-    coach_id:      me.coach_id,
+    coach_id:      coachId,
     message:       message.trim(),
     question_type: question_type,
     status:        'pending',
