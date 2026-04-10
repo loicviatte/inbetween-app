@@ -146,7 +146,7 @@ function ClassPickerModal({ visible, onClose, onSelect, currentId }) {
 const BOTTOM_BAR_H = 50;
 
 export default function NoteDetailScreen({ route, navigation }) {
-  const { noteId, linked_class_input_id: initialLinkedId } = route.params || {};
+  const { noteId, linked_class_input_id: initialLinkedId, backLabel } = route.params || {};
   const isNew = !noteId;
 
   const idRef = useRef(noteId || null);
@@ -323,7 +323,7 @@ export default function NoteDetailScreen({ route, navigation }) {
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn} activeOpacity={0.7}>
           <Ionicons name="chevron-back" size={22} color={Colors.activeFocus} />
-          <Text style={styles.backLabel}>Notes</Text>
+          <Text style={styles.backLabel} numberOfLines={1}>{backLabel || 'Notes'}</Text>
         </TouchableOpacity>
         <TouchableOpacity onPress={handleDelete} activeOpacity={0.7}>
           <Text style={styles.deleteText}>Delete</Text>

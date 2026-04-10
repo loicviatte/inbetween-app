@@ -13,10 +13,13 @@ import {
   Image,
   Animated,
   Dimensions,
+  Modal,
+  Switch,
 } from 'react-native';
 
 const SCREEN_W = Dimensions.get('window').width;
 const LOG_CACHE_KEY = '@cache_log';
+const SKIP_ADD_REMINDER_KEY = '@skip_add_class_reminder';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -24,8 +27,23 @@ import { Colors, Fonts, Spacing } from '../theme';
 import { getClassInputs, getNotes } from '../storage/storage';
 import LogModal from '../components/LogModal';
 import { Ionicons } from '@expo/vector-icons';
+import TabHeader from '../components/TabHeader';
+import LogSkeleton from '../components/LogSkeleton';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+const DANCE_ABBR = {
+  'Cha Cha': 'CCC',
+  'Samba': 'S',
+  'Rumba': 'R',
+  'Paso Doble': 'PD',
+  'Jive': 'J',
+  'Waltz': 'W',
+  'Tango': 'T',
+  'V. Waltz': 'VW',
+  'Foxtrot': 'F',
+  'Quickstep': 'Q',
+};
 const MONTH_FULL = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
@@ -65,22 +83,50 @@ function relativeDate(isoOrTs) {
   return `${MONTHS[d.getMonth()]} ${d.getDate()}`;
 }
 
-function Logo() {
-  return <Text style={styles.logo}>EE</Text>;
+
+function getDanceAbbrs(item) {
+  // Primary: dance field on class_input (single string)
+  if (item.dance) {
+    return DANCE_ABBR[item.dance] || item.dance.substring(0, 3).toUpperCase();
+  }
+  // Fallback: collect dances from linked focus_points (text[] per focus point)
+  if (item.focus_points?.length > 0) {
+    const seen = new Set();
+    for (const fp of item.focus_points) {
+      if (Array.isArray(fp.dance)) {
+        for (const d of fp.dance) if (d) seen.add(d);
+      } else if (typeof fp.dance === 'string' && fp.dance) {
+        seen.add(fp.dance);
+      }
+    }
+    if (seen.size > 0) {
+      return [...seen].map(d => DANCE_ABBR[d] || d.substring(0, 3).toUpperCase()).join(' · ');
+    }
+  }
+  return null;
 }
 
 function ClassItem({ item, onPress }) {
   const hasTwo = item.practice_point_2 && item.ai_secondary_focus;
+  const teacherName = item.teacher_name || item._teacher_fallback || null;
+  const lessonType = item.lesson_type || null;
+  const isGroup = lessonType === 'group';
 
   return (
     <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.75}>
       <View style={[styles.cardAccent, { backgroundColor: Colors.activeLog }]} />
       <View style={styles.cardBody}>
         <View style={styles.cardHeader}>
-          <Text style={styles.cardDate}>{relativeDate(item.created_at)}</Text>
-          {hasTwo && (
-            <View style={styles.countBadge}>
-              <Text style={styles.countBadgeText}>2 points</Text>
+          <Text style={styles.cardDate}>
+            {relativeDate(item.created_at)}
+            {teacherName ? <Text style={styles.cardDateSep}>{' · '}</Text> : null}
+            {teacherName ? <Text style={styles.cardDateTeacher}>{teacherName}</Text> : null}
+          </Text>
+          {!!lessonType && (
+            <View style={[styles.lessonTypeBadge, isGroup ? styles.lessonTypeBadgeGroup : styles.lessonTypeBadgePrivate]}>
+              <Text style={[styles.lessonTypeBadgeText, isGroup ? styles.lessonTypeBadgeTextGroup : styles.lessonTypeBadgeTextPrivate]}>
+                {isGroup ? 'Group Class' : 'Private Lesson'}
+              </Text>
             </View>
           )}
         </View>
@@ -140,6 +186,8 @@ export default function LogScreen({ navigation }) {
   const [notes, setNotes] = useState([]);
   const [search, setSearch] = useState('');
   const [modalVisible, setModalVisible] = useState(false);
+  const [reminderVisible, setReminderVisible] = useState(false);
+  const [dontRemind, setDontRemind] = useState(false);
   const [photoUri, setPhotoUri] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -193,12 +241,26 @@ export default function LogScreen({ navigation }) {
     init();
   }, []));
 
-  function handleAdd() {
+  async function handleAdd() {
     if (activeTab === 'NOTES') {
       navigation.navigate('NoteDetail', {});
-    } else {
-      setModalVisible(true);
+      return;
     }
+    const skip = await AsyncStorage.getItem(SKIP_ADD_REMINDER_KEY);
+    if (skip === 'true') {
+      setModalVisible(true);
+    } else {
+      setDontRemind(false);
+      setReminderVisible(true);
+    }
+  }
+
+  async function handleReminderContinue() {
+    if (dontRemind) {
+      await AsyncStorage.setItem(SKIP_ADD_REMINDER_KEY, 'true');
+    }
+    setReminderVisible(false);
+    setModalVisible(true);
   }
 
   const filteredInputs = search.trim()
@@ -219,25 +281,13 @@ export default function LogScreen({ navigation }) {
   const groupedNotes = groupByDate(filteredNotes, 'updated_at');
 
   if (isLoading) {
-    return (
-      <View style={{ flex: 1, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' }}>
-        <Text style={{ fontFamily: Fonts.monument, fontSize: 20, color: Colors.black, letterSpacing: 1 }}>EE</Text>
-      </View>
-    );
+    return <LogSkeleton />;
   }
 
   return (
     <SafeAreaView style={styles.safe} edges={['top']}>
       <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
-      <View style={styles.header}>
-        <Logo />
-        <TouchableOpacity style={styles.profileIcon} onPress={() => navigation.navigate('PROFILE')} activeOpacity={0.8}>
-          {photoUri
-            ? <Image source={{ uri: photoUri }} style={styles.profilePhoto} />
-            : <Text style={styles.profileInitial}>A</Text>
-          }
-        </TouchableOpacity>
-      </View>
+      <TabHeader navigation={navigation} />
 
       {/* Tab switcher */}
       <View style={styles.tabRow}>
@@ -345,6 +395,40 @@ export default function LogScreen({ navigation }) {
         onClose={() => setModalVisible(false)}
         onSubmitted={() => { setModalVisible(false); load(); }}
       />
+
+      {/* Add class reminder */}
+      <Modal visible={reminderVisible} transparent animationType="fade" onRequestClose={() => setReminderVisible(false)}>
+        <TouchableOpacity style={styles.reminderOverlay} activeOpacity={1} onPress={() => setReminderVisible(false)}>
+          <TouchableOpacity style={styles.reminderSheet} activeOpacity={1} onPress={() => {}}>
+            <View style={styles.reminderIconWrap}>
+              <Ionicons name="information-circle-outline" size={28} color={Colors.activeLog} />
+            </View>
+            <Text style={styles.reminderTitle}>Classes are added automatically</Text>
+            <Text style={styles.reminderBody}>
+              Your coach logs classes directly from their sessions. Only add a class manually if your coach is not yet on InBetween.
+            </Text>
+            <TouchableOpacity
+              style={styles.reminderToggleRow}
+              onPress={() => setDontRemind(v => !v)}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.reminderToggleLabel}>Don't remind me again</Text>
+              <Switch
+                value={dontRemind}
+                onValueChange={setDontRemind}
+                trackColor={{ false: '#E0E0E0', true: Colors.activeLog }}
+                thumbColor="#fff"
+              />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.reminderBtn} onPress={handleReminderContinue} activeOpacity={0.85}>
+              <Text style={styles.reminderBtnText}>Add manually anyway</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setReminderVisible(false)} activeOpacity={0.7} style={{ marginTop: 10 }}>
+              <Text style={styles.reminderCancel}>Cancel</Text>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
       </Animated.View>
     </SafeAreaView>
   );
@@ -384,6 +468,7 @@ const styles = StyleSheet.create({
     paddingTop: 16,
     paddingBottom: 14,
   },
+  notifBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
   logo: { fontFamily: Fonts.monument, fontSize: 20, color: Colors.black, letterSpacing: 1 },
   profileIcon: {
     width: 34, height: 34, borderRadius: 17,
@@ -468,6 +553,37 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.jakartaMedium,
     fontSize: 11,
     color: Colors.secondary,
+    flexShrink: 1,
+  },
+  cardDateSep: {
+    color: Colors.secondary,
+  },
+  cardDateTeacher: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 11,
+    color: Colors.secondary,
+  },
+  lessonTypeBadge: {
+    borderRadius: 6,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+  },
+  lessonTypeBadgePrivate: {
+    backgroundColor: 'rgba(76,175,80,0.1)',
+  },
+  lessonTypeBadgeGroup: {
+    backgroundColor: 'rgba(87,136,230,0.1)',
+  },
+  lessonTypeBadgeText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 10,
+    letterSpacing: 0.3,
+  },
+  lessonTypeBadgeTextPrivate: {
+    color: Colors.activeLog,
+  },
+  lessonTypeBadgeTextGroup: {
+    color: '#5788E6',
   },
   noteBadges: { flexDirection: 'row', gap: 5 },
   countBadge: {
@@ -617,5 +733,87 @@ const styles = StyleSheet.create({
     height: 17,
     borderRadius: 2,
     backgroundColor: '#fff',
+  },
+
+  // ── Add class reminder modal ──────────────────────────────
+  reminderOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+  },
+  reminderSheet: {
+    width: '100%',
+    backgroundColor: '#fff',
+    borderRadius: 24,
+    padding: 24,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowOffset: { width: 0, height: 8 },
+    shadowRadius: 24,
+    elevation: 10,
+  },
+  reminderIconWrap: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: 'rgba(76,175,80,0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+  reminderTitle: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 17,
+    color: Colors.black,
+    textAlign: 'center',
+    marginBottom: 10,
+  },
+  reminderBody: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 14,
+    color: Colors.secondary,
+    textAlign: 'center',
+    lineHeight: 21,
+    marginBottom: 20,
+  },
+  reminderToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    width: '100%',
+    backgroundColor: Colors.statCardBg,
+    borderRadius: 14,
+    borderWidth: 0.5,
+    borderColor: Colors.statCardBorder,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    marginBottom: 16,
+  },
+  reminderToggleLabel: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 14,
+    color: Colors.black,
+  },
+  reminderBtn: {
+    width: '100%',
+    backgroundColor: Colors.black,
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  reminderBtnText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 14,
+    color: '#fff',
+    letterSpacing: 0.2,
+  },
+  reminderCancel: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 14,
+    color: Colors.secondary,
+    paddingVertical: 4,
   },
 });

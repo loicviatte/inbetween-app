@@ -122,6 +122,10 @@ If the coach explicitly signals progress or regression on an EXISTING focus poin
 - mention_count: how many times this was addressed across the full lesson
 - explicit_priority: true if coach used words like "most important", "above all", "focus on this", "before anything else"
 
+## CLASS SUMMARY
+For each student, write a `class_summary`: one sentence (max 20 words) summarizing what was worked on overall during this lesson. It should read naturally, like a note a student would write after class. Focus on the main themes, not individual corrections.
+Examples: "Worked mainly on hip action in Rumba and maintaining back connection throughout the Cha-cha.", "Focus on footwork timing in Quickstep and posture in Waltz."
+
 ## OTHER FOCUS POINTS
 All corrections that did not qualify as focus_points go here.
 No limit on number.
@@ -149,6 +153,7 @@ Always return this exact structure:
     {
       "student_id": string,
       "student_name": string,
+      "class_summary": string,
       "focus_points": [
         {
           "title": string,
@@ -248,6 +253,7 @@ async function processRecord(record: ClassInputRecord): Promise<void> {
     const coachName = coachRow?.name ?? 'Unknown'
 
     // Resolve student names — private (student_id) or group (class_input_students)
+    // Fallback: if no explicit student_id, treat user_id as the student
     let students: { id: string; name: string }[] = []
     if (student_id) {
       const { data: studentRow } = await supabase
@@ -266,6 +272,14 @@ async function processRecord(record: ClassInputRecord): Promise<void> {
           .map((r: any) => r.users)
           .filter(Boolean)
           .map((u: any) => ({ id: u.id, name: u.name ?? u.id }))
+      } else {
+        // Student logged their own class — user_id IS the student
+        const { data: selfRow } = await supabase
+          .from('users')
+          .select('id, name')
+          .eq('id', user_id)
+          .single()
+        if (selfRow) students = [{ id: selfRow.id, name: selfRow.name ?? selfRow.id }]
       }
     }
 
@@ -343,17 +357,133 @@ async function processRecord(record: ClassInputRecord): Promise<void> {
       })
       .eq('id', id)
 
-    // Update practice_point_1 / practice_point_2 on class_inputs (first student's top FPs)
+    // Update practice_point_1 / practice_point_2 / class_summary on class_inputs
     const aiData = parsed as any
     const firstStudent = aiData.students?.[0]
+    const updates: any = {}
     if (firstStudent?.focus_points?.length > 0) {
-      const updates: any = {}
       if (firstStudent.focus_points[0]) updates.practice_point_1 = firstStudent.focus_points[0].title
       if (firstStudent.focus_points[1]) updates.practice_point_2 = firstStudent.focus_points[1].title
+    }
+    if (firstStudent?.class_summary) {
+      updates.class_summary = firstStudent.class_summary
+    }
+    if (Object.keys(updates).length > 0) {
       await supabase.from('class_inputs').update(updates).eq('id', id)
     }
 
+    // Generate title from transcript if not already set
+    const { data: existingRow } = await supabase
+      .from('class_inputs')
+      .select('title')
+      .eq('id', id)
+      .single()
+    if (!existingRow?.title && transcript) {
+      const titleRes = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': Deno.env.get('ANTHROPIC_API_KEY')!,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5',
+          max_tokens: 20,
+          messages: [{
+            role: 'user',
+            content: `Here is a dance lesson transcript:\n\n${transcript.slice(0, 1500)}\n\nWrite a 2-5 word title summarizing what this lesson was about. Capitalize each word. Return ONLY the title, nothing else.`,
+          }],
+        }),
+      })
+      if (titleRes.ok) {
+        const titleData = await titleRes.json()
+        const generatedTitle = (titleData.content?.[0]?.text ?? '').trim().replace(/^["']|["']$/g, '')
+        if (generatedTitle) {
+          await supabase.from('class_inputs').update({ title: generatedTitle }).eq('id', id)
+          console.log(`[yoda-extract] ✓ Generated title: "${generatedTitle}" for ${id}`)
+        }
+      }
+    }
+
     console.log(`[yoda-extract] ✓ Extracted: ${id}`)
+
+    // Insert coach knowledge entries (principles, tips, metaphors, drills)
+    // Only insert entries that are genuinely new — not already covered by existing knowledge
+    const knowledge: { type: string; content: string }[] = aiData.coach?.knowledge ?? []
+    if (knowledge.length > 0) {
+      const newCandidates = knowledge.filter(k => k.type && k.content?.trim())
+
+      // Load existing knowledge for this coach
+      const { data: existingKnowledge } = await supabase
+        .from('coach_knowledge')
+        .select('type, content')
+        .eq('coach_id', user_id)
+
+      const existing = existingKnowledge ?? []
+      let toInsert = newCandidates
+
+      if (existing.length > 0) {
+        // Ask Claude Haiku to filter out entries already covered by existing knowledge
+        const dedupeRes = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': Deno.env.get('ANTHROPIC_API_KEY')!,
+            'anthropic-version': '2023-06-01',
+          },
+          body: JSON.stringify({
+            model: 'claude-haiku-4-5',
+            max_tokens: 800,
+            messages: [{
+              role: 'user',
+              content: `You are deduplicating a dance coach's knowledge base.
+
+EXISTING ENTRIES:
+${existing.map((e, i) => `${i + 1}. [${e.type}] ${e.content}`).join('\n')}
+
+NEW CANDIDATES:
+${newCandidates.map((e, i) => `${i + 1}. [${e.type}] ${e.content}`).join('\n')}
+
+Return ONLY the indices (1-based) of NEW CANDIDATES that add genuinely new information — reject if the core message or teaching idea is already expressed in the existing entries, even partially or with different wording.
+When in doubt, reject. Only keep entries that a coach would clearly want as a separate item in their knowledge base.
+If all are duplicates, return an empty array.
+Return ONLY a JSON array of numbers, e.g. [1, 3]. No explanation.`,
+            }],
+          }),
+        })
+
+        if (dedupeRes.ok) {
+          const dedupeData = await dedupeRes.json()
+          const rawText = (dedupeData.content?.[0]?.text ?? '').trim()
+          try {
+            const indices: number[] = JSON.parse(rawText)
+            toInsert = indices
+              .filter(i => i >= 1 && i <= newCandidates.length)
+              .map(i => newCandidates[i - 1])
+            console.log(`[yoda-extract] Deduplication: ${newCandidates.length} candidates → ${toInsert.length} truly new`)
+          } catch {
+            console.warn('[yoda-extract] Failed to parse deduplication response, inserting all candidates')
+          }
+        }
+      }
+
+      if (toInsert.length > 0) {
+        const knowledgeRows = toInsert.map(k => ({
+          coach_id: user_id,
+          source_class_input_id: id,
+          type: k.type,
+          content: k.content.trim(),
+        }))
+        const { error: knowledgeError } = await supabase
+          .from('coach_knowledge')
+          .insert(knowledgeRows)
+        if (knowledgeError) {
+          console.error(`[yoda-extract] coach_knowledge insert error for ${id}:`, knowledgeError.message)
+        } else {
+          console.log(`[yoda-extract] ✓ Inserted ${knowledgeRows.length} knowledge entries for coach ${user_id}`)
+        }
+      }
+    }
 
     // Invoke yoda-score to insert focus points and seed scores
     const { error: scoreError } = await supabase.functions.invoke('yoda-score', {
