@@ -31,5 +31,16 @@ jobs:
       - name: Build iOS locally (no cloud credits)
         run: eas build --platform ios --profile production --non-interactive --local --output ${{ github.workspace }}/build.ipa
 
-      - name: Submit to TestFlight
-        run: eas submit --platform ios --path ${{ github.workspace }}/build.ipa --non-interactive
+      - name: Decode App Store Connect API Key
+        run: |
+          mkdir -p ~/.appstoreconnect/private_keys
+          echo "${{ secrets.ASC_API_KEY_P8 }}" | base64 --decode > ~/.appstoreconnect/private_keys/AuthKey_${{ secrets.ASC_KEY_ID }}.p8
+
+      - name: Upload to TestFlight via altool
+        run: |
+          xcrun altool --upload-app \
+            --type ios \
+            --file ${{ github.workspace }}/build.ipa \
+            --apiKey ${{ secrets.ASC_KEY_ID }} \
+            --apiIssuer ${{ secrets.ASC_ISSUER_ID }} \
+            --verbose
