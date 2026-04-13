@@ -17,6 +17,7 @@ import {
   PanResponder,
   LayoutAnimation,
   UIManager,
+  Alert,
 } from 'react-native';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -24,6 +25,7 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
 }
 import Slider from '@react-native-community/slider';
 import { Audio } from 'expo-av';
+import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Colors, Fonts, Spacing } from '../theme';
@@ -36,6 +38,28 @@ import {
   clearActiveSession,
   getSessionTimeLeft,
 } from '../storage/activeSession';
+
+const OPENAI_API_KEY = process.env.EXPO_PUBLIC_OPENAI_API_KEY;
+
+async function transcribeAudio(uri) {
+  if (!OPENAI_API_KEY || OPENAI_API_KEY.startsWith('sk-ant-')) {
+    throw new Error('NO_OPENAI_KEY');
+  }
+  const formData = new FormData();
+  formData.append('file', { uri, type: 'audio/m4a', name: 'recording.m4a' });
+  formData.append('model', 'whisper-1');
+  const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
+    body: formData,
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`Whisper ${res.status}: ${body}`);
+  }
+  const data = await res.json();
+  return data.text || '';
+}
 
 const DURATIONS = [0.17, 5, 10, 15, 20, 25, 30, 45, 60, 90]; // 0.17 ≈ 10s for testing
 const TICK_SOUND = require('../../assets/metronome_tick.wav');
@@ -728,6 +752,9 @@ export default function FocusSessionScreen({ route, navigation }) {
   const [aiSending, setAiSending] = useState(false);
   const [aiContext, setAiContext] = useState(null);
   const aiScrollRef = useRef(null);
+  const [aiRecording, setAiRecording] = useState(false);
+  const [aiTranscribing, setAiTranscribing] = useState(false);
+  const aiRecordingRef = useRef(null);
 
   function handleBeat() {
     beatAnim.setValue(1);
@@ -904,7 +931,7 @@ export default function FocusSessionScreen({ route, navigation }) {
         }).join('\n')
       : 'No focus points recorded.';
 
-    const classLines = classInputs.slice(0, 15).map(inp => {
+    const classLines = classInputs.slice(0, 8).map(inp => {
       const date = new Date(inp.created_at).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
       const lines = [`--- Class: ${inp.title ?? date} (${date}) ---`];
       if (inp.class_summary) lines.push(`Summary: ${inp.class_summary}`);
@@ -926,7 +953,10 @@ export default function FocusSessionScreen({ route, navigation }) {
           }
         } catch {}
       }
-      if (inp.transcript) lines.push(`Transcript:\n${inp.transcript}`);
+      if (inp.transcript) {
+        const t = inp.transcript.length > 1200 ? inp.transcript.slice(0, 1200) + '…' : inp.transcript;
+        lines.push(`Transcript:\n${t}`);
+      }
       return lines.join('\n');
     }).join('\n\n') || 'No classes recorded.';
 
@@ -985,13 +1015,14 @@ ${knowledgeBlock}` : ''}
 ════════════════════════════════════════
 RULES
 ════════════════════════════════════════
-1. Answer from the student's own data first.
-2. If no direct answer exists there, use the coach knowledge base to provide an answer in ${coachName ? `${coachName}'s` : 'the coach\'s'} style.
-3. NEVER mention other students or reveal any information about them.
-4. Speak as the coach's assistant — not as the coach.
-5. If you truly cannot answer from any of the above data, say: "I don't have that information in your data."
-6. Be concise (2-3 sentences unless more is asked).
-7. Plain text only — no markdown, no **, no bullet symbols, no headers.`;
+1. The student is currently in a live training session focused on the CURRENT SESSION FOCUS POINT above. When they ask "what do I need to do?", "what should I work on?", "what's my focus?" or similar, answer specifically about that focus point — explain what it means, how to practice it, and what to pay attention to.
+2. Answer from the student's own data first.
+3. If no direct answer exists there, use the coach knowledge base to provide an answer in ${coachName ? `${coachName}'s` : 'the coach\'s'} style.
+4. NEVER mention other students or reveal any information about them.
+5. Speak as the coach's assistant — not as the coach.
+6. If you truly cannot answer from any of the above data, say: "I don't have that information in your data."
+7. Be concise (2-3 sentences unless more is asked).
+8. Plain text only — no markdown, no **, no bullet symbols, no headers.`;
   }
 
   async function handleAiSend() {
@@ -1026,6 +1057,44 @@ RULES
       setAiMessages(prev => [...prev, { role: 'assistant', content: 'Sorry, an error occurred. Please try again.' }]);
     } finally {
       setAiSending(false);
+    }
+  }
+
+  async function startAiRecording() {
+    try {
+      const { granted } = await Audio.requestPermissionsAsync();
+      if (!granted) {
+        Alert.alert('Microphone permission denied', 'Go to Settings → InBetween → allow Microphone.');
+        return;
+      }
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+      const { recording: rec } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+      aiRecordingRef.current = rec;
+      setAiRecording(true);
+    } catch (e) {
+      Alert.alert('Recording error', e.message);
+    }
+  }
+
+  async function stopAiRecording() {
+    if (!aiRecordingRef.current) return;
+    setAiRecording(false);
+    setAiTranscribing(true);
+    try {
+      await aiRecordingRef.current.stopAndUnloadAsync();
+      const uri = aiRecordingRef.current.getURI();
+      aiRecordingRef.current = null;
+      if (!uri) throw new Error('No audio file recorded');
+      const text = await transcribeAudio(uri);
+      if (text) setAiQuestion(prev => (prev ? prev + ' ' : '') + text);
+    } catch (e) {
+      if (e.message === 'NO_OPENAI_KEY') {
+        Alert.alert('OpenAI key missing', 'Add EXPO_PUBLIC_OPENAI_API_KEY to your .env and restart.');
+      } else {
+        Alert.alert('Transcription failed', e.message);
+      }
+    } finally {
+      setAiTranscribing(false);
     }
   }
 
@@ -1165,6 +1234,17 @@ RULES
                 onSubmitEditing={handleAiSend}
                 blurOnSubmit
               />
+              <TouchableOpacity
+                onPress={aiRecording ? stopAiRecording : startAiRecording}
+                disabled={aiTranscribing}
+                style={[styles.aiCardSendBtn, aiRecording && { backgroundColor: 'rgba(232,64,64,0.2)' }]}
+                activeOpacity={0.7}
+              >
+                {aiTranscribing
+                  ? <ActivityIndicator size="small" color="rgba(255,255,255,0.5)" />
+                  : <Ionicons name={aiRecording ? 'stop-circle' : 'mic'} size={16} color={aiRecording ? '#E84040' : 'rgba(255,255,255,0.6)'} />
+                }
+              </TouchableOpacity>
               <TouchableOpacity onPress={handleAiSend} disabled={!aiQuestion.trim() || aiSending} style={[styles.aiCardSendBtn, (!aiQuestion.trim() || aiSending) && { opacity: 0.35 }]} activeOpacity={0.7}>
                 <Text style={styles.aiCardSendIcon}>↑</Text>
               </TouchableOpacity>
