@@ -31,6 +31,13 @@ jobs:
       - name: Build iOS locally (no cloud credits)
         run: eas build --platform ios --profile production --non-interactive --local --output ${{ github.workspace }}/build.ipa
 
+      - name: Save .ipa as GitHub artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ github.sha }}
+          path: ${{ github.workspace }}/build.ipa
+          retention-days: 7
+
       - name: Decode App Store Connect API Key
         run: |
           mkdir -p ~/.appstoreconnect/private_keys
