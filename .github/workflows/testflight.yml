@@ -3,12 +3,12 @@ name: Build & Submit to TestFlight
 on:
   push:
     branches: [main]
-  workflow_dispatch: # Allow manual trigger from GitHub UI
+  workflow_dispatch:
 
 jobs:
   build:
-    name: EAS Build (iOS Production)
-    runs-on: ubuntu-latest
+    name: Local iOS Build & TestFlight Submit
+    runs-on: macos-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -28,5 +28,8 @@ jobs:
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
 
-      - name: Build & submit to TestFlight
-        run: eas build --platform ios --profile production --non-interactive --auto-submit
+      - name: Build iOS locally (no cloud credits)
+        run: eas build --platform ios --profile production --non-interactive --local --output ${{ github.workspace }}/build.ipa
+
+      - name: Submit to TestFlight
+        run: eas submit --platform ios --path ${{ github.workspace }}/build.ipa --non-interactive
