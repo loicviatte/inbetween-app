@@ -120,7 +120,7 @@ function ClassItem({ item, onPress }) {
   const hasTwo = item.practice_point_2 && item.ai_secondary_focus;
   const teacherName = item.teacher_name || item._teacher_fallback || null;
   const lessonType = item.lesson_type || null;
-  const isGroup = lessonType === 'group';
+  const isGroup = lessonType === 'group' || lessonType === 'public';
   const countdown = item._pendingDeadline ? formatCountdown(item._pendingDeadline) : null;
   const isAnalysing = !item._pendingDeadline && (item.status === 'processing' || item.status === 'extracted' || item.status === 'pending');
   const showPendingBadge = !!countdown || isAnalysing || !!item._hasPendingFPs;
@@ -151,7 +151,7 @@ function ClassItem({ item, onPress }) {
       onPress={handlePress}
       activeOpacity={0.75}
     >
-      <View style={[styles.cardAccent, { backgroundColor: Colors.activeLog }]} />
+      <View style={[styles.cardAccent, { backgroundColor: item._hasPendingFPs ? Colors.orange : Colors.activeLog }]} />
       <View style={styles.cardBody}>
         <View style={styles.cardHeader}>
           <Text style={styles.cardDate}>
@@ -621,7 +621,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(76,175,80,0.1)',
   },
   lessonTypeBadgeGroup: {
-    backgroundColor: 'rgba(87,136,230,0.1)',
+    backgroundColor: 'rgba(255,200,0,0.15)',
   },
   lessonTypeBadgeText: {
     fontFamily: Fonts.jakartaExtraBold,
@@ -632,7 +632,7 @@ const styles = StyleSheet.create({
     color: Colors.activeLog,
   },
   lessonTypeBadgeTextGroup: {
-    color: '#5788E6',
+    color: '#B8860B',
   },
   noteBadges: { flexDirection: 'row', gap: 5 },
   countBadge: {

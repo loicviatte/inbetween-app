@@ -4,13 +4,16 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Colors, Fonts, Spacing } from '../theme';
 import { useProfile } from '../context/ProfileContext';
+import { getNotifications } from '../storage/notificationsStorage';
+import { locallyRespondedAttendance } from '../storage/attendanceState';
 
 export default function TabHeader({ navigation, onProfilePress, editMode = false }) {
   const { avatarUri, initials: contextInitials } = useProfile();
 
-  // Fallback to AsyncStorage on first load before ProfileScreen sets the context
   const [cachedPhoto, setCachedPhoto] = useState(null);
   const [cachedInitials, setCachedInitials] = useState('');
+  const [unreadCount, setUnreadCount] = useState(0);
+
   useEffect(() => {
     async function load() {
       const [photo, name] = await Promise.all([
@@ -24,6 +27,41 @@ export default function TabHeader({ navigation, onProfilePress, editMode = false
     }
     load();
   }, []);
+
+  useEffect(() => {
+    async function loadUnread() {
+      const notifs = await getNotifications();
+
+      // Load DB-persisted attendance responses to avoid false positives after app restart
+      let respondedIds = new Set();
+      try {
+        const { supabase: sb } = await import('../services/supabase/client');
+        const { data: { session } } = await sb.auth.getSession();
+        if (session?.user?.id) {
+          const { data } = await sb
+            .from('attendance_responses')
+            .select('class_input_id')
+            .eq('student_id', session.user.id);
+          respondedIds = new Set((data ?? []).map(r => r.class_input_id));
+        }
+      } catch {}
+
+      const count = notifs.filter(n => {
+        if (n.type === 'attendance_check' || n.type === 'group_class_attendance') {
+          // Only count if not yet responded (check both local Set and DB)
+          return !respondedIds.has(n.data?.class_input_id) &&
+                 !locallyRespondedAttendance.has(n.data?.class_input_id);
+        }
+        if (n.type === 'merge_request_student') return true;
+        if (n.type === 'name_match_confirm') return true;
+        return !n.read;
+      }).length;
+      setUnreadCount(count);
+    }
+    loadUnread();
+    const unsub = navigation?.addListener?.('focus', loadUnread);
+    return () => unsub?.();
+  }, [navigation]);
 
   const photoUri = avatarUri || cachedPhoto;
   const initials = contextInitials || cachedInitials || 'ME';
@@ -44,6 +82,11 @@ export default function TabHeader({ navigation, onProfilePress, editMode = false
         activeOpacity={0.7}
       >
         <Ionicons name="notifications-outline" size={24} color={Colors.black} />
+        {unreadCount > 0 && (
+          <View style={styles.notifBadge}>
+            <Text style={styles.notifBadgeText}>{unreadCount > 9 ? '9+' : unreadCount}</Text>
+          </View>
+        )}
       </TouchableOpacity>
 
       {editMode ? (
@@ -77,6 +120,23 @@ const styles = StyleSheet.create({
     height: 36,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  notifBadge: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    backgroundColor: Colors.orange,
+    borderRadius: 8,
+    minWidth: 16,
+    height: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 3,
+  },
+  notifBadgeText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 9,
+    color: '#fff',
   },
   avatar: {
     width: 36,

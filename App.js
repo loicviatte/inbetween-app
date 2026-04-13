@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { View, Text } from 'react-native';
-import { NavigationContainer, DefaultTheme } from '@react-navigation/native';
+import { NavigationContainer, DefaultTheme, createNavigationContainerRef } from '@react-navigation/native';
+import * as Notifications from 'expo-notifications';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
@@ -22,6 +23,8 @@ import {
 import { supabase } from './src/services/supabase/client';
 import { getOrCreateInviteCode } from './src/storage/coachStorage';
 import { ProfileProvider } from './src/context/ProfileContext';
+
+const navigationRef = createNavigationContainerRef();
 
 // Student screens
 import HomeScreen from './src/screens/HomeScreen';
@@ -45,6 +48,7 @@ import StudentDetailScreen from './src/screens/coach/StudentDetailScreen';
 import SessionsFeedScreen from './src/screens/coach/SessionsFeedScreen';
 import CoachProfileScreen from './src/screens/coach/CoachProfileScreen';
 import CoachSessionDetailScreen from './src/screens/coach/CoachSessionDetailScreen';
+import NameMatchConfirmScreen from './src/screens/coach/NameMatchConfirmScreen';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -157,6 +161,7 @@ function CoachAppNavigator() {
         options={{ animation: 'slide_from_left' }}
       />
       <CoachStack.Screen name="FocusValidation" component={FocusValidationScreen} options={{ animation: 'slide_from_right' }} />
+      <CoachStack.Screen name="NameMatchConfirm" component={NameMatchConfirmScreen} options={{ animation: 'slide_from_bottom', presentation: 'modal' }} />
     </CoachStack.Navigator>
   );
 }
@@ -227,6 +232,25 @@ export default function App() {
     }
   }
 
+  // Navigate to Notifications when a push notification is tapped
+  function handleNotificationTap() {
+    if (navigationRef.isReady()) {
+      navigationRef.navigate('Notifications');
+    }
+  }
+
+  useEffect(() => {
+    // App in background — tapped notification
+    const sub = Notifications.addNotificationResponseReceivedListener(() => {
+      handleNotificationTap();
+    });
+    // App killed — launched from notification
+    Notifications.getLastNotificationResponseAsync().then(response => {
+      if (response) handleNotificationTap();
+    });
+    return () => sub.remove();
+  }, []);
+
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session: s } }) => {
       setSession(s ?? null);
@@ -264,7 +288,7 @@ export default function App() {
   return (
     <ProfileProvider>
       <SafeAreaProvider>
-        <NavigationContainer theme={AppTheme}>
+        <NavigationContainer theme={AppTheme} ref={navigationRef}>
           <StatusBar style="dark" />
           {session
             ? (userEmail === TRAINER_EMAIL

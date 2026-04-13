@@ -111,24 +111,12 @@ async function _getClassInputs() {
 }
 export const getClassInputs = cached('classInputs', _getClassInputs);
 
-export async function respondToAttendance(classInputId, response) {
-  const userId = await getUserId();
-  const { error } = await supabase
-    .from('class_input_students')
-    .update({ attendance: response, responded_at: new Date().toISOString() })
-    .eq('class_input_id', classInputId)
-    .eq('student_id', userId);
+export async function respondToAttendance(classInputId, attended) {
+  const { data, error } = await supabase.functions.invoke('attendance-response', {
+    body: { class_input_id: classInputId, attended: attended === 'yes' || attended === true },
+  });
+  console.log('[respondToAttendance] result:', data, error);
   if (error) throw error;
-
-  if (response === 'no') {
-    // Remove pending or active FPs from this class for this student
-    await supabase
-      .from('focus_points')
-      .update({ is_deleted: true, status: 'past' })
-      .eq('source_class_input_id', classInputId)
-      .eq('user_id', userId)
-      .in('status', ['pending_coach', 'active']);
-  }
 }
 
 export async function saveClassInput(input) {

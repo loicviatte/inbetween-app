@@ -60,8 +60,8 @@ function FocusCard({ focus, onEdit }) {
         ? <Text style={fc.sub} numberOfLines={1}>{focus.subtitle}</Text>
         : <Text style={fc.sub}>{practiceLabel(focus.weekCount)}</Text>
       }
-      {!!focus.coachNote && (
-        <Text style={fc.notePreview} numberOfLines={1}>{focus.coachNote}</Text>
+      {!!focus.drill && (
+        <Text style={fc.notePreview} numberOfLines={1}>🔁 {focus.drill}</Text>
       )}
     </TouchableOpacity>
   );
@@ -72,21 +72,21 @@ function FocusCard({ focus, onEdit }) {
 function FocusEditSheet({ focus, visible, onClose, onSave }) {
   const [name, setName] = useState('');
   const [subtitle, setSubtitle] = useState('');
-  const [note, setNote] = useState('');
+  const [drill, setDrill] = useState('');
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (visible && focus) {
       setName(focus.name || '');
       setSubtitle(focus.subtitle || '');
-      setNote(focus.coachNote || '');
+      setDrill(focus.drill || '');
     }
   }, [visible, focus]);
 
   async function handleSave() {
     if (!name.trim()) return;
     setSaving(true);
-    await onSave(focus.id, { name: name.trim(), subtitle: subtitle.trim() || null, coach_note: note.trim() || null });
+    await onSave(focus.id, { name: name.trim(), subtitle: subtitle.trim() || null, drill: drill.trim() || null });
     setSaving(false);
     onClose();
   }
@@ -121,12 +121,12 @@ function FocusEditSheet({ focus, visible, onClose, onSave }) {
               maxLength={120}
             />
 
-            <Text style={es.label}>COACH NOTE</Text>
+            <Text style={es.label}>DRILL</Text>
             <TextInput
               style={[es.input, es.inputMulti]}
-              value={note}
-              onChangeText={setNote}
-              placeholder="Add a tip or instruction for your student…"
+              value={drill}
+              onChangeText={setDrill}
+              placeholder="Describe the drill or exercise to practice…"
               placeholderTextColor="rgba(13,13,18,0.3)"
               multiline
               numberOfLines={3}
@@ -325,7 +325,7 @@ export default function StudentDetailScreen({ route, navigation }) {
   async function handleSaveFocus(focusId, updates) {
     await updateFocusPoint(focusId, updates);
     setFocusPoints(prev => prev.map(fp =>
-      fp.id === focusId ? { ...fp, name: updates.name, subtitle: updates.subtitle || null, coachNote: updates.coach_note || null } : fp
+      fp.id === focusId ? { ...fp, name: updates.name, subtitle: updates.subtitle || null, drill: updates.drill || null } : fp
     ));
   }
 
