@@ -177,7 +177,7 @@ export async function getStudentFocusPoints(studentId) {
   // Get active focus points (pending_coach removed — FPs go direct to student)
   const { data: focusPoints } = await supabase
     .from('focus_points')
-    .select('id, name, subtitle, coach_note, created_at, status, tier')
+    .select('id, name, subtitle, drill, created_at, status, tier')
     .eq('user_id', studentId)
     .eq('is_deleted', false)
     .eq('is_other', false)
@@ -204,7 +204,7 @@ export async function getStudentFocusPoints(studentId) {
     id: f.id,
     name: f.name,
     subtitle: f.subtitle || null,
-    coachNote: f.coach_note || null,
+    drill: f.drill || null,
     weekCount: weekCounts[f.id] || 0,
     status: f.status,
     tier: f.tier || null,

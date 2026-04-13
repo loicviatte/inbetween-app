@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Colors, Fonts, Spacing } from '../theme';
 import { respondToAttendance } from '../storage/storage';
+import { locallyRespondedAttendance } from '../storage/attendanceState';
 
 export default function AttendanceConfirmScreen({ navigation, route }) {
   const { classInputId, coachName, classDate } = route.params ?? {};
@@ -15,10 +16,19 @@ export default function AttendanceConfirmScreen({ navigation, route }) {
     setAnswer(response);
     try {
       await respondToAttendance(classInputId, response);
+      locallyRespondedAttendance.add(classInputId);
       setDone(true);
       setTimeout(() => navigation.goBack(), 1200);
     } catch (e) {
-      console.error(e);
+      console.error('[AttendanceConfirm] error:', e);
+      let msg = String(e?.message ?? e);
+      try {
+        if (e?.context) {
+          const text = await e.context.clone().text();
+          msg += `\n\n${e.context.status}: ${text}`;
+        }
+      } catch (_) {}
+      Alert.alert('Error', msg);
       setResponding(false);
     }
   }

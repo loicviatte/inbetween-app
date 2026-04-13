@@ -1,9 +1,10 @@
 import { supabase } from '../services/supabase/client';
-import { getUserId } from './storage';
 
 export async function getNotifications() {
   try {
-    const userId = await getUserId();
+    const { data: { session } } = await supabase.auth.getSession();
+    const userId = session?.user?.id;
+    if (!userId) return [];
     const { data, error } = await supabase
       .from('notifications')
       .select('*')
@@ -17,9 +18,24 @@ export async function getNotifications() {
   }
 }
 
+export async function deleteNotification(id) {
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const userId = session?.user?.id;
+    if (!userId) return;
+    await supabase
+      .from('notifications')
+      .delete()
+      .eq('id', id)
+      .eq('user_id', userId);
+  } catch {}
+}
+
 export async function markAllNotificationsRead() {
   try {
-    const userId = await getUserId();
+    const { data: { session } } = await supabase.auth.getSession();
+    const userId = session?.user?.id;
+    if (!userId) return;
     await supabase
       .from('notifications')
       .update({ read: true })

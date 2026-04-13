@@ -21,6 +21,7 @@ import {
   getPendingFocusPointsCount,
 } from '../../storage/coachStorage';
 import { getUser } from '../../storage/storage';
+import { getNotifications } from '../../storage/notificationsStorage';
 
 function formatLastActive(dateStr) {
   if (!dateStr) return 'Never';
@@ -124,6 +125,7 @@ export default function CoachHomeScreen({ navigation }) {
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState(null);
   const [pendingCount, setPendingCount] = useState(0);
+  const [unreadCount, setUnreadCount] = useState(0);
 
   useFocusEffect(
     useCallback(() => {
@@ -132,8 +134,19 @@ export default function CoachHomeScreen({ navigation }) {
         setLoading(true);
         autoPublishExpiredFPs().catch(() => {}); // fire-and-forget
         try {
-          const [s, r, u, pc] = await Promise.all([getMyStudents(), getPendingCoachRequests(), getUser(), getPendingFocusPointsCount()]);
-          if (active) { setStudents(s); setRequests(r); setUser(u); setPendingCount(pc); }
+          const [s, r, u, pc, notifs] = await Promise.all([
+            getMyStudents(), getPendingCoachRequests(), getUser(),
+            getPendingFocusPointsCount(), getNotifications(),
+          ]);
+          if (active) {
+            setStudents(s); setRequests(r); setUser(u); setPendingCount(pc);
+            const count = notifs.filter(n =>
+              !n.read ||
+              n.type === 'merge_request_student' ||
+              n.type === 'name_match_confirm'
+            ).length;
+            setUnreadCount(count);
+          }
         } catch {}
         if (active) setLoading(false);
       }
@@ -174,6 +187,11 @@ export default function CoachHomeScreen({ navigation }) {
                   activeOpacity={0.7}
                 >
                   <Ionicons name="notifications-outline" size={24} color={Colors.black} />
+                  {unreadCount > 0 && (
+                    <View style={styles.notifBadge}>
+                      <Text style={styles.notifBadgeText}>{unreadCount > 9 ? '9+' : unreadCount}</Text>
+                    </View>
+                  )}
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={styles.avatar}
@@ -293,6 +311,23 @@ const styles = StyleSheet.create({
     height: 36,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  notifBadge: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    backgroundColor: Colors.orange,
+    borderRadius: 8,
+    minWidth: 16,
+    height: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 3,
+  },
+  notifBadgeText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 9,
+    color: '#fff',
   },
   avatar: {
     width: 36,
