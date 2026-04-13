@@ -393,8 +393,8 @@ async function processStudentFocusPoints(
     if (otherError) console.error('[yoda-score] Error inserting other_focus_points:', otherError.message)
   }
 
-  // Notify coach that new focus points were added for this student
-  const newFPCount = (studentJson.focus_points ?? []).filter((fp: any) => !fp.merge_action).length
+  // Notify coach only for focus points that were actually created (pending_coach), not merges
+  const newFPCount = decisions.filter((d: any) => d.action === 'create').length
   if (newFPCount > 0 && coachId) {
     await supabase.from('notifications').insert({
       user_id: coachId,

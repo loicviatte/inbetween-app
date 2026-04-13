@@ -30,10 +30,10 @@ interface WebhookPayload {
 const SYSTEM_PROMPT = `You are Yoda Extract, a specialized AI that processes coaching lesson transcripts. Your sole job is to output a single structured JSON object — nothing else. No explanation, no preamble, no markdown.
 
 ## INPUTS YOU RECEIVE
-- lesson_type: "private" or "public"
+- lesson_type: "private" | "public"
 - coach_name: string
 - coach_speaker_id: string (e.g. "A")
-- students: array of { id, name }
+- students: array of { id, name } — for public lessons, only include students explicitly named in the transcript OR confirmed present
 - existing_focus_points: array of { id, name, subtitle, tier } — focus points already in the system for each student
 - transcript: raw lesson transcript with paragraph timestamps in format [MM:SS - MM:SS] Speaker X: ...
 
@@ -49,11 +49,18 @@ NOT a focus point:
 - Vague observations without actionable direction ("you seem tired today")
 - Off-topic conversation unrelated to the lesson
 
-## ASSIGNMENT RULES
-- Private lesson → assign all focus points to the student they are directed at
-- Public lesson → only assign a focus point to a student if their name is explicitly mentioned, OR if the coach uses directed language like "work on this for next class" / "you need to practice this"
-- General corrections (no student named) → coach_knowledge only, no focus point created
-- If you cannot confidently assign a correction to a specific student, do not create a focus point
+## LESSON TYPE RULES
+
+### private
+- All focus points assigned to the single student
+- All corrections are relevant
+
+### public
+- Two categories of focus points: shared and individual
+- SHARED: a theme the coach returns to multiple times, addressed to the group as a whole, with no specific student named. Minimum 2 mentions to qualify. Maximum 3 shared focus points per lesson.
+- INDIVIDUAL: a correction explicitly directed at a named student. Extract for every student named in the transcript, even if they are not in the input students[]. Use extracted_name = the name as it appears in the transcript, and student_id = null. Only set student_id if the student is in the input students[].
+- Coach signals during live practice (e.g. during a final run-through) → LOW CONFIDENCE. Do not link to a concept unless the same concept was explicitly taught earlier in the same lesson AND the coach uses the student's name in the same paragraph.
+- General corrections with no student named → shared_focus_points or coach_knowledge only, never individual focus points
 
 ## SELECTING FOCUS POINTS
 Extract all corrections first. Then select the most important ones as focus_points based on these criteria, in order of weight:
@@ -64,12 +71,14 @@ Extract all corrections first. Then select the most important ones as focus_poin
 
 Rules:
 - Minimum 1, maximum 3 focus points per student
+- Maximum 3 shared focus points for public lessons
 - Only include what is genuinely important — do not force 3 if only 1 or 2 qualify
 - All remaining corrections go into other_focus_points
+- If an individual focus point is the same concept as a shared focus point → do not duplicate. Instead, only set coach_signal if applicable on the shared focus point for that student.
 
 ## TIER
 Each focus point must have a tier:
-- "critical" — the most important focus point in this lesson (max 1 per student)
+- "critical" — the most important focus point in this lesson (max 1 per student AND max 1 among shared_focus_points)
 - "important" — significant but secondary
 - "supporting" — worth tracking but lower priority
 
@@ -85,6 +94,7 @@ If the coach explicitly signals progress or regression on an EXISTING focus poin
 - Positive: "much better", "you've really improved on this", "this is looking good now" → coach_signal = "positive"
 - Negative: "still struggling with", "this is getting worse", "we really need to fix this" → coach_signal = "negative"
 - Only set this for existing focus points (include existing_focus_point_id alongside it)
+- For public lessons: only set coach_signal if the student is named explicitly in the same paragraph as the signal
 - Omit the field or set null if no explicit signal
 
 ## FOR EACH FOCUS POINT
@@ -123,8 +133,8 @@ If the coach explicitly signals progress or regression on an EXISTING focus poin
 - explicit_priority: true if coach used words like "most important", "above all", "focus on this", "before anything else"
 
 ## CLASS SUMMARY
-For each student, write a "class_summary": one sentence (max 20 words) summarizing what was worked on overall during this lesson. It should read naturally, like a note a student would write after class. Focus on the main themes, not individual corrections.
-Examples: "Worked mainly on hip action in Rumba and maintaining back connection throughout the Cha-cha.", "Focus on footwork timing in Quickstep and posture in Waltz."
+For each student, write a "class_summary": one sentence (max 20 words) summarizing what was worked on overall during this lesson.
+For public lessons, also write a "shared_class_summary": one sentence (max 20 words) summarizing the main themes addressed to the group.
 
 ## OTHER FOCUS POINTS
 All corrections that did not qualify as focus_points go here.
@@ -149,9 +159,24 @@ Each entry:
 Always return this exact structure:
 
 {
+  "shared_focus_points": [
+    {
+      "title": string,
+      "subtitle": string,
+      "context": string,
+      "dance": [string],
+      "drill": string | null,
+      "timestamp": "MM:SS",
+      "mention_count": number,
+      "explicit_priority": boolean,
+      "tier": "critical" | "important" | "supporting"
+    }
+  ],
+  "shared_class_summary": string | null,
   "students": [
     {
-      "student_id": string,
+      "student_id": string | null,
+      "extracted_name": string | null,
       "student_name": string,
       "class_summary": string,
       "focus_points": [
@@ -183,6 +208,7 @@ Always return this exact structure:
     "coach_name": string,
     "lesson_type": "private" | "public",
     "total_students_in_class": number,
+    "shared_class_summary": string | null,
     "knowledge": [
       {
         "type": string,
@@ -213,6 +239,127 @@ Deno.serve(async (req: Request) => {
   })
 })
 
+// ─── Shared focus points (group class) ───────────────────────────────────────
+
+const STARTING_SCORES: Record<string, number> = { critical: 10, important: 7, supporting: 5 }
+
+async function insertPublicFocusPoints(
+  supabase: ReturnType<typeof createClient>,
+  classInputId: string,
+  aiData: any,
+): Promise<void> {
+  const now = new Date().toISOString()
+
+  // ── 1. Shared focus points (addressed to the whole group) ─────────────────
+  const sharedFPs: any[] = aiData.shared_focus_points ?? []
+
+  // Save shared_class_summary
+  const sharedSummary = aiData.shared_class_summary ?? aiData.coach?.shared_class_summary ?? null
+  if (sharedSummary) {
+    await supabase.from('class_inputs').update({ shared_class_summary: sharedSummary }).eq('id', classInputId)
+  }
+
+  if (sharedFPs.length > 0) {
+    const sharedRows = sharedFPs.map((fp: any) => ({
+      user_id: null,
+      is_shared: true,
+      group_fp: true,
+      source_class_input_id: classInputId,
+      class_input_id: classInputId,
+      name: fp.title,
+      normalized_name: (fp.title ?? '').toLowerCase().trim(),
+      subtitle: fp.subtitle ?? null,
+      context: fp.context ?? null,
+      dance: fp.dance ?? [],
+      drill: fp.drill ?? null,
+      tier: fp.tier ?? 'supporting',
+      base_score: STARTING_SCORES[fp.tier ?? 'supporting'] ?? 5,
+      mention_count: fp.mention_count ?? 0,
+      explicit_priority: fp.explicit_priority ?? false,
+      first_timestamp: fp.timestamp ?? null,
+      last_mentioned_at: now,
+      status: 'active',
+      count: 0,
+      is_archived: false,
+      is_deleted: false,
+      is_other: false,
+    }))
+    const { error } = await supabase.from('focus_points').insert(sharedRows)
+    if (error) console.error('[yoda-extract] Failed to insert shared FPs:', error.message)
+    else console.log(`[yoda-extract] ✓ Inserted ${sharedRows.length} shared FPs for class ${classInputId}`)
+  }
+
+  // ── 2. Individual student focus points (named in transcript) ─────────────
+  const individualRows: any[] = []
+  for (const student of aiData.students ?? []) {
+    const extractedName: string = (student.student_name ?? '').trim()
+
+    // Main focus_points for this student
+    for (const fp of student.focus_points ?? []) {
+      individualRows.push({
+        user_id: null,
+        is_shared: false,
+        group_fp: true,
+        extracted_name: extractedName || null,
+        source_class_input_id: classInputId,
+        class_input_id: classInputId,
+        name: fp.title,
+        normalized_name: (fp.title ?? '').toLowerCase().trim(),
+        subtitle: fp.subtitle ?? null,
+        context: fp.context ?? null,
+        dance: fp.dance ?? [],
+        drill: fp.drill ?? null,
+        tier: fp.tier ?? 'supporting',
+        base_score: STARTING_SCORES[fp.tier ?? 'supporting'] ?? 5,
+        mention_count: fp.mention_count ?? 0,
+        explicit_priority: fp.explicit_priority ?? false,
+        first_timestamp: fp.timestamp ?? null,
+        last_mentioned_at: now,
+        status: 'active',
+        count: 0,
+        is_archived: false,
+        is_deleted: false,
+        is_other: false,
+      })
+    }
+
+    // other_focus_points for this student — also insert so attendance-response can assign them
+    for (const fp of student.other_focus_points ?? []) {
+      individualRows.push({
+        user_id: null,
+        is_shared: false,
+        group_fp: true,
+        extracted_name: extractedName || null,
+        source_class_input_id: classInputId,
+        class_input_id: classInputId,
+        name: fp.title,
+        normalized_name: (fp.title ?? '').toLowerCase().trim(),
+        subtitle: fp.subtitle ?? null,
+        context: fp.context ?? null,
+        dance: fp.dance ?? [],
+        drill: fp.drill ?? null,
+        tier: fp.tier ?? 'supporting',
+        base_score: STARTING_SCORES[fp.tier ?? 'supporting'] ?? 5,
+        mention_count: fp.mention_count ?? 0,
+        explicit_priority: fp.explicit_priority ?? false,
+        first_timestamp: fp.timestamp ?? null,
+        last_mentioned_at: now,
+        status: 'active',
+        count: 0,
+        is_archived: false,
+        is_deleted: false,
+        is_other: true,
+      })
+    }
+  }
+
+  if (individualRows.length > 0) {
+    const { error } = await supabase.from('focus_points').insert(individualRows)
+    if (error) console.error('[yoda-extract] Failed to insert individual FPs:', error.message)
+    else console.log(`[yoda-extract] ✓ Inserted ${individualRows.length} individual FPs (unassigned) for class ${classInputId}`)
+  }
+}
+
 // ─── Group class attendance notification ──────────────────────────────────────
 
 async function notifyGroupClassAttendance(
@@ -232,25 +379,17 @@ async function notifyGroupClassAttendance(
   const studentIds: string[] = (requests ?? []).map((r: any) => r.student_id)
   if (studentIds.length === 0) return
 
-  // Insert class_input_students rows for attendance tracking
-  const cisRows = studentIds.map((sid: string) => ({
-    class_input_id: classInputId,
-    student_id: sid,
-    attendance: 'pending',
-  }))
-  await supabase.from('class_input_students').upsert(cisRows, { onConflict: 'class_input_id,student_id' })
-
-  // Send attendance notification to each student
+  // Send attendance_check notification to each student
   const notifications = studentIds.map((sid: string) => ({
     user_id: sid,
-    type: 'group_class_attendance',
+    type: 'attendance_check',
     title: `Were you at ${coachName}'s group class?`,
     body: `Class on ${classDate} — confirm your attendance to receive your focus points.`,
-    data: { class_input_id: classInputId, coach_name: coachName, class_date: classDate },
+    data: { class_input_id: classInputId, coach_name: coachName, lesson_date: classDate },
   }))
   const { error } = await supabase.from('notifications').insert(notifications)
   if (error) console.error('[yoda-extract] Failed to insert attendance notifications:', error.message)
-  else console.log(`[yoda-extract] ✓ Sent attendance notifications to ${studentIds.length} students for class ${classInputId}`)
+  else console.log(`[yoda-extract] ✓ Sent attendance_check notifications to ${studentIds.length} students for class ${classInputId}`)
 }
 
 // ─── Generate alternative versions for each focus point ──────────────────────
@@ -258,7 +397,7 @@ async function notifyGroupClassAttendance(
 async function generateAlternatives(
   supabase: ReturnType<typeof createClient>,
   classInputId: string,
-  studentId: string,
+  studentId: string | null,
   focusPoints: any[],
 ): Promise<void> {
   if (!focusPoints || focusPoints.length === 0) return
@@ -305,7 +444,7 @@ No markdown, no explanation.`
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify({
-      model: 'claude-haiku-4-5',
+      model: 'claude-sonnet-4-5',
       max_tokens: 3000,
       messages: [{ role: 'user', content: altPrompt }],
     }),
@@ -533,7 +672,7 @@ async function processRecord(record: ClassInputRecord): Promise<void> {
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model: 'claude-haiku-4-5',
+        model: 'claude-sonnet-4-5',
         max_tokens: 4000,
         system: effectiveSystemPrompt,
         messages: [{ role: 'user', content: userMessage }],
@@ -574,15 +713,25 @@ async function processRecord(record: ClassInputRecord): Promise<void> {
 
     // Update practice_point_1 / practice_point_2 / class_summary on class_inputs
     const aiData = parsed as any
-    const firstStudent = aiData.students?.[0]
+    const isGroupLessonType = lesson_type === 'public' || lesson_type === 'group'
     const updates: any = {}
-    if (firstStudent?.focus_points?.length > 0) {
-      if (firstStudent.focus_points[0]) updates.practice_point_1 = firstStudent.focus_points[0].title
-      if (firstStudent.focus_points[1]) updates.practice_point_2 = firstStudent.focus_points[1].title
+
+    if (isGroupLessonType) {
+      // For group classes, use shared focus points and shared summary
+      const sharedFPs = aiData.shared_focus_points ?? []
+      if (sharedFPs[0]) updates.practice_point_1 = sharedFPs[0].title
+      if (sharedFPs[1]) updates.practice_point_2 = sharedFPs[1].title
+      const sharedSummary = aiData.shared_class_summary ?? aiData.coach?.shared_class_summary ?? null
+      if (sharedSummary) updates.class_summary = sharedSummary
+    } else {
+      const firstStudent = aiData.students?.[0]
+      if (firstStudent?.focus_points?.length > 0) {
+        if (firstStudent.focus_points[0]) updates.practice_point_1 = firstStudent.focus_points[0].title
+        if (firstStudent.focus_points[1]) updates.practice_point_2 = firstStudent.focus_points[1].title
+      }
+      if (firstStudent?.class_summary) updates.class_summary = firstStudent.class_summary
     }
-    if (firstStudent?.class_summary) {
-      updates.class_summary = firstStudent.class_summary
-    }
+
     if (Object.keys(updates).length > 0) {
       await supabase.from('class_inputs').update(updates).eq('id', id)
     }
@@ -602,7 +751,7 @@ async function processRecord(record: ClassInputRecord): Promise<void> {
           'anthropic-version': '2023-06-01',
         },
         body: JSON.stringify({
-          model: 'claude-haiku-4-5',
+          model: 'claude-sonnet-4-5',
           max_tokens: 20,
           messages: [{
             role: 'user',
@@ -621,16 +770,6 @@ async function processRecord(record: ClassInputRecord): Promise<void> {
     }
 
     console.log(`[yoda-extract] ✓ Extracted: ${id}`)
-
-    // Notify group class students to confirm attendance
-    if (lesson_type === 'public' || lesson_type === 'group') {
-      try {
-        const classDate = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
-        await notifyGroupClassAttendance(supabase, id, user_id, coachName, classDate)
-      } catch (err) {
-        console.error('[yoda-extract] attendance notification error:', err)
-      }
-    }
 
     // Insert coach knowledge entries (principles, tips, metaphors, drills)
     // Only insert entries that are genuinely new — not already covered by existing knowledge
@@ -657,7 +796,7 @@ async function processRecord(record: ClassInputRecord): Promise<void> {
             'anthropic-version': '2023-06-01',
           },
           body: JSON.stringify({
-            model: 'claude-haiku-4-5',
+            model: 'claude-sonnet-4-5',
             max_tokens: 800,
             messages: [{
               role: 'user',
@@ -710,25 +849,47 @@ Return ONLY a JSON array of numbers, e.g. [1, 3]. No explanation.`,
       }
     }
 
-    // Invoke yoda-score to insert focus points and seed scores
-    const { error: scoreError } = await supabase.functions.invoke('yoda-score', {
-      body: {
-        event: 'class_input',
-        class_input_id: id,
-      },
-    })
-    if (scoreError) {
-      console.error(`[yoda-extract] yoda-score error for ${id}:`, scoreError.message)
+    const isGroupClass = lesson_type === 'public' || lesson_type === 'group'
+
+    if (isGroupClass) {
+      // Group class: create shared + individual FPs (user_id=null) then notify students
+      await insertPublicFocusPoints(supabase, id, aiData)
+      const classDate = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+      await notifyGroupClassAttendance(supabase, id, user_id, coachName, classDate)
+    } else {
+      // Private class: invoke yoda-score to insert + score per-student FPs
+      const { error: scoreError } = await supabase.functions.invoke('yoda-score', {
+        body: { event: 'class_input', class_input_id: id },
+      })
+      if (scoreError) {
+        console.error(`[yoda-extract] yoda-score error for ${id}:`, scoreError.message)
+      }
     }
 
     // Fire-and-forget: generate alternative focus point versions for trainer review
-    // This runs after yoda-score and must not affect the student experience
     try {
       const aiData2 = parsed as any
-      for (const studentResult of aiData2.students ?? []) {
-        const fps = studentResult.focus_points ?? []
-        if (fps.length === 0) continue
-        await generateAlternatives(supabase, id, studentResult.student_id, fps)
+      if (isGroupClass) {
+        // Shared FPs → single batch with student_id = null
+        const sharedFPs = aiData2.shared_focus_points ?? []
+        if (sharedFPs.length > 0) {
+          await generateAlternatives(supabase, id, null, sharedFPs)
+        }
+        // Per-student FPs (named students in transcript) → also null student_id since not yet assigned
+        for (const studentResult of aiData2.students ?? []) {
+          const fps = [
+            ...(studentResult.focus_points ?? []),
+            ...(studentResult.other_focus_points ?? []),
+          ]
+          if (fps.length === 0) continue
+          await generateAlternatives(supabase, id, null, fps)
+        }
+      } else {
+        for (const studentResult of aiData2.students ?? []) {
+          const fps = studentResult.focus_points ?? []
+          if (fps.length === 0) continue
+          await generateAlternatives(supabase, id, studentResult.student_id, fps)
+        }
       }
     } catch (altErr) {
       console.warn(`[yoda-extract] Alternatives generation failed for ${id} (non-fatal):`, altErr)
