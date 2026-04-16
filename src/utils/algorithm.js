@@ -302,7 +302,7 @@ export async function startTrainingSession(slot1FocusId, slot2FocusId) {
 // ─── Complete training session ────────────────────────────────────────────────
 // Inserts a new practice_log row only at this point (end of session).
 
-export async function completeTrainingSession(sessionId, feeling = null, sessionNote = null, activeFocusPointId = null, startedAtMs = null) {
+export async function completeTrainingSession(sessionId, feeling = null, sessionNote = null, activeFocusPointId = null, startedAtMs = null, sessionMotivation = null) {
   try {
     const userId = await getUserId();
 
@@ -323,6 +323,9 @@ export async function completeTrainingSession(sessionId, feeling = null, session
     };
     if (feeling)     insertPayload.feeling      = feeling;
     if (sessionNote) insertPayload.session_note = sessionNote;
+    if (sessionMotivation === 1 || sessionMotivation === 2 || sessionMotivation === 3) {
+      insertPayload.session_motivation = sessionMotivation;
+    }
 
     const { data: inserted, error } = await supabase
       .from('practice_logs')

@@ -10,6 +10,8 @@ const TAB_COLORS = {
   LOG: Colors.activeLog,
   STUDENTS: Colors.activeHome,
   SESSIONS: Colors.orange,
+  DASHBOARD: Colors.activeFocus,
+  NOTES: Colors.orange,
 };
 
 const HIDDEN_TABS = [];

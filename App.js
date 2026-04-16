@@ -45,10 +45,12 @@ import AttendanceConfirmScreen from './src/screens/AttendanceConfirmScreen';
 import CoachHomeScreen from './src/screens/coach/CoachHomeScreen';
 import FocusValidationScreen from './src/screens/coach/FocusValidationScreen';
 import StudentDetailScreen from './src/screens/coach/StudentDetailScreen';
-import SessionsFeedScreen from './src/screens/coach/SessionsFeedScreen';
+import DashboardScreen from './src/screens/coach/DashboardScreen';
 import CoachProfileScreen from './src/screens/coach/CoachProfileScreen';
 import CoachSessionDetailScreen from './src/screens/coach/CoachSessionDetailScreen';
 import NameMatchConfirmScreen from './src/screens/coach/NameMatchConfirmScreen';
+import CoachNotesScreen from './src/screens/coach/CoachNotesScreen';
+import CoachNoteDetailScreen from './src/screens/coach/CoachNoteDetailScreen';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -135,8 +137,8 @@ function CoachMainTabs() {
       }}
     >
       <Tab.Screen name="STUDENTS" component={CoachHomeScreen} />
-      <Tab.Screen name="SESSIONS" component={SessionsFeedScreen} />
-      <Tab.Screen name="PROFILE" component={CoachProfileScreen} />
+      <Tab.Screen name="DASHBOARD" component={DashboardScreen} />
+      <Tab.Screen name="NOTES" component={CoachNotesScreen} />
     </Tab.Navigator>
   );
 }
@@ -162,6 +164,8 @@ function CoachAppNavigator() {
       />
       <CoachStack.Screen name="FocusValidation" component={FocusValidationScreen} options={{ animation: 'slide_from_right' }} />
       <CoachStack.Screen name="NameMatchConfirm" component={NameMatchConfirmScreen} options={{ animation: 'slide_from_bottom', presentation: 'modal' }} />
+      <CoachStack.Screen name="CoachProfile" component={CoachProfileScreen} options={{ animation: 'slide_from_right' }} />
+      <CoachStack.Screen name="CoachNoteDetail" component={CoachNoteDetailScreen} options={{ animation: 'slide_from_right' }} />
     </CoachStack.Navigator>
   );
 }

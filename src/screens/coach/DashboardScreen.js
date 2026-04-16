@@ -1,0 +1,1015 @@
+import React, { useCallback, useMemo, useState } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  Image,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { useFocusEffect } from '@react-navigation/native';
+import { Ionicons } from '@expo/vector-icons';
+import Svg, { Circle } from 'react-native-svg';
+import { Colors, Fonts, Spacing } from '../../theme';
+import { getMyStudents, getCoachActivityFeed } from '../../storage/coachStorage';
+import { getUser } from '../../storage/storage';
+import { getNotifications } from '../../storage/notificationsStorage';
+
+// ── Palette tuned to the "Var 1b" design ────────────────────────────────────
+const HERO_BG = '#141414';
+const HERO_GLOW = 'rgba(232,168,56,0.55)';
+const GN = 'rgba(61,170,71,0.82)';
+const OR = 'rgba(232,168,56,0.82)';
+const RD = 'rgba(212,69,69,0.82)';
+const GN_SOLID = '#3DAA47';
+const OR_SOLID = '#E8A838';
+const RD_SOLID = '#D44545';
+const T1 = '#0A0A0A';
+const T2 = '#8A8A8A';
+const T3 = '#C8C8C8';
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+function initials(name) {
+  if (!name) return '?';
+  return name
+    .split(' ')
+    .map((w) => w[0])
+    .filter(Boolean)
+    .join('')
+    .slice(0, 2)
+    .toUpperCase();
+}
+
+function formatRelative(date) {
+  if (!date) return '';
+  const d = new Date(date);
+  const now = new Date();
+  const diffMs = now - d;
+  const diffMin = Math.floor(diffMs / 60000);
+  const diffH = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+
+  const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  if (diffMin < 60) return `${diffMin}m ago`;
+  if (diffH < 24 && now.getDate() === d.getDate()) return `Today · ${time}`;
+  if (diffDays === 1) return `Yesterday · ${time}`;
+  if (diffDays < 7) {
+    const weekday = d.toLocaleDateString('en-US', { weekday: 'long' });
+    return `${weekday} · ${time}`;
+  }
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+// Health score → (color, progress) for mini student rings.
+// Uses the same 0-100 health metric as the student detail hero ring so the
+// same number drives the ring everywhere in the app.
+function ringForHealth(health) {
+  const v = Math.max(0, Math.min(100, health || 0));
+  const progress = v / 100;
+  const color = v >= 70 ? GN_SOLID : v >= 40 ? OR_SOLID : RD_SOLID;
+  return { color, progress };
+}
+
+// ── Donut (pie with hole) ───────────────────────────────────────────────────
+// Three segments with gaps, rendered via stroke-dashoffset rotations
+function OverviewDonut({ practiced, forgetting, silent, total }) {
+  const size = 116;
+  const r = 46;
+  const strokeWidth = 12;
+  const C = 2 * Math.PI * r;
+
+  const totalVal = Math.max(total, 1);
+  const gP = practiced / totalVal;
+  const gF = forgetting / totalVal;
+  const gS = silent / totalVal;
+
+  // Starting offsets (cumulative) — circle starts at 3 o'clock; rotate -90° to start at top
+  const startP = 0;
+  const startF = practiced / totalVal;
+  const startS = (practiced + forgetting) / totalVal;
+
+  function segProps(startFrac, lenFrac) {
+    const dash = lenFrac * C;
+    const rot = startFrac * 360 - 90;
+    return {
+      strokeDasharray: `${dash} ${C}`,
+      strokeDashoffset: 0,
+      transform: `rotate(${rot} ${size / 2} ${size / 2})`,
+    };
+  }
+
+  return (
+    <View style={{ width: size, height: size }}>
+      <Svg width={size} height={size}>
+        {/* Background track */}
+        <Circle
+          cx={size / 2}
+          cy={size / 2}
+          r={r}
+          stroke="rgba(255,255,255,0.06)"
+          strokeWidth={strokeWidth}
+          fill="none"
+        />
+        {gP > 0 && (
+          <Circle
+            cx={size / 2}
+            cy={size / 2}
+            r={r}
+            stroke={GN}
+            strokeWidth={strokeWidth}
+            strokeLinecap="butt"
+            fill="none"
+            {...segProps(startP, gP)}
+          />
+        )}
+        {gF > 0 && (
+          <Circle
+            cx={size / 2}
+            cy={size / 2}
+            r={r}
+            stroke={OR}
+            strokeWidth={strokeWidth}
+            strokeLinecap="butt"
+            fill="none"
+            {...segProps(startF, gF)}
+          />
+        )}
+        {gS > 0 && (
+          <Circle
+            cx={size / 2}
+            cy={size / 2}
+            r={r}
+            stroke={RD}
+            strokeWidth={strokeWidth}
+            strokeLinecap="butt"
+            fill="none"
+            {...segProps(startS, gS)}
+          />
+        )}
+      </Svg>
+      <View style={StyleSheet.absoluteFillObject}>
+        <View style={styles.donutCenter}>
+          <Text style={styles.donutNum}>{total}</Text>
+          <Text style={styles.donutLabel}>STUDENTS</Text>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+// ── Mini ring for a single student ──────────────────────────────────────────
+function StudentRing({ student, onPress }) {
+  const { color, progress } = ringForHealth(student.health);
+  const size = 50;
+  const r = 22;
+  const strokeWidth = 3;
+  const C = 2 * Math.PI * r;
+  const offset = C * (1 - progress);
+
+  return (
+    <TouchableOpacity style={miniS.wrap} onPress={onPress} activeOpacity={0.75}>
+      <View style={{ width: size, height: size, marginBottom: 5 }}>
+        <Svg width={size} height={size}>
+          <Circle
+            cx={size / 2}
+            cy={size / 2}
+            r={r}
+            stroke="rgba(0,0,0,0.06)"
+            strokeWidth={strokeWidth}
+            fill="none"
+          />
+          <Circle
+            cx={size / 2}
+            cy={size / 2}
+            r={r}
+            stroke={color}
+            strokeWidth={strokeWidth}
+            strokeLinecap="round"
+            strokeDasharray={`${C} ${C}`}
+            strokeDashoffset={offset}
+            fill="none"
+            transform={`rotate(-90 ${size / 2} ${size / 2})`}
+          />
+        </Svg>
+        <View style={[StyleSheet.absoluteFillObject, miniS.avatarWrap]}>
+          {student.photo_url ? (
+            <Image source={{ uri: student.photo_url }} style={miniS.photo} />
+          ) : (
+            <View style={[miniS.avatar, { backgroundColor: `${color}22` }]}>
+              <Text style={[miniS.avatarText, { color }]}>
+                {initials(student.name)}
+              </Text>
+            </View>
+          )}
+        </View>
+      </View>
+      <Text style={miniS.name} numberOfLines={1}>
+        {student.name.split(' ')[0]}
+      </Text>
+    </TouchableOpacity>
+  );
+}
+
+// ── Small AVG ring inside hero bottom row ───────────────────────────────────
+function AvgRing({ value }) {
+  const size = 38;
+  const r = 16;
+  const strokeWidth = 3.5;
+  const C = 2 * Math.PI * r;
+  const progress = Math.max(0, Math.min(1, value / 100));
+  const offset = C * (1 - progress);
+  return (
+    <View style={{ width: size, height: size }}>
+      <Svg width={size} height={size}>
+        <Circle
+          cx={size / 2}
+          cy={size / 2}
+          r={r}
+          stroke="rgba(255,255,255,0.12)"
+          strokeWidth={strokeWidth}
+          fill="none"
+        />
+        <Circle
+          cx={size / 2}
+          cy={size / 2}
+          r={r}
+          stroke="rgba(255,255,255,0.75)"
+          strokeWidth={strokeWidth}
+          strokeLinecap="round"
+          strokeDasharray={`${C} ${C}`}
+          strokeDashoffset={offset}
+          fill="none"
+          transform={`rotate(-90 ${size / 2} ${size / 2})`}
+        />
+      </Svg>
+      <View style={[StyleSheet.absoluteFillObject, { alignItems: 'center', justifyContent: 'center' }]}>
+        <Text style={styles.avgRingLabel}>{value}</Text>
+      </View>
+    </View>
+  );
+}
+
+// ── Activity row (timeline) ─────────────────────────────────────────────────
+function ActivityRow({ item, isLast }) {
+  let tone = 'gn';
+  let verb = '';
+  let detail = '';
+
+  let subject = '';
+  if (item.type === 'training') {
+    tone = 'gn';
+    if (item.focusName) {
+      verb = 'practiced';
+      subject = `"${item.focusName}"`;
+    } else {
+      verb = 'practiced';
+    }
+    detail = item.durationMin ? `${item.durationMin} min` : '';
+  } else if (item.type === 'class') {
+    tone = 'or';
+    verb = 'logged a class';
+    subject = item.title || item.dance || '';
+    detail = '';
+  } else if (item.type === 'question') {
+    tone = 'dim';
+    verb = 'asked a question';
+    detail = 'waiting for your reply';
+  }
+
+  const circleColor =
+    tone === 'gn' ? 'rgba(61,170,71,0.45)'
+      : tone === 'or' ? 'rgba(232,168,56,0.45)'
+        : '#D0D0D0';
+
+  const verbColor =
+    tone === 'gn' ? 'rgba(61,170,71,0.75)'
+      : tone === 'or' ? 'rgba(232,168,56,0.85)'
+        : T3;
+
+  return (
+    <View style={actS.row}>
+      <View style={[actS.circle, { borderColor: circleColor }]}>
+        <View style={[actS.circleDot, { backgroundColor: circleColor }]} />
+      </View>
+      <View style={actS.body}>
+        <Text style={actS.time}>{formatRelative(item.date)}</Text>
+        <Text style={actS.text}>
+          <Text style={actS.textStrong}>{item.studentName || 'Student'} </Text>
+          <Text style={[actS.textVerb, { color: verbColor }]}>{verb}</Text>
+          {!!subject && <Text> {subject}</Text>}
+          {!!detail && <Text style={actS.textDim}> — {detail}</Text>}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+// ── Screen ──────────────────────────────────────────────────────────────────
+export default function DashboardScreen({ navigation }) {
+  const [students, setStudents] = useState([]);
+  const [events, setEvents] = useState([]);
+  const [user, setUser] = useState(null);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [loading, setLoading] = useState(true);
+
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      async function load() {
+        setLoading(true);
+        try {
+          const [s, ev, u, notifs] = await Promise.all([
+            getMyStudents(),
+            getCoachActivityFeed(),
+            getUser(),
+            getNotifications(),
+          ]);
+          if (!active) return;
+          setStudents(s || []);
+          setEvents((ev || []).slice(0, 12));
+          setUser(u);
+          setUnreadCount(
+            (notifs || []).filter(
+              (n) =>
+                !n.read ||
+                n.type === 'merge_request_student' ||
+                n.type === 'name_match_confirm'
+            ).length
+          );
+        } catch {}
+        if (active) setLoading(false);
+      }
+      load();
+      return () => {
+        active = false;
+      };
+    }, [])
+  );
+
+  const stats = useMemo(() => {
+    const practiced = students.filter((s) => s.status === 'on_track').length;
+    const forgetting = students.filter((s) => s.status === 'attention').length;
+    const silent = students.filter((s) => s.status === 'question').length;
+    const total = students.length;
+    const retention = total > 0 ? Math.round((practiced / total) * 100) : 0;
+    const actions = forgetting + silent;
+    const questions = silent;
+    return { practiced, forgetting, silent, total, retention, actions, questions };
+  }, [students]);
+
+  return (
+    <SafeAreaView style={styles.safe}>
+      <View style={styles.fixed}>
+        {/* ── Top header: bell + avatar (unchanged) ── */}
+        <View style={styles.header}>
+          <TouchableOpacity
+            onPress={() => navigation.navigate('Notifications')}
+            style={styles.notifBtn}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="notifications-outline" size={24} color={Colors.black} />
+            {unreadCount > 0 && (
+              <View style={styles.notifBadge}>
+                <Text style={styles.notifBadgeText}>
+                  {unreadCount > 9 ? '9+' : unreadCount}
+                </Text>
+              </View>
+            )}
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.avatar}
+            onPress={() => navigation.navigate('CoachProfile')}
+            activeOpacity={0.8}
+          >
+            {user?.photo_url ? (
+              <Image source={{ uri: user.photo_url }} style={styles.avatarPhoto} />
+            ) : (
+              <Text style={styles.avatarText}>
+                {user?.name ? user.name[0].toUpperCase() : 'C'}
+              </Text>
+            )}
+          </TouchableOpacity>
+        </View>
+
+        {/* ── Students horizontal scroll ── */}
+        <Text style={styles.sectionLabel}>STUDENTS</Text>
+        {students.length > 0 ? (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.studentsScroll}
+            style={styles.studentsScrollOuter}
+          >
+            {students.map((s) => (
+              <StudentRing
+                key={s.id}
+                student={s}
+                onPress={() =>
+                  navigation.navigate('StudentDetail', {
+                    studentId: s.id,
+                    studentName: s.name,
+                  })
+                }
+              />
+            ))}
+          </ScrollView>
+        ) : (
+          <View style={styles.emptyStudents}>
+            <Text style={styles.emptyStudentsText}>No students yet</Text>
+          </View>
+        )}
+
+        {/* ── Hero overview card ── */}
+        <View style={styles.hero}>
+          <View style={styles.weekBadge}>
+            <Text style={styles.weekBadgeText}>THIS WEEK</Text>
+          </View>
+          <View style={styles.heroTop}>
+            <OverviewDonut
+              practiced={stats.practiced}
+              forgetting={stats.forgetting}
+              silent={stats.silent}
+              total={stats.total}
+            />
+            <View style={styles.heroLegend}>
+              <LegendRow color={GN_SOLID} num={stats.practiced} label="Practiced" />
+              <LegendRow color={OR_SOLID} num={stats.forgetting} label="Forgetting" />
+              <LegendRow color={RD_SOLID} num={stats.silent} label="Silent" />
+            </View>
+          </View>
+
+          <View style={styles.heroDivider} />
+
+          <View style={styles.heroMetrics}>
+            {/* AVG RETENTION */}
+            <View style={styles.avgItem}>
+              <AvgRing value={stats.retention} />
+              <View style={{ marginLeft: 10 }}>
+                <Text style={styles.avgItemNum}>AVG</Text>
+                <Text style={styles.metricLabel}>RETENTION</Text>
+              </View>
+            </View>
+
+            {/* Actions pill */}
+            <TouchableOpacity
+              style={styles.actionPill}
+              activeOpacity={0.85}
+              onPress={() => navigation.navigate('STUDENTS')}
+            >
+              <Ionicons name="alert-circle" size={16} color={RD_SOLID} />
+              <Text style={styles.actionPillText}>
+                <Text style={styles.actionPillNum}>{stats.actions}</Text> Action needed
+              </Text>
+            </TouchableOpacity>
+
+            {/* Questions pill */}
+            <TouchableOpacity
+              style={styles.questionPill}
+              activeOpacity={0.85}
+              onPress={() => navigation.navigate('STUDENTS')}
+            >
+              <Ionicons name="chatbubble-ellipses" size={16} color={OR_SOLID} />
+              <Text style={styles.questionPillText}>
+                <Text style={styles.questionPillNum}>{stats.questions}</Text>
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* ── Next group class focus ── */}
+        <Text style={styles.sectionLabelLow}>NEXT GROUP CLASS — FOCUS ON</Text>
+        <View style={styles.focusCard}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.focusTitle}>Balance & Stability</Text>
+            <Text style={styles.focusSub}>
+              {students.length > 0
+                ? `${Math.min(students.length, 4)} students share this focus`
+                : 'No shared focus yet'}
+            </Text>
+          </View>
+          <View style={styles.focusAvatars}>
+            {students.slice(0, 4).map((s, idx) => (
+              <View
+                key={s.id}
+                style={[
+                  styles.focusAvatar,
+                  { marginLeft: idx === 0 ? 0 : -8, zIndex: 4 - idx },
+                ]}
+              >
+                {s.photo_url ? (
+                  <Image source={{ uri: s.photo_url }} style={styles.focusAvatarImg} />
+                ) : (
+                  <Text style={styles.focusAvatarText}>{initials(s.name)}</Text>
+                )}
+              </View>
+            ))}
+          </View>
+        </View>
+
+        {/* ── Recent activity label (fixed) ── */}
+        <Text style={styles.sectionLabelLow}>RECENT ACTIVITY</Text>
+
+        {/* ── Recent activity timeline (scrollable) ── */}
+        <ScrollView
+          style={styles.timelineScroll}
+          contentContainerStyle={styles.timelineScrollContent}
+          showsVerticalScrollIndicator={false}
+        >
+          {events.length > 0 ? (
+            <View style={styles.timeline}>
+              <View style={styles.timelineLine} />
+              {events.map((item, idx) => (
+                <ActivityRow
+                  key={(item.id || '') + idx}
+                  item={item}
+                  isLast={idx === events.length - 1}
+                />
+              ))}
+            </View>
+          ) : (
+            <Text style={styles.emptyActivity}>
+              {loading ? ' ' : 'No activity yet.'}
+            </Text>
+          )}
+        </ScrollView>
+      </View>
+
+      {/* ── Start Class floating CTA ── */}
+      <View style={styles.ctaWrap} pointerEvents="box-none">
+        <TouchableOpacity
+          style={styles.cta}
+          activeOpacity={0.88}
+          onPress={() =>
+            navigation.navigate('FocusValidation', { fromStartClass: true })
+          }
+        >
+          <Ionicons name="play" size={14} color="#fff" />
+          <Text style={styles.ctaText}>Start Class</Text>
+        </TouchableOpacity>
+      </View>
+    </SafeAreaView>
+  );
+}
+
+function LegendRow({ color, num, label }) {
+  return (
+    <View style={styles.legendRow}>
+      <View style={[styles.legendDot, { backgroundColor: color }]} />
+      <Text style={styles.legendNum}>{num}</Text>
+      <Text style={styles.legendLabel}>{label}</Text>
+    </View>
+  );
+}
+
+// ── Styles ──────────────────────────────────────────────────────────────────
+const styles = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: Colors.background },
+  fixed: {
+    flex: 1,
+  },
+
+  // Header (same pattern as SessionsFeedScreen)
+  header: {
+    paddingTop: 16,
+    paddingHorizontal: Spacing.side,
+    paddingBottom: 14,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  notifBtn: {
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  notifBadge: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    backgroundColor: Colors.orange,
+    borderRadius: 8,
+    minWidth: 16,
+    height: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 3,
+  },
+  notifBadgeText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 9,
+    color: '#fff',
+  },
+  avatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#F5E6C8',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatarPhoto: { width: 36, height: 36, borderRadius: 18 },
+  avatarText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 14,
+    color: '#8A6A2E',
+  },
+
+  // Section labels
+  sectionLabel: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 10,
+    color: T3,
+    letterSpacing: 1.1,
+    textTransform: 'uppercase',
+    paddingHorizontal: Spacing.side,
+    marginBottom: 10,
+  },
+  sectionLabelLow: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 10,
+    color: T3,
+    letterSpacing: 1.1,
+    textTransform: 'uppercase',
+    paddingHorizontal: Spacing.side,
+    marginTop: 18,
+    marginBottom: 10,
+  },
+
+  // Students scroll
+  studentsScrollOuter: {
+    flexGrow: 0,
+    flexShrink: 0,
+  },
+  studentsScroll: {
+    paddingHorizontal: Spacing.side,
+    paddingBottom: 14,
+    gap: 10,
+  },
+  emptyStudents: {
+    paddingHorizontal: Spacing.side,
+    paddingBottom: 14,
+  },
+  emptyStudentsText: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 12,
+    color: T2,
+  },
+
+  // Hero card
+  hero: {
+    marginHorizontal: Spacing.side,
+    backgroundColor: HERO_BG,
+    borderRadius: 22,
+    paddingTop: 18,
+    paddingHorizontal: 18,
+    paddingBottom: 16,
+    borderWidth: 2.5,
+    borderColor: HERO_GLOW,
+    shadowColor: '#000',
+    shadowOpacity: 0.25,
+    shadowRadius: 22,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 6,
+  },
+  heroTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 18,
+  },
+  heroLegend: {
+    flex: 1,
+    gap: 8,
+  },
+  weekBadge: {
+    position: 'absolute',
+    top: 14,
+    right: 16,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    backgroundColor: 'rgba(232,168,56,0.14)',
+    zIndex: 2,
+  },
+  weekBadgeText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 9,
+    letterSpacing: 0.8,
+    color: OR_SOLID,
+  },
+  legendRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+  },
+  legendDot: {
+    width: 9,
+    height: 9,
+    borderRadius: 3,
+  },
+  legendNum: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 15,
+    color: '#fff',
+    width: 16,
+  },
+  legendLabel: {
+    fontFamily: Fonts.jakartaSemiBold,
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.65)',
+  },
+  donutCenter: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  donutNum: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 30,
+    color: '#fff',
+    letterSpacing: -1,
+    lineHeight: 32,
+  },
+  donutLabel: {
+    fontFamily: Fonts.jakartaSemiBold,
+    fontSize: 9,
+    color: 'rgba(255,255,255,0.5)',
+    letterSpacing: 1.2,
+    marginTop: 4,
+  },
+
+  heroDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: 'rgba(255,255,255,0.10)',
+    marginTop: 16,
+    marginBottom: 14,
+  },
+  heroMetrics: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  avgItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1.1,
+    paddingRight: 6,
+    borderRightWidth: StyleSheet.hairlineWidth,
+    borderRightColor: 'rgba(255,255,255,0.10)',
+  },
+  avgItemNum: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 13,
+    color: 'rgba(255,255,255,0.55)',
+    lineHeight: 14,
+  },
+  metricLabel: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 8,
+    color: 'rgba(255,255,255,0.45)',
+    letterSpacing: 0.6,
+    marginTop: 2,
+  },
+  avgRingLabel: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 10,
+    color: '#fff',
+  },
+
+  actionPill: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(212,69,69,0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(212,69,69,0.38)',
+    borderRadius: 12,
+    paddingVertical: 11,
+  },
+  actionPillText: {
+    fontFamily: Fonts.jakartaSemiBold,
+    fontSize: 12,
+    color: 'rgba(212,69,69,0.92)',
+  },
+  actionPillNum: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 14,
+    color: RD_SOLID,
+  },
+
+  questionPill: {
+    width: 54,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    backgroundColor: 'rgba(232,168,56,0.14)',
+    borderWidth: 1,
+    borderColor: 'rgba(232,168,56,0.35)',
+    borderRadius: 12,
+    paddingVertical: 11,
+  },
+  questionPillText: {
+    fontFamily: Fonts.jakartaSemiBold,
+    fontSize: 12,
+    color: 'rgba(232,168,56,0.92)',
+  },
+  questionPillNum: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 14,
+    color: OR_SOLID,
+  },
+
+  // Focus card
+  focusCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginHorizontal: Spacing.side,
+    backgroundColor: '#FFF',
+    borderRadius: 16,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(0,0,0,0.05)',
+  },
+  focusTitle: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 16,
+    color: T1,
+    letterSpacing: -0.3,
+    marginBottom: 2,
+  },
+  focusSub: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 11,
+    color: T2,
+  },
+  focusAvatars: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  focusAvatar: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: '#F5E6C8',
+    borderWidth: 2.5,
+    borderColor: '#FFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  focusAvatarImg: {
+    width: 21,
+    height: 21,
+    borderRadius: 11,
+  },
+  focusAvatarText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 9,
+    color: '#8A6A2E',
+  },
+
+  // Timeline (scrollable region — flex:1 takes remaining space above CTA)
+  timelineScroll: {
+    flex: 1,
+  },
+  timelineScrollContent: {
+    paddingHorizontal: Spacing.side,
+    paddingBottom: 90, // clear the floating CTA + tab bar
+  },
+  timeline: {
+    position: 'relative',
+    paddingLeft: 26,
+    paddingTop: 4,
+  },
+  timelineLine: {
+    position: 'absolute',
+    left: 9,
+    top: 12,
+    bottom: 8,
+    width: 1,
+    backgroundColor: '#E8E8E8',
+  },
+  emptyActivity: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 12,
+    color: T2,
+    paddingVertical: 4,
+  },
+
+  // CTA
+  ctaWrap: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 10, // sits just above the floating tab bar
+    paddingHorizontal: 22,
+  },
+  cta: {
+    backgroundColor: OR_SOLID,
+    borderRadius: 16,
+    paddingVertical: 15,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    shadowColor: OR_SOLID,
+    shadowOpacity: 0.35,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 5 },
+    elevation: 4,
+  },
+  ctaText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 14,
+    color: '#fff',
+    letterSpacing: 0.2,
+  },
+});
+
+const miniS = StyleSheet.create({
+  wrap: {
+    width: 68,
+    alignItems: 'center',
+  },
+  avatarWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatar: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatarText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 12,
+  },
+  photo: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+  },
+  name: {
+    fontFamily: Fonts.jakartaSemiBold,
+    fontSize: 10,
+    color: T2,
+  },
+});
+
+const actS = StyleSheet.create({
+  row: {
+    position: 'relative',
+    paddingBottom: 16,
+  },
+  circle: {
+    position: 'absolute',
+    left: -24,
+    top: 2,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    borderWidth: 2,
+    backgroundColor: Colors.background,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  circleDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  body: { flex: 1 },
+  time: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 10,
+    color: T2,
+    marginBottom: 3,
+  },
+  text: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 12,
+    color: T1,
+    lineHeight: 17,
+  },
+  textStrong: {
+    fontFamily: Fonts.jakartaExtraBold,
+  },
+  textVerb: {
+    fontFamily: Fonts.jakartaSemiBold,
+  },
+  textDim: {
+    color: T3,
+  },
+});

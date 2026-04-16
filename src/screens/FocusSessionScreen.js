@@ -576,9 +576,17 @@ function FeelingSlider({ value, onChange }) {
 
 // ─── Session Feeling Modal ────────────────────────────────────────────────────
 
+// Global session motivation options (1..3)
+const MOTIVATION_OPTIONS = [
+  { value: 1, emoji: '😩', label: 'Unmotivated' },
+  { value: 2, emoji: '😐', label: 'Neutral' },
+  { value: 3, emoji: '🔥', label: 'Motivated' },
+];
+
 function SessionFeelingModal({ visible, focusName, onSave, onSkip }) {
   const [feelingIdx, setFeelingIdx] = useState(2);
   const [note, setNote] = useState('');
+  const [motivation, setMotivation] = useState(null); // 1 | 2 | 3 | null
   const [saving, setSaving] = useState(false);
   const slideAnim = useRef(new Animated.Value(600)).current;
 
@@ -586,6 +594,7 @@ function SessionFeelingModal({ visible, focusName, onSave, onSkip }) {
     if (visible) {
       setFeelingIdx(2);
       setNote('');
+      setMotivation(null);
       setSaving(false);
       slideAnim.setValue(600);
       Animated.spring(slideAnim, {
@@ -601,7 +610,7 @@ function SessionFeelingModal({ visible, focusName, onSave, onSkip }) {
     if (saving) return;
     setSaving(true);
     const label = FEELINGS[feelingIdx].label;
-    await onSave(label, note.trim() || null);
+    await onSave(label, note.trim() || null, motivation);
   }
 
   return (
@@ -626,6 +635,29 @@ function SessionFeelingModal({ visible, focusName, onSave, onSkip }) {
             onChangeText={setNote}
             textAlignVertical="top"
           />
+
+          {/* ── Global motivation question ─────────────────────────── */}
+          <Text style={[fm.subtitle, { marginTop: 18 }]}>
+            How do you feel about your training overall?
+          </Text>
+          <View style={fm.motivationRow}>
+            {MOTIVATION_OPTIONS.map((opt) => {
+              const isOn = motivation === opt.value;
+              return (
+                <TouchableOpacity
+                  key={opt.value}
+                  style={[fm.motivationBtn, isOn && fm.motivationBtnOn]}
+                  onPress={() => setMotivation(opt.value)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={fm.motivationEmoji}>{opt.emoji}</Text>
+                  <Text style={[fm.motivationLabel, isOn && fm.motivationLabelOn]}>
+                    {opt.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
         </View>
 
         <View style={fm.btnWrap}>
@@ -1106,11 +1138,11 @@ RULES
     setShowFeelingModal(true);
   }
 
-  async function handleSave(feeling, note) {
+  async function handleSave(feeling, note, motivation) {
     if (sessionCompletedRef.current) return;
     sessionCompletedRef.current = true;
     const startedAtMs = getActiveSession()?.startedAt ?? null;
-    await completeTrainingSession(sessionId, feeling, note, focusPointId, startedAtMs);
+    await completeTrainingSession(sessionId, feeling, note, focusPointId, startedAtMs, motivation);
     clearActiveSession();
     setShowFeelingModal(false);
     navigation.goBack();
@@ -1120,7 +1152,7 @@ RULES
     if (sessionCompletedRef.current) return;
     sessionCompletedRef.current = true;
     const startedAtMs = getActiveSession()?.startedAt ?? null;
-    await completeTrainingSession(sessionId, null, null, focusPointId, startedAtMs);
+    await completeTrainingSession(sessionId, null, null, focusPointId, startedAtMs, null);
     clearActiveSession();
     setShowFeelingModal(false);
     navigation.goBack();
@@ -2278,6 +2310,39 @@ const fm = StyleSheet.create({
     fontFamily: Fonts.jakartaMedium,
     fontSize: 14,
     color: Colors.secondary,
+  },
+  motivationRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 4,
+    width: '100%',
+  },
+  motivationBtn: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: 'rgba(17,12,17,0.1)',
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+    alignItems: 'center',
+    backgroundColor: Colors.statCardBg,
+  },
+  motivationBtnOn: {
+    borderColor: Colors.orange,
+    backgroundColor: 'rgba(232,168,56,0.1)',
+  },
+  motivationEmoji: {
+    fontSize: 24,
+    marginBottom: 4,
+  },
+  motivationLabel: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 11,
+    color: Colors.secondary,
+  },
+  motivationLabelOn: {
+    fontFamily: Fonts.jakartaBold,
+    color: Colors.black,
   },
 });
 
