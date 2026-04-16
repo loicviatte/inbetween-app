@@ -214,6 +214,7 @@ async function processStudentFocusPoints(
           .update({
             ...focusPointToDbUpdate(updated),
             last_mentioned_at: now.toISOString(),
+            merge_action: 'auto_merge',
           })
           .eq('id', existing.id)
         mentionedFPIds.add(existing.id)

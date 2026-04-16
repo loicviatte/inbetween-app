@@ -1,5 +1,5 @@
 import { supabase } from '../services/supabase/client';
-import { getAllStudentMetrics } from '../utils/studentMetrics';
+import { computeAllStudentMetricsBatch } from '../utils/studentMetrics';
 
 async function getCoachId() {
   const { data: { user } } = await supabase.auth.getUser();
@@ -162,13 +162,15 @@ export async function getMyStudents() {
   const studentIds = students.map(s => s.id);
   const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString();
 
-  // Parallel batch queries
+  // Parallel batch queries — includes all practice_logs for metrics (replaces
+  // the old per-student getAllStudentMetrics N+1 pattern).
   const [
     { data: pendingMessages },
     { data: pendingFPs },
     { data: allFocuses },
     { data: recentLogs },
     { data: allClasses },
+    { data: allLogs },
   ] = await Promise.all([
     supabase
       .from('coach_messages')
@@ -184,9 +186,8 @@ export async function getMyStudents() {
       .in('user_id', studentIds),
     supabase
       .from('focus_points')
-      .select('id, name, user_id')
+      .select('id, name, user_id, status, tier, merge_action')
       .in('user_id', studentIds)
-      .eq('status', 'active')
       .eq('is_deleted', false)
       .eq('is_other', false),
     supabase
@@ -197,10 +198,19 @@ export async function getMyStudents() {
       .gte('started_at', sevenDaysAgo),
     supabase
       .from('class_inputs')
-      .select('user_id, created_at, lesson_type')
-      .in('user_id', studentIds)
+      .select('user_id, student_id, created_at, lesson_type')
+      .or(`user_id.in.(${studentIds.join(',')}),student_id.in.(${studentIds.join(',')})`)
       .eq('is_deleted', false)
       .order('created_at', { ascending: false }),
+    supabase
+      .from('practice_logs')
+      // `started_at` + `completed_at` are needed by the status computation
+      // below (distinct focus points practiced since last private class —
+      // filters on completed_at existing + started_at >= cutoff). `created_at`
+      // drives the regularity math in computeAllStudentMetricsBatch.
+      .select('student_id, focus_point_id, created_at, started_at, completed_at')
+      .in('student_id', studentIds)
+      .order('created_at', { ascending: true }),
   ]);
 
   // Pending questions per student
@@ -211,49 +221,39 @@ export async function getMyStudents() {
   }
   const pendingReviewStudents = new Set((pendingFPs || []).map(v => v.user_id));
 
-  // Practice counts per (student, focus) over last 7 days
-  const practicedFocusSet = new Set(
-    (recentLogs || [])
-      .filter(l => l.focus_point_id)
-      .map(l => `${l.student_id}:${l.focus_point_id}`)
-  );
-  // Stuck focuses: active focuses with no practice log in the last 7 days
-  const stuckByStudent = {};
-  for (const f of allFocuses || []) {
-    const key = `${f.user_id}:${f.id}`;
-    if (!practicedFocusSet.has(key)) {
-      if (!stuckByStudent[f.user_id]) stuckByStudent[f.user_id] = [];
-      stuckByStudent[f.user_id].push(f);
-    }
-  }
+  const activeFocuses = (allFocuses || []).filter(f => f.status === 'active');
   const activeFocusCountByStudent = {};
-  for (const f of allFocuses || []) {
+  for (const f of activeFocuses) {
     activeFocusCountByStudent[f.user_id] =
       (activeFocusCountByStudent[f.user_id] || 0) + 1;
   }
 
-  // Last practice timestamp per student (any log, including ones older than 7d)
-  // We already loaded the recent-7d window; also capture most-recent from it.
+  // Last practice timestamp per student — use the full logs set (allLogs is
+  // ordered by started_at asc, so the last entry per student is the most recent).
   const lastPracticeByStudent = {};
-  for (const l of recentLogs || []) {
-    if (
-      !lastPracticeByStudent[l.student_id] ||
-      new Date(l.started_at) > new Date(lastPracticeByStudent[l.student_id])
-    ) {
+  for (const l of allLogs || []) {
+    if (l.completed_at) {
       lastPracticeByStudent[l.student_id] = l.started_at;
     }
   }
 
-  // Most recent class (any type) and most recent PRIVATE class per student
+  // Most recent class (any type) and most recent PRIVATE class per student.
+  // A class can reference a student via user_id (student-logged) or
+  // student_id (coach-logged / attendance-confirmed).
+  const studentIdSet = new Set(studentIds);
   const lastClassByStudent = {};
   const lastPrivateClassByStudent = {};
   for (const c of allClasses || []) {
-    if (!lastClassByStudent[c.user_id]) lastClassByStudent[c.user_id] = c.created_at;
+    const sid = studentIdSet.has(c.user_id) ? c.user_id
+              : studentIdSet.has(c.student_id) ? c.student_id
+              : null;
+    if (!sid) continue;
+    if (!lastClassByStudent[sid]) lastClassByStudent[sid] = c.created_at;
     if (
       (c.lesson_type === 'private' || !c.lesson_type) &&
-      !lastPrivateClassByStudent[c.user_id]
+      !lastPrivateClassByStudent[sid]
     ) {
-      lastPrivateClassByStudent[c.user_id] = c.created_at;
+      lastPrivateClassByStudent[sid] = c.created_at;
     }
   }
 
@@ -262,25 +262,27 @@ export async function getMyStudents() {
     return Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
   }
 
+  // Distinct focus points practiced since last private class, per student.
+  const distinctFPSincePrivate = {};
+  for (const id of studentIds) {
+    const cutoff = lastPrivateClassByStudent[id] || null;
+    const focusSet = new Set();
+    for (const l of allLogs || []) {
+      if (l.student_id !== id || !l.completed_at || !l.focus_point_id) continue;
+      if (cutoff && l.started_at < cutoff) continue;
+      focusSet.add(l.focus_point_id);
+    }
+    distinctFPSincePrivate[id] = focusSet.size;
+  }
+
   // Compute the shared Retention / Motivation / Health metrics for every
-  // student in parallel — this is the SAME source the student detail hero
-  // gauges read from, so the ring value matches across all screens.
-  const metricsEntries = await Promise.all(
-    studentIds.map(async (id) => {
-      try {
-        return [id, await getAllStudentMetrics(id)];
-      } catch {
-        return [id, { retention: 0, motivation: 0, health: 0 }];
-      }
-    })
-  );
-  const metricsByStudent = Object.fromEntries(metricsEntries);
+  // student in a single pass using pre-fetched data (no extra DB calls).
+  const metricsByStudent = computeAllStudentMetricsBatch(studentIds, allFocuses, allLogs);
 
   return students
     .map(s => {
       const pendingQuestions = questionCountByStudent[s.id] || 0;
-      const stuckFocuses = stuckByStudent[s.id] || [];
-      const activeFocuses = activeFocusCountByStudent[s.id] || 0;
+      const activeFocusCount = activeFocusCountByStudent[s.id] || 0;
       const needsReview = pendingReviewStudents.has(s.id);
 
       const lastPracticeIso =
@@ -290,41 +292,31 @@ export async function getMyStudents() {
       const lastPrivateClassIso = lastPrivateClassByStudent[s.id] || null;
       const lastPrivateDays = daysSince(lastPrivateClassIso);
 
-      // Inactivity threshold (5 days)
-      const isInactive =
-        daysSincePractice === null || daysSincePractice >= 5;
+      // How many distinct focus points practiced since last private class
+      const fpSincePrivate = distinctFPSincePrivate[s.id] || 0;
 
-      // Status — preserved 3-value enum used by Dashboard rings:
-      //   question → pending questions (red)
-      //   attention → stuck / review / inactive (orange)
-      //   on_track → healthy
-      // The new Students list groups question + attention together.
+      // Status based on practice since last private class:
+      //   on_track  → practiced >= 2 distinct focus points
+      //   attention → practiced exactly 1 focus point ("in progress")
+      //   silent    → practiced 0 focus points
       let status = 'on_track';
-      if (pendingQuestions > 0) {
-        status = 'question';
-      } else if (
-        stuckFocuses.length > 0 ||
-        needsReview ||
-        isInactive
-      ) {
+      if (fpSincePrivate === 0) {
+        status = 'silent';
+      } else if (fpSincePrivate === 1) {
         status = 'attention';
       }
 
-      // Shared Retention / Motivation / Health metrics (identical source
-      // as the student detail hero gauges).
-      const m = metricsByStudent[s.id] || { retention: 0, motivation: 0, health: 0 };
-      const health = m.health;
+      // Shared Progression / Retention / Global metrics (identical source
+      // as the student detail hero gauges). All three are on a 0-100 scale
+      // where 100 = good.
+      const m = metricsByStudent[s.id] || { progression: 0, retention: 100, global: 0 };
+      const progression = m.progression;
       const retention = m.retention;
-      const motivation = m.motivation;
+      const global = m.global;
 
-      // Primary alert for attention students
+      // Primary alert
       let alert = null;
-      if (stuckFocuses.length > 0) {
-        alert = {
-          kind: 'stuck',
-          text: `${stuckFocuses[0].name} — stuck ${stuckFocuses.length}×`,
-        };
-      } else if (pendingQuestions > 0) {
+      if (pendingQuestions > 0) {
         alert = {
           kind: 'question',
           text: `${pendingQuestions} pending question${pendingQuestions > 1 ? 's' : ''}`,
@@ -334,39 +326,42 @@ export async function getMyStudents() {
           kind: 'review',
           text: 'New focus points to review',
         };
-      } else if (isInactive && daysSincePractice !== null) {
-        alert = {
-          kind: 'inactive',
-          text: `Inactive for ${daysSincePractice} day${daysSincePractice > 1 ? 's' : ''}`,
-        };
+      } else if (status === 'silent') {
+        const label = lastPrivateClassIso
+          ? `No practice since last class`
+          : 'No practice yet';
+        alert = { kind: 'inactive', text: label };
+      } else if (status === 'attention') {
+        alert = { kind: 'in_progress', text: `1 focus practiced — keep going` };
       }
 
       return {
         id: s.id,
         name: s.name || 'Student',
         danceStyle: s.dance_style || '',
-        photoUrl: s.avatar_url || null, // avatar_url may be undefined if column missing
+        photoUrl: s.avatar_url || null,
         lastActiveDate: lastPracticeIso,
         daysSincePractice,
         lastClassDate: lastClassIso,
         lastPrivateClassDate: lastPrivateClassIso,
         lastPrivateDays,
         pendingQuestions,
-        stuckCount: stuckFocuses.length,
-        stuckFocusName: stuckFocuses[0]?.name || null,
-        activeFocuses,
+        fpSincePrivate,
+        activeFocuses: activeFocusCount,
         needsReview,
         status,
-        health,
+        // `health` kept for any legacy consumer that reads it; mirrors global.
+        health: global,
+        global,
+        progression,
         retention,
-        motivation,
         alert,
       };
     })
     .sort((a, b) => {
-      // Order: question → attention → on_track, then lowest health first
-      const order = { question: 0, attention: 1, on_track: 2 };
-      if (a.status !== b.status) return order[a.status] - order[b.status];
+      // Order: silent → attention → on_track, then lowest health first
+      const order = { silent: 0, attention: 1, on_track: 2 };
+      if (a.status !== b.status) return (order[a.status] ?? 3) - (order[b.status] ?? 3);
       return a.health - b.health;
     });
 }
@@ -429,6 +424,80 @@ export async function updateFocusPoint(focusPointId, updates) {
     .eq('id', focusPointId);
 }
 
+// Returns up to 5 candidate focus points for a group-class theme suggestion,
+// ranked by how many of the coach's students currently share them.
+// Looks at active focus points mentioned since the coach's last group class
+// (falls back to the last 30 days if the coach has never taught one).
+//
+// Shape: { candidates: [{ key, name, count, studentIds }], lastGroupDate, cutoffIso }
+export async function getGroupClassThemeCandidates(studentIds) {
+  if (!studentIds || studentIds.length === 0) {
+    return { candidates: [], lastGroupDate: null, cutoffIso: null };
+  }
+
+  const [coachId, coachName] = await Promise.all([
+    getCoachId().catch(() => null),
+    getCoachName(),
+  ]);
+
+  // 1. Find the coach's last group class (matched by coach-created user_id
+  //    OR student-logged teacher_name).
+  const { data: groupClasses } = await supabase
+    .from('class_inputs')
+    .select('created_at, user_id, teacher_name, lesson_type')
+    .eq('lesson_type', 'group')
+    .eq('is_deleted', false)
+    .order('created_at', { ascending: false })
+    .limit(30);
+
+  const lc = coachName ? coachName.trim().toLowerCase() : null;
+  const lastGroup = (groupClasses || []).find(
+    (c) =>
+      (coachId && c.user_id === coachId) ||
+      (lc && (c.teacher_name || '').trim().toLowerCase() === lc)
+  );
+
+  // Fallback window: last 30 days.
+  const cutoffIso =
+    lastGroup?.created_at ?? new Date(Date.now() - 30 * 86400000).toISOString();
+
+  // 2. All active focus points across these students.
+  const { data: fps } = await supabase
+    .from('focus_points')
+    .select('id, user_id, name, normalized_name, tier, last_mentioned_at, created_at')
+    .in('user_id', studentIds)
+    .eq('status', 'active')
+    .eq('is_deleted', false)
+    .eq('is_other', false);
+
+  // 3. Keep only those touched/created since the cutoff.
+  const recent = (fps || []).filter((f) => {
+    const when = f.last_mentioned_at || f.created_at;
+    return !when || when >= cutoffIso;
+  });
+
+  // 4. Aggregate by normalized name — count DISTINCT students per theme.
+  const byName = {};
+  for (const f of recent) {
+    const key = f.normalized_name || (f.name || '').toLowerCase();
+    if (!key) continue;
+    if (!byName[key]) byName[key] = { name: f.name, studentIds: new Set() };
+    byName[key].studentIds.add(f.user_id);
+  }
+
+  const candidates = Object.entries(byName)
+    .map(([k, v]) => ({
+      key: k,
+      name: v.name,
+      count: v.studentIds.size,
+      studentIds: [...v.studentIds],
+    }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 5);
+
+  return { candidates, lastGroupDate: lastGroup?.created_at ?? null, cutoffIso };
+}
+
 // Look up the logged-in coach's display name (used for teacher matching).
 async function getCoachName() {
   const coachId = await getCoachId().catch(() => null);
@@ -446,11 +515,14 @@ async function getCoachName() {
 // Falls back to the most recent private lesson of any teacher if the coach
 // has never been credited.
 export async function getStudentLastClassDate(studentId) {
-  const coachName = await getCoachName();
+  const [coachId, coachName] = await Promise.all([
+    getCoachId().catch(() => null),
+    getCoachName(),
+  ]);
   const { data: classes } = await supabase
     .from('class_inputs')
-    .select('created_at, teacher_name, lesson_type')
-    .eq('user_id', studentId)
+    .select('created_at, user_id, student_id, teacher_name, lesson_type')
+    .or(`user_id.eq.${studentId},student_id.eq.${studentId}`)
     .eq('is_deleted', false)
     .order('created_at', { ascending: false })
     .limit(30);
@@ -463,17 +535,21 @@ export async function getStudentLastClassDate(studentId) {
   );
   if (privateLessons.length === 0) return null;
 
-  if (coachName) {
-    const lc = coachName.trim().toLowerCase();
-    const mine = privateLessons.find(
-      (c) => (c.teacher_name || '').trim().toLowerCase() === lc
-    );
-    if (mine) return mine.created_at;
-  }
+  const lc = coachName ? coachName.trim().toLowerCase() : null;
+  const mine = privateLessons.find((c) => {
+    // Coach-created class: user_id is the coach
+    if (coachId && c.user_id === coachId) return true;
+    // Student-created class: teacher_name matches coach name
+    if (lc && (c.teacher_name || '').trim().toLowerCase() === lc) return true;
+    return false;
+  });
+  if (mine) return mine.created_at;
+
   return privateLessons[0]?.created_at || null;
 }
 
 export async function getStudentRecentActivity(studentId, limit = 20) {
+  const coachId = await getCoachId().catch(() => null);
   const [{ data: sessions }, { data: classes }, coachName] = await Promise.all([
     supabase
       .from('practice_logs')
@@ -484,8 +560,8 @@ export async function getStudentRecentActivity(studentId, limit = 20) {
       .limit(limit),
     supabase
       .from('class_inputs')
-      .select('id, created_at, title, dance, teacher_name')
-      .eq('user_id', studentId)
+      .select('id, user_id, student_id, created_at, title, dance, teacher_name, class_summary, lesson_type, focus_points!focus_points_class_input_id_fkey(id, name, is_other)')
+      .or(`user_id.eq.${studentId},student_id.eq.${studentId}`)
       .eq('is_deleted', false)
       .order('created_at', { ascending: false })
       .limit(limit),
@@ -518,8 +594,11 @@ export async function getStudentRecentActivity(studentId, limit = 20) {
     })),
     ...(classes || []).map(c => {
       const teacher = c.teacher_name || null;
-      const withCurrentCoach =
-        !!lcCoach && !!teacher && teacher.trim().toLowerCase() === lcCoach;
+      // Coach-created class: user_id is the coach, student_id is the student.
+      // Student-created class: user_id is the student, teacher_name matches coach name.
+      const coachCreated = !!coachId && c.user_id === coachId;
+      const nameMatches = !!lcCoach && !!teacher && teacher.trim().toLowerCase() === lcCoach;
+      const withCurrentCoach = coachCreated || nameMatches;
       return {
         id: c.id,
         type: 'class',
@@ -529,6 +608,11 @@ export async function getStudentRecentActivity(studentId, limit = 20) {
         dance: c.dance || null,
         teacherName: teacher,
         withCurrentCoach,
+        classSummary: c.class_summary || null,
+        lessonType: c.lesson_type || null,
+        focusPoints: (c.focus_points || [])
+          .filter(fp => !fp.is_other)
+          .map(fp => ({ id: fp.id, name: fp.name })),
       };
     }),
   ];
@@ -783,17 +867,21 @@ export async function getCoachActivityFeed() {
   const sixtyDaysAgo = new Date(Date.now() - 60 * 86400000).toISOString();
   const { data: allClasses } = await supabase
     .from('class_inputs')
-    .select('id, user_id, created_at, title, dance')
-    .in('user_id', studentIds)
+    .select('id, user_id, student_id, created_at, title, dance, class_summary, lesson_type, focus_points!focus_points_class_input_id_fkey(id, name, status)')
+    .or(`user_id.in.(${studentIds.join(',')}),student_id.in.(${studentIds.join(',')})`)
     .eq('is_deleted', false)
     .gte('created_at', sixtyDaysAgo)
     .order('created_at', { ascending: false })
     .limit(100);
 
-  // Per-student: most recent class date
+  // Per-student: most recent class date (resolve student from user_id or student_id)
+  const feedStudentIdSet = new Set(studentIds);
   const lastClassByStudent = {};
   for (const c of allClasses || []) {
-    if (!lastClassByStudent[c.user_id]) lastClassByStudent[c.user_id] = c.created_at;
+    const sid = feedStudentIdSet.has(c.user_id) ? c.user_id
+              : feedStudentIdSet.has(c.student_id) ? c.student_id
+              : null;
+    if (sid && !lastClassByStudent[sid]) lastClassByStudent[sid] = c.created_at;
   }
 
   // Query floor: earliest "last class" across all students, or 14 days ago if none.
@@ -850,16 +938,24 @@ export async function getCoachActivityFeed() {
       focusPointId: s.focus_point_id || null,
       focusName: s.focus_point_id ? focusMap[s.focus_point_id] || null : null,
     })),
-    ...(allClasses || []).map(c => ({
-      id: c.id,
-      studentId: c.user_id,
-      studentName: studentMap[c.user_id] || 'Student',
-      type: 'class',
-      date: new Date(c.created_at),
-      durationMin: null,
-      title: c.title || null,
-      dance: c.dance || null,
-    })),
+    ...(allClasses || []).map(c => {
+      const sid = feedStudentIdSet.has(c.user_id) ? c.user_id
+                : feedStudentIdSet.has(c.student_id) ? c.student_id
+                : c.user_id;
+      return {
+        id: c.id,
+        studentId: sid,
+        studentName: studentMap[sid] || 'Student',
+        type: 'class',
+        date: new Date(c.created_at),
+        durationMin: null,
+        title: c.title || null,
+        dance: c.dance || null,
+        classSummary: c.class_summary || null,
+        lessonType: c.lesson_type || null,
+        focusPoints: (c.focus_points || []).map(fp => fp.name).filter(Boolean),
+      };
+    }),
     ...(messages || []).map(m => ({
       id: m.id,
       studentId: m.student_id,

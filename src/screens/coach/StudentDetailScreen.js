@@ -13,7 +13,9 @@ import {
   Image,
   ActivityIndicator,
   Animated,
+  useWindowDimensions,
 } from 'react-native';
+import { SkeletonBox } from '../../components/Skeleton';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
@@ -30,8 +32,13 @@ import {
   dismissQuestion,
   getPendingFocusPoints,
   getStudentLastClassDate,
+  approveFocusPoint,
+  deletePendingFocusPoint,
+  updateFocusPoint,
 } from '../../storage/coachStorage';
+import { getNotifications, deleteNotification } from '../../storage/notificationsStorage';
 import { getAllStudentMetrics } from '../../utils/studentMetrics';
+import FocusPointEditSheet from '../../components/FocusPointEditSheet';
 
 // ── Palette ─────────────────────────────────────────────────────────────────
 const C = {
@@ -97,7 +104,7 @@ function ActivityRing({ progress = 0, size = 62, strokeWidth = 3.5, color = C.or
 }
 
 // ── Gauge (semi-circle) ─────────────────────────────────────────────────────
-function Gauge({ value = 0, color, label, dark = false }) {
+function Gauge({ value = 0, color, label, dark = false, dashWhenZero = false }) {
   const size = 64;
   const strokeW = 5;
   const r = size / 2 - strokeW;
@@ -131,7 +138,7 @@ function Gauge({ value = 0, color, label, dark = false }) {
         />
       </Svg>
       <Text style={{ fontFamily: Fonts.jakartaExtraBold, fontSize: 16, color: dark ? C.white : C.text, marginTop: -4 }}>
-        {Math.round(value)}%
+        {dashWhenZero && value === 0 ? '—%' : `${Math.round(value)}%`}
       </Text>
       <Text style={{ fontFamily: Fonts.jakartaMedium, fontSize: 10, color: dark ? 'rgba(255,255,255,0.45)' : C.sub, marginTop: 2, letterSpacing: 0.3 }}>
         {label}
@@ -146,6 +153,75 @@ function Card({ style, children }) {
     <View style={[styles.card, style]}>
       {children}
     </View>
+  );
+}
+
+// ── Skeleton for the initial load ───────────────────────────────────────────
+function StudentDetailSkeleton({ onBack }) {
+  return (
+    <SafeAreaView style={styles.safe}>
+      <View style={styles.navHeader}>
+        <Pressable onPress={onBack} style={styles.backBtn} hitSlop={12}>
+          <Ionicons name="chevron-back" size={24} color={C.text} />
+        </Pressable>
+      </View>
+
+      {/* Hero card skeleton */}
+      <View
+        style={[
+          styles.stickyOverlay,
+          {
+            position: 'relative',
+            top: 0,
+            left: 0,
+            right: 0,
+            height: 256,
+            marginTop: 16,
+            marginHorizontal: 24,
+          },
+        ]}
+      >
+        <View style={{ flex: 1, overflow: 'hidden' }}>
+          <View style={styles.heroTop}>
+            <SkeletonBox width={62} height={62} borderRadius={31} style={{ backgroundColor: 'rgba(255,255,255,0.1)' }} />
+            <View style={{ flex: 1, marginLeft: 14, gap: 8 }}>
+              <SkeletonBox width={160} height={20} borderRadius={6} style={{ backgroundColor: 'rgba(255,255,255,0.1)' }} />
+              <SkeletonBox width={220} height={12} borderRadius={4} style={{ backgroundColor: 'rgba(255,255,255,0.08)' }} />
+            </View>
+          </View>
+
+          <View style={[styles.gaugeRow, { marginTop: 24, gap: 16 }]}>
+            {[0, 1, 2].map((i) => (
+              <View key={i} style={{ alignItems: 'center', gap: 8, flex: 1 }}>
+                <SkeletonBox width={64} height={36} borderRadius={6} style={{ backgroundColor: 'rgba(255,255,255,0.1)' }} />
+                <SkeletonBox width={56} height={10} borderRadius={4} style={{ backgroundColor: 'rgba(255,255,255,0.08)' }} />
+              </View>
+            ))}
+          </View>
+
+          <View style={[styles.heroFooter, { marginTop: 18 }]}>
+            <SkeletonBox width={140} height={13} borderRadius={4} style={{ backgroundColor: 'rgba(255,255,255,0.1)' }} />
+            <SkeletonBox width={70} height={12} borderRadius={4} style={{ backgroundColor: 'rgba(255,255,255,0.08)' }} />
+          </View>
+        </View>
+      </View>
+
+      {/* Tab row skeleton */}
+      <View style={[styles.tabsRow, { marginHorizontal: 24, marginTop: 18 }]}>
+        {[0, 1, 2].map((i) => (
+          <View key={i} style={[styles.tabBtn, { alignItems: 'center' }]}>
+            <SkeletonBox width={72} height={14} borderRadius={4} />
+          </View>
+        ))}
+      </View>
+
+      {/* Content skeleton */}
+      <View style={{ paddingHorizontal: 24, paddingTop: 18, gap: 12 }}>
+        <SkeletonBox width="100%" height={140} borderRadius={16} />
+        <SkeletonBox width="100%" height={72} borderRadius={14} />
+        <SkeletonBox width="100%" height={72} borderRadius={14} />
+      </View>
+    </SafeAreaView>
   );
 }
 
@@ -274,15 +350,19 @@ export default function StudentDetailScreen({ route, navigation }) {
   const [activity, setActivity] = useState([]);
   const [questions, setQuestions] = useState([]);
   const [pendingFPs, setPendingFPs] = useState([]);
+  const [mergeRequests, setMergeRequests] = useState([]);
+  const [nameMatches, setNameMatches] = useState([]);
   const [lastClassDate, setLastClassDate] = useState(null);
-  const [metrics, setMetrics] = useState({ retention: 0, motivation: 0, health: 0 });
+  const [metrics, setMetrics] = useState({ progression: 0, retention: 100, global: 0 });
   const [loading, setLoading] = useState(true);
 
-  const [activeTab, setActiveTab] = useState('information'); // information | activity | actions
+  const [activeTab, setActiveTab] = useState('activity'); // information | activity | actions
   const [expandedAction, setExpandedAction] = useState(null);
 
   const [activeQuestion, setActiveQuestion] = useState(null);
   const [questionSheetVisible, setQuestionSheetVisible] = useState(false);
+
+  const [editingFocus, setEditingFocus] = useState(null);
 
   useFocusEffect(
     useCallback(() => {
@@ -292,7 +372,7 @@ export default function StudentDetailScreen({ route, navigation }) {
       async function load() {
         setLoading(true);
         try {
-          const [p, fp, act, qs, pfp, lcd, m] = await Promise.all([
+          const [p, fp, act, qs, pfp, lcd, m, notifs, { data: merges }] = await Promise.all([
             getStudentProfile(studentId),
             getStudentFocusPoints(studentId),
             getStudentRecentActivity(studentId, 30),
@@ -300,6 +380,13 @@ export default function StudentDetailScreen({ route, navigation }) {
             getPendingFocusPoints(studentId),
             getStudentLastClassDate(studentId),
             getAllStudentMetrics(studentId),
+            getNotifications().catch(() => []),
+            supabase
+              .from('merge_requests')
+              .select('id, student_id, focus_a, focus_b, status, created_at')
+              .eq('student_id', studentId)
+              .eq('status', 'pending_coach')
+              .order('created_at', { ascending: false }),
           ]);
           if (active) {
             setProfile(p);
@@ -309,6 +396,28 @@ export default function StudentDetailScreen({ route, navigation }) {
             setPendingFPs(pfp);
             setLastClassDate(lcd);
             setMetrics(m);
+            setNameMatches(
+              (notifs || []).filter(n =>
+                n.type === 'name_match_confirm' &&
+                n.data?.student_id === studentId
+              )
+            );
+            // Enrich merge requests with focus point names
+            const mrList = merges || [];
+            if (mrList.length > 0) {
+              const fpIds = [...new Set(mrList.flatMap(mr => [mr.focus_a, mr.focus_b]))];
+              const { data: fpRows } = await supabase
+                .from('focus_points').select('id, name').in('id', fpIds);
+              const fpMap = {};
+              for (const f of fpRows || []) fpMap[f.id] = f.name;
+              setMergeRequests(mrList.map(mr => ({
+                ...mr,
+                focusAName: fpMap[mr.focus_a] || '?',
+                focusBName: fpMap[mr.focus_b] || '?',
+              })));
+            } else {
+              setMergeRequests([]);
+            }
           }
         } catch (e) {
           console.error('StudentDetailScreen load error:', e);
@@ -454,17 +563,20 @@ export default function StudentDetailScreen({ route, navigation }) {
   // ── Actions (derived) ────────────────────────────────────────────────────
   const actions = useMemo(() => {
     const list = [];
-    // Stuck corrections — focuses never practiced
-    // 1. Focus points pending validation after a class
     pendingFPs.forEach((fp) => {
       list.push({ kind: 'review', id: `review_${fp.id}`, focus: fp });
     });
-    // 2. Student questions awaiting a reply
     questions.forEach((q) => {
       list.push({ kind: 'question', id: `q_${q.id}`, question: q });
     });
+    mergeRequests.forEach((mr) => {
+      list.push({ kind: 'merge', id: `merge_${mr.id}`, merge: mr });
+    });
+    nameMatches.forEach((nm) => {
+      list.push({ kind: 'name', id: `name_${nm.id}`, notif: nm });
+    });
     return list;
-  }, [pendingFPs, questions]);
+  }, [pendingFPs, questions, mergeRequests, nameMatches]);
 
   const hasUrgent = questions.length > 0;
   const badgeColor = hasUrgent ? C.red : C.orange;
@@ -485,18 +597,6 @@ export default function StudentDetailScreen({ route, navigation }) {
             : 'Practice session',
           detail: ev.durationMin ? `${ev.durationMin} min` : null,
         });
-      } else if (ev.type === 'class') {
-        // Privacy: only reveal "with you" when the class is actually ours.
-        // For any other teacher, show a generic label — no name leakage.
-        const withWhom = ev.withCurrentCoach ? 'with you' : 'with other teacher';
-        const dancePart = ev.dance ? `${ev.dance}` : 'Class logged';
-        events.push({
-          id: `c_${ev.id || i}`,
-          date: ev.date,
-          type: 'class',
-          title: ev.title || (ev.withCurrentCoach ? 'Private lesson with you' : 'Class logged'),
-          detail: `${dancePart} — ${withWhom}`,
-        });
       }
     });
     questions.forEach((q) => {
@@ -516,6 +616,31 @@ export default function StudentDetailScreen({ route, navigation }) {
       .sort((a, b) => new Date(b.date) - new Date(a.date))
       .slice(0, 20);
   }, [activity, questions, sinceMs]);
+
+  // ── Last class with this coach (for recap card in Activity tab) ──────────
+  const lastCoachClass = useMemo(() => {
+    const cls = activity.find(
+      (ev) => ev.type === 'class' && ev.withCurrentCoach && ev.classSummary
+    );
+    if (!cls) return null;
+
+    // Count practice sessions per focus point since this class
+    const classDate = new Date(cls.date).getTime();
+    const trainCounts = {};
+    for (const ev of activity) {
+      if (ev.type === 'training' && ev.focusPointId && new Date(ev.date).getTime() > classDate) {
+        trainCounts[ev.focusPointId] = (trainCounts[ev.focusPointId] || 0) + 1;
+      }
+    }
+
+    return {
+      ...cls,
+      focusPoints: (cls.focusPoints || []).slice(0, 3).map(fp => ({
+        ...fp,
+        trainedCount: trainCounts[fp.id] || 0,
+      })),
+    };
+  }, [activity]);
 
   // ── Recommendations (Information tab) ────────────────────────────────────
   const recommendations = useMemo(() => {
@@ -570,19 +695,37 @@ export default function StudentDetailScreen({ route, navigation }) {
   // Two discrete states only: open (0) → closed (1). Crossing the scroll
   // threshold downward triggers a snap-close; returning to scrollY<=0 snaps
   // back open. No intermediate interpolation during the scroll itself.
-  const HERO_FULL = 240;
+  const HERO_FULL = 256;
   const HERO_COLLAPSED = 120;
   const COLLAPSE_THRESHOLD = 24; // pixels before the snap-close fires
   const TABS_H = 46;
-  const WEEK_HEAD_H = 76; // only when Activity tab is active
-  const headerExtra = activeTab === 'activity' ? WEEK_HEAD_H : 0;
 
-  const scrollRef = useRef(null);
+  // One vertical scroll ref per tab (their scroll positions are independent)
+  // plus the horizontal pager ref and the x offset driving the underline.
+  const scrollRefInfo = useRef(null);
+  const scrollRefActivity = useRef(null);
+  const scrollRefActions = useRef(null);
+  const pagerRef = useRef(null);
+  const { width: screenWidth } = useWindowDimensions();
+  const horizontalScrollX = useRef(new Animated.Value(0)).current;
   const collapsedAnim = useRef(new Animated.Value(0)).current; // 0 open, 1 closed
   const collapsedState = useRef(false); // latched boolean for threshold logic
+  // When collapsed, the card stays closed even after the user scrolls all the
+  // way back to y=0. It only re-expands on the NEXT scroll gesture started at
+  // the top — this ref flags that we're "waiting at the top" for that gesture.
+  const armedToReopen = useRef(false);
+  // Flag set on drag-begin while armed-at-top; resolved on the first scroll
+  // tick that tells us the drag direction. Prevents an upward scroll from
+  // accidentally triggering a reopen.
+  const pendingReopenCheck = useRef(false);
 
   function animateTo(openClosed) {
     // openClosed: 0 = open, 1 = closed
+    // Only drive `collapsedAnim` here — the spacer, heroHeight, tabs translate
+    // and gauge opacity are all interpolations of this single value, so they
+    // stay perfectly in sync. Adding a parallel `scrollTo(animated:true)`
+    // caused a sub-frame mismatch (native scroll animation duration ≠ 260ms),
+    // which showed up as a tiny jump at the end of the transition.
     Animated.timing(collapsedAnim, {
       toValue: openClosed,
       duration: 260,
@@ -590,26 +733,60 @@ export default function StudentDetailScreen({ route, navigation }) {
     }).start();
   }
 
-  // On tab switch, preserve the current collapsed state:
-  //   - open   → scroll the new tab back to y=0 (fully open at the top)
-  //   - closed → jump the new tab to y = COLLAPSE_DISTANCE so its first item
-  //              sits just under the collapsed header; the card stays closed.
-  useEffect(() => {
-    const targetY = collapsedState.current
-      ? HERO_FULL - HERO_COLLAPSED
-      : 0;
-    scrollRef.current?.scrollTo({ y: targetY, animated: false });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab]);
 
   function handleScroll(e) {
     const y = e.nativeEvent.contentOffset.y;
+
+    // Resolve a pending reopen check: we're armed-at-top and a drag just
+    // started; use the first non-zero scroll tick to figure out direction.
+    if (pendingReopenCheck.current) {
+      if (y > 0) {
+        // User scrolled UP into the content — cancel the reopen.
+        pendingReopenCheck.current = false;
+      } else if (y < 0) {
+        // iOS bounce: user scrolled DOWN past the top → commit reopen.
+        pendingReopenCheck.current = false;
+        collapsedState.current = false;
+        armedToReopen.current = false;
+        animateTo(0);
+      }
+      // y === 0: wait for the next tick.
+    }
+
     if (!collapsedState.current && y > COLLAPSE_THRESHOLD) {
       collapsedState.current = true;
+      armedToReopen.current = false;
+      pendingReopenCheck.current = false;
       animateTo(1);
     } else if (collapsedState.current && y <= 0) {
-      collapsedState.current = false;
-      animateTo(0);
+      // Reached the top while closed — do NOT auto-reopen. Arm the next
+      // gesture to handle the re-expand.
+      armedToReopen.current = true;
+    }
+  }
+
+  // Fires at the start of a new drag. If we're sitting closed-at-top, arm a
+  // direction check — we'll commit (or cancel) the reopen in handleScroll.
+  function handleScrollBeginDrag(e) {
+    const y = e.nativeEvent.contentOffset.y;
+    if (collapsedState.current && armedToReopen.current && y <= 0) {
+      pendingReopenCheck.current = true;
+    }
+  }
+
+  // Android fallback: if scrollY never changed during the drag (no bounce),
+  // the first-tick direction check can't fire. On release, if we still had a
+  // pending reopen, commit it — the user definitely made a down-gesture at
+  // the top since scrollY never went up.
+  function handleScrollEndDrag(e) {
+    if (pendingReopenCheck.current) {
+      pendingReopenCheck.current = false;
+      const y = e.nativeEvent.contentOffset.y;
+      if (collapsedState.current && armedToReopen.current && y <= 0) {
+        collapsedState.current = false;
+        armedToReopen.current = false;
+        animateTo(0);
+      }
     }
   }
 
@@ -622,23 +799,53 @@ export default function StudentDetailScreen({ route, navigation }) {
     outputRange: [1, 0],
     extrapolate: 'clamp',
   });
-
-  if (loading) {
-    return (
-      <SafeAreaView style={styles.safe}>
-        <View style={styles.loadingWrap}>
-          <ActivityIndicator size="small" color={C.sub} />
-        </View>
-      </SafeAreaView>
-    );
-  }
+  // Nudge the heroTop row down when collapsing so the avatar visually
+  // centres in the smaller card (the gauges+footer below stay in layout
+  // but are invisible/clipped, which otherwise leaves extra space at the
+  // bottom).
+  const heroTopTranslate = collapsedAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, 9],
+  });
 
   const tabs = ['information', 'activity', 'actions'];
   const tabIndex = tabs.indexOf(activeTab);
   const actionCount = actions.length;
 
-  // Sticky overlay height = 16 top offset + hero + tabs + (optional section head)
-  const scrollPaddingTop = 16 + HERO_FULL + TABS_H + headerExtra;
+  // When activeTab changes via a tab tap, sync the horizontal pager to the
+  // matching page. On first mount we jump without animation (needed on
+  // Android — `contentOffset` only honours the initial x on iOS) and also
+  // seed `horizontalScrollX` so the underline renders at the right tab;
+  // otherwise the Animated.Value sits at 0 until the first scroll event
+  // fires, leaving the trait under Information while the pager is on
+  // Activity.
+  const pagerFirstMount = useRef(true);
+  useEffect(() => {
+    if (!screenWidth) return;
+    const targetX = tabIndex * screenWidth;
+    if (pagerFirstMount.current) {
+      horizontalScrollX.setValue(targetX);
+      pagerRef.current?.scrollTo({ x: targetX, animated: false });
+      pagerFirstMount.current = false;
+    } else {
+      pagerRef.current?.scrollTo({ x: targetX, animated: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tabIndex, screenWidth]);
+
+  if (loading) {
+    return <StudentDetailSkeleton onBack={() => navigation.goBack()} />;
+  }
+
+  // Each tab's vertical ScrollView has a tight paddingTop (enough for the
+  // collapsed hero + tabs) plus an animated spacer that shrinks from
+  // (HERO_FULL - HERO_COLLAPSED) → 0 as the hero collapses. That keeps the
+  // first content block glued to the bottom of the hero+tabs strip at both
+  // sizes, for all three tab pages.
+  const heroSpacerHeight = collapsedAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [HERO_FULL - HERO_COLLAPSED, 0],
+  });
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -654,22 +861,47 @@ export default function StudentDetailScreen({ route, navigation }) {
       </View>
 
       <View style={{ flex: 1 }}>
-        {/* ── Scrollable tab content (paddingTop reserves space for overlay) ── */}
-        <ScrollView
-          ref={scrollRef}
-          style={{ flex: 1 }}
-          contentContainerStyle={{ paddingTop: scrollPaddingTop, paddingBottom: 40 }}
-          showsVerticalScrollIndicator={false}
+        {/* ── Horizontal pager: one vertical ScrollView per tab, finger-synced
+            with the underline below the tab labels. ── */}
+        <Animated.ScrollView
+          ref={pagerRef}
+          horizontal
+          pagingEnabled
+          bounces={false}
+          showsHorizontalScrollIndicator={false}
           scrollEventThrottle={16}
-          onScroll={handleScroll}
+          contentOffset={{ x: tabIndex * screenWidth, y: 0 }}
+          onScroll={Animated.event(
+            [{ nativeEvent: { contentOffset: { x: horizontalScrollX } } }],
+            { useNativeDriver: false }
+          )}
+          onMomentumScrollEnd={(e) => {
+            const page = Math.round(e.nativeEvent.contentOffset.x / Math.max(1, screenWidth));
+            const next = tabs[page];
+            if (next && next !== activeTab) setActiveTab(next);
+          }}
         >
 
         {/* ══════════════════════════════════════════════ */}
         {/* ── INFORMATION TAB ── */}
         {/* ══════════════════════════════════════════════ */}
-        {activeTab === 'information' && (
+        <View style={{ width: screenWidth, flex: 1 }}>
+          <ScrollView
+            ref={scrollRefInfo}
+            style={{ flex: 1 }}
+            contentContainerStyle={{
+              paddingTop: 16 + HERO_COLLAPSED + TABS_H,
+              paddingBottom: 40,
+            }}
+            showsVerticalScrollIndicator={false}
+            scrollEventThrottle={16}
+            onScroll={handleScroll}
+            onScrollBeginDrag={handleScrollBeginDrag}
+            onScrollEndDrag={handleScrollEndDrag}
+          >
+          <Animated.View style={{ height: heroSpacerHeight }} pointerEvents="none" />
           <View style={styles.tabContent}>
-            <Card style={{ borderColor: 'rgba(232,168,56,0.12)' }}>
+            <Card style={{ borderWidth: 2, borderColor: 'rgba(232,168,56,0.12)' }}>
               <View style={styles.briefHead}>
                 <View style={styles.briefIconWrap}>
                   <Ionicons name="flash" size={14} color={C.orange} />
@@ -677,20 +909,74 @@ export default function StudentDetailScreen({ route, navigation }) {
                 <Text style={styles.briefTitle}>Next class briefing</Text>
               </View>
 
-              <Text style={styles.briefingText}>
-                {displayName.split(' ')[0]}{' '}
-                {briefingParts.map((p, i) => (
-                  <Text
-                    key={i}
-                    style={{
-                      color: p.color || C.sub,
-                      fontFamily: p.bold ? Fonts.jakartaBold : Fonts.jakartaRegular,
-                    }}
-                  >
-                    {p.text}
+              {/* Stats row: sessions / practiced / questions */}
+              <View style={styles.briefStatsRow}>
+                <View style={styles.briefStat}>
+                  <Text style={styles.briefStatNum}>{stats.sessionsSince}</Text>
+                  <Text style={styles.briefStatLabel}>Sessions</Text>
+                </View>
+                <View style={styles.briefStatDivider} />
+                <View style={styles.briefStat}>
+                  <Text style={styles.briefStatNum}>
+                    {focusPoints.filter((f) => f.weekCount > 0).length}
                   </Text>
-                ))}
-              </Text>
+                  <Text style={styles.briefStatLabel}>Practiced</Text>
+                </View>
+                <View style={styles.briefStatDivider} />
+                <View style={styles.briefStat}>
+                  <Text
+                    style={[
+                      styles.briefStatNum,
+                      questions.length > 0 && { color: C.orange },
+                    ]}
+                  >
+                    {questions.length}
+                  </Text>
+                  <Text style={styles.briefStatLabel}>Questions</Text>
+                </View>
+              </View>
+
+              {/* Practiced this week */}
+              {focusPoints.some((f) => f.weekCount > 0) && (
+                <View style={styles.briefSection}>
+                  <Text style={styles.briefSectionLabel}>PRACTICED THIS WEEK</Text>
+                  {focusPoints
+                    .filter((f) => f.weekCount > 0)
+                    .slice(0, 4)
+                    .map((f) => (
+                      <View key={f.id} style={styles.briefPracticedRow}>
+                        <Ionicons name="checkmark-circle" size={14} color={C.green} />
+                        <Text style={styles.briefPracticedText} numberOfLines={1}>
+                          {f.name}
+                        </Text>
+                        <Text style={styles.briefPracticedCount}>{f.weekCount}×</Text>
+                      </View>
+                    ))}
+                </View>
+              )}
+
+              {/* Pending questions */}
+              {questions.length > 0 && (
+                <View style={styles.briefSection}>
+                  <Text style={styles.briefSectionLabel}>PENDING QUESTIONS</Text>
+                  {questions.slice(0, 2).map((q) => (
+                    <TouchableOpacity
+                      key={q.id}
+                      style={styles.briefQuestionRow}
+                      activeOpacity={0.85}
+                      onPress={() => {
+                        setActiveQuestion(q);
+                        setQuestionSheetVisible(true);
+                      }}
+                    >
+                      <Ionicons name="chatbubble" size={12} color={C.orange} />
+                      <Text style={styles.briefQuestionText} numberOfLines={2}>
+                        {q.message}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
 
               <View style={styles.recBlock}>
                 <Text style={styles.recLabel}>RECOMMENDATIONS</Text>
@@ -708,9 +994,14 @@ export default function StudentDetailScreen({ route, navigation }) {
             {/* Working on */}
             {focusPoints.length > 0 && (
               <View style={{ marginTop: 16 }}>
-                <Text style={styles.sectionLabel}>WORKING ON</Text>
+                <Text style={styles.sectionLabel}>ACTIVE FOCUS</Text>
                 {focusPoints.slice(0, 5).map((f) => (
-                  <View key={f.id} style={styles.focusRow}>
+                  <TouchableOpacity
+                    key={f.id}
+                    style={styles.focusRow}
+                    activeOpacity={0.8}
+                    onPress={() => setEditingFocus(f)}
+                  >
                     <View style={styles.focusDot} />
                     <View style={{ flex: 1 }}>
                       <Text style={styles.focusName}>{f.name}</Text>
@@ -735,17 +1026,69 @@ export default function StudentDetailScreen({ route, navigation }) {
                         {f.weekCount}×
                       </Text>
                     </View>
-                  </View>
+                    <View style={styles.focusEditBtn}>
+                      <Ionicons name="pencil" size={13} color={C.muted} />
+                    </View>
+                  </TouchableOpacity>
                 ))}
               </View>
             )}
           </View>
-        )}
+          </ScrollView>
+        </View>
 
         {/* ══════════════════════════════════════════════ */}
         {/* ── ACTIVITY TAB ── */}
         {/* ══════════════════════════════════════════════ */}
-        {activeTab === 'activity' && (
+        <View style={{ width: screenWidth, flex: 1 }}>
+          <ScrollView
+            ref={scrollRefActivity}
+            style={{ flex: 1 }}
+            contentContainerStyle={{
+              paddingTop: 16 + HERO_COLLAPSED + TABS_H,
+              paddingBottom: 40,
+            }}
+            showsVerticalScrollIndicator={false}
+            scrollEventThrottle={16}
+            onScroll={handleScroll}
+            onScrollBeginDrag={handleScrollBeginDrag}
+            onScrollEndDrag={handleScrollEndDrag}
+          >
+          <Animated.View style={{ height: heroSpacerHeight }} pointerEvents="none" />
+          <View style={styles.activityHeader}>
+            <View style={{ flexShrink: 1, paddingRight: 10 }}>
+              <Text style={styles.weekTitle}>
+                {stats.sessionsSince} session{stats.sessionsSince !== 1 ? 's' : ''}
+                {stats.totalMinSince > 0 ? ` · ${stats.totalMinSince} min` : ''}
+              </Text>
+              <Text style={styles.weekSub}>
+                Since last private lesson{lastClassDate ? ` · ${relativeDateShort(lastClassDate)}` : ''}
+              </Text>
+            </View>
+            {stats.trend !== 0 && (
+              <View
+                style={[
+                  styles.trendPill,
+                  { backgroundColor: stats.trend > 0 ? 'rgba(74,175,82,0.08)' : 'rgba(212,69,69,0.08)' },
+                ]}
+              >
+                <Ionicons
+                  name={stats.trend > 0 ? 'trending-up' : 'trending-down'}
+                  size={11}
+                  color={stats.trend > 0 ? C.green : C.red}
+                />
+                <Text
+                  style={[
+                    styles.trendText,
+                    { color: stats.trend > 0 ? C.green : C.red },
+                  ]}
+                >
+                  {stats.trend > 0 ? '+' : ''}
+                  {stats.trend}%
+                </Text>
+              </View>
+            )}
+          </View>
           <View style={styles.tabContent}>
             <View style={styles.tlContainer}>
               <View style={styles.tlSpine} />
@@ -755,13 +1098,68 @@ export default function StudentDetailScreen({ route, navigation }) {
                 timelineEvents.map((item) => <TimelineRow key={item.id} item={item} />)
               )}
             </View>
+
+            {/* ── Last class recap card ── */}
+            {lastCoachClass && (
+              <View style={styles.classRecap}>
+                <View style={styles.classRecapHeader}>
+                  <View style={styles.classRecapBadge}>
+                    <Text style={styles.classRecapBadgeText}>LAST CLASS WITH YOU</Text>
+                  </View>
+                  <Text style={styles.classRecapDate}>
+                    {relativeDateShort(lastCoachClass.date)}
+                  </Text>
+                </View>
+                <Text style={styles.classRecapTitle}>
+                  {lastCoachClass.title || lastCoachClass.dance || 'Private lesson'}
+                </Text>
+                {!!lastCoachClass.classSummary && (
+                  <Text style={styles.classRecapSummary}>
+                    {lastCoachClass.classSummary}
+                  </Text>
+                )}
+                {lastCoachClass.focusPoints && lastCoachClass.focusPoints.length > 0 && (
+                  <View style={styles.classRecapFPs}>
+                    <Text style={styles.classRecapFPLabel}>Focus points</Text>
+                    {lastCoachClass.focusPoints.map((fp, i) => (
+                      <View key={fp.id || i} style={styles.classRecapFPRow}>
+                        <View style={[styles.classRecapFPDot, { backgroundColor: fp.trainedCount > 0 ? C.green : C.red }]} />
+                        <Text style={styles.classRecapFPName} numberOfLines={1}>{fp.name}</Text>
+                        <View style={[styles.classRecapFPCount, {
+                          backgroundColor: fp.trainedCount > 0 ? 'rgba(74,175,82,0.08)' : 'rgba(212,69,69,0.08)',
+                        }]}>
+                          <Text style={[styles.classRecapFPCountText, {
+                            color: fp.trainedCount > 0 ? C.green : C.red,
+                          }]}>{fp.trainedCount}x</Text>
+                        </View>
+                      </View>
+                    ))}
+                  </View>
+                )}
+              </View>
+            )}
           </View>
-        )}
+          </ScrollView>
+        </View>
 
         {/* ══════════════════════════════════════════════ */}
         {/* ── ACTIONS TAB ── */}
         {/* ══════════════════════════════════════════════ */}
-        {activeTab === 'actions' && (
+        <View style={{ width: screenWidth, flex: 1 }}>
+          <ScrollView
+            ref={scrollRefActions}
+            style={{ flex: 1 }}
+            contentContainerStyle={{
+              paddingTop: 16 + HERO_COLLAPSED + TABS_H,
+              paddingBottom: 40,
+            }}
+            showsVerticalScrollIndicator={false}
+            scrollEventThrottle={16}
+            onScroll={handleScroll}
+            onScrollBeginDrag={handleScrollBeginDrag}
+            onScrollEndDrag={handleScrollEndDrag}
+          >
+          <Animated.View style={{ height: heroSpacerHeight }} pointerEvents="none" />
           <View style={styles.tabContent}>
             {actions.length === 0 ? (
               <View style={styles.actionsEmpty}>
@@ -861,25 +1259,116 @@ export default function StudentDetailScreen({ route, navigation }) {
                     ))}
                   </>
                 )}
+
+                {/* 3. Merge requests */}
+                {mergeRequests.length > 0 && (
+                  <>
+                    <Text style={[styles.actionsSectionLabel, { marginTop: 16 }]}>
+                      MERGE SUGGESTIONS
+                    </Text>
+                    {mergeRequests.map((mr) => (
+                      <View key={`merge_${mr.id}`} style={[styles.actionCard, styles.actionCardOrange]}>
+                        <View style={styles.actionCardLabelRow}>
+                          <Ionicons name="git-merge-outline" size={13} color={C.orange} />
+                          <Text style={[styles.actionCardLabel, { color: C.orange }]}>MERGE REQUEST</Text>
+                        </View>
+                        <Text style={styles.actionCardTitle}>
+                          "{mr.focusAName}" & "{mr.focusBName}"
+                        </Text>
+                        <View style={styles.actionBtnRow}>
+                          <TouchableOpacity
+                            style={styles.replyBtn}
+                            onPress={async () => {
+                              await supabase.from('focus_points').update({ is_deleted: true, status: 'past' }).eq('id', mr.focus_b);
+                              await supabase.from('merge_requests').update({ status: 'merged', resolved_at: new Date().toISOString(), resolved_by: 'coach' }).eq('id', mr.id);
+                              setMergeRequests(prev => prev.filter(m => m.id !== mr.id));
+                            }}
+                            activeOpacity={0.85}
+                          >
+                            <Ionicons name="checkmark" size={13} color="#fff" />
+                            <Text style={styles.replyBtnText}>Merge</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={styles.inClassBtn}
+                            onPress={async () => {
+                              await supabase.from('merge_requests').update({ status: 'rejected', resolved_at: new Date().toISOString(), resolved_by: 'coach' }).eq('id', mr.id);
+                              setMergeRequests(prev => prev.filter(m => m.id !== mr.id));
+                            }}
+                            activeOpacity={0.85}
+                          >
+                            <Text style={styles.inClassBtnText}>Ignore</Text>
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    ))}
+                  </>
+                )}
+
+                {/* 4. Name matching */}
+                {nameMatches.length > 0 && (
+                  <>
+                    <Text style={[styles.actionsSectionLabel, { marginTop: 16 }]}>
+                      NAME MATCHING
+                    </Text>
+                    {nameMatches.map((notif) => {
+                      const d = notif.data || {};
+                      return (
+                        <View key={`name_${notif.id}`} style={[styles.actionCard, styles.actionCardOrange]}>
+                          <View style={styles.actionCardLabelRow}>
+                            <Ionicons name="help-circle-outline" size={13} color={C.orange} />
+                            <Text style={[styles.actionCardLabel, { color: C.orange }]}>NAME MATCH</Text>
+                          </View>
+                          <Text style={styles.actionCardTitle}>
+                            Is "{d.extracted_name}" the same as "{d.student_name}"?
+                          </Text>
+                          <View style={styles.actionBtnRow}>
+                            <TouchableOpacity
+                              style={styles.replyBtn}
+                              onPress={async () => {
+                                const { focus_point_ids } = d;
+                                if (focus_point_ids?.length > 0) {
+                                  await supabase.from('focus_points').update({ status: 'pending_coach' }).in('id', focus_point_ids);
+                                }
+                                await deleteNotification(notif.id);
+                                setNameMatches(prev => prev.filter(n => n.id !== notif.id));
+                              }}
+                              activeOpacity={0.85}
+                            >
+                              <Ionicons name="checkmark" size={13} color="#fff" />
+                              <Text style={styles.replyBtnText}>Confirm</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              style={styles.inClassBtn}
+                              onPress={async () => {
+                                const { focus_point_ids } = d;
+                                if (focus_point_ids?.length > 0) {
+                                  await supabase.from('focus_points').update({ user_id: null, status: 'active' }).in('id', focus_point_ids);
+                                }
+                                await deleteNotification(notif.id);
+                                setNameMatches(prev => prev.filter(n => n.id !== notif.id));
+                              }}
+                              activeOpacity={0.85}
+                            >
+                              <Text style={styles.inClassBtnText}>Not a match</Text>
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      );
+                    })}
+                  </>
+                )}
               </>
             )}
           </View>
-        )}
-        </ScrollView>
+          </ScrollView>
+        </View>
 
-        {/* ── Full-width white backdrop: masks scroll content behind the
-            sticky header (sides + top strip) so cards never peek through. ── */}
+        </Animated.ScrollView>
+
+        {/* White backdrop so scrolling content stays hidden behind the floating hero card */}
         <Animated.View
           pointerEvents="none"
-          style={[
-            styles.stickyBackdrop,
-            {
-              height: Animated.add(
-                heroHeight,
-                new Animated.Value(16 + TABS_H + headerExtra)
-              ),
-            },
-          ]}
+          style={[styles.heroBackdrop, { height: Animated.add(heroHeight, 16) }]}
         />
 
         {/* ── Sticky overlay: animated hero + tabs + (section head) ── */}
@@ -888,13 +1377,15 @@ export default function StudentDetailScreen({ route, navigation }) {
           style={[styles.stickyOverlay, { height: heroHeight }]}
         >
           <View style={{ flex: 1, overflow: 'hidden' }}>
-            <View style={styles.heroTop}>
+            <Animated.View
+              style={[styles.heroTop, { transform: [{ translateY: heroTopTranslate }] }]}
+            >
               <View style={styles.avatarWrap}>
                 <ActivityRing
-                  progress={metrics.health}
+                  progress={metrics.global}
                   size={62}
                   strokeWidth={3.5}
-                  color={metrics.health >= 70 ? C.green : metrics.health >= 40 ? C.orange : C.red}
+                  color={metrics.global > 70 ? C.green : metrics.global >= 40 ? C.orange : C.red}
                 />
                 <View style={styles.avatarBadge}>
                   {profile?.photo_url ? (
@@ -909,45 +1400,65 @@ export default function StudentDetailScreen({ route, navigation }) {
                   {displayName}
                 </Text>
                 <Text style={styles.heroMeta} numberOfLines={1}>
-                  {[profile?.level, profile?.dance_style].filter(Boolean).join(' · ') || 'Student'}
+                  Trained{' '}
+                  <Text
+                    style={[
+                      styles.heroMetaCount,
+                      {
+                        color:
+                          stats.sessionsSince >= 3
+                            ? C.green
+                            : stats.sessionsSince >= 1
+                              ? C.orange
+                              : C.red,
+                      },
+                    ]}
+                  >
+                    {stats.sessionsSince}x
+                  </Text>
+                  {' time'}
+                  {stats.sessionsSince === 1 ? '' : 's'}
+                  {' since last private lesson'}
                 </Text>
               </View>
-            </View>
+            </Animated.View>
 
             <Animated.View style={{ opacity: gaugesOpacity }} pointerEvents="none">
               <View style={styles.gaugeRow}>
                 <Gauge
+                  value={metrics.progression}
+                  color={metrics.progression > 70 ? C.green : metrics.progression >= 40 ? C.orange : C.red}
+                  label="Progression"
+                  dark
+                  dashWhenZero
+                />
+                <Gauge
                   value={metrics.retention}
-                  color={metrics.retention >= 70 ? C.green : metrics.retention >= 40 ? C.orange : C.red}
+                  color={metrics.retention > 70 ? C.green : metrics.retention >= 40 ? C.orange : C.red}
                   label="Retention"
                   dark
                 />
                 <Gauge
-                  value={metrics.motivation}
-                  color={metrics.motivation >= 70 ? C.green : metrics.motivation >= 40 ? C.orange : C.red}
-                  label="Motivation"
-                  dark
-                />
-                <Gauge
-                  value={metrics.health}
-                  color={metrics.health >= 70 ? C.green : metrics.health >= 40 ? C.orange : C.red}
-                  label="Health"
+                  value={metrics.global}
+                  color={metrics.global > 70 ? C.green : metrics.global >= 40 ? C.orange : C.red}
+                  label="Global"
                   dark
                 />
               </View>
 
               <View style={styles.heroFooter}>
-                <Ionicons
-                  name="shield-checkmark-outline"
-                  size={14}
-                  color={churnLow ? C.green : C.orange}
-                />
-                <Text style={styles.heroFooterText}>
+                <View style={styles.heroFooterLeft}>
+                  <View
+                    style={[
+                      styles.heroFooterDot,
+                      { backgroundColor: churnLow ? C.green : C.orange },
+                    ]}
+                  />
                   <Text style={styles.heroFooterBold}>
                     {churnLow ? 'Low churn risk' : 'Watch engagement'}
                   </Text>
-                  {`  ·  Seen ${lastSeen}${profile?.created_at ? `  ·  Since ${joinedLabel(profile.created_at)}` : ''}`}
-                </Text>
+                </View>
+                <Text style={styles.heroFooterMuted}>Seen {lastSeen}</Text>
               </View>
             </Animated.View>
           </View>
@@ -965,11 +1476,8 @@ export default function StudentDetailScreen({ route, navigation }) {
               const isActive = activeTab === tab;
               const isActions = tab === 'actions';
               const label = tab === 'information' ? 'Information' : tab === 'activity' ? 'Activity' : 'Actions';
-              const color = isActive
-                ? isActions && actionCount > 0
-                  ? badgeColor
-                  : C.text
-                : C.muted;
+              const activeColor = isActions && actionCount > 0 ? badgeColor : C.text;
+              const color = isActive ? activeColor : C.muted;
               return (
                 <TouchableOpacity
                   key={tab}
@@ -977,77 +1485,42 @@ export default function StudentDetailScreen({ route, navigation }) {
                   onPress={() => setActiveTab(tab)}
                   activeOpacity={0.7}
                 >
-                  <Text
-                    style={[
-                      styles.tabLabel,
-                      { color, fontFamily: isActive ? Fonts.jakartaBold : Fonts.jakartaMedium },
-                    ]}
-                  >
-                    {label}
-                  </Text>
-                  {isActions && actionCount > 0 && (
-                    <View style={[styles.tabBadge, { backgroundColor: badgeColor }]}>
-                      <Text style={styles.tabBadgeText}>{actionCount}</Text>
-                    </View>
-                  )}
+                  <View style={styles.tabLabelRow}>
+                    <Text
+                      style={[
+                        styles.tabLabel,
+                        { color, fontFamily: isActive ? Fonts.jakartaBold : Fonts.jakartaMedium },
+                      ]}
+                    >
+                      {label}
+                    </Text>
+                    {isActions && actionCount > 0 && (
+                      <View style={[styles.tabBadge, { backgroundColor: badgeColor }]}>
+                        <Text style={styles.tabBadgeText}>{actionCount}</Text>
+                      </View>
+                    )}
+                  </View>
                 </TouchableOpacity>
               );
             })}
+            <Animated.View
+              pointerEvents="none"
+              style={[
+                styles.tabSlidingUnderline,
+                {
+                  backgroundColor:
+                    activeTab === 'actions' && actionCount > 0 ? badgeColor : C.dark,
+                  left: horizontalScrollX.interpolate({
+                    inputRange: [0, Math.max(1, screenWidth), Math.max(2, 2 * screenWidth)],
+                    outputRange: ['5%', '38.333%', '71.667%'],
+                    extrapolate: 'clamp',
+                  }),
+                },
+              ]}
+            />
           </View>
-          <View style={styles.tabUnderlineTrack} />
-          <View
-            style={[
-              styles.tabUnderline,
-              {
-                left: `${(tabIndex * 100) / 3}%`,
-                backgroundColor: activeTab === 'actions' && actionCount > 0 ? badgeColor : C.dark,
-              },
-            ]}
-          />
         </Animated.View>
 
-        {/* Pinned "Since last private lesson" head (Activity tab only) */}
-        {activeTab === 'activity' && (
-          <Animated.View
-            style={[
-              styles.stickyWeekHead,
-              { transform: [{ translateY: Animated.add(heroHeight, new Animated.Value(TABS_H)) }] },
-            ]}
-          >
-            <View style={{ flexShrink: 1, paddingRight: 10 }}>
-              <Text style={styles.weekTitle}>
-                {stats.sessionsSince} session{stats.sessionsSince !== 1 ? 's' : ''}
-                {stats.totalMinSince > 0 ? ` · ${stats.totalMinSince} min` : ''}
-              </Text>
-              <Text style={styles.weekSub}>
-                Since last private lesson{lastClassDate ? ` · ${relativeDateShort(lastClassDate)}` : ''}
-              </Text>
-            </View>
-            {stats.trend !== 0 && (
-              <View
-                style={[
-                  styles.trendPill,
-                  { backgroundColor: stats.trend > 0 ? 'rgba(74,175,82,0.08)' : 'rgba(212,69,69,0.08)' },
-                ]}
-              >
-                <Ionicons
-                  name={stats.trend > 0 ? 'trending-up' : 'trending-down'}
-                  size={11}
-                  color={stats.trend > 0 ? C.green : C.red}
-                />
-                <Text
-                  style={[
-                    styles.trendText,
-                    { color: stats.trend > 0 ? C.green : C.red },
-                  ]}
-                >
-                  {stats.trend > 0 ? '+' : ''}
-                  {stats.trend}%
-                </Text>
-              </View>
-            )}
-          </Animated.View>
-        )}
       </View>
 
       <QuestionSheet
@@ -1060,6 +1533,28 @@ export default function StudentDetailScreen({ route, navigation }) {
           setQuestions((prev) => prev.filter((x) => x.id !== activeQuestion?.id));
         }}
       />
+
+      <Modal
+        visible={!!editingFocus}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setEditingFocus(null)}
+      >
+        {editingFocus && (
+          <FocusPointEditSheet
+            fp={editingFocus}
+            saveLabel="Save"
+            onSave={async (fpId, updates) => {
+              await updateFocusPoint(fpId, updates);
+              setFocusPoints((prev) =>
+                prev.map((f) => (f.id === fpId ? { ...f, ...updates } : f))
+              );
+              setEditingFocus(null);
+            }}
+            onClose={() => setEditingFocus(null)}
+          />
+        )}
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -1103,45 +1598,56 @@ const styles = StyleSheet.create({
   // ── Sticky collapsing overlay (new) ──
   stickyBackdrop: {
     position: 'absolute',
+    left: 0,
+    right: 0,
+    backgroundColor: C.bg,
+  },
+  heroBackdrop: {
+    position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
     backgroundColor: C.bg,
+    zIndex: 1,
   },
   stickyOverlay: {
     position: 'absolute',
     top: 16,
     left: 24,
     right: 24,
+    zIndex: 2,
     backgroundColor: C.dark,
     borderRadius: 22,
     padding: 20,
     borderWidth: 1,
     borderColor: 'rgba(232,168,56,0.18)',
     shadowColor: '#000',
-    shadowOpacity: 0.22,
-    shadowOffset: { width: 0, height: 8 },
-    shadowRadius: 16,
-    elevation: 6,
+    shadowOpacity: 0.10,
+    shadowOffset: { width: 0, height: 4 },
+    shadowRadius: 10,
+    elevation: 3,
   },
   stickyTabs: {
     position: 'absolute',
     top: 16, // then translated by heroHeight
-    left: 24,
-    right: 24,
+    left: 0,
+    right: 0,
     height: 46,
     backgroundColor: C.bg,
+    paddingHorizontal: 24,
+    zIndex: 2,
+    overflow: 'visible',
   },
-  stickyWeekHead: {
-    position: 'absolute',
-    top: 16, // then translated by heroHeight + tabs
-    left: 24,
-    right: 24,
+  // In-flow header for the Activity tab — sits at the top of the page's
+  // vertical ScrollView, so it slides horizontally with the rest of the tab
+  // content instead of floating above the pager.
+  activityHeader: {
     height: 76,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     backgroundColor: C.bg,
+    paddingHorizontal: 24,
     paddingTop: 22,
     paddingBottom: 6,
   },
@@ -1180,6 +1686,9 @@ const styles = StyleSheet.create({
     color: 'rgba(255,255,255,0.45)',
     marginTop: 4,
   },
+  heroMetaCount: {
+    fontFamily: Fonts.jakartaExtraBold,
+  },
   gaugeRow: {
     flexDirection: 'row',
     justifyContent: 'space-around',
@@ -1189,32 +1698,46 @@ const styles = StyleSheet.create({
   },
   heroFooter: {
     marginTop: 14,
-    backgroundColor: 'rgba(255,255,255,0.06)',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 9,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    justifyContent: 'space-between',
   },
-  heroFooterText: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 11,
-    color: 'rgba(255,255,255,0.55)',
-    flex: 1,
+  heroFooterLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flexShrink: 1,
+  },
+  heroFooterDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
   },
   heroFooterBold: {
     fontFamily: Fonts.jakartaBold,
-    color: 'rgba(255,255,255,0.85)',
+    fontSize: 13,
+    color: C.white,
+    letterSpacing: -0.1,
+  },
+  heroFooterMuted: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.45)',
+    marginLeft: 10,
   },
 
   // Tab switcher
   tabSwitcher: { marginHorizontal: 24, marginTop: 22 },
-  tabsRow: { flexDirection: 'row' },
+  tabsRow: { flexDirection: 'row', position: 'relative' },
+  tabLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   tabBtn: {
     flex: 1,
-    paddingVertical: 14,
-    flexDirection: 'row',
+    paddingTop: 14,
+    paddingBottom: 10.5,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
@@ -1241,10 +1764,16 @@ const styles = StyleSheet.create({
     backgroundColor: C.surface,
   },
   tabUnderline: {
+    height: 2.5,
+    width: '70%',
+    borderRadius: 2,
+    marginTop: 8,
+  },
+  tabSlidingUnderline: {
     position: 'absolute',
     bottom: 0,
+    width: '23.333%',
     height: 2.5,
-    width: '33.33%',
     borderRadius: 2,
   },
 
@@ -1294,6 +1823,97 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: C.sub,
     lineHeight: 21,
+  },
+
+  // Brief stats row
+  briefStatsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: C.surfaceAlt,
+    borderRadius: 14,
+    paddingVertical: 12,
+    marginBottom: 14,
+  },
+  briefStat: {
+    flex: 1,
+    alignItems: 'center',
+    gap: 2,
+  },
+  briefStatNum: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 20,
+    color: C.text,
+    letterSpacing: -0.5,
+  },
+  briefStatLabel: {
+    fontFamily: Fonts.jakartaSemiBold,
+    fontSize: 10,
+    color: C.muted,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+  briefStatDivider: {
+    width: StyleSheet.hairlineWidth,
+    height: 26,
+    backgroundColor: C.cardBorder,
+  },
+
+  // Brief sections
+  briefSection: {
+    marginBottom: 14,
+  },
+  briefSectionLabel: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 10,
+    color: C.muted,
+    letterSpacing: 1,
+    marginBottom: 8,
+  },
+  briefPracticedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 6,
+  },
+  briefPracticedText: {
+    flex: 1,
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 13,
+    color: C.text,
+  },
+  briefPracticedCount: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 12,
+    color: C.green,
+  },
+  briefQuestionRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    backgroundColor: 'rgba(232,168,56,0.06)',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginBottom: 6,
+  },
+  briefQuestionText: {
+    flex: 1,
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 12,
+    color: C.text,
+    lineHeight: 17,
+    fontStyle: 'italic',
+    marginTop: 1,
+  },
+
+  // Focus row edit icon
+  focusEditBtn: {
+    width: 26,
+    height: 26,
+    borderRadius: 8,
+    backgroundColor: C.surfaceAlt,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 
   recBlock: {
@@ -1733,6 +2353,93 @@ const styles = StyleSheet.create({
     color: C.sub,
     textAlign: 'center',
     paddingHorizontal: 30,
+  },
+
+  // Last class recap card
+  classRecap: {
+    backgroundColor: C.surface,
+    borderRadius: 16,
+    padding: 16,
+    marginTop: 20,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: C.cardBorder,
+  },
+  classRecapHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  classRecapBadge: {
+    backgroundColor: 'rgba(232,168,56,0.12)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  classRecapBadgeText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 9,
+    letterSpacing: 0.8,
+    color: C.orange,
+  },
+  classRecapDate: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 10,
+    color: C.sub,
+  },
+  classRecapTitle: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 15,
+    color: C.dark,
+    letterSpacing: -0.2,
+    marginBottom: 6,
+  },
+  classRecapSummary: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 12,
+    color: C.sub,
+    lineHeight: 18,
+    marginBottom: 12,
+  },
+  classRecapFPs: {
+    gap: 6,
+  },
+  classRecapFPLabel: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 10,
+    color: C.muted,
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+    marginBottom: 2,
+  },
+  classRecapFPRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: C.white,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  classRecapFPDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+  },
+  classRecapFPName: {
+    fontFamily: Fonts.jakartaSemiBold,
+    fontSize: 13,
+    color: C.dark,
+    flex: 1,
+  },
+  classRecapFPCount: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+  },
+  classRecapFPCountText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 11,
   },
 });
 

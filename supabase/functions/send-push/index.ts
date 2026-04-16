@@ -73,7 +73,10 @@ async function sendPush(record: NotificationRecord): Promise<void> {
         to: pushToken,
         title: record.title,
         body: record.body,
-        data: record.data ?? {},
+        // Include the notification type so the app can route to the right
+        // screen when the push is tapped (coach action-needed types go to
+        // the ActionNeeded view, others fall back to the Notifications list).
+        data: { ...(record.data ?? {}), type: record.type },
         sound: 'default',
       }),
     })

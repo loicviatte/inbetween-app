@@ -1,11 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text } from 'react-native';
+import { View, Image } from 'react-native';
 import { NavigationContainer, DefaultTheme, createNavigationContainerRef } from '@react-navigation/native';
 import * as Notifications from 'expo-notifications';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import {
   useFonts,
   PlusJakartaSans_300Light,
@@ -23,6 +23,8 @@ import {
 import { supabase } from './src/services/supabase/client';
 import { getOrCreateInviteCode } from './src/storage/coachStorage';
 import { ProfileProvider } from './src/context/ProfileContext';
+import { CoachDataProvider } from './src/context/CoachDataContext';
+import CoachTabHeader from './src/components/CoachTabHeader';
 
 const navigationRef = createNavigationContainerRef();
 
@@ -51,6 +53,8 @@ import CoachSessionDetailScreen from './src/screens/coach/CoachSessionDetailScre
 import NameMatchConfirmScreen from './src/screens/coach/NameMatchConfirmScreen';
 import CoachNotesScreen from './src/screens/coach/CoachNotesScreen';
 import CoachNoteDetailScreen from './src/screens/coach/CoachNoteDetailScreen';
+import StartClassScreen from './src/screens/coach/StartClassScreen';
+import ActionNeededScreen from './src/screens/coach/ActionNeededScreen';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -128,23 +132,28 @@ function AppNavigator() {
 
 function CoachMainTabs() {
   return (
-    <Tab.Navigator
-      initialRouteName="STUDENTS"
-      tabBar={(props) => <CustomTabBar {...props} />}
-      screenOptions={{
-        headerShown: false,
-        tabBarStyle: { backgroundColor: 'transparent', borderTopWidth: 0, elevation: 0 },
-      }}
-    >
-      <Tab.Screen name="STUDENTS" component={CoachHomeScreen} />
-      <Tab.Screen name="DASHBOARD" component={DashboardScreen} />
-      <Tab.Screen name="NOTES" component={CoachNotesScreen} />
-    </Tab.Navigator>
+    <SafeAreaView style={{ flex: 1, backgroundColor: '#FFFFFF' }} edges={['top']}>
+      <CoachTabHeader />
+      <Tab.Navigator
+        initialRouteName="DASHBOARD"
+        tabBar={(props) => <CustomTabBar {...props} />}
+        screenOptions={{
+          headerShown: false,
+          lazy: false,
+          tabBarStyle: { backgroundColor: 'transparent', borderTopWidth: 0, elevation: 0 },
+        }}
+      >
+        <Tab.Screen name="STUDENTS" component={CoachHomeScreen} />
+        <Tab.Screen name="DASHBOARD" component={DashboardScreen} />
+        <Tab.Screen name="NOTES" component={CoachNotesScreen} />
+      </Tab.Navigator>
+    </SafeAreaView>
   );
 }
 
 function CoachAppNavigator() {
   return (
+    <CoachDataProvider>
     <CoachStack.Navigator screenOptions={{ headerShown: false }}>
       <CoachStack.Screen name="CoachMainTabs" component={CoachMainTabs} />
       <CoachStack.Screen
@@ -162,11 +171,14 @@ function CoachAppNavigator() {
         component={NotificationsScreen}
         options={{ animation: 'slide_from_left' }}
       />
+      <CoachStack.Screen name="StartClass" component={StartClassScreen} options={{ animation: 'slide_from_bottom' }} />
+      <CoachStack.Screen name="ActionNeeded" component={ActionNeededScreen} options={{ animation: 'slide_from_right' }} />
       <CoachStack.Screen name="FocusValidation" component={FocusValidationScreen} options={{ animation: 'slide_from_right' }} />
       <CoachStack.Screen name="NameMatchConfirm" component={NameMatchConfirmScreen} options={{ animation: 'slide_from_bottom', presentation: 'modal' }} />
       <CoachStack.Screen name="CoachProfile" component={CoachProfileScreen} options={{ animation: 'slide_from_right' }} />
       <CoachStack.Screen name="CoachNoteDetail" component={CoachNoteDetailScreen} options={{ animation: 'slide_from_right' }} />
     </CoachStack.Navigator>
+    </CoachDataProvider>
   );
 }
 
@@ -236,21 +248,36 @@ export default function App() {
     }
   }
 
-  // Navigate to Notifications when a push notification is tapped
-  function handleNotificationTap() {
-    if (navigationRef.isReady()) {
+  // Coach-facing "action needed" notification types — tapping any of these
+  // should land the coach directly on the ActionNeeded screen instead of
+  // the generic Notifications list.
+  const COACH_ACTION_TYPES = new Set([
+    'focus_points_added',
+    'focus_point_added',
+    'merge_request',
+    'name_match_confirm',
+  ]);
+
+  // Route a tapped push notification to the right screen, based on the
+  // `type` we now stash in the push `data` payload.
+  function handleNotificationTap(data) {
+    if (!navigationRef.isReady()) return;
+    const type = data?.type;
+    if (type && COACH_ACTION_TYPES.has(type)) {
+      navigationRef.navigate('ActionNeeded');
+    } else {
       navigationRef.navigate('Notifications');
     }
   }
 
   useEffect(() => {
     // App in background — tapped notification
-    const sub = Notifications.addNotificationResponseReceivedListener(() => {
-      handleNotificationTap();
+    const sub = Notifications.addNotificationResponseReceivedListener((response) => {
+      handleNotificationTap(response.notification.request.content.data);
     });
     // App killed — launched from notification
-    Notifications.getLastNotificationResponseAsync().then(response => {
-      if (response) handleNotificationTap();
+    Notifications.getLastNotificationResponseAsync().then((response) => {
+      if (response) handleNotificationTap(response.notification.request.content.data);
     });
     return () => sub.remove();
   }, []);
@@ -281,10 +308,12 @@ export default function App() {
 
   if (isLoading) {
     return (
-      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFFFFF' }}>
-        {fontsLoaded && (
-          <Text style={{ fontFamily: 'Montserrat_800ExtraBold', fontSize: 20, color: '#0D0D12', letterSpacing: 1 }}>EE</Text>
-        )}
+      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#0E0E0E' }}>
+        <Image
+          source={require('./assets/icon.png')}
+          style={{ width: 120, height: 120 }}
+          resizeMode="contain"
+        />
       </View>
     );
   }
