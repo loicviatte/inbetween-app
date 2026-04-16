@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -7,17 +7,14 @@ import {
   TouchableOpacity,
   TextInput,
   Image,
-  ActivityIndicator,
   Pressable,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import Svg, { Circle } from 'react-native-svg';
 import { Fonts, Spacing } from '../../theme';
-import { getMyStudents, getPendingCoachRequests, respondToCoachRequest } from '../../storage/coachStorage';
-import { getUser } from '../../storage/storage';
-import { getNotifications } from '../../storage/notificationsStorage';
+import { respondToCoachRequest } from '../../storage/coachStorage';
+import { CoachHomeScreenSkeleton } from '../../components/Skeleton';
+import { useCoachData } from '../../context/CoachDataContext';
 
 // ── Palette ─────────────────────────────────────────────────────────────────
 const C = {
@@ -287,61 +284,20 @@ function RequestRow({ student, onAccept, onReject }) {
 
 // ── Screen ──────────────────────────────────────────────────────────────────
 export default function CoachHomeScreen({ navigation }) {
-  const [students, setStudents] = useState([]);
-  const [requests, setRequests] = useState([]);
-  const [user, setUser] = useState(null);
-  const [unreadCount, setUnreadCount] = useState(0);
-  const [loading, setLoading] = useState(true);
+  const { students, requests, initialLoading: loading, refresh, updateRequests } = useCoachData();
 
   const [filter, setFilter] = useState('all'); // 'all' | 'last_private'
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
-  useFocusEffect(
-    useCallback(() => {
-      let active = true;
-      async function load() {
-        setLoading(true);
-        try {
-          const [s, r, u, notifs] = await Promise.all([
-            getMyStudents(),
-            getPendingCoachRequests().catch(() => []),
-            getUser().catch(() => null),
-            getNotifications().catch(() => []),
-          ]);
-          if (!active) return;
-          setStudents(s || []);
-          setRequests(r || []);
-          setUser(u);
-          setUnreadCount(
-            (notifs || []).filter(
-              (n) =>
-                !n.read ||
-                n.type === 'merge_request_student' ||
-                n.type === 'name_match_confirm'
-            ).length
-          );
-        } catch (e) {
-          console.error('CoachHomeScreen load error:', e);
-        }
-        if (active) setLoading(false);
-      }
-      load();
-      return () => {
-        active = false;
-      };
-    }, [])
-  );
-
   async function handleAccept(requestId) {
     await respondToCoachRequest(requestId, true);
-    setRequests((prev) => prev.filter((r) => r.id !== requestId));
-    const s = await getMyStudents();
-    setStudents(s || []);
+    updateRequests((prev) => prev.filter((r) => r.id !== requestId));
+    refresh();
   }
   async function handleReject(requestId) {
     await respondToCoachRequest(requestId, false);
-    setRequests((prev) => prev.filter((r) => r.id !== requestId));
+    updateRequests((prev) => prev.filter((r) => r.id !== requestId));
   }
 
   const filteredStudents = useMemo(() => {
@@ -364,44 +320,15 @@ export default function CoachHomeScreen({ navigation }) {
   const openStudent = (s) =>
     navigation.navigate('StudentDetail', { studentId: s.id, studentName: s.name });
 
+  if (loading) return <CoachHomeScreenSkeleton />;
+
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
+    <View style={styles.safe}>
       <ScrollView
         style={{ flex: 1 }}
         contentContainerStyle={{ paddingBottom: 110 }}
         showsVerticalScrollIndicator={false}
       >
-        {/* ── Top row: notif + avatar ── */}
-        <View style={styles.topRow}>
-          <TouchableOpacity
-            onPress={() => navigation.navigate('Notifications')}
-            style={styles.notifBtn}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="notifications-outline" size={24} color={C.text} />
-            {unreadCount > 0 && (
-              <View style={styles.notifBadge}>
-                <Text style={styles.notifBadgeText}>
-                  {unreadCount > 9 ? '9+' : unreadCount}
-                </Text>
-              </View>
-            )}
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.avatarBtn}
-            onPress={() => navigation.navigate('CoachProfile')}
-            activeOpacity={0.8}
-          >
-            {user?.photo_url ? (
-              <Image source={{ uri: user.photo_url }} style={styles.avatarImg} />
-            ) : (
-              <Text style={styles.avatarText}>
-                {user?.name ? user.name[0].toUpperCase() : 'C'}
-              </Text>
-            )}
-          </TouchableOpacity>
-        </View>
-
         {/* ── Title + search toggle ── */}
         <View style={styles.titleRow}>
           <Text style={styles.title}>Students</Text>
@@ -559,13 +486,8 @@ export default function CoachHomeScreen({ navigation }) {
           </View>
         )}
 
-        {loading && (
-          <View style={{ paddingTop: 40, alignItems: 'center' }}>
-            <ActivityIndicator size="small" color={C.muted} />
-          </View>
-        )}
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }
 

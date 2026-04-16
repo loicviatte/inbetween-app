@@ -9,3 +9,6 @@ verify_jwt = false
 
 [functions.yoda-extract]
 verify_jwt = false
+
+[functions.ai-chat]
+verify_jwt = false

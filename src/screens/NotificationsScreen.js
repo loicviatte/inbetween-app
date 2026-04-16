@@ -9,6 +9,15 @@ import { locallyRespondedAttendance, locallyResolvedNameMatches } from '../stora
 
 const ATTENDANCE_TYPES = new Set(['attendance_check', 'group_class_attendance']);
 const ACTIONABLE_TYPES = new Set(['attendance_check', 'group_class_attendance', 'merge_request_student', 'name_match_confirm']);
+// Coach-facing "action needed" notification types: tapping any of these
+// routes straight to the ActionNeeded screen (where the coach can validate
+// focus points, resolve merge requests, or confirm name matches).
+const COACH_ACTION_TYPES = new Set([
+  'focus_points_added',
+  'focus_point_added',
+  'merge_request',
+  'name_match_confirm',
+]);
 
 const TYPE_CONFIG = {
   coach_request_accepted:  { icon: 'checkmark-circle-outline', color: '#34C759' },
@@ -179,20 +188,11 @@ export default function NotificationsScreen({ navigation }) {
         coachName: notif.data.coach_name,
         classDate: notif.data.lesson_date ?? notif.data.class_date,
       });
-    } else if (notif.type === 'focus_points_added' && notif.data?.student_id && notif.data.student_id !== currentUserId) {
-      navigation.navigate('FocusValidation', {
-        studentId: notif.data.student_id,
-        studentName: notif.data.student_name ?? 'Student',
-      });
-    } else if (notif.type === 'name_match_confirm' && notif.data?.student_id) {
-      navigation.navigate('NameMatchConfirm', {
-        studentId: notif.data.student_id,
-        studentName: notif.data.student_name ?? 'Student',
-        extractedName: notif.data.extracted_name ?? '?',
-        focusPointIds: notif.data.focus_point_ids ?? [],
-        notificationId: notif.id,
-      });
-    } else if (notif.type === 'focus_points_added' || notif.type === 'focus_point_added') {
+    } else if (COACH_ACTION_TYPES.has(notif.type)) {
+      // Coach action needed (focus point review / merge / name match) —
+      // all three are handled in a single ActionNeeded screen with tabs.
+      navigation.navigate('ActionNeeded');
+    } else if (notif.type === 'focus_point_added') {
       navigation.replace('AllFocusPoints');
     } else if (notif.type === 'merge_request_student' && notif.data?.merge_request_id) {
       navigation.navigate('MergeReview', { mergeRequestId: notif.data.merge_request_id });

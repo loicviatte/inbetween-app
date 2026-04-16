@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -10,12 +10,10 @@ import {
   Platform,
   Image,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Fonts, Spacing } from '../../theme';
-import { getCoachNotes, getMyStudents } from '../../storage/coachStorage';
-import { getUser } from '../../storage/storage';
+import CoachNotesSkeleton from '../../components/CoachNotesSkeleton';
+import { useCoachData } from '../../context/CoachDataContext';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -101,28 +99,14 @@ function NoteCard({ item, onPress }) {
 }
 
 export default function CoachNotesScreen({ navigation }) {
-  const [notes, setNotes] = useState([]);
-  const [user, setUser] = useState(null);
-  const [studentsCount, setStudentsCount] = useState(0);
+  const { notes, students, initialLoading: loading, refresh } = useCoachData();
+  const studentsCount = students.length;
   const [search, setSearch] = useState('');
   const [refreshing, setRefreshing] = useState(false);
 
-  async function load() {
-    const [n, u, s] = await Promise.all([
-      getCoachNotes(),
-      getUser().catch(() => null),
-      getMyStudents().catch(() => []),
-    ]);
-    setNotes(n || []);
-    setUser(u);
-    setStudentsCount((s || []).length);
-  }
-
-  useFocusEffect(useCallback(() => { load(); }, []));
-
   async function handleRefresh() {
     setRefreshing(true);
-    try { await load(); } catch {}
+    try { await refresh(); } catch {}
     setRefreshing(false);
   }
 
@@ -138,31 +122,11 @@ export default function CoachNotesScreen({ navigation }) {
   const grouped = groupByDate(filtered);
   const linkedCount = notes.filter(n => n.linkedStudent).length;
 
-  return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
-      <View style={styles.fixed}>
-        {/* Header */}
-        <View style={styles.header}>
-          <TouchableOpacity
-            onPress={() => navigation.navigate('Notifications')}
-            style={styles.notifBtn}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="notifications-outline" size={24} color={Colors.black} />
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.avatar}
-            onPress={() => navigation.navigate('CoachProfile')}
-            activeOpacity={0.8}
-          >
-            {user?.photo_url ? (
-              <Image source={{ uri: user.photo_url }} style={styles.avatarPhoto} />
-            ) : (
-              <Text style={styles.avatarText}>{user?.name ? user.name[0].toUpperCase() : 'C'}</Text>
-            )}
-          </TouchableOpacity>
-        </View>
+  if (loading) return <CoachNotesSkeleton />;
 
+  return (
+    <View style={styles.safe}>
+      <View style={styles.fixed}>
         {/* Hero card */}
         <View style={styles.hero}>
           <View style={styles.heroBadge}>
@@ -252,7 +216,7 @@ export default function CoachNotesScreen({ navigation }) {
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
-    </SafeAreaView>
+    </View>
   );
 }
 

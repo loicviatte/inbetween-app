@@ -1,54 +1,24 @@
-const API_KEY = process.env.EXPO_PUBLIC_ANTHROPIC_API_KEY;
-const MODEL = 'claude-haiku-4-5-20251001';
-const API_URL = 'https://api.anthropic.com/v1/messages';
+import { supabase } from '../supabase/client';
+
+// All Claude calls are proxied through the Supabase edge function `ai-chat`
+// so the ANTHROPIC_API_KEY stays server-side and never ships in the app bundle.
+
+async function invokeAiChat({ systemPrompt, prompt, messages, maxTokens }) {
+  const { data, error } = await supabase.functions.invoke('ai-chat', {
+    body: { systemPrompt, prompt, messages, maxTokens },
+  });
+  if (error) throw new Error(`ai-chat invoke error: ${error.message || error}`);
+  if (data?.error) throw new Error(data.error);
+  return (data?.text ?? '').trim();
+}
 
 export async function callClaudeChat(systemPrompt, messages, maxTokens = 500) {
-  const res = await fetch(API_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': API_KEY,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true',
-    },
-    body: JSON.stringify({
-      model: MODEL,
-      max_tokens: maxTokens,
-      system: systemPrompt,
-      messages,
-    }),
-  });
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`Anthropic API error: ${errText}`);
-  }
-  const data = await res.json();
-  return data.content[0].text.trim();
+  return await invokeAiChat({ systemPrompt, messages, maxTokens });
 }
 
 async function callClaude(prompt, maxTokens = 200) {
-  console.log('[Anthropic] callClaude →', { model: MODEL, maxTokens, promptPreview: prompt.slice(0, 80) });
-  const res = await fetch(API_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': API_KEY,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true',
-    },
-    body: JSON.stringify({
-      model: MODEL,
-      max_tokens: maxTokens,
-      messages: [{ role: 'user', content: prompt }],
-    }),
-  });
-  if (!res.ok) {
-    const errText = await res.text();
-    console.error('[Anthropic] API error', res.status, errText);
-    throw new Error(`Anthropic API error: ${errText}`);
-  }
-  const data = await res.json();
-  const text = data.content[0].text.trim();
+  console.log('[Anthropic] callClaude →', { maxTokens, promptPreview: prompt.slice(0, 80) });
+  const text = await invokeAiChat({ prompt, maxTokens });
   console.log('[Anthropic] response →', text);
   return text;
 }
@@ -121,6 +91,40 @@ Respond with ONLY valid JSON: {"focus_name": string|null}`;
     if (!match) return null;
     const parsed = JSON.parse(match[0]);
     return parsed.focus_name || null;
+  } catch {
+    return null;
+  }
+}
+
+// ─── Group class theme suggestion ────────────────────────────────────────────
+//
+// Given the top focus points currently shared across a coach's students,
+// ask Claude to propose a unifying theme for the next group class.
+//   candidates: [{ name, count }]  (count = distinct students working on it)
+// Returns { theme, subtitle } or null on failure.
+export async function suggestGroupClassTheme(candidates) {
+  if (!candidates || candidates.length === 0) return null;
+
+  const list = candidates
+    .map((c) => `- "${c.name}" (${c.count} student${c.count > 1 ? 's' : ''})`)
+    .join('\n');
+
+  const prompt = `You are a dance coach planning a group class. These are the most common focus points your students are actively working on right now:
+
+${list}
+
+Suggest ONE unifying class theme that addresses the dominant underlying skill — it can group several related focus points under a broader theme, or single out the most frequent one if nothing else clusters well.
+
+Respond with ONLY valid JSON:
+{"theme": "2-4 word class title (e.g. 'Balance & Stability')", "subtitle": "8-12 words of context on what to focus on"}`;
+
+  try {
+    const text = await callClaude(prompt, 150);
+    const match = text.match(/\{[\s\S]*\}/);
+    if (!match) return null;
+    const parsed = JSON.parse(match[0]);
+    if (!parsed.theme) return null;
+    return { theme: parsed.theme, subtitle: parsed.subtitle || '' };
   } catch {
     return null;
   }

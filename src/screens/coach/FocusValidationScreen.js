@@ -1,7 +1,7 @@
 import React, { useCallback, useState } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
-  ActivityIndicator, TextInput, KeyboardAvoidingView, Platform, ScrollView, Modal
+  ActivityIndicator, Modal
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -11,6 +11,7 @@ import {
   getPendingFocusPoints, approveFocusPoint, editAndApproveFocusPoint,
   deletePendingFocusPoint, approveAllPendingForStudent
 } from '../../storage/coachStorage';
+import FocusPointEditSheet from '../../components/FocusPointEditSheet';
 
 const TIER_COLOR = { critical: '#E84040', important: '#FF9D00', supporting: '#4CAF50' };
 
@@ -44,54 +45,6 @@ function PendingFocusCard({ fp, onApprove, onEdit, onDelete }) {
         </TouchableOpacity>
       </View>
     </View>
-  );
-}
-
-function EditSheet({ fp, onSave, onClose }) {
-  const [name, setName] = useState(fp.name ?? '');
-  const [subtitle, setSubtitle] = useState(fp.subtitle ?? '');
-  const [context, setContext] = useState(fp.context ?? '');
-  const [drill, setDrill] = useState(fp.drill ?? '');
-  const [tier, setTier] = useState(fp.tier ?? 'important');
-  const [saving, setSaving] = useState(false);
-
-  async function handleSave() {
-    setSaving(true);
-    await onSave(fp.id, { name, subtitle, context, drill, tier });
-    setSaving(false);
-  }
-
-  return (
-    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={es.overlay}>
-      <View style={es.sheet}>
-        <View style={es.handle} />
-        <Text style={es.title}>Edit Focus Point</Text>
-        <ScrollView showsVerticalScrollIndicator={false}>
-          {[['Title', name, setName], ['Subtitle', subtitle, setSubtitle], ['Context', context, setContext], ['Drill', drill, setDrill]].map(([label, val, set]) => (
-            <View key={label} style={es.field}>
-              <Text style={es.label}>{label}</Text>
-              <TextInput style={[es.input, label === 'Context' && { minHeight: 80 }]} value={val} onChangeText={set} multiline={label === 'Context'} placeholderTextColor="rgba(13,13,18,0.3)" />
-            </View>
-          ))}
-          <View style={es.field}>
-            <Text style={es.label}>Tier</Text>
-            <View style={es.pillRow}>
-              {['critical', 'important', 'supporting'].map(t => (
-                <TouchableOpacity key={t} style={[es.pill, tier === t && es.pillActive]} onPress={() => setTier(t)} activeOpacity={0.8}>
-                  <Text style={[es.pillText, tier === t && es.pillTextActive]}>{t}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-        </ScrollView>
-        <TouchableOpacity style={es.saveBtn} onPress={handleSave} disabled={saving} activeOpacity={0.85}>
-          <Text style={es.saveBtnText}>{saving ? 'Saving…' : 'Save & Approve'}</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={es.cancelBtn} onPress={onClose} activeOpacity={0.7}>
-          <Text style={es.cancelText}>Cancel</Text>
-        </TouchableOpacity>
-      </View>
-    </KeyboardAvoidingView>
   );
 }
 
@@ -208,7 +161,14 @@ export default function FocusValidationScreen({ navigation, route }) {
       )}
 
       <Modal visible={!!editingFp} transparent animationType="slide" onRequestClose={() => setEditingFp(null)}>
-        {editingFp && <EditSheet fp={editingFp} onSave={handleSaveEdit} onClose={() => setEditingFp(null)} />}
+        {editingFp && (
+          <FocusPointEditSheet
+            fp={editingFp}
+            onSave={handleSaveEdit}
+            onClose={() => setEditingFp(null)}
+            saveLabel="Save & Approve"
+          />
+        )}
       </Modal>
     </SafeAreaView>
   );
@@ -242,21 +202,3 @@ const s = StyleSheet.create({
   actionIconBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', borderRadius: 10, backgroundColor: Colors.statCardBg, borderWidth: 0.5, borderColor: Colors.statCardBorder },
 });
 
-const es = StyleSheet.create({
-  overlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.4)' },
-  sheet: { backgroundColor: Colors.white, borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingHorizontal: 24, paddingTop: 12, paddingBottom: 44, maxHeight: '90%' },
-  handle: { width: 32, height: 3, backgroundColor: 'rgba(13,13,18,0.1)', borderRadius: 2, alignSelf: 'center', marginBottom: 20 },
-  title: { fontFamily: Fonts.jakartaExtraBold, fontSize: 17, color: Colors.black, textAlign: 'center', marginBottom: 20, letterSpacing: -0.2 },
-  field: { marginBottom: 16 },
-  label: { fontFamily: Fonts.jakartaExtraBold, fontSize: 10, color: Colors.secondary, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 6 },
-  input: { backgroundColor: Colors.statCardBg, borderWidth: 0.5, borderColor: Colors.statCardBorder, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12, fontFamily: Fonts.jakartaRegular, fontSize: 14, color: Colors.black },
-  pillRow: { flexDirection: 'row', gap: 8 },
-  pill: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 16, borderWidth: 0.5, borderColor: Colors.statCardBorder, backgroundColor: Colors.statCardBg },
-  pillActive: { backgroundColor: Colors.black, borderColor: Colors.black },
-  pillText: { fontFamily: Fonts.jakartaMedium, fontSize: 13, color: Colors.secondary },
-  pillTextActive: { color: Colors.white },
-  saveBtn: { backgroundColor: Colors.black, borderRadius: 14, paddingVertical: 16, alignItems: 'center', marginTop: 8 },
-  saveBtnText: { fontFamily: Fonts.jakartaBold, fontSize: 15, color: Colors.white },
-  cancelBtn: { paddingVertical: 14, alignItems: 'center' },
-  cancelText: { fontFamily: Fonts.jakartaRegular, fontSize: 14, color: Colors.secondary },
-});

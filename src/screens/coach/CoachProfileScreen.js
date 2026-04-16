@@ -161,11 +161,12 @@ export default function CoachProfileScreen({ navigation }) {
         {/* Header */}
         <View style={styles.header}>
           <TouchableOpacity
-            onPress={() => navigation.navigate('Notifications')}
-            style={styles.notifBtn}
+            onPress={() => navigation.goBack()}
+            style={styles.backBtn}
+            hitSlop={12}
             activeOpacity={0.7}
           >
-            <Ionicons name="notifications-outline" size={24} color={Colors.black} />
+            <Ionicons name="chevron-back" size={24} color={Colors.black} />
           </TouchableOpacity>
           <TouchableOpacity onPress={openEdit} activeOpacity={0.7}>
             <Text style={styles.editBtn}>Edit</Text>
@@ -301,6 +302,13 @@ const styles = StyleSheet.create({
     height: 36,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  backBtn: {
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: -8,
   },
   editBtn: {
     fontFamily: Fonts.jakartaBold,

@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -7,14 +7,13 @@ import {
   TouchableOpacity,
   Image,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import Svg, { Circle } from 'react-native-svg';
 import { Colors, Fonts, Spacing } from '../../theme';
-import { getMyStudents, getCoachActivityFeed } from '../../storage/coachStorage';
-import { getUser } from '../../storage/storage';
-import { getNotifications } from '../../storage/notificationsStorage';
+import DashboardSkeleton from '../../components/DashboardSkeleton';
+import { useCoachData } from '../../context/CoachDataContext';
+import { getGroupClassThemeCandidates } from '../../storage/coachStorage';
+import { suggestGroupClassTheme } from '../../services/ai/anthropic';
 
 // ── Palette tuned to the "Var 1b" design ────────────────────────────────────
 const HERO_BG = '#141414';
@@ -307,91 +306,90 @@ function ActivityRow({ item, isLast }) {
 
 // ── Screen ──────────────────────────────────────────────────────────────────
 export default function DashboardScreen({ navigation }) {
-  const [students, setStudents] = useState([]);
-  const [events, setEvents] = useState([]);
-  const [user, setUser] = useState(null);
-  const [unreadCount, setUnreadCount] = useState(0);
-  const [loading, setLoading] = useState(true);
+  const { students, events, actionCounts, initialLoading: loading } = useCoachData();
 
-  useFocusEffect(
-    useCallback(() => {
-      let active = true;
-      async function load() {
-        setLoading(true);
-        try {
-          const [s, ev, u, notifs] = await Promise.all([
-            getMyStudents(),
-            getCoachActivityFeed(),
-            getUser(),
-            getNotifications(),
-          ]);
-          if (!active) return;
-          setStudents(s || []);
-          setEvents((ev || []).slice(0, 12));
-          setUser(u);
-          setUnreadCount(
-            (notifs || []).filter(
-              (n) =>
-                !n.read ||
-                n.type === 'merge_request_student' ||
-                n.type === 'name_match_confirm'
-            ).length
-          );
-        } catch {}
-        if (active) setLoading(false);
+  // ── Group class theme suggestion ────────────────────────────────────────
+  // Computes candidates from the coach's students' active focus points since
+  // the last group class (or last 30 days), then asks Claude for a unifying
+  // theme. Cached per studentIds signature to avoid re-calling on every
+  // render — but recomputed when the students list changes.
+  const [groupTheme, setGroupTheme] = useState(null);
+  const [groupThemeLoading, setGroupThemeLoading] = useState(false);
+  const [groupThemeStudents, setGroupThemeStudents] = useState([]);
+  const lastSignatureRef = useRef(null);
+
+  useEffect(() => {
+    if (!students || students.length === 0) {
+      setGroupTheme(null);
+      setGroupThemeStudents([]);
+      return;
+    }
+    const signature = students.map((s) => s.id).sort().join('|');
+    if (signature === lastSignatureRef.current) return;
+    lastSignatureRef.current = signature;
+
+    let alive = true;
+    async function run() {
+      setGroupThemeLoading(true);
+      try {
+        const { candidates } = await getGroupClassThemeCandidates(
+          students.map((s) => s.id),
+        );
+        if (!alive) return;
+        if (!candidates || candidates.length === 0) {
+          setGroupTheme(null);
+          setGroupThemeStudents([]);
+          return;
+        }
+        // Students sharing the #1 candidate — used for the avatar stack.
+        const topIds = new Set(candidates[0].studentIds);
+        const matched = students.filter((s) => topIds.has(s.id));
+        const suggestion = await suggestGroupClassTheme(
+          candidates.map((c) => ({ name: c.name, count: c.count })),
+        );
+        if (!alive) return;
+        setGroupTheme(
+          suggestion || {
+            theme: candidates[0].name,
+            subtitle: `${candidates[0].count} student${candidates[0].count > 1 ? 's' : ''} working on it`,
+          },
+        );
+        setGroupThemeStudents(matched);
+      } catch {
+        if (!alive) return;
+        setGroupTheme(null);
+        setGroupThemeStudents([]);
+      } finally {
+        if (alive) setGroupThemeLoading(false);
       }
-      load();
-      return () => {
-        active = false;
-      };
-    }, [])
-  );
+    }
+    run();
+    return () => {
+      alive = false;
+    };
+  }, [students]);
 
   const stats = useMemo(() => {
     const practiced = students.filter((s) => s.status === 'on_track').length;
-    const forgetting = students.filter((s) => s.status === 'attention').length;
-    const silent = students.filter((s) => s.status === 'question').length;
+    const inProgress = students.filter((s) => s.status === 'attention').length;
+    const silent = students.filter((s) => s.status === 'silent').length;
     const total = students.length;
-    const retention = total > 0 ? Math.round((practiced / total) * 100) : 0;
-    const actions = forgetting + silent;
-    const questions = silent;
-    return { practiced, forgetting, silent, total, retention, actions, questions };
+    // Average of the per-student Global score (same 0-100 metric shown on
+    // the student detail hero). Falls back to 0 when there are no students.
+    const globalAvg = total > 0
+      ? Math.round(
+          students.reduce((sum, s) => sum + (s.global || s.health || 0), 0) / total
+        )
+      : 0;
+    const actions = inProgress + silent;
+    return { practiced, inProgress, silent, total, globalAvg, actions };
   }, [students]);
 
-  return (
-    <SafeAreaView style={styles.safe}>
-      <View style={styles.fixed}>
-        {/* ── Top header: bell + avatar (unchanged) ── */}
-        <View style={styles.header}>
-          <TouchableOpacity
-            onPress={() => navigation.navigate('Notifications')}
-            style={styles.notifBtn}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="notifications-outline" size={24} color={Colors.black} />
-            {unreadCount > 0 && (
-              <View style={styles.notifBadge}>
-                <Text style={styles.notifBadgeText}>
-                  {unreadCount > 9 ? '9+' : unreadCount}
-                </Text>
-              </View>
-            )}
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.avatar}
-            onPress={() => navigation.navigate('CoachProfile')}
-            activeOpacity={0.8}
-          >
-            {user?.photo_url ? (
-              <Image source={{ uri: user.photo_url }} style={styles.avatarPhoto} />
-            ) : (
-              <Text style={styles.avatarText}>
-                {user?.name ? user.name[0].toUpperCase() : 'C'}
-              </Text>
-            )}
-          </TouchableOpacity>
-        </View>
+  if (loading) return <DashboardSkeleton />;
 
+  return (
+    <View style={styles.safe}>
+      <View style={styles.fixed}>
         {/* ── Students horizontal scroll ── */}
         <Text style={styles.sectionLabel}>STUDENTS</Text>
         {students.length > 0 ? (
@@ -423,57 +421,66 @@ export default function DashboardScreen({ navigation }) {
         {/* ── Hero overview card ── */}
         <View style={styles.hero}>
           <View style={styles.weekBadge}>
-            <Text style={styles.weekBadgeText}>THIS WEEK</Text>
+            <Text style={styles.weekBadgeText}>SINCE LAST CLASS</Text>
           </View>
           <View style={styles.heroTop}>
             <OverviewDonut
               practiced={stats.practiced}
-              forgetting={stats.forgetting}
+              forgetting={stats.inProgress}
               silent={stats.silent}
               total={stats.total}
             />
             <View style={styles.heroLegend}>
               <LegendRow color={GN_SOLID} num={stats.practiced} label="Practiced" />
-              <LegendRow color={OR_SOLID} num={stats.forgetting} label="Forgetting" />
+              <LegendRow color={OR_SOLID} num={stats.inProgress} label="In progress" />
               <LegendRow color={RD_SOLID} num={stats.silent} label="Silent" />
             </View>
           </View>
 
+          <TouchableOpacity
+            style={styles.retentionBar}
+            activeOpacity={0.85}
+            onPress={() => navigation.navigate('STUDENTS')}
+          >
+            <View style={styles.retentionHeader}>
+              <Text style={styles.retentionLabel}>GLOBAL AVG</Text>
+              <Text style={styles.retentionPct}>{stats.globalAvg}%</Text>
+            </View>
+            <View style={styles.retentionTrack}>
+              <View
+                style={[
+                  styles.retentionFill,
+                  { width: `${Math.max(2, Math.min(100, stats.globalAvg))}%` },
+                ]}
+              />
+            </View>
+          </TouchableOpacity>
+
           <View style={styles.heroDivider} />
 
           <View style={styles.heroMetrics}>
-            {/* AVG RETENTION */}
-            <View style={styles.avgItem}>
-              <AvgRing value={stats.retention} />
-              <View style={{ marginLeft: 10 }}>
-                <Text style={styles.avgItemNum}>AVG</Text>
-                <Text style={styles.metricLabel}>RETENTION</Text>
-              </View>
-            </View>
-
-            {/* Actions pill */}
             <TouchableOpacity
-              style={styles.actionPill}
-              activeOpacity={0.85}
-              onPress={() => navigation.navigate('STUDENTS')}
+              style={styles.startClassBtn}
+              activeOpacity={0.88}
+              onPress={() => navigation.navigate('StartClass')}
             >
-              <Ionicons name="alert-circle" size={16} color={RD_SOLID} />
-              <Text style={styles.actionPillText}>
-                <Text style={styles.actionPillNum}>{stats.actions}</Text> Action needed
-              </Text>
+              <Ionicons name="play" size={14} color="#fff" />
+              <Text style={styles.startClassText}>Start Class</Text>
             </TouchableOpacity>
 
-            {/* Questions pill */}
-            <TouchableOpacity
-              style={styles.questionPill}
-              activeOpacity={0.85}
-              onPress={() => navigation.navigate('STUDENTS')}
-            >
-              <Ionicons name="chatbubble-ellipses" size={16} color={OR_SOLID} />
-              <Text style={styles.questionPillText}>
-                <Text style={styles.questionPillNum}>{stats.questions}</Text>
-              </Text>
-            </TouchableOpacity>
+            {actionCounts?.total > 0 && (
+              <TouchableOpacity
+                style={[
+                  styles.actionsBtn,
+                  { backgroundColor: actionCounts.focus > 0 ? RD_SOLID : OR_SOLID },
+                ]}
+                activeOpacity={0.85}
+                onPress={() => navigation.navigate('ActionNeeded')}
+              >
+                <Text style={styles.actionsBtnNum}>{actionCounts.total}</Text>
+                <Ionicons name="alert" size={14} color="#fff" />
+              </TouchableOpacity>
+            )}
           </View>
         </View>
 
@@ -481,29 +488,36 @@ export default function DashboardScreen({ navigation }) {
         <Text style={styles.sectionLabelLow}>NEXT GROUP CLASS — FOCUS ON</Text>
         <View style={styles.focusCard}>
           <View style={{ flex: 1 }}>
-            <Text style={styles.focusTitle}>Balance & Stability</Text>
+            <Text style={styles.focusTitle}>
+              {groupThemeLoading
+                ? 'Analyzing focus points…'
+                : groupTheme?.theme || 'No shared focus yet'}
+            </Text>
             <Text style={styles.focusSub}>
-              {students.length > 0
-                ? `${Math.min(students.length, 4)} students share this focus`
-                : 'No shared focus yet'}
+              {groupThemeLoading
+                ? 'Looking at what your students have been working on'
+                : groupTheme?.subtitle ||
+                  (students.length > 0 ? 'Not enough recent activity to suggest a theme' : '')}
             </Text>
           </View>
           <View style={styles.focusAvatars}>
-            {students.slice(0, 4).map((s, idx) => (
-              <View
-                key={s.id}
-                style={[
-                  styles.focusAvatar,
-                  { marginLeft: idx === 0 ? 0 : -8, zIndex: 4 - idx },
-                ]}
-              >
-                {s.photo_url ? (
-                  <Image source={{ uri: s.photo_url }} style={styles.focusAvatarImg} />
-                ) : (
-                  <Text style={styles.focusAvatarText}>{initials(s.name)}</Text>
-                )}
-              </View>
-            ))}
+            {(groupThemeStudents.length > 0 ? groupThemeStudents : students)
+              .slice(0, 4)
+              .map((s, idx) => (
+                <View
+                  key={s.id}
+                  style={[
+                    styles.focusAvatar,
+                    { marginLeft: idx === 0 ? 0 : -8, zIndex: 4 - idx },
+                  ]}
+                >
+                  {s.photo_url ? (
+                    <Image source={{ uri: s.photo_url }} style={styles.focusAvatarImg} />
+                  ) : (
+                    <Text style={styles.focusAvatarText}>{initials(s.name)}</Text>
+                  )}
+                </View>
+              ))}
           </View>
         </View>
 
@@ -532,23 +546,10 @@ export default function DashboardScreen({ navigation }) {
               {loading ? ' ' : 'No activity yet.'}
             </Text>
           )}
+
         </ScrollView>
       </View>
-
-      {/* ── Start Class floating CTA ── */}
-      <View style={styles.ctaWrap} pointerEvents="box-none">
-        <TouchableOpacity
-          style={styles.cta}
-          activeOpacity={0.88}
-          onPress={() =>
-            navigation.navigate('FocusValidation', { fromStartClass: true })
-          }
-        >
-          <Ionicons name="play" size={14} color="#fff" />
-          <Text style={styles.ctaText}>Start Class</Text>
-        </TouchableOpacity>
-      </View>
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -748,79 +749,103 @@ const styles = StyleSheet.create({
   heroMetrics: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 12,
   },
-  avgItem: {
+  metricTile: {
+    alignItems: 'center',
+    gap: 6,
+    flex: 1,
+  },
+  actionsTile: {
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 6,
+  },
+  startClassBtn: {
+    flex: 8,
+    backgroundColor: OR_SOLID,
+    borderRadius: 14,
+    paddingVertical: 14,
     flexDirection: 'row',
     alignItems: 'center',
-    flex: 1.1,
-    paddingRight: 6,
-    borderRightWidth: StyleSheet.hairlineWidth,
-    borderRightColor: 'rgba(255,255,255,0.10)',
+    justifyContent: 'center',
+    gap: 8,
   },
-  avgItemNum: {
+  actionsBtn: {
+    flex: 2,
+    borderRadius: 14,
+    paddingVertical: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+  },
+  actionsBtnNum: {
     fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 13,
+    fontSize: 15,
+    color: '#fff',
+    letterSpacing: -0.3,
+  },
+  startClassText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 14,
+    color: '#fff',
+    letterSpacing: 0.2,
+  },
+  retentionBar: {
+    marginTop: 16,
+  },
+  retentionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-end',
+    marginBottom: 6,
+  },
+  retentionLabel: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 10,
+    letterSpacing: 1.1,
     color: 'rgba(255,255,255,0.55)',
-    lineHeight: 14,
   },
-  metricLabel: {
+  retentionPct: {
     fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 8,
-    color: 'rgba(255,255,255,0.45)',
-    letterSpacing: 0.6,
-    marginTop: 2,
+    fontSize: 16,
+    color: '#fff',
+    letterSpacing: -0.3,
+  },
+  retentionTrack: {
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    overflow: 'hidden',
+  },
+  retentionFill: {
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: OR_SOLID,
+  },
+  metricBadge: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  metricBadgeNum: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 16,
+  },
+  metricTileLabel: {
+    fontFamily: Fonts.jakartaSemiBold,
+    fontSize: 10,
+    color: 'rgba(255,255,255,0.50)',
+    letterSpacing: 0.3,
   },
   avgRingLabel: {
     fontFamily: Fonts.jakartaExtraBold,
     fontSize: 10,
     color: '#fff',
-  },
-
-  actionPill: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    backgroundColor: 'rgba(212,69,69,0.15)',
-    borderWidth: 1,
-    borderColor: 'rgba(212,69,69,0.38)',
-    borderRadius: 12,
-    paddingVertical: 11,
-  },
-  actionPillText: {
-    fontFamily: Fonts.jakartaSemiBold,
-    fontSize: 12,
-    color: 'rgba(212,69,69,0.92)',
-  },
-  actionPillNum: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 14,
-    color: RD_SOLID,
-  },
-
-  questionPill: {
-    width: 54,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 5,
-    backgroundColor: 'rgba(232,168,56,0.14)',
-    borderWidth: 1,
-    borderColor: 'rgba(232,168,56,0.35)',
-    borderRadius: 12,
-    paddingVertical: 11,
-  },
-  questionPillText: {
-    fontFamily: Fonts.jakartaSemiBold,
-    fontSize: 12,
-    color: 'rgba(232,168,56,0.92)',
-  },
-  questionPillNum: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 14,
-    color: OR_SOLID,
   },
 
   // Focus card
@@ -884,7 +909,7 @@ const styles = StyleSheet.create({
   },
   timelineScrollContent: {
     paddingHorizontal: Spacing.side,
-    paddingBottom: 90, // clear the floating CTA + tab bar
+    paddingBottom: 30, // clear the tab bar
   },
   timeline: {
     position: 'relative',
@@ -906,34 +931,6 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
 
-  // CTA
-  ctaWrap: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 10, // sits just above the floating tab bar
-    paddingHorizontal: 22,
-  },
-  cta: {
-    backgroundColor: OR_SOLID,
-    borderRadius: 16,
-    paddingVertical: 15,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    shadowColor: OR_SOLID,
-    shadowOpacity: 0.35,
-    shadowRadius: 14,
-    shadowOffset: { width: 0, height: 5 },
-    elevation: 4,
-  },
-  ctaText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 14,
-    color: '#fff',
-    letterSpacing: 0.2,
-  },
 });
 
 const miniS = StyleSheet.create({

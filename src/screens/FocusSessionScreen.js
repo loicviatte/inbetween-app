@@ -1082,11 +1082,15 @@ RULES
     } catch {}
 
     try {
-      const reply = await callClaudeChat(buildAiSystemPrompt(), newMessages);
+      const systemPrompt = buildAiSystemPrompt();
+      console.log('[AI Coach] systemPrompt length:', systemPrompt.length, 'aiContext:', !!aiContext);
+      const reply = await callClaudeChat(systemPrompt, newMessages);
+      console.log('[AI Coach] reply received, length:', reply?.length);
       setAiMessages(prev => [...prev, { role: 'assistant', content: reply }]);
       setTimeout(() => aiScrollRef.current?.scrollToEnd({ animated: true }), 50);
-    } catch {
-      setAiMessages(prev => [...prev, { role: 'assistant', content: 'Sorry, an error occurred. Please try again.' }]);
+    } catch (err) {
+      console.error('[AI Coach] send error:', err?.message || err);
+      setAiMessages(prev => [...prev, { role: 'assistant', content: `Error: ${err?.message || 'unknown'}` }]);
     } finally {
       setAiSending(false);
     }
