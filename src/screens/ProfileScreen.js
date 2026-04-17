@@ -319,10 +319,12 @@ export default function ProfileScreen({ navigation }) {
       allowsEditing: true,
       aspect: [1, 1],
       quality: 0.8,
+      base64: true,
     });
     if (result.canceled || !result.assets[0]?.uri) return;
 
-    const localUri = result.assets[0].uri;
+    const asset = result.assets[0];
+    const localUri = asset.uri;
     setPhotoUri(localUri); // optimistic update
 
     try {
@@ -330,15 +332,18 @@ export default function ProfileScreen({ navigation }) {
       const userId = session?.user?.id;
       if (!userId) throw new Error('Not authenticated');
 
-      // Read file as blob
-      const response = await fetch(localUri);
-      const blob = await response.blob();
-      const ext = localUri.split('.').pop()?.toLowerCase() || 'jpg';
+      if (!asset.base64) throw new Error('No base64 data from picker');
+      const bin = global.atob(asset.base64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+
+      const ext = (localUri.split('.').pop() || 'jpg').toLowerCase();
+      const contentType = ext === 'png' ? 'image/png' : 'image/jpeg';
       const path = `${userId}/avatar.${ext}`;
 
       const { error: uploadError } = await supabase.storage
         .from('avatars')
-        .upload(path, blob, { upsert: true, contentType: `image/${ext}` });
+        .upload(path, bytes, { upsert: true, contentType });
 
       if (uploadError) throw uploadError;
 
@@ -567,6 +572,19 @@ export default function ProfileScreen({ navigation }) {
           </TouchableOpacity>
         )}
 
+        {/* ── Trainer: students & focus point scores ── */}
+        {isTrainer && (
+          <TouchableOpacity
+            style={styles.trainerStudentsBtn}
+            onPress={() => navigation.navigate('TrainerStudents')}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.trainerStudentsText}>
+              {'\uD83D\uDCCA  Students & scores'}
+            </Text>
+          </TouchableOpacity>
+        )}
+
       </ScrollView>
       {/* Edit Profile Modal */}
       <Modal visible={editVisible} transparent animationType="slide" onRequestClose={() => setEditVisible(false)}>
@@ -774,6 +792,21 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.jakartaSemiBold,
     fontSize: 13,
     color: '#FF9D00',
+  },
+  trainerStudentsBtn: {
+    alignSelf: 'center',
+    marginTop: 10,
+    paddingHorizontal: 18,
+    paddingVertical: 11,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.12)',
+    backgroundColor: 'rgba(0,0,0,0.035)',
+  },
+  trainerStudentsText: {
+    fontFamily: Fonts.jakartaSemiBold,
+    fontSize: 13,
+    color: '#141414',
   },
 });
 

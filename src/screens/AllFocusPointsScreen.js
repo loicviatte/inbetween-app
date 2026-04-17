@@ -12,6 +12,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Fonts, Spacing } from '../theme';
 import { getAllFocusPointsRanked } from '../utils/algorithm';
+import { GenericListSkeleton } from '../components/Skeleton';
 
 const TIER_COLOR = {
   critical:  '#FF4B4B',
@@ -113,9 +114,7 @@ export default function AllFocusPointsScreen({ navigation }) {
       </View>
 
       {loading ? (
-        <View style={s.center}>
-          <ActivityIndicator color={Colors.black} />
-        </View>
+        <GenericListSkeleton rows={6} showHeader={false} showTitle={false} />
       ) : points.length === 0 ? (
         <View style={s.center}>
           <Text style={s.emptyTitle}>No focus points yet</Text>

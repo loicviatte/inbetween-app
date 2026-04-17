@@ -337,10 +337,8 @@ export async function completeTrainingSession(sessionId, feeling = null, session
     const newLogId = inserted?.id;
 
     if (activeFid) {
-      // Apply immediate score update to focus_points
-      await applyFocusEvent(activeFid, 'PRACTICE_SESSION_LOG', userId);
-
-      // Invoke yoda-score for full algorithm processing (fire-and-forget)
+      // Server-side yoda-score.applyPracticeLog is the single source of truth
+      // for practice_count and base_score changes. Fire-and-forget.
       supabase.functions.invoke('yoda-score', {
         body: {
           event:           'practice_log',

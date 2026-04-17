@@ -748,7 +748,7 @@ function FocusPointCard({ candidate, onPress }) {
 
 // ─── Main screen ──────────────────────────────────────────────────────────────
 
-export default function TrainerReviewScreen() {
+export default function TrainerReviewScreen({ navigation }) {
   const [activeTab, setActiveTab] = useState('extract');
 
   // Extract tab state
@@ -1017,6 +1017,13 @@ export default function TrainerReviewScreen() {
           <Text style={[tabStyles.tabPillText, activeTab === 'submit' && tabStyles.tabPillTextActive]}>
             Submit
           </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={tabStyles.tabPill}
+          onPress={() => navigation.navigate('TrainerStudents')}
+          activeOpacity={0.75}
+        >
+          <Text style={tabStyles.tabPillText}>Students</Text>
         </TouchableOpacity>
       </View>
 

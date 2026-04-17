@@ -26,6 +26,13 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Colors, Fonts, Spacing } from '../theme';
 import { getClassInputs, getNotes } from '../storage/storage';
+import {
+  getPendingClasses,
+  addPendingClass,
+  updatePendingClass,
+  removePendingClass,
+} from '../storage/pendingClasses';
+import { processClassDraft } from '../services/classSubmission';
 import LogModal from '../components/LogModal';
 import { Ionicons } from '@expo/vector-icons';
 import TabHeader from '../components/TabHeader';
@@ -116,16 +123,30 @@ function getDanceAbbrs(item) {
   return null;
 }
 
-function ClassItem({ item, onPress }) {
+function ClassItem({ item, onPress, onRetry }) {
   const hasTwo = item.practice_point_2 && item.ai_secondary_focus;
   const teacherName = item.teacher_name || item._teacher_fallback || null;
   const lessonType = item.lesson_type || null;
   const isGroup = lessonType === 'group' || lessonType === 'public';
   const countdown = item._pendingDeadline ? formatCountdown(item._pendingDeadline) : null;
   const isAnalysing = !item._pendingDeadline && (item.status === 'processing' || item.status === 'extracted' || item.status === 'pending');
-  const showPendingBadge = !!countdown || isAnalysing || !!item._hasPendingFPs;
+  const isLocalPending = !!item._localPending && !item._failed;
+  const isLocalFailed = !!item._failed;
+  const showPendingBadge = !!countdown || isAnalysing || !!item._hasPendingFPs || isLocalPending || isLocalFailed;
 
   function handlePress() {
+    if (isLocalFailed) {
+      onRetry?.(item._draft);
+      return;
+    }
+    if (isLocalPending) {
+      Alert.alert(
+        'Saving class',
+        'Your class is being processed. It will appear fully in a moment.',
+        [{ text: 'OK' }]
+      );
+      return;
+    }
     if (isAnalysing) {
       Alert.alert(
         'Being analysed',
@@ -145,13 +166,23 @@ function ClassItem({ item, onPress }) {
     onPress();
   }
 
+  const accentColor = isLocalFailed
+    ? '#E84040'
+    : item._hasPendingFPs
+      ? Colors.orange
+      : Colors.activeLog;
+
   return (
     <TouchableOpacity
-      style={[styles.card, showPendingBadge && styles.cardDisabled]}
+      style={[
+        styles.card,
+        isLocalPending && styles.cardDisabled,
+        isLocalFailed && styles.cardFailed,
+      ]}
       onPress={handlePress}
       activeOpacity={0.75}
     >
-      <View style={[styles.cardAccent, { backgroundColor: item._hasPendingFPs ? Colors.orange : Colors.activeLog }]} />
+      <View style={[styles.cardAccent, { backgroundColor: accentColor }]} />
       <View style={styles.cardBody}>
         <View style={styles.cardHeader}>
           <Text style={styles.cardDate}>
@@ -173,13 +204,23 @@ function ClassItem({ item, onPress }) {
           <Text style={styles.cardSecondary} numberOfLines={1}>+ {item.ai_secondary_focus}</Text>
         )}
         {showPendingBadge && (
-          <View style={styles.pendingBadge}>
-            <Text style={styles.pendingBadgeText}>
-              {isAnalysing
-                ? 'Analysing class…'
-                : countdown
-                  ? `Focus creation in progress · ready in ${countdown}`
-                  : 'Pending coach approval'}
+          <View style={[
+            styles.pendingBadge,
+            isLocalFailed && styles.pendingBadgeFailed,
+          ]}>
+            <Text style={[
+              styles.pendingBadgeText,
+              isLocalFailed && styles.pendingBadgeTextFailed,
+            ]}>
+              {isLocalFailed
+                ? 'Failed — tap to try again'
+                : isLocalPending
+                  ? 'Saving…'
+                  : isAnalysing
+                    ? 'Analysing class…'
+                    : countdown
+                      ? `Focus creation in progress · ready in ${countdown}`
+                      : 'Pending coach approval'}
             </Text>
           </View>
         )}
@@ -240,16 +281,79 @@ export default function LogScreen({ navigation }) {
   const [refreshing, setRefreshing] = useState(false);
 
   const [isLoading, setIsLoading] = useState(true);
+  const [pending, setPending] = useState([]);
+  const [retryDraft, setRetryDraft] = useState(null);
   const hasLoadedRef = useRef(false);
+  const processingIdsRef = useRef(new Set());
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const scrollRef = useRef(null);
 
   async function load() {
-    const [allInputs, allNotes, savedPhoto] = await Promise.all([getClassInputs(), getNotes(), AsyncStorage.getItem('@profile_photo')]);
+    const [allInputs, allNotes, savedPhoto, pendingList] = await Promise.all([
+      getClassInputs(),
+      getNotes(),
+      AsyncStorage.getItem('@profile_photo'),
+      getPendingClasses(),
+    ]);
     setInputs(allInputs);
     setNotes(allNotes);
+    setPending(pendingList);
     setPhotoUri(savedPhoto || null);
     AsyncStorage.setItem(LOG_CACHE_KEY, JSON.stringify({ inputs: allInputs, notes: allNotes })).catch(() => {});
+  }
+
+  function draftToDisplayItem(draft) {
+    return {
+      id: draft._pendingId,
+      created_at: draft.createdAt,
+      practice_point_1: draft.practicePoint1,
+      practice_point_2: draft.showSecond ? draft.practicePoint2 : null,
+      teacher_name: draft.teacherName || null,
+      lesson_type: draft.lessonType || null,
+      dance: draft.selectedDances?.length ? draft.selectedDances.join(', ') : null,
+      title: (draft.practicePoint1 || '').split(' ').slice(0, 6).join(' '),
+      _localPending: true,
+      _failed: !!draft._failed,
+      _draft: draft,
+    };
+  }
+
+  function startProcessing(draft) {
+    processClassDraft(draft)
+      .then(async () => {
+        await removePendingClass(draft._pendingId);
+        await load();
+      })
+      .catch(async (err) => {
+        console.warn('[LogScreen] class submit failed:', err);
+        await updatePendingClass(draft._pendingId, { _failed: true });
+        const list = await getPendingClasses();
+        setPending(list);
+      });
+  }
+
+  async function handleModalSubmit(draft) {
+    // If retrying, replace the failed draft with the fresh one
+    if (retryDraft) {
+      await removePendingClass(retryDraft._pendingId);
+    }
+    const clean = { ...draft, _failed: false };
+    await addPendingClass(clean);
+    const list = await getPendingClasses();
+    setPending(list);
+    setModalVisible(false);
+    setRetryDraft(null);
+    startProcessing(clean);
+  }
+
+  function handleRetry(draft) {
+    setRetryDraft(draft);
+    setModalVisible(true);
+  }
+
+  function handleModalClose() {
+    setModalVisible(false);
+    setRetryDraft(null);
   }
 
   function switchTab(tab) {
@@ -284,6 +388,15 @@ export default function LogScreen({ navigation }) {
       if (isFirst) {
         fadeAnim.setValue(0);
         Animated.timing(fadeAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
+        // Resume any orphaned pending drafts (e.g. app was killed mid-processing)
+        try {
+          const orphans = await getPendingClasses();
+          orphans.filter((d) => !d._failed && !processingIdsRef.current.has(d._pendingId))
+            .forEach((d) => {
+              processingIdsRef.current.add(d._pendingId);
+              startProcessing(d);
+            });
+        } catch {}
       }
     }
     init();
@@ -311,12 +424,17 @@ export default function LogScreen({ navigation }) {
     setModalVisible(true);
   }
 
+  const pendingDisplay = pending.map(draftToDisplayItem);
+  const mergedInputs = [...pendingDisplay, ...inputs].sort(
+    (a, b) => new Date(b.created_at) - new Date(a.created_at)
+  );
+
   const filteredInputs = search.trim()
-    ? inputs.filter((i) => {
+    ? mergedInputs.filter((i) => {
         const q = search.toLowerCase();
         return i.practice_point_1?.toLowerCase().includes(q) || i.practice_point_2?.toLowerCase().includes(q) || i.ai_primary_focus?.toLowerCase().includes(q);
       })
-    : inputs;
+    : mergedInputs;
 
   const filteredNotes = search.trim()
     ? notes.filter((n) => {
@@ -371,7 +489,11 @@ export default function LogScreen({ navigation }) {
               sections={groupedInputs}
               keyExtractor={(item) => item.id}
               renderItem={({ item }) => (
-                <ClassItem item={item} onPress={() => navigation.navigate('ClassDetail', { inputId: item.id })} />
+                <ClassItem
+                  item={item}
+                  onPress={() => navigation.navigate('ClassDetail', { inputId: item.id })}
+                  onRetry={handleRetry}
+                />
               )}
               renderSectionHeader={({ section: { title } }) => (
                 <View style={styles.sectionHeader}>
@@ -440,8 +562,9 @@ export default function LogScreen({ navigation }) {
 
       <LogModal
         visible={modalVisible}
-        onClose={() => setModalVisible(false)}
-        onSubmitted={() => { setModalVisible(false); load(); }}
+        onClose={handleModalClose}
+        onSubmitted={handleModalSubmit}
+        initialDraft={retryDraft}
       />
 
       {/* Add class reminder */}
@@ -584,6 +707,10 @@ const styles = StyleSheet.create({
   cardDisabled: {
     opacity: 0.5,
   },
+  cardFailed: {
+    backgroundColor: 'rgba(232,64,64,0.06)',
+    borderColor: 'rgba(232,64,64,0.35)',
+  },
   cardAccent: {
     width: 4,
   },
@@ -679,6 +806,13 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.jakartaMedium,
     fontSize: 11,
     color: Colors.orange,
+  },
+  pendingBadgeFailed: {
+    backgroundColor: 'rgba(232,64,64,0.12)',
+    borderColor: 'rgba(232,64,64,0.35)',
+  },
+  pendingBadgeTextFailed: {
+    color: '#E84040',
   },
 
   empty: { alignItems: 'center', paddingTop: 60 },

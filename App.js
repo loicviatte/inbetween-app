@@ -41,6 +41,8 @@ import NotificationsScreen from './src/screens/NotificationsScreen';
 import AllFocusPointsScreen from './src/screens/AllFocusPointsScreen';
 import CustomTabBar from './src/components/CustomTabBar';
 import TrainerReviewScreen from './src/screens/TrainerReviewScreen';
+import TrainerStudentsScreen from './src/screens/TrainerStudentsScreen';
+import TrainerFocusHistoryScreen from './src/screens/TrainerFocusHistoryScreen';
 import AttendanceConfirmScreen from './src/screens/AttendanceConfirmScreen';
 
 // Coach screens
@@ -123,6 +125,16 @@ function AppNavigator() {
         component={TrainerReviewScreen}
         options={{ animation: 'slide_from_right' }}
       />
+      <Stack.Screen
+        name="TrainerStudents"
+        component={TrainerStudentsScreen}
+        options={{ animation: 'slide_from_right' }}
+      />
+      <Stack.Screen
+        name="TrainerFocusHistory"
+        component={TrainerFocusHistoryScreen}
+        options={{ animation: 'slide_from_right' }}
+      />
       <Stack.Screen name="AttendanceConfirm" component={AttendanceConfirmScreen} options={{ animation: 'slide_from_bottom', presentation: 'modal' }} />
     </Stack.Navigator>
   );
@@ -188,6 +200,8 @@ function TrainerNavigator() {
   return (
     <TrainerStack.Navigator screenOptions={{ headerShown: false }}>
       <TrainerStack.Screen name="TrainerReview" component={TrainerReviewScreen} />
+      <TrainerStack.Screen name="TrainerStudents" component={TrainerStudentsScreen} />
+      <TrainerStack.Screen name="TrainerFocusHistory" component={TrainerFocusHistoryScreen} />
     </TrainerStack.Navigator>
   );
 }

@@ -1,6 +1,5 @@
 import React, { useEffect, useRef } from 'react';
 import { View, StyleSheet, Animated } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { Spacing } from '../theme';
 
 function Bone({ width, height, radius = 8, style }) {
@@ -24,16 +23,16 @@ export default function DashboardSkeleton() {
   }, []);
 
   return (
-    <SafeAreaView style={sk.safe} edges={['top']}>
+    <View style={sk.safe}>
       <Animated.View style={{ flex: 1, opacity: pulse }}>
-        {/* Header */}
-        <View style={sk.header}>
-          <Bone width={36} height={36} radius={18} />
-          <Bone width={36} height={36} radius={18} />
-        </View>
-
-        {/* Section label */}
-        <Bone width={80} height={10} radius={4} style={{ marginBottom: 12, marginHorizontal: Spacing.side }} />
+        {/* Section label — matches sectionLabel in DashboardScreen
+            (paddingHorizontal: Spacing.side, marginBottom: 10) */}
+        <Bone
+          width={70}
+          height={10}
+          radius={4}
+          style={{ marginHorizontal: Spacing.side, marginBottom: 10 }}
+        />
 
         {/* Student rings row */}
         <View style={sk.ringRow}>
@@ -91,20 +90,12 @@ export default function DashboardSkeleton() {
           ))}
         </View>
       </Animated.View>
-    </SafeAreaView>
+    </View>
   );
 }
 
 const sk = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#fff' },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: Spacing.side,
-    paddingTop: 16,
-    paddingBottom: 14,
-  },
   ringRow: {
     flexDirection: 'row',
     paddingHorizontal: Spacing.side,

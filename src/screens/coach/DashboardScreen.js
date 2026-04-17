@@ -158,8 +158,9 @@ function OverviewDonut({ practiced, forgetting, silent, total }) {
 }
 
 // ── Mini ring for a single student ──────────────────────────────────────────
-function StudentRing({ student, onPress }) {
+function StudentRing({ student, actionCount = 0, onPress }) {
   const { color, progress } = ringForHealth(student.health);
+  const photoUri = student.photoUrl || student.photo_url || student.avatar_url;
   const size = 50;
   const r = 22;
   const strokeWidth = 3;
@@ -192,8 +193,8 @@ function StudentRing({ student, onPress }) {
           />
         </Svg>
         <View style={[StyleSheet.absoluteFillObject, miniS.avatarWrap]}>
-          {student.photo_url ? (
-            <Image source={{ uri: student.photo_url }} style={miniS.photo} />
+          {photoUri ? (
+            <Image source={{ uri: photoUri }} style={miniS.photo} />
           ) : (
             <View style={[miniS.avatar, { backgroundColor: `${color}22` }]}>
               <Text style={[miniS.avatarText, { color }]}>
@@ -202,6 +203,13 @@ function StudentRing({ student, onPress }) {
             </View>
           )}
         </View>
+        {actionCount > 0 && (
+          <View style={miniS.actionBadge}>
+            <Text style={miniS.actionBadgeText}>
+              {actionCount > 9 ? '9+' : actionCount}
+            </Text>
+          </View>
+        )}
       </View>
       <Text style={miniS.name} numberOfLines={1}>
         {student.name.split(' ')[0]}
@@ -306,7 +314,7 @@ function ActivityRow({ item, isLast }) {
 
 // ── Screen ──────────────────────────────────────────────────────────────────
 export default function DashboardScreen({ navigation }) {
-  const { students, events, actionCounts, initialLoading: loading } = useCoachData();
+  const { students, events, actionCounts, studentActionCounts, initialLoading: loading } = useCoachData();
 
   // ── Group class theme suggestion ────────────────────────────────────────
   // Computes candidates from the coach's students' active focus points since
@@ -403,6 +411,7 @@ export default function DashboardScreen({ navigation }) {
               <StudentRing
                 key={s.id}
                 student={s}
+                actionCount={studentActionCounts?.[s.id] || 0}
                 onPress={() =>
                   navigation.navigate('StudentDetail', {
                     studentId: s.id,
@@ -511,8 +520,8 @@ export default function DashboardScreen({ navigation }) {
                     { marginLeft: idx === 0 ? 0 : -8, zIndex: 4 - idx },
                   ]}
                 >
-                  {s.photo_url ? (
-                    <Image source={{ uri: s.photo_url }} style={styles.focusAvatarImg} />
+                  {(s.photoUrl || s.photo_url) ? (
+                    <Image source={{ uri: s.photoUrl || s.photo_url }} style={styles.focusAvatarImg} />
                   ) : (
                     <Text style={styles.focusAvatarText}>{initials(s.name)}</Text>
                   )}
@@ -962,6 +971,27 @@ const miniS = StyleSheet.create({
     fontFamily: Fonts.jakartaSemiBold,
     fontSize: 10,
     color: T2,
+  },
+  actionBadge: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    paddingHorizontal: 5,
+    backgroundColor: '#E8A838',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#FAFAFA',
+  },
+  actionBadgeText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 10,
+    color: '#fff',
+    letterSpacing: 0.1,
+    lineHeight: 12,
   },
 });
 

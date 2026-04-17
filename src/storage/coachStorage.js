@@ -148,12 +148,12 @@ export async function getMyStudents() {
   // instead of FK embed, which can get silently dropped by RLS).
   const { data: userRows } = await supabase
     .from('users')
-    .select('id, name, dance_style, last_active_date')
+    .select('id, name, dance_style, last_active_date, avatar_url')
     .in('id', wantedIds);
 
   const byId = new Map();
   for (const u of userRows || []) {
-    if (u?.id) byId.set(u.id, u);
+    if (u?.id) byId.set(u.id, { ...u, photo_url: u.avatar_url || null });
   }
 
   const students = Array.from(byId.values());
@@ -371,10 +371,11 @@ export async function getMyStudents() {
 export async function getStudentProfile(studentId) {
   const { data } = await supabase
     .from('users')
-    .select('id, name, dance_style, main_studio, last_active_date')
+    .select('id, name, dance_style, main_studio, last_active_date, avatar_url')
     .eq('id', studentId)
     .single();
-  return data || null;
+  if (!data) return null;
+  return { ...data, photo_url: data.avatar_url || null };
 }
 
 export async function getStudentFocusPoints(studentId) {
@@ -392,18 +393,26 @@ export async function getStudentFocusPoints(studentId) {
 
   if (!focusPoints || focusPoints.length === 0) return [];
 
-  // Count practice_logs this week for each focus
+  // Count practice_logs this week for each focus + capture latest log details
   const focusIds = focusPoints.map(f => f.id);
   const { data: logs } = await supabase
     .from('practice_logs')
-    .select('focus_point_id')
+    .select('focus_point_id, duration_minutes, feeling, created_at, started_at, completed_at')
     .eq('student_id', studentId)
     .gte('created_at', weekAgo)
-    .in('focus_point_id', focusIds);
+    .in('focus_point_id', focusIds)
+    .order('created_at', { ascending: false });
 
   const weekCounts = {};
+  const totalDuration = {};
+  const lastLogByFocus = {};
   for (const l of logs || []) {
     weekCounts[l.focus_point_id] = (weekCounts[l.focus_point_id] || 0) + 1;
+    totalDuration[l.focus_point_id] =
+      (totalDuration[l.focus_point_id] || 0) + (l.duration_minutes || 0);
+    if (!lastLogByFocus[l.focus_point_id]) {
+      lastLogByFocus[l.focus_point_id] = l; // first = most recent (desc order)
+    }
   }
 
   return focusPoints.map(f => ({
@@ -412,6 +421,9 @@ export async function getStudentFocusPoints(studentId) {
     subtitle: f.subtitle || null,
     drill: f.drill || null,
     weekCount: weekCounts[f.id] || 0,
+    totalDurationMin: totalDuration[f.id] || 0,
+    lastFeeling: lastLogByFocus[f.id]?.feeling || null,
+    lastPracticedAt: lastLogByFocus[f.id]?.created_at || null,
     status: f.status,
     tier: f.tier || null,
   }));
@@ -711,10 +723,14 @@ export async function getClassDetail(classId) {
 // ─── Focus Point Validation ───────────────────────────────────────────────────
 
 export async function getPendingFocusPoints(studentId) {
+  const selectStr =
+    'id, name, subtitle, context, drill, tier, coach_review_deadline, group_fp, source_class_input_id, created_at, user_id, ' +
+    'source_class_input:source_class_input_id(class_summary, practice_point_1, practice_point_2, ai_primary_focus, ai_secondary_focus)';
+
   if (studentId) {
     const { data, error } = await supabase
       .from('focus_points')
-      .select('id, name, subtitle, context, drill, tier, coach_review_deadline, group_fp, source_class_input_id, created_at')
+      .select(selectStr)
       .eq('user_id', studentId)
       .eq('status', 'pending_coach')
       .eq('is_other', false)
@@ -736,7 +752,7 @@ export async function getPendingFocusPoints(studentId) {
 
   const { data, error } = await supabase
     .from('focus_points')
-    .select('id, name, subtitle, context, drill, tier, coach_review_deadline, group_fp, source_class_input_id, created_at, user_id')
+    .select(selectStr)
     .in('user_id', studentIds)
     .eq('status', 'pending_coach')
     .eq('is_other', false)
@@ -790,6 +806,28 @@ export async function deletePendingFocusPoint(fpId) {
     .update({ is_deleted: true, status: 'past' })
     .eq('id', fpId);
   if (error) throw error;
+}
+
+export async function rejectPendingFocusPoint({ fpId, studentId, fpName, reason }) {
+  const { error } = await supabase
+    .from('focus_points')
+    .update({ is_deleted: true, status: 'past' })
+    .eq('id', fpId);
+  if (error) throw error;
+
+  const trimmedReason = (reason || '').trim();
+  const { error: notifErr } = await supabase.from('notifications').insert({
+    user_id: studentId,
+    type: 'focus_point_rejected',
+    title: 'Focus point declined by your coach',
+    body: trimmedReason
+      ? `"${fpName}" — ${trimmedReason}`
+      : `Your coach declined "${fpName}".`,
+    data: { focus_point_name: fpName, reason: trimmedReason || null },
+  });
+  if (notifErr) {
+    console.warn('[rejectPendingFocusPoint] notification insert failed:', notifErr.message);
+  }
 }
 
 export async function approveAllPendingForStudent(studentId) {

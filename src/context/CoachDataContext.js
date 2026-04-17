@@ -14,6 +14,7 @@ export function CoachDataProvider({ children }) {
   const [user, setUser] = useState(null);
   const [unreadCount, setUnreadCount] = useState(0);
   const [actionCounts, setActionCounts] = useState({ focus: 0, merge: 0, name: 0, total: 0 });
+  const [studentActionCounts, setStudentActionCounts] = useState({});
   const [initialLoading, setInitialLoading] = useState(true);
   const loaded = useRef(false);
 
@@ -38,10 +39,10 @@ export function CoachDataProvider({ children }) {
         getPendingFocusPoints(null).catch(() => []),
         supabase
           .from('merge_requests')
-          .select('id', { count: 'exact', head: true })
+          .select('id, student_id', { count: 'exact' })
           .eq('status', 'pending_coach')
           .then((res) => res)
-          .catch(() => ({ count: 0 })),
+          .catch(() => ({ count: 0, data: [] })),
       ]);
       setStudents(s || []);
       setEvents((ev || []).slice(0, 12));
@@ -52,13 +53,28 @@ export function CoachDataProvider({ children }) {
 
       const focusCount = (fps || []).length;
       const mergeCount = mergesRes?.count || 0;
-      const nameCount = (notifs || []).filter((x) => x.type === 'name_match_confirm').length;
+      const nameNotifs = (notifs || []).filter((x) => x.type === 'name_match_confirm');
+      const nameCount = nameNotifs.length;
       setActionCounts({
         focus: focusCount,
         merge: mergeCount,
         name: nameCount,
         total: focusCount + mergeCount + nameCount,
       });
+
+      // Per-student action count (focus validation + merge + name match)
+      const perStudent = {};
+      for (const fp of fps || []) {
+        if (fp.user_id) perStudent[fp.user_id] = (perStudent[fp.user_id] || 0) + 1;
+      }
+      for (const mr of mergesRes?.data || []) {
+        if (mr.student_id) perStudent[mr.student_id] = (perStudent[mr.student_id] || 0) + 1;
+      }
+      for (const notif of nameNotifs) {
+        const sid = notif.data?.student_id;
+        if (sid) perStudent[sid] = (perStudent[sid] || 0) + 1;
+      }
+      setStudentActionCounts(perStudent);
     } catch {}
     if (!loaded.current) {
       loaded.current = true;
@@ -97,6 +113,7 @@ export function CoachDataProvider({ children }) {
         user,
         unreadCount,
         actionCounts,
+        studentActionCounts,
         initialLoading,
         refresh,
         updateStudents,
