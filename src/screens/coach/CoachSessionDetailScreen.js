@@ -10,6 +10,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Colors, Fonts, Spacing } from '../../theme';
 import { getTrainingSessionDetail, getClassDetail } from '../../storage/coachStorage';
+import { GenericListSkeleton } from '../../components/Skeleton';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -180,9 +181,7 @@ export default function CoachSessionDetailScreen({ route, navigation }) {
       </View>
 
       {loading ? (
-        <View style={s.loadingWrap}>
-          <ActivityIndicator color={Colors.secondary} />
-        </View>
+        <GenericListSkeleton rows={4} variant="detail" showHeader={false} showTitle={false} />
       ) : !data ? (
         <View style={s.loadingWrap}>
           <Text style={s.emptyText}>Session not found.</Text>

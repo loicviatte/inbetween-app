@@ -1297,7 +1297,7 @@ RULES
             pointerEvents={aiOpen ? 'none' : 'auto'}
             onLayout={e => { if (!aiOpen && e.nativeEvent.layout.height > 0) setAiChatHeight(e.nativeEvent.layout.height); }}
           >
-            {!sessionDone && focusPoint?.drill ? (
+            {!sessionDone && !aiOpen && focusPoint?.drill ? (
               <View style={styles.drillCard}>
                 <View style={styles.drillHeader}>
                   <View style={styles.drillPill}><Text style={styles.drillPillText}>DRILL</Text></View>

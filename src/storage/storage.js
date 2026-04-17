@@ -121,11 +121,14 @@ export async function respondToAttendance(classInputId, attended) {
 
 export async function saveClassInput(input) {
   const userId = await getUserId();
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from('class_inputs')
-    .insert({ status: 'pending', ...input, user_id: userId, is_deleted: false });
+    .insert({ status: 'pending', ...input, user_id: userId, is_deleted: false })
+    .select('id')
+    .single();
   if (error) throw error;
   invalidateCache('classInputs');
+  return data?.id;
 }
 
 export async function deleteClassInput(id) {

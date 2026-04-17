@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -8,6 +8,8 @@ import {
   TextInput,
   Image,
   Pressable,
+  Animated,
+  Dimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Svg, { Circle } from 'react-native-svg';
@@ -100,10 +102,11 @@ function HealthRing({ value = 0, size = 42, strokeWidth = 3 }) {
 // ── Avatar badge (letter or photo) ──────────────────────────────────────────
 function AvatarBadge({ student, size = 30, fontSize = 13 }) {
   const color = avatarColorFor(student.id);
-  if (student.photoUrl) {
+  const photoUri = student.photoUrl || student.photo_url || student.avatar_url;
+  if (photoUri) {
     return (
       <Image
-        source={{ uri: student.photoUrl }}
+        source={{ uri: photoUri }}
         style={{ width: size, height: size, borderRadius: size / 2 }}
       />
     );
@@ -287,6 +290,26 @@ export default function CoachHomeScreen({ navigation }) {
   const { students, requests, initialLoading: loading, refresh, updateRequests } = useCoachData();
 
   const [filter, setFilter] = useState('all'); // 'all' | 'last_private'
+
+  // Horizontal pager — synced with filter state, drives a moving underline.
+  const screenWidth = Dimensions.get('window').width;
+  const pagerRef = useRef(null);
+  const horizontalScrollX = useRef(new Animated.Value(0)).current;
+  const TABS = ['all', 'last_private'];
+  const tabIndex = Math.max(0, TABS.indexOf(filter));
+  const firstMount = useRef(true);
+
+  useEffect(() => {
+    if (!screenWidth) return;
+    const targetX = tabIndex * screenWidth;
+    if (firstMount.current) {
+      horizontalScrollX.setValue(targetX);
+      pagerRef.current?.scrollTo({ x: targetX, animated: false });
+      firstMount.current = false;
+    } else {
+      pagerRef.current?.scrollTo({ x: targetX, animated: true });
+    }
+  }, [tabIndex, screenWidth]);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -324,11 +347,8 @@ export default function CoachHomeScreen({ navigation }) {
 
   return (
     <View style={styles.safe}>
-      <ScrollView
-        style={{ flex: 1 }}
-        contentContainerStyle={{ paddingBottom: 110 }}
-        showsVerticalScrollIndicator={false}
-      >
+      {/* ── Fixed header (title + search + filter tabs + requests) ── */}
+      <View>
         {/* ── Title + search toggle ── */}
         <View style={styles.titleRow}>
           <Text style={styles.title}>Students</Text>
@@ -359,7 +379,7 @@ export default function CoachHomeScreen({ navigation }) {
           </View>
         )}
 
-        {/* ── Filter tabs ── */}
+        {/* ── Filter tabs (tap OR swipe) ── */}
         <View style={styles.filterWrap}>
           <View style={styles.filterRow}>
             {[
@@ -390,10 +410,17 @@ export default function CoachHomeScreen({ navigation }) {
             })}
           </View>
           <View style={styles.filterTrack} />
-          <View
+          <Animated.View
+            pointerEvents="none"
             style={[
               styles.filterUnderline,
-              { left: filter === 'all' ? '0%' : '50%' },
+              {
+                left: horizontalScrollX.interpolate({
+                  inputRange: [0, Math.max(1, screenWidth)],
+                  outputRange: ['0%', '50%'],
+                  extrapolate: 'clamp',
+                }),
+              },
             ]}
           />
         </View>
@@ -412,11 +439,33 @@ export default function CoachHomeScreen({ navigation }) {
             ))}
           </View>
         )}
+      </View>
 
-        {/* ══════════════════════════════════════════ */}
-        {/* ── ALL (grouped) VIEW ── */}
-        {/* ══════════════════════════════════════════ */}
-        {filter === 'all' && !loading && (
+      {/* ── Horizontal pager: finger-follows swipe between the 2 views ── */}
+      <Animated.ScrollView
+        ref={pagerRef}
+        horizontal
+        pagingEnabled
+        bounces={false}
+        showsHorizontalScrollIndicator={false}
+        scrollEventThrottle={16}
+        onScroll={Animated.event(
+          [{ nativeEvent: { contentOffset: { x: horizontalScrollX } } }],
+          { useNativeDriver: false }
+        )}
+        onMomentumScrollEnd={(e) => {
+          const page = Math.round(e.nativeEvent.contentOffset.x / Math.max(1, screenWidth));
+          const next = TABS[page];
+          if (next && next !== filter) setFilter(next);
+        }}
+        style={{ flex: 1 }}
+      >
+        {/* ── Page 1: ALL (grouped) ── */}
+        <ScrollView
+          style={{ width: screenWidth }}
+          contentContainerStyle={{ paddingBottom: 110 }}
+          showsVerticalScrollIndicator={false}
+        >
           <View style={styles.content}>
             {filteredStudents.length === 0 && (
               <View style={styles.empty}>
@@ -461,12 +510,14 @@ export default function CoachHomeScreen({ navigation }) {
               </View>
             )}
           </View>
-        )}
+        </ScrollView>
 
-        {/* ══════════════════════════════════════════ */}
-        {/* ── LAST PRIVATE LESSON VIEW ── */}
-        {/* ══════════════════════════════════════════ */}
-        {filter === 'last_private' && !loading && (
+        {/* ── Page 2: LAST PRIVATE LESSON ── */}
+        <ScrollView
+          style={{ width: screenWidth }}
+          contentContainerStyle={{ paddingBottom: 110 }}
+          showsVerticalScrollIndicator={false}
+        >
           <View style={styles.content}>
             {byLastPrivate.length === 0 ? (
               <View style={styles.empty}>
@@ -484,9 +535,8 @@ export default function CoachHomeScreen({ navigation }) {
               ))
             )}
           </View>
-        )}
-
-      </ScrollView>
+        </ScrollView>
+      </Animated.ScrollView>
     </View>
   );
 }

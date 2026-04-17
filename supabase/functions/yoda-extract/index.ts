@@ -25,6 +25,36 @@ interface WebhookPayload {
   record: ClassInputRecord
 }
 
+// ─── Style rule & sanitizer (applies to every AI output) ─────────────────────
+
+const NO_HYPHEN_RULE = `
+
+## CRITICAL STYLE RULE — NO HYPHENS
+Never use hyphens, en dashes, or em dashes in any string value. Do not use "-", "–", or "—" anywhere — not in titles, subtitles, context, drills, class_summary, notes, reasoning, or any other text field. Replace with a space, a comma, or rephrase. Applies to every text field inside the JSON.`
+
+function stripHyphens(str: string): string {
+  if (!str) return str
+  return String(str)
+    .replace(/[\u2010-\u2015\u2212\-]/g, ' ')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/ ([.,;:!?])/g, '$1')
+    .trim()
+}
+
+// Recursively walk a parsed JSON object and strip hyphens from every string.
+function sanitizeStrings<T>(value: T): T {
+  if (typeof value === 'string') return stripHyphens(value) as unknown as T
+  if (Array.isArray(value)) return value.map(sanitizeStrings) as unknown as T
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = sanitizeStrings(v)
+    }
+    return out as unknown as T
+  }
+  return value
+}
+
 // ─── System prompt ────────────────────────────────────────────────────────────
 
 const SYSTEM_PROMPT = `You are Yoda Extract, a specialized AI that processes coaching lesson transcripts. Your sole job is to output a single structured JSON object — nothing else. No explanation, no preamble, no markdown.
@@ -434,7 +464,7 @@ Return ONLY a JSON object with this structure:
     ...
   ]
 }
-No markdown, no explanation.`
+No markdown, no explanation.${NO_HYPHEN_RULE}`
 
   const altRes = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -466,6 +496,7 @@ No markdown, no explanation.`
   } catch {
     throw new Error(`Failed to parse alternatives JSON: ${rawAltText.slice(0, 300)}`)
   }
+  parsed = sanitizeStrings(parsed)
 
   // Insert one row per focus point
   const rows = simplifiedFPs.map((chosenFP, fpIndex) => {
@@ -587,9 +618,9 @@ async function processRecord(record: ClassInputRecord): Promise<void> {
   } catch (err) {
     console.warn('[yoda-extract] Could not load trainer feedback:', err)
   }
-  const effectiveSystemPrompt = trainerFeedbackSection
+  const effectiveSystemPrompt = (trainerFeedbackSection
     ? SYSTEM_PROMPT + trainerFeedbackSection
-    : SYSTEM_PROMPT
+    : SYSTEM_PROMPT) + NO_HYPHEN_RULE
 
   // Mark as processing
   await supabase
@@ -699,6 +730,9 @@ async function processRecord(record: ClassInputRecord): Promise<void> {
     } catch {
       throw new Error(`JSON parse failed. Raw output:\n${rawText.slice(0, 500)}`)
     }
+    // Belt-and-suspenders: the prompt forbids hyphens, but strip any that
+    // slipped through from every string field before we write anything.
+    parsed = sanitizeStrings(parsed)
 
     // Write raw JSON back
     await supabase
@@ -755,13 +789,15 @@ async function processRecord(record: ClassInputRecord): Promise<void> {
           max_tokens: 20,
           messages: [{
             role: 'user',
-            content: `Here is a dance lesson transcript:\n\n${transcript.slice(0, 1500)}\n\nWrite a 2-5 word title summarizing what this lesson was about. Capitalize each word. Return ONLY the title, nothing else.`,
+            content: `Here is a dance lesson transcript:\n\n${transcript.slice(0, 1500)}\n\nWrite a 2 to 5 word title summarizing what this lesson was about. Capitalize each word. Return ONLY the title, nothing else.${NO_HYPHEN_RULE}`,
           }],
         }),
       })
       if (titleRes.ok) {
         const titleData = await titleRes.json()
-        const generatedTitle = (titleData.content?.[0]?.text ?? '').trim().replace(/^["']|["']$/g, '')
+        const generatedTitle = stripHyphens(
+          (titleData.content?.[0]?.text ?? '').trim().replace(/^["']|["']$/g, '')
+        )
         if (generatedTitle) {
           await supabase.from('class_inputs').update({ title: generatedTitle }).eq('id', id)
           console.log(`[yoda-extract] ✓ Generated title: "${generatedTitle}" for ${id}`)

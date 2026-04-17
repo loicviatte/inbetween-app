@@ -283,7 +283,7 @@ function DanceSelector({ dances, values, onChange }) {
 
 // ─── Main modal ───────────────────────────────────────────────────────────────
 
-export default function LogModal({ visible, onClose, onSubmitted }) {
+export default function LogModal({ visible, onClose, onSubmitted, initialDraft }) {
   // Content fields
   const [step, setStep]                     = useState(1);
   const [class_summary, setClassSummary]          = useState('');
@@ -376,6 +376,28 @@ export default function LogModal({ visible, onClose, onSubmitted }) {
     })();
   }, [visible]);
 
+  // Pre-fill form state when retrying a failed draft
+  useEffect(() => {
+    if (!visible || !initialDraft) return;
+    setClassSummary(initialDraft.class_summary || '');
+    setPracticePoint1(initialDraft.practicePoint1 || '');
+    setPriorityScore1(initialDraft.priorityScore1 ?? 5);
+    setShowDrill(!!initialDraft.showDrill);
+    setDrill(initialDraft.drill || '');
+    setShowSecond(!!initialDraft.showSecond);
+    setPracticePoint2(initialDraft.practicePoint2 || '');
+    setPriorityScore2(initialDraft.priorityScore2 ?? 5);
+    setShowDrill2(!!initialDraft.showDrill2);
+    setDrill2(initialDraft.drill2 || '');
+    setLessonType(initialDraft.lessonType || 'private');
+    setSelectedDances(initialDraft.selectedDances || []);
+    if (initialDraft.teacherName) {
+      setTeacherName(initialDraft.teacherName);
+      setTeacherEditing(false);
+    }
+    if (initialDraft.createdAt) setClassDate(new Date(initialDraft.createdAt));
+  }, [visible, initialDraft]);
+
   const translateY  = useRef(new Animated.Value(0)).current;
   const scrollViewRef = useRef(null);
 
@@ -448,100 +470,35 @@ export default function LogModal({ visible, onClose, onSubmitted }) {
     setStep(2);
   }
 
-  async function handleSubmit() {
-    setSubmitting(true);
+  function handleSubmit() {
     setError('');
-    try {
-      const existingPoints = await getFocusPoints();
-      const existingNames = existingPoints.map((p) => p.name);
-      const pp2 = showSecond && practicePoint2.trim() ? practicePoint2 : null;
+    const now = new Date(classDate);
+    const current = new Date();
+    now.setHours(current.getHours(), current.getMinutes(), current.getSeconds(), 0);
+    const createdAt = now.toISOString();
 
-      const [primaryFocusName, secondaryFocusName, title] = await Promise.all([
-        extractPrimaryFocus({ practicePoint1, priorityScore1, existingNames }),
-        pp2 ? extractSecondaryFocus({ practicePoint2: pp2, priorityScore2: showSecond ? priorityScore2 : null, existingNames }) : Promise.resolve(null),
-        generateClassTitle(class_summary, practicePoint1),
-      ]);
+    const draft = {
+      _pendingId:
+        initialDraft?._pendingId ||
+        `pending_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      class_summary,
+      practicePoint1,
+      priorityScore1,
+      showDrill,
+      drill,
+      showSecond,
+      practicePoint2,
+      priorityScore2,
+      showDrill2,
+      drill2,
+      lessonType,
+      selectedDances,
+      teacherName,
+      createdAt,
+    };
 
-      const now = new Date(classDate);
-      const current = new Date();
-      now.setHours(current.getHours(), current.getMinutes(), current.getSeconds(), 0);
-      const createdAt = now.toISOString();
-
-      async function resolveFp(name, priorityScore, drillText) {
-        if (!name) return null;
-        const norm = normalizeLabel(name);
-        const tier = urgencyToTier(priorityScore);
-        const drill_value = drillText?.trim() || null;
-        const existing = existingPoints.find((p) => p.normalized_name === norm);
-        if (existing) {
-          await saveFocusPoint({ ...existing, count: existing.count + 1, tier, base_score: priorityScore, ...(drill_value && { drill: drill_value }) });
-          return existing.id;
-        }
-        const newId = await saveFocusPoint({ name, normalized_name: norm, count: 1, tier, base_score: priorityScore, drill: drill_value });
-        if (newId) existingPoints.push({ id: newId, name, normalized_name: norm, count: 1 });
-        return newId;
-      }
-
-      const drill1Value = showDrill  ? drill.trim()  || null : null;
-      const drill2Value = showDrill2 ? drill2.trim() || null : null;
-
-      await resolveFp(primaryFocusName,   priorityScore1, drill1Value);
-      await resolveFp(secondaryFocusName, priorityScore2, drill2Value);
-
-      await saveClassInput({
-        title,
-        class_summary:      class_summary.trim() || null,
-        practice_point_1:   practicePoint1,
-        priority_score_1:   priorityScore1,
-        practice_point_2:   pp2,
-        priority_score_2:   showSecond ? priorityScore2 : null,
-        ai_primary_focus:   primaryFocusName || null,
-        ai_secondary_focus: secondaryFocusName || null,
-        lesson_type:        lessonType,
-        dance:              selectedDances.length > 0 ? selectedDances.join(', ') : null,
-        teacher_name:       teacherName.trim() || null,
-        created_at:         createdAt,
-      });
-
-      // Wire ai focus matches → FOCUS_REMENTIONED
-      try {
-        const { applyFocusEvent } = await import('../utils/algorithm');
-        const { data: { user } } = await supabase.auth.getUser();
-        if (user) {
-          const { data: fps } = await supabase
-            .from('focus_points')
-            .select('id, name')
-            .eq('user_id', user.id)
-            .not('is_deleted', 'is', true)
-            .eq('is_archived', false);
-
-          const aiFocuses = [primaryFocusName, secondaryFocusName]
-            .filter(Boolean).map(f => f.toLowerCase().trim());
-
-          const matched = (fps || []).filter(fp => {
-            const fpName = (fp.name || '').toLowerCase().trim();
-            return aiFocuses.some(af => af === fpName || af.includes(fpName) || fpName.includes(af));
-          });
-          await Promise.all(matched.map(fp => applyFocusEvent(fp.id, 'FOCUS_REMENTIONED', user.id)));
-        }
-      } catch {}
-
-      // Background: coaching summary + nudge refresh
-      getRecentClassInputs(3).then((recent) =>
-        generateCoachingSummary(recent).then(updateUserSummary).catch(() => {})
-      );
-      import('../utils/algorithm').then(({ refreshNudgeMessage }) =>
-        refreshNudgeMessage().catch(() => {})
-      );
-
-      reset();
-      onSubmitted();
-    } catch (e) {
-      console.error(e);
-      setError('Something went wrong. Please try again.');
-    } finally {
-      setSubmitting(false);
-    }
+    reset();
+    onSubmitted(draft);
   }
 
   function handleTeacherChange(text) {

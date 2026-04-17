@@ -7,6 +7,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { Colors, Fonts, Spacing } from '../../theme';
+import { GenericListSkeleton } from '../../components/Skeleton';
 import {
   getPendingFocusPoints, approveFocusPoint, editAndApproveFocusPoint,
   deletePendingFocusPoint, approveAllPendingForStudent
@@ -138,7 +139,7 @@ export default function FocusValidationScreen({ navigation, route }) {
       )}
 
       {loading ? (
-        <View style={s.center}><ActivityIndicator color={Colors.orange} /></View>
+        <GenericListSkeleton rows={4} variant="detail" showHeader={false} showTitle={false} />
       ) : fps.length === 0 ? (
         <View style={s.center}>
           <Ionicons name="checkmark-circle-outline" size={48} color={Colors.activeLog} />

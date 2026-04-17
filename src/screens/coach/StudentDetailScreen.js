@@ -13,8 +13,14 @@ import {
   Image,
   ActivityIndicator,
   Animated,
+  LayoutAnimation,
+  UIManager,
   useWindowDimensions,
 } from 'react-native';
+
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 import { SkeletonBox } from '../../components/Skeleton';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -34,8 +40,12 @@ import {
   getStudentLastClassDate,
   approveFocusPoint,
   deletePendingFocusPoint,
+  editAndApproveFocusPoint,
+  rejectPendingFocusPoint,
   updateFocusPoint,
 } from '../../storage/coachStorage';
+import PendingFocusCard from '../../components/coach/PendingFocusCard';
+import RejectFocusSheet from '../../components/coach/RejectFocusSheet';
 import { getNotifications, deleteNotification } from '../../storage/notificationsStorage';
 import { getAllStudentMetrics } from '../../utils/studentMetrics';
 import FocusPointEditSheet from '../../components/FocusPointEditSheet';
@@ -358,6 +368,42 @@ export default function StudentDetailScreen({ route, navigation }) {
 
   const [activeTab, setActiveTab] = useState('activity'); // information | activity | actions
   const [expandedAction, setExpandedAction] = useState(null);
+  const [expandedPendingFpId, setExpandedPendingFpId] = useState(null);
+  const [editingPendingFp, setEditingPendingFp] = useState(null);
+  const [rejectingPendingFp, setRejectingPendingFp] = useState(null);
+
+  async function handleApprovePendingFp(fpId) {
+    try {
+      await approveFocusPoint(fpId);
+      setPendingFPs((prev) => prev.filter((fp) => fp.id !== fpId));
+    } catch {}
+  }
+
+  function handleRejectPendingFp(fp) {
+    setRejectingPendingFp(fp);
+  }
+
+  async function handleConfirmRejectPendingFp(reason) {
+    if (!rejectingPendingFp) return;
+    try {
+      await rejectPendingFocusPoint({
+        fpId: rejectingPendingFp.id,
+        studentId: rejectingPendingFp.user_id ?? studentId,
+        fpName: rejectingPendingFp.name,
+        reason,
+      });
+      setPendingFPs((prev) => prev.filter((fp) => fp.id !== rejectingPendingFp.id));
+      setRejectingPendingFp(null);
+    } catch {}
+  }
+
+  async function handleSavePendingFpEdit(fpId, updates) {
+    try {
+      await editAndApproveFocusPoint(fpId, updates);
+      setPendingFPs((prev) => prev.filter((fp) => fp.id !== fpId));
+      setEditingPendingFp(null);
+    } catch {}
+  }
 
   const [activeQuestion, setActiveQuestion] = useState(null);
   const [questionSheetVisible, setQuestionSheetVisible] = useState(false);
@@ -1177,30 +1223,29 @@ export default function StudentDetailScreen({ route, navigation }) {
                     <Text style={styles.actionsSectionLabel}>
                       FOCUS POINTS TO REVIEW
                     </Text>
-                    {pendingFPs.map((fp) => (
-                      <TouchableOpacity
-                        key={`review_${fp.id}`}
-                        style={[styles.actionCard, styles.actionCardOrange]}
-                        onPress={() =>
-                          navigation.navigate('FocusValidation', {
-                            studentId,
-                            studentName: displayName,
-                          })
-                        }
-                        activeOpacity={0.85}
-                      >
-                        <View style={styles.actionCardLabelRow}>
-                          <Ionicons name="sparkles-outline" size={13} color={C.orange} />
-                          <Text style={[styles.actionCardLabel, { color: C.orange }]}>
-                            PENDING VALIDATION
-                          </Text>
-                        </View>
-                        <Text style={styles.actionCardTitle}>{fp.name}</Text>
-                        {!!fp.subtitle && (
-                          <Text style={styles.actionCardSub}>{fp.subtitle}</Text>
-                        )}
-                      </TouchableOpacity>
-                    ))}
+                    {pendingFPs.map((fp) => {
+                      const isExpanded = expandedPendingFpId === fp.id;
+                      return (
+                        <PendingFocusCard
+                          key={`review_${fp.id}`}
+                          fp={fp}
+                          isExpanded={isExpanded}
+                          onToggle={() => {
+                            LayoutAnimation.configureNext({
+                              duration: 220,
+                              update: { type: LayoutAnimation.Types.easeInEaseOut },
+                              create: { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity },
+                              delete: { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity },
+                            });
+                            setExpandedPendingFpId(isExpanded ? null : fp.id);
+                          }}
+                          studentName={null}
+                          onApprove={handleApprovePendingFp}
+                          onEdit={setEditingPendingFp}
+                          onDelete={handleRejectPendingFp}
+                        />
+                      );
+                    })}
                   </>
                 )}
 
@@ -1552,6 +1597,37 @@ export default function StudentDetailScreen({ route, navigation }) {
               setEditingFocus(null);
             }}
             onClose={() => setEditingFocus(null)}
+          />
+        )}
+      </Modal>
+
+      <Modal
+        visible={!!editingPendingFp}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setEditingPendingFp(null)}
+      >
+        {editingPendingFp && (
+          <FocusPointEditSheet
+            fp={editingPendingFp}
+            saveLabel="Save & Approve"
+            onSave={handleSavePendingFpEdit}
+            onClose={() => setEditingPendingFp(null)}
+          />
+        )}
+      </Modal>
+
+      <Modal
+        visible={!!rejectingPendingFp}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setRejectingPendingFp(null)}
+      >
+        {rejectingPendingFp && (
+          <RejectFocusSheet
+            fp={rejectingPendingFp}
+            onConfirm={handleConfirmRejectPendingFp}
+            onClose={() => setRejectingPendingFp(null)}
           />
         )}
       </Modal>

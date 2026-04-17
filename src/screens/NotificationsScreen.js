@@ -6,6 +6,7 @@ import { Colors, Fonts, Spacing } from '../theme';
 import { getNotifications, markAllNotificationsRead, deleteNotification } from '../storage/notificationsStorage';
 import { supabase } from '../services/supabase/client';
 import { locallyRespondedAttendance, locallyResolvedNameMatches } from '../storage/attendanceState';
+import { GenericListSkeleton } from '../components/Skeleton';
 
 const ATTENDANCE_TYPES = new Set(['attendance_check', 'group_class_attendance']);
 const ACTIONABLE_TYPES = new Set(['attendance_check', 'group_class_attendance', 'merge_request_student', 'name_match_confirm']);
@@ -19,16 +20,18 @@ const COACH_ACTION_TYPES = new Set([
   'name_match_confirm',
 ]);
 
+// Typographic category labels. Used instead of iconography to convey notification
+// type — feels editorial / premium rather than cluttered with mismatched glyphs.
 const TYPE_CONFIG = {
-  coach_request_accepted:  { icon: 'checkmark-circle-outline', color: '#34C759' },
-  coach_request_declined:  { icon: 'close-circle-outline',     color: '#FF3B30' },
-  attendance_check:        { icon: 'people-circle-outline',    color: Colors.orange, cta: 'Confirm attendance' },
-  group_class_attendance:  { icon: 'people-circle-outline',    color: Colors.orange, cta: 'Confirm attendance' },
-  focus_points_added:      { icon: 'star-outline',             color: '#34C759' },
-  focus_point_added:       { icon: 'star-outline',             color: '#34C759' },
-  merge_request:           { icon: 'git-merge-outline',        color: '#5788E6' },
-  merge_request_student:   { icon: 'git-merge-outline',        color: '#5788E6', cta: 'Review' },
-  name_match_confirm:      { icon: 'help-circle-outline',      color: '#FF9500', cta: 'Confirm' },
+  coach_request_accepted:  { label: 'Request',     color: '#34C759' },
+  coach_request_declined:  { label: 'Request',     color: '#FF3B30' },
+  attendance_check:        { label: 'Attendance',  color: Colors.orange, cta: 'Confirm attendance' },
+  group_class_attendance:  { label: 'Attendance',  color: Colors.orange, cta: 'Confirm attendance' },
+  focus_points_added:      { label: 'Review',      color: Colors.orange },
+  focus_point_added:       { label: 'Review',      color: Colors.orange },
+  merge_request:           { label: 'Merge',       color: '#5788E6' },
+  merge_request_student:   { label: 'Merge',       color: '#5788E6', cta: 'Review' },
+  name_match_confirm:      { label: 'Name match',  color: '#FF9500', cta: 'Confirm' },
 };
 
 function formatTime(dateStr) {
@@ -168,9 +171,22 @@ export default function NotificationsScreen({ navigation }) {
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [respondedClassInputIds, setRespondedClassInputIds] = useState(new Set());
+  const [pendingClassInputIds, setPendingClassInputIds] = useState(new Set());
   const [currentUserId, setCurrentUserId] = useState(null);
   const [scrollEnabled, setScrollEnabled] = useState(true);
   const initiallyUnread = useRef(new Set());
+
+  async function refreshCoachPending() {
+    // For coach-action notifs (focus_point_added etc.), find which linked
+    // class_inputs still have unresolved pending_coach FPs. Resolved notifs
+    // fall back to normal read/unread fading.
+    const { data } = await supabase
+      .from('focus_points')
+      .select('source_class_input_id')
+      .eq('status', 'pending_coach')
+      .eq('is_deleted', false);
+    setPendingClassInputIds(new Set((data ?? []).map(r => r.source_class_input_id).filter(Boolean)));
+  }
 
   function handleDelete(id) {
     setNotifications(prev => prev.filter(n => n.id !== id));
@@ -224,6 +240,7 @@ export default function NotificationsScreen({ navigation }) {
       initiallyUnread.current = new Set(data.filter(n => !n.read).map(n => n.id));
       setNotifications(data);
       setRespondedClassInputIds(new Set((responsesRes.data ?? []).map(r => r.class_input_id)));
+      await refreshCoachPending();
       setLoading(false);
       setTimeout(() => markAllNotificationsRead(), 2000);
     }
@@ -231,7 +248,10 @@ export default function NotificationsScreen({ navigation }) {
   }, []);
 
   useEffect(() => {
-    const unsub = navigation.addListener('focus', refreshResponded);
+    const unsub = navigation.addListener('focus', () => {
+      refreshResponded();
+      refreshCoachPending();
+    });
     return unsub;
   }, [navigation]);
 
@@ -252,9 +272,7 @@ export default function NotificationsScreen({ navigation }) {
       </View>
 
       {loading ? (
-        <View style={styles.loadingWrap}>
-          <ActivityIndicator size="small" color={Colors.secondary} />
-        </View>
+        <GenericListSkeleton rows={6} showHeader={false} showTitle={false} />
       ) : (
         <ScrollView
           contentContainerStyle={styles.list}
@@ -280,79 +298,76 @@ export default function NotificationsScreen({ navigation }) {
                 (notif.type === 'name_match_confirm' && locallyResolvedNameMatches.has(notif.id));
               const isActionable = ACTIONABLE_TYPES.has(notif.type) && !alreadyResponded;
               const wasUnread = initiallyUnread.current.has(notif.id);
+              // Coach-action notifs stay in full "unread" color until the coach
+              // actually resolves the action — the read-dot still disappears on tap,
+              // but the card color doesn't fade. Once the underlying class_input
+              // has no more pending_coach FPs, the notif fades normally.
+              const coachActionType = COACH_ACTION_TYPES.has(notif.type);
+              const linkedClassInputId = notif.data?.class_input_id;
+              const stillHasPending =
+                coachActionType &&
+                (!linkedClassInputId || pendingClassInputIds.has(linkedClassInputId));
+              const lookUnread = wasUnread || stillHasPending;
 
               const card = (
                 <Pressable
                   style={({ pressed }) => [
                     styles.card,
-                    isActionable && styles.cardActionable,
-                    !isActionable && wasUnread && styles.cardUnread,
-                    !isActionable && !wasUnread && styles.cardRead,
                     pressed && styles.cardPressed,
                   ]}
                   onPress={() => handleNotificationPress(notif)}
                 >
-                  {/* Left accent bar */}
-                  {isActionable && (
-                    <View style={[styles.accentBar, { backgroundColor: Colors.orange }]} />
-                  )}
-                  {!isActionable && wasUnread && (
-                    <View style={[styles.accentBar, { backgroundColor: Colors.black }]} />
-                  )}
-
-                  {/* Icon */}
-                  <View style={[
-                    styles.iconWrap,
-                    { backgroundColor: isActionable
-                        ? 'rgba(255,157,0,0.13)'
-                        : wasUnread
-                          ? '#EFEFEF'
-                          : '#F3F3F3',
-                    },
-                  ]}>
-                    <Ionicons
-                      name={config.icon}
-                      size={20}
-                      color={
-                        isActionable ? Colors.orange
-                        : wasUnread   ? Colors.black
-                        :               '#B0B0B0'
-                      }
-                    />
-                  </View>
-
-                  {/* Body */}
                   <View style={styles.cardBody}>
-                    <View style={styles.cardTop}>
-                      <Text
-                        style={[
-                          styles.cardTitle,
-                          (wasUnread || isActionable) ? styles.cardTitleBold : styles.cardTitleMuted,
-                        ]}
-                        numberOfLines={2}
-                      >
-                        {notif.title}
+                    {/* Category + time header */}
+                    <View style={styles.metaHeader}>
+                      {!!config.label && (
+                        <Text
+                          style={[
+                            styles.categoryLabel,
+                            { color: (lookUnread || isActionable) ? (config.color ?? Colors.black) : '#C8C8C8' },
+                          ]}
+                        >
+                          {config.label}
+                        </Text>
+                      )}
+                      {wasUnread && !isActionable && <View style={[styles.unreadDot, { backgroundColor: config.color ?? Colors.orange }]} />}
+                      <View style={{ flex: 1 }} />
+                      <Text style={[styles.cardTime, (!lookUnread && !isActionable) && styles.cardTimeMuted]}>
+                        {formatTime(notif.created_at)}
                       </Text>
-                      <Text style={styles.cardTime}>{formatTime(notif.created_at)}</Text>
                     </View>
+
+                    {/* Title */}
                     <Text
-                      style={[styles.cardBody2, (!wasUnread && !isActionable) && styles.cardBody2Muted]}
+                      style={[
+                        styles.cardTitle,
+                        (lookUnread || isActionable) ? styles.cardTitleBold : styles.cardTitleMuted,
+                      ]}
                       numberOfLines={2}
                     >
-                      {notif.body}
+                      {notif.title}
                     </Text>
+
+                    {/* Body */}
+                    {!!notif.body && (
+                      <Text
+                        style={[styles.cardBody2, (!lookUnread && !isActionable) && styles.cardBody2Muted]}
+                        numberOfLines={2}
+                      >
+                        {notif.body}
+                      </Text>
+                    )}
+
+                    {/* CTA */}
                     {isActionable && config.cta && (
                       <View style={styles.ctaRow}>
-                        <View style={styles.ctaPill}>
-                          <Text style={styles.ctaText}>{config.cta}</Text>
-                          <Ionicons name="chevron-forward" size={11} color={Colors.orange} />
-                        </View>
+                        <Text style={[styles.ctaInline, { color: config.color ?? Colors.orange }]}>
+                          {config.cta}
+                        </Text>
+                        <Ionicons name="arrow-forward" size={12} color={config.color ?? Colors.orange} />
                       </View>
                     )}
                   </View>
-
-                  {/* Unread dot */}
-                  {wasUnread && !isActionable && <View style={styles.dot} />}
                 </Pressable>
               );
 
@@ -420,70 +435,47 @@ const styles = StyleSheet.create({
   loadingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center' },
 
   list: {
-    paddingHorizontal: Spacing.side,
     paddingBottom: 48,
-    gap: 6,
   },
 
-  // ── Card ──
+  // ── Card ── editorial, full-width, hairline-separated
   card: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    borderRadius: 16,
-    paddingVertical: 14,
-    paddingHorizontal: 14,
-    gap: 12,
-    overflow: 'hidden',
-  },
-  cardActionable: {
-    backgroundColor: '#FFFAF2',
-    borderWidth: 1,
-    borderColor: 'rgba(255,157,0,0.22)',
-  },
-  cardUnread: {
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#EBEBEB',
-  },
-  cardRead: {
-    backgroundColor: '#F6F6F6',
-    borderWidth: 1,
-    borderColor: '#EFEFEF',
+    paddingHorizontal: Spacing.side,
+    paddingTop: 16,
+    paddingBottom: 18,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#EFEFEF',
   },
   cardPressed: {
-    backgroundColor: '#F0F0F0',
+    backgroundColor: 'rgba(0,0,0,0.025)',
   },
 
-  accentBar: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    bottom: 0,
-    width: 3,
-    borderTopLeftRadius: 16,
-    borderBottomLeftRadius: 16,
+  cardBody: {
+    gap: 4,
   },
 
-  iconWrap: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-  },
-
-  cardBody: { flex: 1, gap: 3 },
-
-  cardTop: {
+  metaHeader: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 8,
+    alignItems: 'center',
+    gap: 7,
+    marginBottom: 4,
   },
+  categoryLabel: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 10,
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
+  },
+  unreadDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+
   cardTitle: {
-    flex: 1,
-    fontSize: 14,
-    lineHeight: 19,
+    fontSize: 15,
+    lineHeight: 21,
+    letterSpacing: -0.2,
   },
   cardTitleBold: {
     fontFamily: Fonts.jakartaBold,
@@ -491,50 +483,40 @@ const styles = StyleSheet.create({
   },
   cardTitleMuted: {
     fontFamily: Fonts.jakartaMedium,
-    color: '#999',
-  },
-  cardTime: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 11,
-    color: '#ADADAD',
-    marginTop: 2,
-    flexShrink: 0,
+    color: '#9A9A9A',
   },
 
   cardBody2: {
     fontFamily: Fonts.jakartaRegular,
-    fontSize: 13,
-    color: Colors.secondary,
-    lineHeight: 18,
+    fontSize: 13.5,
+    color: '#5C6370',
+    lineHeight: 19,
+    marginTop: 1,
   },
   cardBody2Muted: {
-    color: '#BDBDBD',
+    color: '#B5B5B5',
   },
 
-  // CTA
-  ctaRow: { marginTop: 8, flexDirection: 'row' },
-  ctaPill: {
+  cardTime: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 11,
+    color: '#9A9A9A',
+    letterSpacing: 0.1,
+  },
+  cardTimeMuted: {
+    color: '#C8C8C8',
+  },
+
+  ctaRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 3,
-    backgroundColor: 'rgba(255,157,0,0.11)',
-    paddingHorizontal: 11,
-    paddingVertical: 6,
-    borderRadius: 20,
+    gap: 5,
+    marginTop: 10,
   },
-  ctaText: {
-    fontFamily: Fonts.jakartaBold,
+  ctaInline: {
+    fontFamily: Fonts.jakartaExtraBold,
     fontSize: 12,
-    color: Colors.orange,
-  },
-
-  dot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: Colors.black,
-    marginTop: 7,
-    flexShrink: 0,
+    letterSpacing: 0.2,
   },
 
   emptyWrap: {

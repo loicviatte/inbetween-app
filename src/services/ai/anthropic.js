@@ -3,13 +3,37 @@ import { supabase } from '../supabase/client';
 // All Claude calls are proxied through the Supabase edge function `ai-chat`
 // so the ANTHROPIC_API_KEY stays server-side and never ships in the app bundle.
 
+// Global style rule injected into every AI call: the product voice forbids
+// hyphens/dashes in user-facing copy, so we both instruct the model and
+// post-sanitize its output as a safety net.
+const NO_HYPHEN_RULE =
+  'IMPORTANT STYLE RULE: Never use hyphens, en dashes, or em dashes in your output. ' +
+  'Do not use "-", "–", or "—" anywhere. If you need a pause, use a comma or a period. ' +
+  'If you need to join words, use a space or rephrase. Applies to all text fields, ' +
+  'including inside JSON string values.';
+
+// Remove hyphens/dashes from AI output. We replace with a space and then
+// collapse double spaces so "foo — bar" becomes "foo bar", not "foo  bar".
+function stripHyphens(str) {
+  if (!str) return str;
+  return String(str)
+    .replace(/[\u2010-\u2015\u2212\-]/g, ' ')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/ ([.,;:!?])/g, '$1')
+    .trim();
+}
+
 async function invokeAiChat({ systemPrompt, prompt, messages, maxTokens }) {
+  const mergedSystem = systemPrompt
+    ? `${systemPrompt}\n\n${NO_HYPHEN_RULE}`
+    : NO_HYPHEN_RULE;
   const { data, error } = await supabase.functions.invoke('ai-chat', {
-    body: { systemPrompt, prompt, messages, maxTokens },
+    body: { systemPrompt: mergedSystem, prompt, messages, maxTokens },
   });
   if (error) throw new Error(`ai-chat invoke error: ${error.message || error}`);
   if (data?.error) throw new Error(data.error);
-  return (data?.text ?? '').trim();
+  const raw = (data?.text ?? '').trim();
+  return stripHyphens(raw);
 }
 
 export async function callClaudeChat(systemPrompt, messages, maxTokens = 500) {
@@ -45,19 +69,27 @@ export async function extractPrimaryFocus({ practicePoint1, priorityScore1, exis
 
 ${existingStr}
 
-Extract a concise focus point label (e.g. "Leg Strength", "Hip Rotation", "Body Alignment").
-- If the input is nonsense or irrelevant, return null.
-- If an existing name matches closely, use it exactly.
-- Otherwise create a short 2-3 word label.
+Extract:
+1. A concise focus point label (2-3 words, e.g. "Leg Strength", "Hip Rotation", "Body Alignment").
+   - If the input is nonsense or irrelevant, return null for all fields.
+   - If an existing name matches closely, use it exactly.
+2. A short subtitle (6-12 words) that clarifies the underlying skill or the symptom the student experiences.
+3. A context paragraph (2-4 sentences) explaining why this matters for the student based on what they wrote — reuse their own phrasing and urgency where possible. Written directly to the student in second person ("you", "your").
 
-Respond with ONLY valid JSON: {"focus_name": string|null}`;
+Respond with ONLY valid JSON:
+{"focus_name": string|null, "subtitle": string|null, "context": string|null}`;
 
   try {
-    const text = await callClaude(prompt, 100);
+    const text = await callClaude(prompt, 400);
     const match = text.match(/\{[\s\S]*\}/);
     if (!match) return null;
     const parsed = JSON.parse(match[0]);
-    return parsed.focus_name || null;
+    if (!parsed.focus_name) return null;
+    return {
+      name: parsed.focus_name,
+      subtitle: parsed.subtitle || null,
+      context: parsed.context || null,
+    };
   } catch {
     return null;
   }
@@ -78,19 +110,27 @@ export async function extractSecondaryFocus({ practicePoint2, priorityScore2, ex
 
 ${existingStr}
 
-Extract a concise focus point label (e.g. "Jump Power", "Arm Lines", "Musicality").
-- If the input is nonsense or irrelevant, return null.
-- If an existing name matches closely, use it exactly.
-- Otherwise create a short 2-3 word label.
+Extract:
+1. A concise focus point label (2-3 words, e.g. "Jump Power", "Arm Lines", "Musicality").
+   - If the input is nonsense or irrelevant, return null for all fields.
+   - If an existing name matches closely, use it exactly.
+2. A short subtitle (6-12 words) that clarifies the underlying skill or the symptom the student experiences.
+3. A context paragraph (2-4 sentences) explaining why this matters for the student based on what they wrote — reuse their own phrasing and urgency where possible. Written directly to the student in second person ("you", "your").
 
-Respond with ONLY valid JSON: {"focus_name": string|null}`;
+Respond with ONLY valid JSON:
+{"focus_name": string|null, "subtitle": string|null, "context": string|null}`;
 
   try {
-    const text = await callClaude(prompt, 100);
+    const text = await callClaude(prompt, 400);
     const match = text.match(/\{[\s\S]*\}/);
     if (!match) return null;
     const parsed = JSON.parse(match[0]);
-    return parsed.focus_name || null;
+    if (!parsed.focus_name) return null;
+    return {
+      name: parsed.focus_name,
+      subtitle: parsed.subtitle || null,
+      context: parsed.context || null,
+    };
   } catch {
     return null;
   }

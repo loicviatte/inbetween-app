@@ -1,11 +1,34 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
   ScrollView,
+  Modal,
+  Animated,
+  Dimensions,
+  LayoutAnimation,
+  Platform,
+  UIManager,
 } from 'react-native';
+
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
+
+const EXPAND_ANIMATION = {
+  duration: 220,
+  update: { type: LayoutAnimation.Types.easeInEaseOut },
+  create: {
+    type: LayoutAnimation.Types.easeInEaseOut,
+    property: LayoutAnimation.Properties.opacity,
+  },
+  delete: {
+    type: LayoutAnimation.Types.easeInEaseOut,
+    property: LayoutAnimation.Properties.opacity,
+  },
+};
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Fonts, Spacing } from '../../theme';
@@ -14,8 +37,14 @@ import {
   getPendingFocusPoints,
   approveFocusPoint,
   deletePendingFocusPoint,
+  editAndApproveFocusPoint,
   approveAllPendingForStudent,
+  rejectPendingFocusPoint,
 } from '../../storage/coachStorage';
+import FocusPointEditSheet from '../../components/FocusPointEditSheet';
+import PendingFocusCard from '../../components/coach/PendingFocusCard';
+import RejectFocusSheet from '../../components/coach/RejectFocusSheet';
+import { SkeletonBox } from '../../components/Skeleton';
 import { getNotifications, deleteNotification } from '../../storage/notificationsStorage';
 import { supabase } from '../../services/supabase/client';
 
@@ -47,6 +76,8 @@ export default function ActionNeededScreen({ navigation }) {
   // Focus points
   const [pendingFPs, setPendingFPs] = useState([]);
   const [fpLoading, setFpLoading] = useState(true);
+  const [editingFp, setEditingFp] = useState(null);
+  const [rejectingFp, setRejectingFp] = useState(null);
 
   // Merge requests
   const [mergeRequests, setMergeRequests] = useState([]);
@@ -107,10 +138,30 @@ export default function ActionNeededScreen({ navigation }) {
     } catch {}
   };
 
-  const handleDelete = async (fpId) => {
+  const handleReject = (fp) => {
+    setRejectingFp(fp);
+  };
+
+  const handleConfirmReject = async (reason) => {
+    if (!rejectingFp) return;
     try {
-      await deletePendingFocusPoint(fpId);
+      await rejectPendingFocusPoint({
+        fpId: rejectingFp.id,
+        studentId: rejectingFp.user_id,
+        fpName: rejectingFp.name,
+        reason,
+      });
+      setPendingFPs(prev => prev.filter(fp => fp.id !== rejectingFp.id));
+      setRejectingFp(null);
+      refresh();
+    } catch {}
+  };
+
+  const handleSaveEdit = async (fpId, updates) => {
+    try {
+      await editAndApproveFocusPoint(fpId, updates);
       setPendingFPs(prev => prev.filter(fp => fp.id !== fpId));
+      setEditingFp(null);
       refresh();
     } catch {}
   };
@@ -178,6 +229,24 @@ export default function ActionNeededScreen({ navigation }) {
 
   const totalCount = pendingFPs.length + mergeRequests.length + nameMatches.length;
 
+  // Horizontal pager: sync tab selection <-> swipe gesture, drive a moving underline.
+  const screenWidth = Dimensions.get('window').width;
+  const pagerRef = useRef(null);
+  const horizontalScrollX = useRef(new Animated.Value(0)).current;
+  const tabIndex = Math.max(0, tabs.findIndex(t => t.key === activeTab));
+  const firstMount = useRef(true);
+
+  useEffect(() => {
+    const targetX = tabIndex * screenWidth;
+    if (firstMount.current) {
+      horizontalScrollX.setValue(targetX);
+      pagerRef.current?.scrollTo({ x: targetX, animated: false });
+      firstMount.current = false;
+    } else {
+      pagerRef.current?.scrollTo({ x: targetX, animated: true });
+    }
+  }, [tabIndex, screenWidth]);
+
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
       {/* Header */}
@@ -193,34 +262,90 @@ export default function ActionNeededScreen({ navigation }) {
         )}
       </View>
 
-      {/* Tabs */}
+      {/* Tabs with moving underline */}
       <View style={s.tabRow}>
-        {tabs.map(tab => (
-          <TouchableOpacity
-            key={tab.key}
-            style={[s.tab, activeTab === tab.key && s.tabActive]}
-            onPress={() => { setActiveTab(tab.key); setExpandedId(null); }}
-            activeOpacity={0.7}
-          >
-            <Text style={[s.tabText, activeTab === tab.key && s.tabTextActive]}>{tab.label}</Text>
-            {tab.count > 0 && (
-              <View style={[s.tabBadge, activeTab === tab.key && s.tabBadgeActive]}>
-                <Text style={[s.tabBadgeText, activeTab === tab.key && s.tabBadgeTextActive]}>{tab.count}</Text>
+        {tabs.map(tab => {
+          const isActive = activeTab === tab.key;
+          return (
+            <TouchableOpacity
+              key={tab.key}
+              style={s.tab}
+              onPress={() => { setActiveTab(tab.key); setExpandedId(null); }}
+              activeOpacity={0.7}
+            >
+              <View style={s.tabLabelRow}>
+                <Text style={[s.tabText, isActive && s.tabTextActive]}>{tab.label}</Text>
+                {tab.count > 0 && (
+                  <View style={[s.tabBadge, isActive && s.tabBadgeActive]}>
+                    <Text style={[s.tabBadgeText, isActive && s.tabBadgeTextActive]}>{tab.count}</Text>
+                  </View>
+                )}
               </View>
-            )}
-          </TouchableOpacity>
-        ))}
+            </TouchableOpacity>
+          );
+        })}
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            s.tabUnderline,
+            {
+              left: horizontalScrollX.interpolate({
+                inputRange: [0, Math.max(1, screenWidth), Math.max(2, 2 * screenWidth)],
+                outputRange: ['5%', '38.333%', '71.667%'],
+                extrapolate: 'clamp',
+              }),
+            },
+          ]}
+        />
       </View>
 
-      {/* Content */}
-      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: Spacing.side, paddingBottom: 100 }}>
-
-        {/* ── Focus Points Tab ── */}
-        {activeTab === 'focus' && (
-          <>
+      {/* Pager — swipe between tabs */}
+      <Animated.ScrollView
+        ref={pagerRef}
+        horizontal
+        pagingEnabled
+        bounces={false}
+        showsHorizontalScrollIndicator={false}
+        scrollEventThrottle={16}
+        onScroll={Animated.event(
+          [{ nativeEvent: { contentOffset: { x: horizontalScrollX } } }],
+          { useNativeDriver: false }
+        )}
+        onMomentumScrollEnd={(e) => {
+          const page = Math.round(e.nativeEvent.contentOffset.x / Math.max(1, screenWidth));
+          const next = tabs[page]?.key;
+          if (next && next !== activeTab) {
+            setActiveTab(next);
+            setExpandedId(null);
+          }
+        }}
+        style={{ flex: 1 }}
+      >
+      {/* ── Page 1: Focus Points ── */}
+      <ScrollView style={{ width: screenWidth }} contentContainerStyle={{ padding: Spacing.side, paddingBottom: 100 }}>
+        <>
             <Text style={s.tabIntro}>
               AI-generated focus points from your recent classes. Approve, edit or reject before they auto-publish to your students.
             </Text>
+
+            {fpLoading && pendingFPs.length === 0 && (
+              <View style={{ gap: 12 }}>
+                {[0, 1, 2].map(i => (
+                  <View key={i} style={s.skeletonCard}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 10 }}>
+                      <SkeletonBox width={32} height={32} borderRadius={16} />
+                      <View style={{ flex: 1, gap: 6 }}>
+                        <SkeletonBox width="55%" height={14} borderRadius={4} />
+                        <SkeletonBox width="35%" height={11} borderRadius={4} />
+                      </View>
+                      <SkeletonBox width={44} height={18} borderRadius={6} />
+                    </View>
+                    <SkeletonBox width="90%" height={12} borderRadius={4} style={{ marginBottom: 6 }} />
+                    <SkeletonBox width="75%" height={12} borderRadius={4} />
+                  </View>
+                ))}
+              </View>
+            )}
 
             {/* Bulk actions */}
             {pendingFPs.length > 0 && (
@@ -235,82 +360,20 @@ export default function ActionNeededScreen({ navigation }) {
             {pendingFPs.map(fp => {
               const isExpanded = expandedId === `fp-${fp.id}`;
               const student = studentMap[fp.user_id];
-              const hoursLeft = fp.coach_review_deadline
-                ? Math.max(0, Math.ceil((new Date(fp.coach_review_deadline) - Date.now()) / 3600000))
-                : null;
-              const isUrgent = hoursLeft !== null && hoursLeft < 3;
-
               return (
-                <TouchableOpacity
+                <PendingFocusCard
                   key={fp.id}
-                  style={[s.fpCard, isUrgent && s.fpCardUrgent]}
-                  activeOpacity={0.85}
-                  onPress={() => setExpandedId(isExpanded ? null : `fp-${fp.id}`)}
-                >
-                  {/* Header */}
-                  <View style={s.fpHeader}>
-                    <View style={s.fpAvatar}>
-                      <Text style={s.fpAvatarText}>{student ? initials(student.name) : '?'}</Text>
-                    </View>
-                    <View style={{ flex: 1, minWidth: 0 }}>
-                      <Text style={s.fpName} numberOfLines={1}>{fp.name}</Text>
-                      <Text style={s.fpStudent}>{student?.name || 'Student'}</Text>
-                    </View>
-                    {hoursLeft !== null && (
-                      <View style={[s.timerBadge, isUrgent && s.timerBadgeUrgent]}>
-                        <Ionicons name="time-outline" size={10} color={isUrgent ? C.red : C.orange} />
-                        <Text style={[s.timerText, isUrgent && { color: C.red }]}>{hoursLeft}h</Text>
-                      </View>
-                    )}
-                  </View>
-
-                  {/* Detail */}
-                  {!!fp.context && (
-                    <Text style={s.fpDetail} numberOfLines={isExpanded ? undefined : 2}>{fp.context}</Text>
-                  )}
-
-                  {/* Expanded */}
-                  {isExpanded && (
-                    <View style={s.fpExpanded}>
-                      {!!fp.drill && (
-                        <View style={s.aiBox}>
-                          <View style={s.aiBoxHeader}>
-                            <Ionicons name="star" size={12} color="#fff" />
-                          </View>
-                          <View style={{ flex: 1 }}>
-                            <Text style={s.aiBoxLabel}>Drill suggestion</Text>
-                            <Text style={s.aiBoxText}>{fp.drill}</Text>
-                          </View>
-                        </View>
-                      )}
-
-                      <View style={s.fpActions}>
-                        <TouchableOpacity
-                          style={s.approveBtn}
-                          onPress={() => handleApprove(fp.id)}
-                          activeOpacity={0.8}
-                        >
-                          <Ionicons name="checkmark" size={14} color="#fff" />
-                          <Text style={s.approveBtnText}>Approve</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          style={s.editBtn}
-                          onPress={() => navigation.navigate('FocusValidation', { studentId: fp.user_id })}
-                          activeOpacity={0.8}
-                        >
-                          <Text style={s.editBtnText}>Edit</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          style={s.rejectBtn}
-                          onPress={() => handleDelete(fp.id)}
-                          activeOpacity={0.8}
-                        >
-                          <Text style={s.rejectBtnText}>Reject</Text>
-                        </TouchableOpacity>
-                      </View>
-                    </View>
-                  )}
-                </TouchableOpacity>
+                  fp={fp}
+                  isExpanded={isExpanded}
+                  onToggle={() => {
+                    LayoutAnimation.configureNext(EXPAND_ANIMATION);
+                    setExpandedId(isExpanded ? null : `fp-${fp.id}`);
+                  }}
+                  studentName={student?.name || 'Student'}
+                  onApprove={handleApprove}
+                  onEdit={setEditingFp}
+                  onDelete={handleReject}
+                />
               );
             })}
 
@@ -321,12 +384,12 @@ export default function ActionNeededScreen({ navigation }) {
                 <Text style={s.emptySub}>No pending focus points to review.</Text>
               </View>
             )}
-          </>
-        )}
+        </>
+      </ScrollView>
 
-        {/* ── Merge Requests Tab ── */}
-        {activeTab === 'merge' && (
-          <>
+      {/* ── Page 2: Merge Requests ── */}
+      <ScrollView style={{ width: screenWidth }} contentContainerStyle={{ padding: Spacing.side, paddingBottom: 100 }}>
+        <>
             <Text style={s.tabIntro}>
               AI detected similar focus points that could be merged into one to keep things clean for your students.
             </Text>
@@ -370,12 +433,12 @@ export default function ActionNeededScreen({ navigation }) {
                 <Text style={s.emptySub}>No merge suggestions right now.</Text>
               </View>
             )}
-          </>
-        )}
+        </>
+      </ScrollView>
 
-        {/* ── Name Matching Tab ── */}
-        {activeTab === 'name' && (
-          <>
+      {/* ── Page 3: Name Matching ── */}
+      <ScrollView style={{ width: screenWidth }} contentContainerStyle={{ padding: Spacing.side, paddingBottom: 100 }}>
+        <>
             <Text style={s.tabIntro}>
               We found names from class attendance that might match your students. Confirm the right ones so focus points land in the right place.
             </Text>
@@ -430,9 +493,30 @@ export default function ActionNeededScreen({ navigation }) {
                 <Text style={s.emptySub}>No name matches to review.</Text>
               </View>
             )}
-          </>
-        )}
+        </>
       </ScrollView>
+      </Animated.ScrollView>
+
+      <Modal visible={!!editingFp} transparent animationType="slide" onRequestClose={() => setEditingFp(null)}>
+        {editingFp && (
+          <FocusPointEditSheet
+            fp={editingFp}
+            onSave={handleSaveEdit}
+            onClose={() => setEditingFp(null)}
+            saveLabel="Save & Approve"
+          />
+        )}
+      </Modal>
+
+      <Modal visible={!!rejectingFp} transparent animationType="slide" onRequestClose={() => setRejectingFp(null)}>
+        {rejectingFp && (
+          <RejectFocusSheet
+            fp={rejectingFp}
+            onConfirm={handleConfirmReject}
+            onClose={() => setRejectingFp(null)}
+          />
+        )}
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -480,23 +564,29 @@ const s = StyleSheet.create({
 
   // Tabs
   tabRow: {
+    position: 'relative',
     flexDirection: 'row',
-    paddingHorizontal: Spacing.side,
     borderBottomWidth: 1,
     borderBottomColor: C.lightGray,
   },
   tab: {
     flex: 1,
-    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
     paddingVertical: 14,
-    borderBottomWidth: 2.5,
-    borderBottomColor: 'transparent',
   },
-  tabActive: {
-    borderBottomColor: C.dark,
+  tabLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  tabUnderline: {
+    position: 'absolute',
+    bottom: -1,
+    width: '23.333%',
+    height: 2.5,
+    borderRadius: 2,
+    backgroundColor: C.dark,
   },
   tabText: {
     fontFamily: Fonts.jakartaMedium,
@@ -576,156 +666,158 @@ const s = StyleSheet.create({
     color: '#fff',
   },
 
-  // Focus point card
+  // Focus point card — editorial, minimal
   fpCard: {
     backgroundColor: C.card,
-    borderRadius: 16,
-    padding: 16,
+    borderRadius: 14,
+    paddingVertical: 18,
+    paddingHorizontal: 18,
     marginBottom: 10,
-    borderWidth: 1,
-    borderColor: 'transparent',
+    overflow: 'hidden',
+    // Subtle shadow instead of border — gives depth without boxiness
+    shadowColor: '#000',
+    shadowOpacity: 0.035,
+    shadowOffset: { width: 0, height: 1 },
+    shadowRadius: 3,
+    elevation: 1,
   },
-  fpCardUrgent: {
-    borderColor: 'rgba(212,69,69,0.2)',
+  fpCardExpanded: {
+    shadowOpacity: 0.07,
+    shadowRadius: 10,
+    elevation: 3,
   },
-  fpHeader: {
+  urgentAccent: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: 2.5,
+    backgroundColor: C.red,
+  },
+  metaRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: 6,
+    marginBottom: 6,
   },
-  fpAvatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 13,
-    backgroundColor: C.surface,
-    alignItems: 'center',
-    justifyContent: 'center',
+  metaCategory: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 10,
+    letterSpacing: 1.2,
+    color: C.orange,
+    textTransform: 'uppercase',
   },
-  fpAvatarText: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 13,
-    color: C.text,
+  metaSep: {
+    fontSize: 10,
+    color: '#C8C8C8',
+    marginHorizontal: -2,
   },
-  fpName: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 15,
-    color: C.text,
-  },
-  fpStudent: {
+  metaStudent: {
     fontFamily: Fonts.jakartaMedium,
-    fontSize: 12,
+    fontSize: 11,
     color: C.gray,
-    marginTop: 2,
+    letterSpacing: 0.2,
+    flexShrink: 1,
   },
-  timerBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: 'rgba(232,168,56,0.08)',
-    borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-  },
-  timerBadgeUrgent: {
-    backgroundColor: 'rgba(212,69,69,0.08)',
-  },
-  timerText: {
+  metaTime: {
     fontFamily: Fonts.jakartaBold,
     fontSize: 11,
     color: C.orange,
+    letterSpacing: 0.1,
+  },
+  metaTimeUrgent: {
+    color: C.red,
+  },
+  fpName: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 18,
+    lineHeight: 24,
+    letterSpacing: -0.3,
+    color: C.text,
   },
   fpDetail: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 13,
-    color: C.text,
-    lineHeight: 19,
-    marginTop: 10,
-    paddingLeft: 52,
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 13.5,
+    color: '#5C6370',
+    lineHeight: 20,
+    marginTop: 8,
   },
   fpExpanded: {
-    marginTop: 14,
-    paddingTop: 14,
-    borderTopWidth: 1,
-    borderTopColor: C.lightGray,
+    marginTop: 18,
+    paddingTop: 18,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: '#E8E8E8',
   },
-  aiBox: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 10,
-    backgroundColor: 'rgba(232,168,56,0.06)',
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 14,
+  skeletonCard: {
+    backgroundColor: C.card,
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: C.lightGray,
   },
-  aiBoxHeader: {
-    width: 22,
-    height: 22,
-    borderRadius: 7,
-    backgroundColor: C.orange,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 1,
+  // Quote-style blocks (replacing boxy gray sections)
+  quoteBlock: {
+    marginBottom: 16,
   },
-  aiBoxLabel: {
+  quoteLabel: {
     fontFamily: Fonts.jakartaExtraBold,
     fontSize: 10,
-    color: C.orange,
+    color: C.gray,
+    letterSpacing: 1.2,
     textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    marginBottom: 3,
+    marginBottom: 7,
   },
-  aiBoxText: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 12,
+  quoteRow: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  quoteBar: {
+    width: 2,
+    backgroundColor: '#E0E0E0',
+    borderRadius: 1,
+  },
+  quoteText: {
+    flex: 1,
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 13.5,
     color: C.text,
-    lineHeight: 18,
+    lineHeight: 20,
   },
   fpActions: {
     flexDirection: 'row',
-    gap: 8,
+    alignItems: 'center',
+    gap: 14,
+    marginTop: 6,
   },
   approveBtn: {
-    flex: 2,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    backgroundColor: C.dark,
-    borderRadius: 12,
-    paddingVertical: 11,
-  },
-  approveBtnText: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 13,
-    color: '#fff',
-  },
-  editBtn: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1.5,
-    borderColor: C.lightGray,
-    borderRadius: 12,
-    paddingVertical: 11,
+    backgroundColor: C.dark,
+    borderRadius: 999,
+    paddingVertical: 12,
+  },
+  approveBtnText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 13,
+    color: '#fff',
+    letterSpacing: 0.2,
+  },
+  textBtn: {
+    paddingVertical: 10,
+    paddingHorizontal: 4,
   },
   editBtnText: {
     fontFamily: Fonts.jakartaBold,
     fontSize: 13,
     color: C.text,
-  },
-  rejectBtn: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1.5,
-    borderColor: 'rgba(212,69,69,0.2)',
-    borderRadius: 12,
-    paddingVertical: 11,
+    letterSpacing: 0.1,
   },
   rejectBtnText: {
     fontFamily: Fonts.jakartaBold,
     fontSize: 13,
     color: C.red,
+    letterSpacing: 0.1,
   },
 
   // Tab intro
