@@ -13,6 +13,7 @@ import {
   deletePendingFocusPoint, approveAllPendingForStudent
 } from '../../storage/coachStorage';
 import FocusPointEditSheet from '../../components/FocusPointEditSheet';
+import { useCoachData } from '../../context/CoachDataContext';
 
 const TIER_COLOR = { critical: '#E84040', important: '#FF9D00', supporting: '#4CAF50' };
 
@@ -51,6 +52,7 @@ function PendingFocusCard({ fp, onApprove, onEdit, onDelete }) {
 
 export default function FocusValidationScreen({ navigation, route }) {
   const { studentId, studentName } = route.params ?? {};
+  const { refresh: refreshCoachData } = useCoachData();
   const [fps, setFps] = useState([]);
   const [loading, setLoading] = useState(true);
   const [editingFp, setEditingFp] = useState(null);
@@ -81,11 +83,13 @@ export default function FocusValidationScreen({ navigation, route }) {
   async function handleApprove(fpId) {
     await approveFocusPoint(fpId);
     setFps(prev => prev.filter(f => f.id !== fpId));
+    refreshCoachData();
   }
 
   async function handleDelete(fpId) {
     await deletePendingFocusPoint(fpId);
     setFps(prev => prev.filter(f => f.id !== fpId));
+    refreshCoachData();
   }
 
   async function handleEdit(fp) { setEditingFp(fp); }
@@ -94,6 +98,7 @@ export default function FocusValidationScreen({ navigation, route }) {
     await editAndApproveFocusPoint(fpId, updates);
     setFps(prev => prev.filter(f => f.id !== fpId));
     setEditingFp(null);
+    refreshCoachData();
   }
 
   async function handleApproveAll() {
@@ -107,6 +112,7 @@ export default function FocusValidationScreen({ navigation, route }) {
       }
     }
     setFps([]);
+    refreshCoachData();
     setApproving(false);
   }
 

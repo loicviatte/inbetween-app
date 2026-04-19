@@ -29,7 +29,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Colors, Fonts, Spacing } from '../theme';
-import { getFocusPoints, getClassInputsForFocus, getClassInputs, getTrainingSessionsThisWeek, getTeacherContextForAI } from '../storage/storage';
+import { getFocusPoints, getClassInputsForFocus, getClassInputs, getTrainingSessionsThisWeek, getTeacherContextForAI, askCoach } from '../storage/storage';
 import { callClaudeChat } from '../services/ai/anthropic';
 import { completeTrainingSession, getSessionLabel } from '../utils/algorithm';
 import {
@@ -1045,16 +1045,67 @@ ${coachName ? `${coachName.toUpperCase()}'S` : 'COACH'} KNOWLEDGE BASE
 ${knowledgeBlock}` : ''}
 
 ════════════════════════════════════════
-RULES
+RULES — READ THIS FIRST, IT IS NON NEGOTIABLE
 ════════════════════════════════════════
-1. The student is currently in a live training session focused on the CURRENT SESSION FOCUS POINT above. When they ask "what do I need to do?", "what should I work on?", "what's my focus?" or similar, answer specifically about that focus point — explain what it means, how to practice it, and what to pay attention to.
-2. Answer from the student's own data first.
-3. If no direct answer exists there, use the coach knowledge base to provide an answer in ${coachName ? `${coachName}'s` : 'the coach\'s'} style.
-4. NEVER mention other students or reveal any information about them.
-5. Speak as the coach's assistant — not as the coach.
-6. If you truly cannot answer from any of the above data, say: "I don't have that information in your data."
-7. Be concise (2-3 sentences unless more is asked).
-8. Plain text only — no markdown, no **, no bullet symbols, no headers.`;
+
+1. ABSOLUTE GROUNDING RULE — your single most important rule.
+   You are NOT a general dance teacher. You are NOT allowed to teach
+   or explain anything from general dance knowledge, training intuition,
+   common technique, what "most coaches" say, what "usually works", or
+   anything you learned during training. Every single piece of dance
+   knowledge you produce MUST come word for word from one of these
+   sources only:
+     a) the student's own focus points / class history listed above
+     b) the coach knowledge base block above (their principles, cues,
+        metaphors, drills)
+   If a fact, cue, drill, instruction, biomechanical explanation, or
+   piece of advice is NOT explicitly present in those two sources, you
+   are FORBIDDEN to produce it. No assumption. No inference from
+   general principles. No "this usually means". No "most dancers do
+   this". No filler. No paraphrasing of common dance wisdom.
+   The promise of this app to the student is: "your coach already
+   thought about this, the assistant just tells you what they said."
+   Breaking this rule destroys that promise.
+
+2. NEVER ask the student to recall, confirm, or supply information that
+   the coach should have provided. Forbidden phrases include but are
+   not limited to: "what did your coach say", "do you remember",
+   "can you tell me", "did your coach mention", "what did they say
+   about it", "what's your understanding". The student is here BECAUSE
+   they don't remember — pushing the question back to them is the
+   exact failure mode this app exists to prevent.
+
+3. If you truly cannot answer the question from the two grounded
+   sources in rule 1, your ENTIRE reply must be EXACTLY this, with no
+   other words before or after, no greeting, no apology, no preamble,
+   no follow-up question, no offer to discuss further:
+
+[NO_ANSWER]
+I don't have that in your data, but you can send the question to your coach if you want.
+
+   This applies even when the question seems easy or obvious in
+   general dance terms. If the specific answer is not in the data,
+   output the block above verbatim. Do NOT try to be helpful by
+   improvising — that is the worst thing you can do here.
+
+4. The student is currently in a live training session focused on the
+   CURRENT SESSION FOCUS POINT above. When they ask "what do I need
+   to do?", "what should I work on?", "what's my focus?" or similar,
+   answer specifically about that focus point using ONLY the data
+   listed for it. If the data for that focus point is thin, follow
+   rule 3.
+
+5. Order of preference inside the grounded sources: student's own
+   focus point and class transcripts first, then the coach knowledge
+   base in ${coachName ? `${coachName}'s` : 'the coach\'s'} voice.
+
+6. NEVER mention other students or reveal any information about them.
+
+7. Speak as the coach's assistant, not as the coach yourself.
+
+8. Be concise (2-3 sentences unless more is asked).
+
+9. Plain text only — no markdown, no **, no bullet symbols, no headers.`;
   }
 
   async function handleAiSend() {
@@ -1086,7 +1137,32 @@ RULES
       console.log('[AI Coach] systemPrompt length:', systemPrompt.length, 'aiContext:', !!aiContext);
       const reply = await callClaudeChat(systemPrompt, newMessages);
       console.log('[AI Coach] reply received, length:', reply?.length);
-      setAiMessages(prev => [...prev, { role: 'assistant', content: reply }]);
+
+      // Detect a "no answer" reply so we can show the "Send to coach" CTA.
+      // Primary signal: the [NO_ANSWER] token from the prompt. Fallback
+      // heuristics catch cases where the model improvised — either by
+      // asking the student to recall, or by saying it doesn't have the
+      // info in their data. In both cases we replace the body with the
+      // canonical sentence so the student never sees a question pushed
+      // back at them.
+      const rawReply = reply || '';
+      const hasToken = /\[NO_ANSWER\]/i.test(rawReply);
+      const askedStudent = /(what did your coach|do you remember|can you tell me|did your coach|what did they say|what.+coach.+say)/i.test(rawReply);
+      const saidNoData = /(don't have (that|this|specific|the (specific|exact))|don'?t have .{0,40}(in (your|the) data|details))/i.test(rawReply);
+      const noAnswer = hasToken || askedStudent || saidNoData;
+      const cleanReply = noAnswer
+        ? "I don't have that in your data, but you can send the question to your coach if you want."
+        : rawReply.replace(/\[NO_ANSWER\]\s*/i, '').trim();
+      setAiMessages(prev => [
+        ...prev,
+        {
+          role: 'assistant',
+          content: cleanReply,
+          noAnswer,
+          forQuestion: noAnswer ? text : undefined,
+          coachAsked: false,
+        },
+      ]);
       setTimeout(() => aiScrollRef.current?.scrollToEnd({ animated: true }), 50);
     } catch (err) {
       console.error('[AI Coach] send error:', err?.message || err);
@@ -1094,6 +1170,36 @@ RULES
     } finally {
       setAiSending(false);
     }
+  }
+
+  async function handleAskCoach(messageIdx) {
+    const msg = aiMessages[messageIdx];
+    if (!msg?.forQuestion || msg.coachAsked) return;
+    // Optimistically mark as sent so the buttons disappear immediately.
+    setAiMessages(prev => prev.map((m, i) =>
+      i === messageIdx ? { ...m, coachAsked: true, coachAskPending: true } : m
+    ));
+    try {
+      // Build context: question + last few exchanges + current focus point name
+      const fpName = focusPoint?.name ? ` [Focus: ${focusPoint.name}]` : '';
+      const contextual = `${msg.forQuestion}${fpName}`;
+      await askCoach(contextual, 'clarification', focusPointId || null);
+      setAiMessages(prev => prev.map((m, i) =>
+        i === messageIdx ? { ...m, coachAskPending: false, coachAskOk: true } : m
+      ));
+    } catch (e) {
+      console.error('[AI Coach] askCoach failed:', e?.message || e);
+      setAiMessages(prev => prev.map((m, i) =>
+        i === messageIdx
+          ? { ...m, coachAsked: false, coachAskPending: false, coachAskError: e?.message || 'Failed to send' }
+          : m
+      ));
+    }
+  }
+  function dismissAskCoach(messageIdx) {
+    setAiMessages(prev => prev.map((m, i) =>
+      i === messageIdx ? { ...m, noAnswer: false } : m
+    ));
   }
 
   async function startAiRecording() {
@@ -1255,10 +1361,50 @@ RULES
                 <Text style={styles.aiCardEmptyText}>Ask a question about your focus point or training.</Text>
               )}
               {aiMessages.map((msg, i) => (
-                <View key={i} style={[styles.aiCardBubble, msg.role === 'user' ? styles.aiCardBubbleUser : styles.aiCardBubbleBot]}>
-                  <Text style={[styles.aiCardBubbleText, msg.role === 'user' ? styles.aiCardBubbleTextUser : styles.aiCardBubbleTextBot]}>
-                    {msg.content}
-                  </Text>
+                <View key={i}>
+                  <View style={[styles.aiCardBubble, msg.role === 'user' ? styles.aiCardBubbleUser : styles.aiCardBubbleBot]}>
+                    <Text style={[styles.aiCardBubbleText, msg.role === 'user' ? styles.aiCardBubbleTextUser : styles.aiCardBubbleTextBot]}>
+                      {msg.content}
+                    </Text>
+                  </View>
+                  {msg.role === 'assistant' && msg.noAnswer && !msg.coachAsked && (
+                    <View style={styles.askCoachRow}>
+                      <TouchableOpacity
+                        style={styles.askCoachBtn}
+                        activeOpacity={0.85}
+                        onPress={() => handleAskCoach(i)}
+                      >
+                        <Ionicons name="paper-plane" size={12} color="#fff" />
+                        <Text style={styles.askCoachBtnText}>Send to coach</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.askCoachDismiss}
+                        activeOpacity={0.7}
+                        onPress={() => dismissAskCoach(i)}
+                      >
+                        <Text style={styles.askCoachDismissText}>Not now</Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+                  {msg.role === 'assistant' && msg.coachAsked && (
+                    <View style={styles.askCoachStatus}>
+                      {msg.coachAskPending ? (
+                        <>
+                          <ActivityIndicator size="small" color="rgba(255,255,255,0.5)" />
+                          <Text style={styles.askCoachStatusText}>Sending to your coach…</Text>
+                        </>
+                      ) : msg.coachAskError ? (
+                        <Text style={[styles.askCoachStatusText, { color: '#E84040' }]}>
+                          Couldn't send: {msg.coachAskError}
+                        </Text>
+                      ) : (
+                        <>
+                          <Ionicons name="checkmark-circle" size={13} color="#4AAF52" />
+                          <Text style={styles.askCoachStatusText}>Sent to your coach</Text>
+                        </>
+                      )}
+                    </View>
+                  )}
                 </View>
               ))}
               {aiSending && (
@@ -1833,6 +1979,50 @@ const styles = StyleSheet.create({
   },
   aiCardBubbleTextBot: {
     color: 'rgba(255,255,255,0.65)',
+  },
+  askCoachRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 6,
+    marginBottom: 4,
+    paddingLeft: 4,
+  },
+  askCoachBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#E8A838',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 9,
+  },
+  askCoachBtnText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 11.5,
+    color: '#fff',
+    letterSpacing: 0.2,
+  },
+  askCoachDismiss: {
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+  },
+  askCoachDismissText: {
+    fontFamily: Fonts.jakartaSemiBold,
+    fontSize: 11.5,
+    color: 'rgba(255,255,255,0.45)',
+  },
+  askCoachStatus: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 6,
+    paddingLeft: 4,
+  },
+  askCoachStatusText: {
+    fontFamily: Fonts.jakartaSemiBold,
+    fontSize: 11,
+    color: 'rgba(255,255,255,0.55)',
   },
   aiCardInputRow: {
     flexDirection: 'row',

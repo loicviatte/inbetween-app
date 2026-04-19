@@ -49,6 +49,7 @@ import RejectFocusSheet from '../../components/coach/RejectFocusSheet';
 import { getNotifications, deleteNotification } from '../../storage/notificationsStorage';
 import { getAllStudentMetrics } from '../../utils/studentMetrics';
 import FocusPointEditSheet from '../../components/FocusPointEditSheet';
+import { useCoachData } from '../../context/CoachDataContext';
 
 // ── Palette ─────────────────────────────────────────────────────────────────
 const C = {
@@ -355,6 +356,7 @@ function QuestionSheet({ visible, question, onClose, onDone }) {
 // ── Main Screen ─────────────────────────────────────────────────────────────
 export default function StudentDetailScreen({ route, navigation }) {
   const { studentId, studentName } = route.params;
+  const { refresh: refreshCoachData } = useCoachData();
   const [profile, setProfile] = useState(null);
   const [focusPoints, setFocusPoints] = useState([]);
   const [activity, setActivity] = useState([]);
@@ -376,6 +378,9 @@ export default function StudentDetailScreen({ route, navigation }) {
     try {
       await approveFocusPoint(fpId);
       setPendingFPs((prev) => prev.filter((fp) => fp.id !== fpId));
+      // Sync the global coach context so the dashboard's badge / red action
+      // button / per-student dot all reflect the approval immediately.
+      refreshCoachData();
     } catch {}
   }
 
@@ -394,6 +399,7 @@ export default function StudentDetailScreen({ route, navigation }) {
       });
       setPendingFPs((prev) => prev.filter((fp) => fp.id !== rejectingPendingFp.id));
       setRejectingPendingFp(null);
+      refreshCoachData();
     } catch {}
   }
 
@@ -1576,6 +1582,7 @@ export default function StudentDetailScreen({ route, navigation }) {
           setQuestionSheetVisible(false);
           setActiveQuestion(null);
           setQuestions((prev) => prev.filter((x) => x.id !== activeQuestion?.id));
+          refreshCoachData();
         }}
       />
 

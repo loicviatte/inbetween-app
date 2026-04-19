@@ -783,29 +783,64 @@ export async function getPendingFocusPointsCount() {
 }
 
 export async function approveFocusPoint(fpId) {
+  // Capture the student before mutating so we can clear related coach notifs.
+  const { data: fpRow } = await supabase
+    .from('focus_points')
+    .select('user_id')
+    .eq('id', fpId)
+    .maybeSingle();
   const { error } = await supabase
     .from('focus_points')
     .update({ status: 'active', coach_review_deadline: null })
     .eq('id', fpId);
   if (error) throw error;
+  // Coach has acted on the pending FPs for this student → clear any
+  // unread "focus_points_added" notifications targeting this student so
+  // the bell badge in the dashboard goes back down.
+  await markFocusAddedNotificationsReadForStudent(fpRow?.user_id).catch(() => {});
+}
+
+async function markFocusAddedNotificationsReadForStudent(studentId) {
+  if (!studentId) return;
+  const coachId = await getCoachId().catch(() => null);
+  if (!coachId) return;
+  await supabase
+    .from('notifications')
+    .update({ read: true })
+    .eq('user_id', coachId)
+    .eq('type', 'focus_points_added')
+    .eq('read', false)
+    .contains('data', { student_id: studentId });
 }
 
 export async function editAndApproveFocusPoint(fpId, updates) {
   const allowed = ['name', 'subtitle', 'context', 'drill', 'tier'];
   const filtered = Object.fromEntries(Object.entries(updates).filter(([k]) => allowed.includes(k)));
+  const { data: fpRow } = await supabase
+    .from('focus_points')
+    .select('user_id')
+    .eq('id', fpId)
+    .maybeSingle();
   const { error } = await supabase
     .from('focus_points')
     .update({ ...filtered, status: 'active', coach_review_deadline: null })
     .eq('id', fpId);
   if (error) throw error;
+  await markFocusAddedNotificationsReadForStudent(fpRow?.user_id).catch(() => {});
 }
 
 export async function deletePendingFocusPoint(fpId) {
+  const { data: fpRow } = await supabase
+    .from('focus_points')
+    .select('user_id')
+    .eq('id', fpId)
+    .maybeSingle();
   const { error } = await supabase
     .from('focus_points')
     .update({ is_deleted: true, status: 'past' })
     .eq('id', fpId);
   if (error) throw error;
+  await markFocusAddedNotificationsReadForStudent(fpRow?.user_id).catch(() => {});
 }
 
 export async function rejectPendingFocusPoint({ fpId, studentId, fpName, reason }) {
@@ -814,6 +849,7 @@ export async function rejectPendingFocusPoint({ fpId, studentId, fpName, reason 
     .update({ is_deleted: true, status: 'past' })
     .eq('id', fpId);
   if (error) throw error;
+  await markFocusAddedNotificationsReadForStudent(studentId).catch(() => {});
 
   const trimmedReason = (reason || '').trim();
   const { error: notifErr } = await supabase.from('notifications').insert({
@@ -838,6 +874,7 @@ export async function approveAllPendingForStudent(studentId) {
     .eq('status', 'pending_coach')
     .eq('is_deleted', false);
   if (error) throw error;
+  await markFocusAddedNotificationsReadForStudent(studentId).catch(() => {});
 }
 
 export async function autoPublishExpiredFPs() {
