@@ -205,11 +205,16 @@ export default function NotificationsScreen({ navigation }) {
         classDate: notif.data.lesson_date ?? notif.data.class_date,
       });
     } else if (COACH_ACTION_TYPES.has(notif.type)) {
-      // Coach action needed (focus point review / merge / name match) —
-      // all three are handled in a single ActionNeeded screen with tabs.
-      navigation.navigate('ActionNeeded');
-    } else if (notif.type === 'focus_point_added') {
-      navigation.replace('AllFocusPoints');
+      // The same type ('focus_point_added' singular) is reused by two
+      // unrelated triggers: a coach-side one (data has student_id) and a
+      // student-side one fired when the coach validates a focus point
+      // (data has focus_point_id). Route by payload, not just by type.
+      const isStudentSide = !!notif.data?.focus_point_id && !notif.data?.student_id;
+      if (isStudentSide) {
+        navigation.replace('AllFocusPoints');
+      } else {
+        navigation.navigate('ActionNeeded');
+      }
     } else if (notif.type === 'merge_request_student' && notif.data?.merge_request_id) {
       navigation.navigate('MergeReview', { mergeRequestId: notif.data.merge_request_id });
     }
