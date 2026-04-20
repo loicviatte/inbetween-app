@@ -13,6 +13,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Apple requires iOS 26 SDK (Xcode 26) for uploads starting
+      # April 28, 2026. The default Xcode on macos-latest may still be
+      # 16.x, so we pin it explicitly. Bump the minor as Apple ships
+      # security updates; `26` selects the newest 26.x on the runner.
+      - name: Select Xcode 26
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26'
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -45,9 +54,29 @@ jobs:
           retention-days: 7
 
       - name: Decode App Store Connect API Key
+        env:
+          ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
         run: |
+          set -euo pipefail
           mkdir -p ~/.appstoreconnect/private_keys
-          echo "${{ secrets.ASC_API_KEY_P8 }}" | tr -d ' \n' | base64 --decode > ~/.appstoreconnect/private_keys/AuthKey_${{ secrets.ASC_KEY_ID }}.p8
+          KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+
+          # Strip every whitespace byte (spaces, tabs, CR, LF) and decode.
+          # Using printf + env var instead of `echo "${{ secrets.X }}"`
+          # because GitHub's shell expansion can mangle multi-line secrets.
+          printf '%s' "$ASC_API_KEY_P8" | tr -d '[:space:]' | base64 -D > "$KEY_PATH"
+          chmod 600 "$KEY_PATH"
+
+          # Fail fast if the decoded file isn't a valid PEM — gives a clear
+          # error right here instead of a cryptic JWT failure in altool.
+          if ! head -n 1 "$KEY_PATH" | grep -q "BEGIN PRIVATE KEY"; then
+            echo "::error::Decoded .p8 is not a valid PEM. First line was:"
+            head -n 1 "$KEY_PATH"
+            echo "Check the ASC_API_KEY_P8 secret — it must be the base64 of a raw .p8 file (no PEM headers, no extra whitespace)."
+            exit 1
+          fi
+          echo "✓ AuthKey_${ASC_KEY_ID}.p8 decoded ($(wc -c < "$KEY_PATH") bytes)."
 
       - name: Upload to TestFlight via altool
         run: |
