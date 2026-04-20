@@ -17,6 +17,11 @@ import Svg, { Circle } from 'react-native-svg';
 import { Colors, Fonts, Spacing } from '../../theme';
 import { useCoachData } from '../../context/CoachDataContext';
 import { getStudentFocusPoints, getStudentQuestions, getStudentRecentActivity } from '../../storage/coachStorage';
+import {
+  getActiveCoachClass,
+  setActiveCoachClass,
+  clearActiveCoachClass,
+} from '../../storage/activeCoachClass';
 
 // ── Palette ────────────────────────────────────────────────────────────────
 const C = {
@@ -116,14 +121,57 @@ export default function StartClassScreen({ navigation }) {
     return () => clearInterval(id);
   }, [classStartedAt]);
 
+  // On first mount, restore a class that was started before the coach
+  // navigated away. We need to land on the right briefing view and, for
+  // private classes, re-fetch the student detail so the hero stats and
+  // focus point lists render correctly.
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (restoredRef.current) return;
+    const active = getActiveCoachClass();
+    if (!active) return;
+    restoredRef.current = true;
+    setClassStartedAt(active.startedAt);
+    setChronoMs(Date.now() - active.startedAt);
+    if (active.kind === 'private' && active.studentId) {
+      const match = students.find((s) => s.id === active.studentId);
+      if (match) {
+        // Reuse the existing loader so detail data is consistent with a
+        // fresh pick (focus points, questions, last class).
+        loadStudentDetail(match);
+      } else {
+        // Fallback: at least land on the briefing view with what we have.
+        setSelectedStudent({
+          id: active.studentId,
+          name: active.studentName,
+          global: 0,
+          status: 'on_track',
+        });
+        setView('private-briefing');
+      }
+    } else if (active.kind === 'group') {
+      loadGroupData();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [students]);
+
   function openAudioModal() {
     setSelectedDeviceId('iphone');
     setAudioModalOpen(true);
   }
   function startClassNow() {
     setAudioModalOpen(false);
-    setClassStartedAt(Date.now());
+    const now = Date.now();
+    setClassStartedAt(now);
     setChronoMs(0);
+    // Persist globally so the Dashboard can show "Class in progress" and so
+    // navigating back to StartClass restores the running view.
+    setActiveCoachClass({
+      kind: view === 'private-briefing' ? 'private' : 'group',
+      startedAt: now,
+      studentId: selectedStudent?.id ?? null,
+      studentName: selectedStudent?.name ?? null,
+    });
   }
   function stopClass() {
     setDebriefDurationMs(chronoMs);
@@ -143,6 +191,7 @@ export default function StartClassScreen({ navigation }) {
     // `validatedFpIds`, save class note). For now just close and bounce
     // back to the coach's home.
     setDebriefOpen(false);
+    clearActiveCoachClass();
     navigation.popToTop();
   }
 

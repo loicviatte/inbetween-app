@@ -14,6 +14,10 @@ import DashboardSkeleton from '../../components/DashboardSkeleton';
 import { useCoachData } from '../../context/CoachDataContext';
 import { getGroupClassThemeCandidates } from '../../storage/coachStorage';
 import { suggestGroupClassTheme } from '../../services/ai/anthropic';
+import {
+  getActiveCoachClass,
+  subscribeToActiveCoachClass,
+} from '../../storage/activeCoachClass';
 
 // ── Palette tuned to the "Var 1b" design ────────────────────────────────────
 const HERO_BG = '#141414';
@@ -316,6 +320,28 @@ function ActivityRow({ item, isLast }) {
 export default function DashboardScreen({ navigation }) {
   const { students, events, actionCounts, studentActionCounts, initialLoading: loading } = useCoachData();
 
+  // Subscribe to the running coach class so the Start Class button swaps
+  // into a compact "Class in Progress" pill (same spirit as HomeScreen).
+  const [activeClass, setActiveClass] = useState(getActiveCoachClass());
+  const [chronoTick, setChronoTick] = useState(0);
+  useEffect(() => subscribeToActiveCoachClass(setActiveClass), []);
+  useEffect(() => {
+    if (!activeClass) return;
+    const id = setInterval(() => setChronoTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [activeClass]);
+  const chronoLabel = useMemo(() => {
+    if (!activeClass) return '';
+    const total = Math.floor((Date.now() - activeClass.startedAt) / 1000);
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const sec = total % 60;
+    const mm = String(m).padStart(2, '0');
+    const ss = String(sec).padStart(2, '0');
+    return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeClass, chronoTick]);
+
   // ── Group class theme suggestion ────────────────────────────────────────
   // Computes candidates from the coach's students' active focus points since
   // the last group class (or last 30 days), then asks Claude for a unifying
@@ -468,14 +494,31 @@ export default function DashboardScreen({ navigation }) {
           <View style={styles.heroDivider} />
 
           <View style={styles.heroMetrics}>
-            <TouchableOpacity
-              style={styles.startClassBtn}
-              activeOpacity={0.88}
-              onPress={() => navigation.navigate('StartClass')}
-            >
-              <Ionicons name="play" size={14} color="#fff" />
-              <Text style={styles.startClassText}>Start Class</Text>
-            </TouchableOpacity>
+            {activeClass ? (
+              <TouchableOpacity
+                style={styles.inProgressBtn}
+                activeOpacity={0.85}
+                onPress={() => navigation.navigate('StartClass')}
+              >
+                <View style={styles.inProgressLeft}>
+                  <View style={styles.inProgressDot} />
+                  <Text style={styles.inProgressLabel}>Class in progress</Text>
+                </View>
+                <View style={styles.inProgressRight}>
+                  <Text style={styles.inProgressTimer}>{chronoLabel}</Text>
+                  <Text style={styles.inProgressArrow}>›</Text>
+                </View>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                style={styles.startClassBtn}
+                activeOpacity={0.88}
+                onPress={() => navigation.navigate('StartClass')}
+              >
+                <Ionicons name="play" size={14} color="#fff" />
+                <Text style={styles.startClassText}>Start Class</Text>
+              </TouchableOpacity>
+            )}
 
             {actionCounts?.total > 0 && (
               <TouchableOpacity
@@ -769,6 +812,53 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
     paddingHorizontal: 6,
+  },
+  inProgressBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderRadius: 14,
+    paddingVertical: 13,
+    paddingHorizontal: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.14)',
+  },
+  inProgressLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  inProgressDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#D44545',
+  },
+  inProgressLabel: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 13,
+    color: '#fff',
+    letterSpacing: 0.2,
+  },
+  inProgressRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  inProgressTimer: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 15,
+    color: '#fff',
+    letterSpacing: 0.3,
+    fontVariant: ['tabular-nums'],
+  },
+  inProgressArrow: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 20,
+    color: 'rgba(255,255,255,0.55)',
+    lineHeight: 20,
   },
   startClassBtn: {
     flex: 8,

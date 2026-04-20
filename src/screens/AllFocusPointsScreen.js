@@ -12,7 +12,18 @@ import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Fonts, Spacing } from '../theme';
 import { getAllFocusPointsRanked } from '../utils/algorithm';
+import { getUser } from '../storage/storage';
 import { GenericListSkeleton } from '../components/Skeleton';
+
+// Same partition used by storage.js / categoryFromDances. Kept local so
+// filtering stays instant without a round-trip.
+const LATIN_DANCES = ['Cha Cha', 'Samba', 'Rumba', 'Paso Doble', 'Jive'];
+
+function fpCategory(fp) {
+  const dances = Array.isArray(fp.dance) ? fp.dance : [];
+  if (dances.length === 0) return null;
+  return LATIN_DANCES.some((d) => dances.includes(d)) ? 'latin' : 'ballroom';
+}
 
 const TIER_COLOR = {
   critical:  '#FF4B4B',
@@ -33,20 +44,17 @@ function formatDate(iso) {
 }
 
 function FocusCard({ item, index }) {
-  const tierColor = TIER_COLOR[item.tier] || Colors.orange;
-  const tierLabel = TIER_LABEL[item.tier] || 'Important';
   const dances = Array.isArray(item.dance) ? item.dance.filter(Boolean) : [];
   const cls = item.class_inputs;
 
   return (
     <View style={c.card}>
-      <View style={[c.accent, { backgroundColor: tierColor }]} />
+      <View style={[c.accent, { backgroundColor: Colors.orange }]} />
       <View style={c.body}>
 
         {/* Top row */}
         <View style={c.topRow}>
           <Text style={c.rank}>#{index + 1}</Text>
-          <Text style={[c.tier, { color: tierColor }]}>{tierLabel}</Text>
         </View>
 
         {/* Name */}
@@ -91,15 +99,30 @@ function FocusCard({ item, index }) {
 export default function AllFocusPointsScreen({ navigation }) {
   const [points, setPoints] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [danceStyle, setDanceStyle] = useState(null);
+  const [filter, setFilter] = useState('all'); // 'all' | 'latin' | 'ballroom'
 
   useFocusEffect(useCallback(() => {
     let active = true;
     setLoading(true);
-    getAllFocusPointsRanked()
-      .then((data) => { if (active) { setPoints(data); setLoading(false); } })
+    Promise.all([
+      getAllFocusPointsRanked(),
+      getUser().catch(() => null),
+    ])
+      .then(([data, user]) => {
+        if (!active) return;
+        setPoints(data);
+        setDanceStyle(user?.dance_style ?? null);
+        setLoading(false);
+      })
       .catch(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, []));
+
+  const showFilter = danceStyle === 'Latin & Ballroom';
+  const filteredPoints = showFilter && filter !== 'all'
+    ? points.filter((p) => fpCategory(p) === filter)
+    : points;
 
   return (
     <SafeAreaView style={s.safe} edges={['top', 'left', 'right']}>
@@ -113,20 +136,48 @@ export default function AllFocusPointsScreen({ navigation }) {
         <View style={s.backBtn} />
       </View>
 
+      {showFilter && !loading && (
+        <View style={s.filterRow}>
+          {[
+            { key: 'all', label: 'All' },
+            { key: 'latin', label: 'Latin' },
+            { key: 'ballroom', label: 'Ballroom' },
+          ].map((opt) => {
+            const on = filter === opt.key;
+            return (
+              <TouchableOpacity
+                key={opt.key}
+                style={[s.filterPill, on && s.filterPillOn]}
+                activeOpacity={0.75}
+                onPress={() => setFilter(opt.key)}
+              >
+                <Text style={[s.filterPillText, on && s.filterPillTextOn]}>{opt.label}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      )}
+
       {loading ? (
         <GenericListSkeleton rows={6} showHeader={false} showTitle={false} />
-      ) : points.length === 0 ? (
+      ) : filteredPoints.length === 0 ? (
         <View style={s.center}>
-          <Text style={s.emptyTitle}>No focus points yet</Text>
-          <Text style={s.emptyBody}>Log a class to get started.</Text>
+          <Text style={s.emptyTitle}>
+            {points.length === 0 ? 'No focus points yet' : 'No focus points in this category'}
+          </Text>
+          <Text style={s.emptyBody}>
+            {points.length === 0 ? 'Log a class to get started.' : 'Try another filter.'}
+          </Text>
         </View>
       ) : (
         <ScrollView
           showsVerticalScrollIndicator={false}
           contentContainerStyle={s.list}
         >
-          <Text style={s.countLabel}>{points.length} active · ordered by priority</Text>
-          {points.map((item, index) => (
+          <Text style={s.countLabel}>
+            {filteredPoints.length} active · ordered by priority
+          </Text>
+          {filteredPoints.map((item, index) => (
             <FocusCard key={item.id} item={item} index={index} />
           ))}
         </ScrollView>
@@ -287,5 +338,30 @@ const s = StyleSheet.create({
     letterSpacing: 0.6,
     marginBottom: 12,
     marginTop: 2,
+  },
+  filterRow: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: Spacing.side,
+    paddingTop: 4,
+    paddingBottom: 12,
+  },
+  filterPill: {
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 999,
+    backgroundColor: '#F0F0F0',
+  },
+  filterPillOn: {
+    backgroundColor: Colors.black,
+  },
+  filterPillText: {
+    fontFamily: Fonts.jakartaBold,
+    fontSize: 12,
+    color: Colors.secondary,
+    letterSpacing: 0.2,
+  },
+  filterPillTextOn: {
+    color: '#FFFFFF',
   },
 });

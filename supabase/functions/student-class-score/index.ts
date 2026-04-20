@@ -108,21 +108,32 @@ async function process(supabase: any, payload: Payload): Promise<void> {
     })
     .filter(Boolean) as Array<{ id: string; name: string | null }>
 
+  // Resolve which coach (if any) should review the focus points from this
+  // class. Two cases:
+  //
+  // (A) The student typed a teacher_name. We ONLY attribute the class to a
+  //     coach when that name matches one of the student's linked coaches.
+  //     If the typed teacher is not on the app (no match), we leave coachId
+  //     null on purpose — the student logged a class with an external
+  //     teacher, so there is nobody to validate the focus points and they
+  //     must publish straight to the student (status=active below).
+  //
+  // (B) No teacher_name typed (system-created class etc.) — fall back to
+  //     the dance-style based linked coach so their primary coach reviews.
   if (ci.teacher_name) {
     const tn = ci.teacher_name.trim().toLowerCase()
     const hit = linkedCoaches.find((c) => (c.name ?? '').trim().toLowerCase() === tn)
     if (hit) coachId = hit.id
-  }
-
-  if (!coachId) {
+    // No fallback when teacher_name is set but doesn't match — external teacher.
+  } else {
     const isLatin = danceList.some((d) => LATIN_DANCES.includes(d))
     coachId = isLatin ? (studentRow?.latin_coach_id ?? null) : (studentRow?.ballroom_coach_id ?? null)
-  }
-  if (!coachId && linkedCoaches.length === 1) {
-    coachId = linkedCoaches[0].id
-  }
-  if (!coachId) {
-    coachId = studentRow?.latin_coach_id ?? studentRow?.ballroom_coach_id ?? null
+    if (!coachId && linkedCoaches.length === 1) {
+      coachId = linkedCoaches[0].id
+    }
+    if (!coachId) {
+      coachId = studentRow?.latin_coach_id ?? studentRow?.ballroom_coach_id ?? null
+    }
   }
 
   const { data: existing } = await supabase
