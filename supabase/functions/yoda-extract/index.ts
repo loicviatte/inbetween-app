@@ -55,6 +55,41 @@ function sanitizeStrings<T>(value: T): T {
   return value
 }
 
+// Hard cap drill length to a gym-prescription style. We keep the first
+// imperative sentence and at most one short reps/counts line. Anything
+// beyond that is the model relapsing into explanation mode and we strip
+// it before persisting. The display layer also chunks by newline.
+function trimDrill(raw: unknown): string | null {
+  if (typeof raw !== 'string') return raw as null
+  const cleaned = raw.replace(/\r/g, '').trim()
+  if (!cleaned) return null
+  // Split on existing line breaks first, then on sentence boundaries.
+  const lines = cleaned
+    .split(/\n+/)
+    .flatMap((l) => l.split(/(?<=[.!?])\s+/))
+    .map((l) => l.trim())
+    .filter(Boolean)
+  if (lines.length === 0) return null
+  const first = lines[0].slice(0, 140)
+  // Pick a short trailing line that looks like reps / counts / time.
+  const repsRegex = /^\d|reps?\b|sets?\b|seconds?\b|sec\b|minutes?\b|min\b|each (side|leg|arm)|hold/i
+  const reps = lines.slice(1).find((l) => l.length <= 40 && repsRegex.test(l))
+  return reps ? `${first}\n${reps}` : first
+}
+
+// Walk the extracted JSON and apply trimDrill to every "drill" field.
+function trimAllDrills(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(trimAllDrills)
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = k === 'drill' ? trimDrill(v) : trimAllDrills(v)
+    }
+    return out
+  }
+  return value
+}
+
 // ─── System prompt ────────────────────────────────────────────────────────────
 
 const SYSTEM_PROMPT = `You are Yoda Extract, a specialized AI that processes coaching lesson transcripts. Your sole job is to output a single structured JSON object — nothing else. No explanation, no preamble, no markdown.
@@ -143,9 +178,31 @@ If the coach explicitly signals progress or regression on an EXISTING focus poin
 - Example: ["Rumba", "Cha-cha", "Samba"]
 
 ### drill
-- A practical exercise the student can do alone, written as a concrete sequence of actions
-- Based strictly on what the coach said explicitly — do not reformulate the correction as a drill, do not invent
-- null if the coach gave no explicit exercise
+- A short, gym style exercise prescription the student can do alone. Think
+  of how a strength coach writes a workout, NOT how a teacher explains a
+  concept. All the explanation already lives in the "context" field, so do
+  not repeat it here.
+- HARD LENGTH LIMIT: maximum 25 words total in the drill field. If the
+  coach's explicit instruction is longer than that, distill it to the
+  bare action and reps. Long drills are a bug, not a feature.
+- Format: ONE short imperative sentence (the action), optionally followed
+  by a single line of reps or counts in this exact form: "3 sets of 8" or
+  "30 seconds" or "10 reps each side". Never produce 3+ sentences. Never
+  produce paragraphs. Never re-explain why.
+- Based strictly on what the coach said explicitly. Do not invent a drill
+  if the coach did not give one. Do not reformulate the correction as a
+  drill.
+- null if the coach gave no explicit exercise.
+
+Good drill examples (target style):
+  "Slow side step with weight transfer. 3 sets of 8."
+  "Hip drop on the 4 count, walking pattern. 30 seconds."
+  "Stand on one leg with arm frame held. Hold 20 seconds each side."
+
+Bad drill examples (do NOT do this):
+  Anything 3+ sentences. Anything that explains the concept. Anything
+  with bullet points listing common mistakes. Anything starting with
+  "First, ... Then, ... Finally, ...".
 
 ### Other fields
 - timestamp: MM:SS when first addressed (from paragraph timestamps)
@@ -357,7 +414,7 @@ No markdown, no explanation.${NO_HYPHEN_RULE}`
   } catch {
     throw new Error(`Failed to parse alternatives JSON: ${rawAltText.slice(0, 300)}`)
   }
-  parsed = sanitizeStrings(parsed)
+  parsed = trimAllDrills(sanitizeStrings(parsed)) as typeof parsed
 
   // Insert one row per focus point
   const rows = simplifiedFPs.map((chosenFP, fpIndex) => {
@@ -593,7 +650,7 @@ async function processRecord(record: ClassInputRecord): Promise<void> {
     }
     // Belt-and-suspenders: the prompt forbids hyphens, but strip any that
     // slipped through from every string field before we write anything.
-    parsed = sanitizeStrings(parsed)
+    parsed = trimAllDrills(sanitizeStrings(parsed)) as typeof parsed
 
     // Write raw JSON back
     await supabase

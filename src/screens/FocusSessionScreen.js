@@ -576,17 +576,9 @@ function FeelingSlider({ value, onChange }) {
 
 // ─── Session Feeling Modal ────────────────────────────────────────────────────
 
-// Global session motivation options (1..3)
-const MOTIVATION_OPTIONS = [
-  { value: 1, emoji: '😩', label: 'Unmotivated' },
-  { value: 2, emoji: '😐', label: 'Neutral' },
-  { value: 3, emoji: '🔥', label: 'Motivated' },
-];
-
 function SessionFeelingModal({ visible, focusName, onSave, onSkip }) {
   const [feelingIdx, setFeelingIdx] = useState(2);
   const [note, setNote] = useState('');
-  const [motivation, setMotivation] = useState(null); // 1 | 2 | 3 | null
   const [saving, setSaving] = useState(false);
   const slideAnim = useRef(new Animated.Value(600)).current;
 
@@ -594,7 +586,6 @@ function SessionFeelingModal({ visible, focusName, onSave, onSkip }) {
     if (visible) {
       setFeelingIdx(2);
       setNote('');
-      setMotivation(null);
       setSaving(false);
       slideAnim.setValue(600);
       Animated.spring(slideAnim, {
@@ -610,7 +601,7 @@ function SessionFeelingModal({ visible, focusName, onSave, onSkip }) {
     if (saving) return;
     setSaving(true);
     const label = FEELINGS[feelingIdx].label;
-    await onSave(label, note.trim() || null, motivation);
+    await onSave(label, note.trim() || null);
   }
 
   return (
@@ -636,28 +627,6 @@ function SessionFeelingModal({ visible, focusName, onSave, onSkip }) {
             textAlignVertical="top"
           />
 
-          {/* ── Global motivation question ─────────────────────────── */}
-          <Text style={[fm.subtitle, { marginTop: 18 }]}>
-            How do you feel about your training overall?
-          </Text>
-          <View style={fm.motivationRow}>
-            {MOTIVATION_OPTIONS.map((opt) => {
-              const isOn = motivation === opt.value;
-              return (
-                <TouchableOpacity
-                  key={opt.value}
-                  style={[fm.motivationBtn, isOn && fm.motivationBtnOn]}
-                  onPress={() => setMotivation(opt.value)}
-                  activeOpacity={0.8}
-                >
-                  <Text style={fm.motivationEmoji}>{opt.emoji}</Text>
-                  <Text style={[fm.motivationLabel, isOn && fm.motivationLabelOn]}>
-                    {opt.label}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
         </View>
 
         <View style={fm.btnWrap}>
@@ -795,6 +764,18 @@ export default function FocusSessionScreen({ route, navigation }) {
   const [timeLeft, setTimeLeft] = useState(25 * 60);
   const [overTime, setOverTime] = useState(0);
   const overTimeRef = useRef(0);
+
+  // Overrun protection: if the user lets the chrono run after the target
+  // is reached we prompt them after 5 min, then auto-stop after another 5
+  // min with a capped duration. See _startInterval for the trigger.
+  const OVERRUN_FIRST_PROMPT_SEC = 5 * 60;
+  const OVERRUN_EXTEND_SEC = 5 * 60;
+  const OVERRUN_AUTO_STOP_MS = 5 * 60 * 1000;
+  const [overrunModalOpen, setOverrunModalOpen] = useState(false);
+  const overrunModalOpenRef = useRef(false);
+  const overrunNextThresholdRef = useRef(OVERRUN_FIRST_PROMPT_SEC);
+  const overrunTriggerSecRef = useRef(OVERRUN_FIRST_PROMPT_SEC);
+  const overrunAutoStopTimerRef = useRef(null);
   const [showFeelingModal, setShowFeelingModal] = useState(false);
   const [showStopConfirm, setShowStopConfirm] = useState(false);
   const sessionCompletedRef = useRef(false);
@@ -857,7 +838,13 @@ export default function FocusSessionScreen({ route, navigation }) {
         _startInterval(existing.startedAt, existing.duration);
       }
     }
-    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      if (overrunAutoStopTimerRef.current) {
+        clearTimeout(overrunAutoStopTimerRef.current);
+        overrunAutoStopTimerRef.current = null;
+      }
+    };
   }, [sessionId]));
 
   function _stopOverTime() {
@@ -879,6 +866,19 @@ export default function FocusSessionScreen({ route, navigation }) {
         const over = Math.floor(-remaining);
         overTimeRef.current = over;
         setOverTime(over);
+        // Overrun safety net: when the user blows past their target by
+        // overrunNextThresholdRef seconds, ask if they're still training.
+        // If they don't answer within OVERRUN_AUTO_STOP_MS we auto-save
+        // with the duration capped at that threshold so a forgotten chrono
+        // never inflates a focus point's recorded practice time.
+        if (
+          over >= overrunNextThresholdRef.current &&
+          !overrunModalOpenRef.current &&
+          !sessionCompletedRef.current &&
+          !showFeelingModal
+        ) {
+          openOverrunModal();
+        }
       }
     }, 1000);
   }
@@ -890,7 +890,71 @@ export default function FocusSessionScreen({ route, navigation }) {
     setSessionDone(false);
     setTimeLeft(duration * 60);
     _stopOverTime();
+    overrunNextThresholdRef.current = OVERRUN_FIRST_PROMPT_SEC;
+    overrunTriggerSecRef.current = OVERRUN_FIRST_PROMPT_SEC;
+    cancelOverrunAutoStop();
+    overrunModalOpenRef.current = false;
+    setOverrunModalOpen(false);
     _startInterval(startedAt, duration);
+  }
+
+  function cancelOverrunAutoStop() {
+    if (overrunAutoStopTimerRef.current) {
+      clearTimeout(overrunAutoStopTimerRef.current);
+      overrunAutoStopTimerRef.current = null;
+    }
+  }
+
+  function openOverrunModal() {
+    overrunTriggerSecRef.current = overrunNextThresholdRef.current;
+    overrunModalOpenRef.current = true;
+    setOverrunModalOpen(true);
+    cancelOverrunAutoStop();
+    overrunAutoStopTimerRef.current = setTimeout(() => {
+      autoCompleteOverrun();
+    }, OVERRUN_AUTO_STOP_MS);
+  }
+
+  function extendOverrun() {
+    cancelOverrunAutoStop();
+    overrunNextThresholdRef.current += OVERRUN_EXTEND_SEC;
+    overrunModalOpenRef.current = false;
+    setOverrunModalOpen(false);
+  }
+
+  function confirmStopOverrun() {
+    cancelOverrunAutoStop();
+    overrunModalOpenRef.current = false;
+    setOverrunModalOpen(false);
+    handleEndSession();
+  }
+
+  async function autoCompleteOverrun() {
+    cancelOverrunAutoStop();
+    overrunModalOpenRef.current = false;
+    setOverrunModalOpen(false);
+    if (sessionCompletedRef.current) return;
+    sessionCompletedRef.current = true;
+    if (intervalRef.current) clearInterval(intervalRef.current);
+    _stopOverTime();
+    setSessionActive(false);
+    setSessionPaused(false);
+    // Cap duration at target + the threshold that was active when the
+    // modal opened (so first cycle = target + 5 min, after one extension
+    // = target + 10 min, etc). We achieve the cap by faking startedAt so
+    // the elapsed math in completeTrainingSession lands on capMinutes.
+    const capMinutes = duration + Math.round(overrunTriggerSecRef.current / 60);
+    const fakeStartedAt = Date.now() - capMinutes * 60_000;
+    await completeTrainingSession(
+      sessionId,
+      null,
+      'Auto stopped after no response to overtime check.',
+      focusPointId,
+      fakeStartedAt,
+      null,
+    );
+    clearActiveSession();
+    navigation.goBack();
   }
 
   function pauseSession() {
@@ -913,6 +977,9 @@ export default function FocusSessionScreen({ route, navigation }) {
   function stopSession() {
     if (intervalRef.current) clearInterval(intervalRef.current);
     _stopOverTime();
+    cancelOverrunAutoStop();
+    overrunModalOpenRef.current = false;
+    setOverrunModalOpen(false);
     setSessionActive(false);
     setSessionPaused(false);
     setTimeLeft(duration * 60);
@@ -1243,16 +1310,19 @@ I don't have that in your data, but you can send the question to your coach if y
   function handleEndSession() {
     if (intervalRef.current) clearInterval(intervalRef.current);
     _stopOverTime();
+    cancelOverrunAutoStop();
+    overrunModalOpenRef.current = false;
+    setOverrunModalOpen(false);
     setSessionActive(false);
     setSessionPaused(false);
     setShowFeelingModal(true);
   }
 
-  async function handleSave(feeling, note, motivation) {
+  async function handleSave(feeling, note) {
     if (sessionCompletedRef.current) return;
     sessionCompletedRef.current = true;
     const startedAtMs = getActiveSession()?.startedAt ?? null;
-    await completeTrainingSession(sessionId, feeling, note, focusPointId, startedAtMs, motivation);
+    await completeTrainingSession(sessionId, feeling, note, focusPointId, startedAtMs);
     clearActiveSession();
     setShowFeelingModal(false);
     navigation.goBack();
@@ -1443,14 +1513,37 @@ I don't have that in your data, but you can send the question to your coach if y
             pointerEvents={aiOpen ? 'none' : 'auto'}
             onLayout={e => { if (!aiOpen && e.nativeEvent.layout.height > 0) setAiChatHeight(e.nativeEvent.layout.height); }}
           >
-            {!sessionDone && !aiOpen && focusPoint?.drill ? (
-              <View style={styles.drillCard}>
-                <View style={styles.drillHeader}>
-                  <View style={styles.drillPill}><Text style={styles.drillPillText}>DRILL</Text></View>
+            {!sessionDone && !aiOpen && focusPoint?.drill ? (() => {
+              // Drills should read like a gym prescription: one short
+              // imperative line + optional reps/counts on the next line(s).
+              // Render the first non-empty line as the main action, and
+              // every short following line as a chip (reps, time, sides).
+              const drillLines = (focusPoint.drill || '')
+                .split(/\n+/)
+                .map((l) => l.trim())
+                .filter(Boolean);
+              const main = drillLines[0] || '';
+              const chips = drillLines
+                .slice(1)
+                .filter((l) => l.length <= 40); // long extra lines aren't chip material
+              return (
+                <View style={styles.drillCard}>
+                  <View style={styles.drillHeader}>
+                    <View style={styles.drillPill}><Text style={styles.drillPillText}>DRILL</Text></View>
+                  </View>
+                  <Text style={styles.drillText}>{main}</Text>
+                  {chips.length > 0 && (
+                    <View style={styles.drillChipRow}>
+                      {chips.map((c, i) => (
+                        <View key={i} style={styles.drillChip}>
+                          <Text style={styles.drillChipText}>{c}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  )}
                 </View>
-                <Text style={styles.drillText}>{focusPoint.drill}</Text>
-              </View>
-            ) : null}
+              );
+            })() : null}
 
             <View style={styles.timerSection}>
               {sessionDone ? (
@@ -1576,6 +1669,28 @@ I don't have that in your data, but you can send the question to your coach if y
         onSave={handleSave}
         onSkip={handleSkip}
       />
+
+      {/* Overrun safety modal: shown when chrono runs OVERRUN_FIRST_PROMPT_SEC
+          past target. If no answer in OVERRUN_AUTO_STOP_MS we auto-save
+          with the duration capped (see autoCompleteOverrun). */}
+      <Modal visible={overrunModalOpen} transparent animationType="fade">
+        <View style={styles.overrunBackdrop}>
+          <View style={styles.overrunCard}>
+            <Text style={styles.overrunTitle}>Still training?</Text>
+            <Text style={styles.overrunBody}>
+              You've gone {Math.round((overrunTriggerSecRef.current || OVERRUN_FIRST_PROMPT_SEC) / 60)} min past your target.
+              {'\n'}
+              No answer in 5 min and we'll save the session with {duration + Math.round((overrunTriggerSecRef.current || OVERRUN_FIRST_PROMPT_SEC) / 60)} min so a forgotten chrono doesn't inflate your stats.
+            </Text>
+            <TouchableOpacity style={styles.overrunPrimary} activeOpacity={0.85} onPress={extendOverrun}>
+              <Text style={styles.overrunPrimaryText}>Yes, give me 5 more min</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.overrunSecondary} activeOpacity={0.7} onPress={confirmStopOverrun}>
+              <Text style={styles.overrunSecondaryText}>Done, end session</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -1690,6 +1805,74 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: Colors.black,
     lineHeight: 22,
+  },
+  drillChipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 10,
+  },
+  drillChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 8,
+    backgroundColor: 'rgba(0,0,0,0.06)',
+  },
+  drillChipText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 11.5,
+    color: Colors.black,
+    letterSpacing: 0.2,
+  },
+
+  // Overrun safety modal
+  overrunBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    justifyContent: 'center',
+    paddingHorizontal: 28,
+  },
+  overrunCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    paddingHorizontal: 22,
+    paddingVertical: 24,
+  },
+  overrunTitle: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 20,
+    color: '#0E0E0E',
+    letterSpacing: -0.3,
+    marginBottom: 10,
+  },
+  overrunBody: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 13,
+    color: '#666',
+    lineHeight: 19,
+    marginBottom: 20,
+  },
+  overrunPrimary: {
+    backgroundColor: '#E8A838',
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  overrunPrimaryText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 14,
+    color: '#0E0E0E',
+    letterSpacing: 0.3,
+  },
+  overrunSecondary: {
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  overrunSecondaryText: {
+    fontFamily: Fonts.jakartaSemiBold,
+    fontSize: 13,
+    color: '#999',
   },
 
   timerSection: {

@@ -593,7 +593,32 @@ export async function getMyCoachForCategory(category) {
     .eq('id', userId)
     .single();
 
-  const coachId = me?.[field];
+  let coachId = me?.[field];
+
+  // Fallback: when the student was on a single-style profile, the category
+  // column on users may never have been populated. Look up accepted
+  // coach_requests for this category and adopt the most recent one, so
+  // switching to 'Latin & Ballroom' does not lose a pre-existing link.
+  if (!coachId) {
+    const { data: req } = await supabase
+      .from('coach_requests')
+      .select('coach_id, created_at')
+      .eq('student_id', userId)
+      .eq('status', 'accepted')
+      .eq('category', category)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    coachId = req?.coach_id ?? null;
+    // Self heal the users column so the next read is a single round trip.
+    if (coachId) {
+      await supabase
+        .from('users')
+        .update({ [field]: coachId })
+        .eq('id', userId);
+    }
+  }
+
   if (!coachId) return null;
 
   const { data: coach } = await supabase
