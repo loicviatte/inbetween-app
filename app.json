@@ -32,7 +32,6 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "./plugins/withAudioRoutePicker",
       "expo-font",
       [
         "expo-av",

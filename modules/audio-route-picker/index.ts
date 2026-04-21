@@ -1,8 +1,8 @@
-import { NativeModules, Platform } from 'react-native';
-
-const { AudioRoutePicker } = NativeModules;
+import { requireNativeModule } from 'expo-modules-core';
+import { Platform } from 'react-native';
 
 export async function presentAudioRoutePicker(): Promise<void> {
-  if (Platform.OS !== 'ios' || !AudioRoutePicker) return;
-  return AudioRoutePicker.presentPicker();
+  if (Platform.OS !== 'ios') return;
+  const mod = requireNativeModule('AudioRoutePicker');
+  return mod.presentPicker();
 }

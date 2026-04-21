@@ -1,0 +1,8 @@
+{
+  "name": "audio-route-picker",
+  "version": "1.0.0",
+  "description": "Native iOS AVRoutePickerView module for InBetween",
+  "main": "index.ts",
+  "author": "loicviatte",
+  "license": "MIT"
+}
