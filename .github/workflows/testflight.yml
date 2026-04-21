@@ -62,21 +62,36 @@ jobs:
           mkdir -p ~/.appstoreconnect/private_keys
           KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
 
-          # Strip every whitespace byte (spaces, tabs, CR, LF) and decode.
-          # Using printf + env var instead of `echo "${{ secrets.X }}"`
-          # because GitHub's shell expansion can mangle multi-line secrets.
-          printf '%s' "$ASC_API_KEY_P8" | tr -d '[:space:]' | base64 -D > "$KEY_PATH"
+          # Handle 3 storage formats for the secret:
+          #   1. Raw PEM text  (starts with -----BEGIN PRIVATE KEY-----)
+          #   2. base64 of PEM (most common — decode → PEM)
+          #   3. base64 of DER (binary) — decode → convert DER→PEM via openssl
+          if printf '%s' "$ASC_API_KEY_P8" | grep -q "BEGIN PRIVATE KEY"; then
+            echo "Secret is raw PEM, writing as-is."
+            printf '%s\n' "$ASC_API_KEY_P8" > "$KEY_PATH"
+          else
+            echo "Secret looks like base64, decoding."
+            printf '%s' "$ASC_API_KEY_P8" | tr -d '[:space:]' | base64 -D > "$KEY_PATH"
+          fi
           chmod 600 "$KEY_PATH"
 
-          # Fail fast if the decoded file isn't a valid PEM — gives a clear
-          # error right here instead of a cryptic JWT failure in altool.
-          if ! head -n 1 "$KEY_PATH" | grep -q "BEGIN PRIVATE KEY"; then
-            echo "::error::Decoded .p8 is not a valid PEM. First line was:"
-            head -n 1 "$KEY_PATH"
-            echo "Check the ASC_API_KEY_P8 secret — it must be the base64 of a raw .p8 file (no PEM headers, no extra whitespace)."
-            exit 1
+          # If the result still isn't PEM, try DER→PEM conversion (openssl pkcs8).
+          if ! head -c 40 "$KEY_PATH" | grep -q "BEGIN PRIVATE KEY"; then
+            echo "Decoded content is not PEM — attempting DER→PEM conversion."
+            tmp_pem="${KEY_PATH}.pem"
+            if openssl pkcs8 -inform DER -in "$KEY_PATH" -out "$tmp_pem" -nocrypt 2>/dev/null \
+               && grep -q "BEGIN PRIVATE KEY" "$tmp_pem"; then
+              mv "$tmp_pem" "$KEY_PATH"
+              echo "DER→PEM conversion succeeded."
+            else
+              rm -f "$tmp_pem"
+              echo "::error::Could not decode ASC_API_KEY_P8 as PEM or DER. First bytes were:"
+              head -c 40 "$KEY_PATH" | xxd | head -2
+              echo "Re-export your .p8 from App Store Connect and store its full PEM text as the secret."
+              exit 1
+            fi
           fi
-          echo "✓ AuthKey_${ASC_KEY_ID}.p8 decoded ($(wc -c < "$KEY_PATH") bytes)."
+          echo "✓ AuthKey_${ASC_KEY_ID}.p8 ready ($(wc -c < "$KEY_PATH") bytes)."
 
       - name: Upload to TestFlight via altool
         run: |
