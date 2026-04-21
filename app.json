@@ -2,7 +2,7 @@
   "expo": {
     "name": "InBetween",
     "slug": "inbetween-app",
-    "version": "1.3.3",
+    "version": "1.3.6",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -32,6 +32,7 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
+      "./plugins/withAudioRoutePicker",
       "expo-font",
       [
         "expo-av",

@@ -10,10 +10,12 @@ import {
   Image,
   Modal,
   Pressable,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import Svg, { Circle } from 'react-native-svg';
+import { Audio } from 'expo-av';
 import { Colors, Fonts, Spacing } from '../../theme';
 import { useCoachData } from '../../context/CoachDataContext';
 import { getStudentFocusPoints, getStudentQuestions, getStudentRecentActivity } from '../../storage/coachStorage';
@@ -22,6 +24,35 @@ import {
   setActiveCoachClass,
   clearActiveCoachClass,
 } from '../../storage/activeCoachClass';
+import { supabase } from '../../services/supabase/client';
+import { presentAudioRoutePicker } from '../../../modules/audio-route-picker';
+
+const OPENAI_API_KEY = process.env.EXPO_PUBLIC_OPENAI_API_KEY;
+
+// ~14 MB/hour — fits Whisper's 25 MB limit for classes up to ~100 min
+function getCoachRecordingOptions() {
+  const base = Audio.RecordingOptionsPresets.HIGH_QUALITY;
+  return {
+    ...base,
+    android: { ...base.android, numberOfChannels: 1, bitRate: 32000, sampleRate: 16000 },
+    ios: { ...base.ios, numberOfChannels: 1, bitRate: 32000, sampleRate: 16000 },
+  };
+}
+
+async function transcribeAudio(uri) {
+  if (!OPENAI_API_KEY) throw new Error('NO_OPENAI_KEY');
+  const formData = new FormData();
+  formData.append('file', { uri, type: 'audio/m4a', name: 'class.m4a' });
+  formData.append('model', 'whisper-1');
+  const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
+    body: formData,
+  });
+  if (!res.ok) throw new Error(`Whisper ${res.status}: ${await res.text().catch(() => '')}`);
+  const data = await res.json();
+  return data.text || '';
+}
 
 // ── Palette ────────────────────────────────────────────────────────────────
 const C = {
@@ -103,9 +134,14 @@ export default function StartClassScreen({ navigation }) {
 
   // Audio device picker modal + running class state
   const [audioModalOpen, setAudioModalOpen] = useState(false);
-  const [selectedDeviceId, setSelectedDeviceId] = useState('iphone');
   const [classStartedAt, setClassStartedAt] = useState(null);
   const [chronoMs, setChronoMs] = useState(0);
+
+  // Microphone recording
+  const recordingRef = useRef(null);
+  const [recordingUri, setRecordingUri] = useState(null);
+  const [micPermGranted, setMicPermGranted] = useState(null);
+  const [classRecorded, setClassRecorded] = useState(false);
 
   // End-of-class debrief modal
   const [debriefOpen, setDebriefOpen] = useState(false);
@@ -155,17 +191,29 @@ export default function StartClassScreen({ navigation }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [students]);
 
-  function openAudioModal() {
-    setSelectedDeviceId('iphone');
+  async function openAudioModal() {
+    const { granted } = await Audio.requestPermissionsAsync();
+    setMicPermGranted(granted);
     setAudioModalOpen(true);
   }
-  function startClassNow() {
+  async function startClassNow() {
     setAudioModalOpen(false);
+    setRecordingUri(null);
+
+    // Start recording if permission was granted
+    if (micPermGranted) {
+      try {
+        await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+        const { recording } = await Audio.Recording.createAsync(getCoachRecordingOptions());
+        recordingRef.current = recording;
+      } catch (err) {
+        console.warn('[StartClass] Could not start recording:', err);
+      }
+    }
+
     const now = Date.now();
     setClassStartedAt(now);
     setChronoMs(0);
-    // Persist globally so the Dashboard can show "Class in progress" and so
-    // navigating back to StartClass restores the running view.
     setActiveCoachClass({
       kind: view === 'private-briefing' ? 'private' : 'group',
       startedAt: now,
@@ -173,7 +221,20 @@ export default function StartClassScreen({ navigation }) {
       studentName: selectedStudent?.name ?? null,
     });
   }
-  function stopClass() {
+  async function stopClass() {
+    // Stop recording and keep the URI for transcription in finishDebrief
+    if (recordingRef.current) {
+      try {
+        await recordingRef.current.stopAndUnloadAsync();
+        const uri = recordingRef.current.getURI();
+        setRecordingUri(uri);
+      } catch (err) {
+        console.warn('[StartClass] Could not stop recording:', err);
+      }
+      recordingRef.current = null;
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
+    }
+
     setDebriefDurationMs(chronoMs);
     setDebriefNote('');
     setValidatedFpIds([]);
@@ -186,13 +247,53 @@ export default function StartClassScreen({ navigation }) {
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
     );
   }
+  function transcribeAndSubmit(uri, isPrivate, studentId, allStudents) {
+    const run = async () => {
+      try {
+        const transcript = await transcribeAudio(uri);
+        if (!transcript?.trim()) return;
+        const { data: { user } } = await supabase.auth.getUser();
+        const { data: classInput, error: insertErr } = await supabase
+          .from('class_inputs')
+          .insert({
+            user_id: user.id,
+            transcript,
+            lesson_type: isPrivate ? 'private' : 'group',
+            student_id: isPrivate ? (studentId ?? null) : null,
+            status: 'pending',
+          })
+          .select('id')
+          .single();
+        if (insertErr) throw insertErr;
+        if (!isPrivate && classInput?.id && allStudents.length > 0) {
+          await supabase.from('class_input_students').insert(
+            allStudents.map((s) => ({ class_input_id: classInput.id, student_id: s.id }))
+          );
+        }
+      } catch (err) {
+        console.warn('[StartClass] Background transcription failed:', err);
+      }
+    };
+    run();
+  }
+
   function finishDebrief() {
-    // TODO: persist note + validations (approve past_candidate FPs in
-    // `validatedFpIds`, save class note). For now just close and bounce
-    // back to the coach's home.
+    const uri = recordingUri;
+    const isPrivate = view === 'private-briefing';
     setDebriefOpen(false);
+    setRecordingUri(null);
     clearActiveCoachClass();
-    navigation.popToTop();
+
+    if (uri) {
+      transcribeAndSubmit(uri, isPrivate, selectedStudent?.id, students);
+      setClassRecorded(true);
+      setTimeout(() => {
+        setClassRecorded(false);
+        navigation.popToTop();
+      }, 2500);
+    } else {
+      navigation.popToTop();
+    }
   }
 
   // Detail data loaded when student is picked
@@ -351,11 +452,13 @@ export default function StartClassScreen({ navigation }) {
     return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
   }
 
-  const devices = useMemo(() => ([
-    { id: 'iphone', name: 'iPhone Speaker', type: 'Built-in', icon: 'phone-portrait' },
-    { id: 'airpods', name: 'AirPods Pro', type: 'Bluetooth · Connected', icon: 'headset' },
-    { id: 'speaker', name: 'Studio Bluetooth Speaker', type: 'Bluetooth · Available', icon: 'volume-high' },
-  ]), []);
+  async function handleOpenRoutePicker() {
+    try {
+      await presentAudioRoutePicker();
+    } catch (e) {
+      console.warn('[StartClass] Route picker unavailable:', e);
+    }
+  }
 
   function renderBottomBar() {
     if (classStartedAt) {
@@ -497,6 +600,13 @@ export default function StartClassScreen({ navigation }) {
               </>
             )}
 
+            {recordingUri && (
+              <View style={db.recBanner}>
+                <Ionicons name="mic" size={14} color={C.orange} />
+                <Text style={db.recBannerText}>Recording ready — will be transcribed on Done</Text>
+              </View>
+            )}
+
             <View style={db.actions}>
               <TouchableOpacity style={db.btnDone} activeOpacity={0.88} onPress={finishDebrief}>
                 <Text style={db.btnDoneText}>Done</Text>
@@ -524,51 +634,33 @@ export default function StartClassScreen({ navigation }) {
           <Pressable style={ad.sheet} onPress={(e) => e.stopPropagation()}>
             <View style={ad.handle} />
             <View style={ad.iconWrap}>
-              <Ionicons name="mic" size={24} color={C.orange} />
+              <Ionicons name="mic" size={24} color={micPermGranted === false ? C.red : C.orange} />
             </View>
-            <Text style={ad.title}>Audio output</Text>
-            <Text style={ad.subtitle}>Choose where to play music during the class</Text>
+            <Text style={ad.title}>Ready to record</Text>
+            <Text style={ad.subtitle}>
+              {micPermGranted === false
+                ? 'Microphone access denied — enable it in Settings to record classes.'
+                : 'The class will be recorded and transcribed automatically.'}
+            </Text>
 
-            <View style={ad.list}>
-              {devices.map((dev) => {
-                const selected = selectedDeviceId === dev.id;
-                return (
-                  <TouchableOpacity
-                    key={dev.id}
-                    style={[ad.device, selected && ad.deviceSelected]}
-                    activeOpacity={0.75}
-                    onPress={() => setSelectedDeviceId(dev.id)}
-                  >
-                    <View style={[ad.devIcon, selected && ad.devIconSelected]}>
-                      <Ionicons
-                        name={dev.icon}
-                        size={18}
-                        color={selected ? '#fff' : C.text}
-                      />
-                    </View>
-                    <View style={{ flex: 1, minWidth: 0 }}>
-                      <Text style={ad.devName}>{dev.name}</Text>
-                      <Text style={ad.devType}>{dev.type}</Text>
-                    </View>
-                    <View style={[ad.check, selected && ad.checkSelected]}>
-                      {selected && <Ionicons name="checkmark" size={14} color="#fff" />}
-                    </View>
-                  </TouchableOpacity>
-                );
-              })}
-
-              <View style={ad.scanning}>
-                <View style={ad.scanDot} />
-                <Text style={ad.scanText}>Scanning for more devices…</Text>
+            <TouchableOpacity
+              style={ad.routeBtn}
+              activeOpacity={0.75}
+              onPress={handleOpenRoutePicker}
+            >
+              <View style={ad.routeBtnIcon}>
+                <Ionicons name="bluetooth" size={18} color={C.orange} />
               </View>
-            </View>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={ad.routeBtnLabel}>Audio output</Text>
+                <Text style={ad.routeBtnSub}>AirPods, Bluetooth speaker…</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color={C.gray} />
+            </TouchableOpacity>
 
             <View style={ad.actions}>
               <TouchableOpacity style={ad.btnStart} activeOpacity={0.88} onPress={startClassNow}>
                 <Text style={ad.btnStartText}>Start class</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={ad.btnSkip} onPress={startClassNow} activeOpacity={0.6}>
-                <Text style={ad.btnSkipText}>Skip audio setup</Text>
               </TouchableOpacity>
             </View>
           </Pressable>
@@ -582,6 +674,24 @@ export default function StartClassScreen({ navigation }) {
     if (!q) return students;
     return students.filter(s => (s.name || '').toLowerCase().includes(q));
   }, [students, searchQuery]);
+
+  // ── CLASS RECORDED SUCCESS SCREEN ─────────────────────────────────────
+  if (classRecorded) {
+    return (
+      <SafeAreaView style={[s.safe, { alignItems: 'center', justifyContent: 'center' }]} edges={['top']}>
+        <View style={cr.wrap}>
+          <View style={cr.iconWrap}>
+            <Ionicons name="mic" size={32} color={C.orange} />
+          </View>
+          <Text style={cr.title}>Class recorded</Text>
+          <Text style={cr.sub}>
+            We're processing the transcript in the background.{'\n'}
+            You'll get a notification when the focus points are ready to review.
+          </Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   // ── VIEW 1: Select class type ──────────────────────────────────────────
   if (view === 'select') {
@@ -2454,81 +2564,33 @@ const ad = StyleSheet.create({
     marginTop: 4,
     marginBottom: 24,
   },
-  list: {
-    flexDirection: 'column',
-    gap: 8,
-  },
-  device: {
+  routeBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 14,
     padding: 16,
     borderRadius: 16,
     backgroundColor: '#F8F8F8',
-    borderWidth: 2,
-    borderColor: 'transparent',
+    marginBottom: 4,
   },
-  deviceSelected: {
-    backgroundColor: 'rgba(232,168,56,0.06)',
-    borderColor: '#E8A838',
-  },
-  devIcon: {
+  routeBtnIcon: {
     width: 40,
     height: 40,
     borderRadius: 12,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: 'rgba(232,168,56,0.10)',
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOpacity: 0.06,
-    shadowRadius: 3,
-    shadowOffset: { width: 0, height: 1 },
-    elevation: 1,
   },
-  devIconSelected: {
-    backgroundColor: '#E8A838',
-  },
-  devName: {
+  routeBtnLabel: {
     fontFamily: Fonts.jakartaExtraBold,
     fontSize: 14,
     color: '#0E0E0E',
   },
-  devType: {
+  routeBtnSub: {
     fontFamily: Fonts.jakartaMedium,
     fontSize: 11,
     color: '#999',
     marginTop: 1,
-  },
-  check: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    borderWidth: 2,
-    borderColor: '#DDD',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  checkSelected: {
-    borderColor: '#E8A838',
-    backgroundColor: '#E8A838',
-  },
-  scanning: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 14,
-  },
-  scanDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: '#DDD',
-  },
-  scanText: {
-    fontFamily: Fonts.jakartaSemiBold,
-    fontSize: 12,
-    color: '#BBB',
   },
   actions: {
     marginTop: 20,
@@ -2546,15 +2608,6 @@ const ad = StyleSheet.create({
     color: '#0E0E0E',
     letterSpacing: 1,
     textTransform: 'uppercase',
-  },
-  btnSkip: {
-    alignItems: 'center',
-    paddingVertical: 12,
-  },
-  btnSkipText: {
-    fontFamily: Fonts.jakartaSemiBold,
-    fontSize: 13,
-    color: '#999',
   },
 });
 
@@ -2726,5 +2779,55 @@ const db = StyleSheet.create({
     fontFamily: Fonts.jakartaSemiBold,
     fontSize: 13,
     color: '#999',
+  },
+  recBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 24,
+    marginTop: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    backgroundColor: 'rgba(232,168,56,0.08)',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(232,168,56,0.2)',
+  },
+  recBannerText: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 12,
+    color: '#E8A838',
+    flex: 1,
+  },
+});
+
+const cr = StyleSheet.create({
+  wrap: {
+    alignItems: 'center',
+    paddingHorizontal: 40,
+  },
+  iconWrap: {
+    width: 72,
+    height: 72,
+    borderRadius: 24,
+    backgroundColor: 'rgba(232,168,56,0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 24,
+  },
+  title: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 24,
+    color: '#0E0E0E',
+    letterSpacing: -0.3,
+    marginBottom: 12,
+    textAlign: 'center',
+  },
+  sub: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 14,
+    color: '#999',
+    textAlign: 'center',
+    lineHeight: 22,
   },
 });
