@@ -27,8 +27,13 @@ async function invokeAiChat({ systemPrompt, prompt, messages, maxTokens }) {
   const mergedSystem = systemPrompt
     ? `${systemPrompt}\n\n${NO_HYPHEN_RULE}`
     : NO_HYPHEN_RULE;
+  // Strip any non-API fields (e.g. UI flags like noAnswer/coachAsked) — Anthropic
+  // rejects messages with extra keys.
+  const cleanMessages = Array.isArray(messages)
+    ? messages.map((m) => ({ role: m.role, content: m.content }))
+    : messages;
   const { data, error } = await supabase.functions.invoke('ai-chat', {
-    body: { systemPrompt: mergedSystem, prompt, messages, maxTokens },
+    body: { systemPrompt: mergedSystem, prompt, messages: cleanMessages, maxTokens },
   });
   if (error) throw new Error(`ai-chat invoke error: ${error.message || error}`);
   if (data?.error) throw new Error(data.error);
