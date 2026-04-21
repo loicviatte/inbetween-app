@@ -1,5 +1,5 @@
 require 'json'
-package = JSON.parse(File.read(File.join(__dir__, 'package.json')))
+package = JSON.parse(File.read(File.join(__dir__, '..', 'package.json')))
 
 Pod::Spec.new do |s|
   s.name           = 'AudioRoutePicker'
@@ -12,6 +12,6 @@ Pod::Spec.new do |s|
   s.platform       = :ios, '15.1'
   s.swift_version  = '5.4'
   s.source         = { :path => '.' }
-  s.source_files   = 'ios/**/*.{h,m,mm,swift}'
+  s.source_files   = '**/*.{h,m,mm,swift}'
   s.dependency 'ExpoModulesCore'
 end

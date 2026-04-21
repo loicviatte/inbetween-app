@@ -111,12 +111,14 @@ export default function ActionNeededScreen({ navigation }) {
         const fpIds = [...new Set(mrList.flatMap(m => [m.focus_a, m.focus_b]))];
         const { data: fpRows } = await supabase
           .from('focus_points')
-          .select('id, name, user_id')
+          .select('id, name, user_id, subtitle, context, dance, drill, tier, category, created_at')
           .in('id', fpIds);
         const fpMap = {};
         for (const fp of fpRows || []) fpMap[fp.id] = fp;
         setMergeRequests(mrList.map(m => ({
           ...m,
+          focusA: fpMap[m.focus_a] || null,
+          focusB: fpMap[m.focus_b] || null,
           focusAName: fpMap[m.focus_a]?.name || '?',
           focusBName: fpMap[m.focus_b]?.name || '?',
         })));
@@ -396,6 +398,11 @@ export default function ActionNeededScreen({ navigation }) {
 
             {mergeRequests.map(mr => {
               const student = studentMap[mr.student_id];
+              const a = mr.focusA;
+              const b = mr.focusB;
+              const olderFirst = a && b && new Date(a.created_at) <= new Date(b.created_at);
+              const existing = olderFirst ? a : b;
+              const incoming = olderFirst ? b : a;
               return (
                 <View key={mr.id} style={s.mergeCard}>
                   <View style={s.mergeHeader}>
@@ -403,15 +410,48 @@ export default function ActionNeededScreen({ navigation }) {
                       <Ionicons name="git-merge-outline" size={14} color={C.orange} />
                     </View>
                     <Text style={s.mergeTitleText} numberOfLines={1}>
-                      "{mr.focusAName}" & "{mr.focusBName}"
+                      Possible duplicate
                     </Text>
                   </View>
 
                   {student && (
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8 }}>
                       <Ionicons name="person-outline" size={14} color={C.gray} />
                       <Text style={s.mergeMeta}>{student.name}</Text>
                     </View>
+                  )}
+
+                  {[{ fp: existing, label: 'Existing' }, { fp: incoming, label: 'New from this class' }].map(
+                    ({ fp, label }, i) =>
+                      fp ? (
+                        <View
+                          key={fp.id}
+                          style={{
+                            marginTop: 12,
+                            paddingTop: 10,
+                            borderTopWidth: i === 0 ? 0 : 1,
+                            borderTopColor: '#EEE',
+                          }}
+                        >
+                          <Text style={{ fontSize: 11, color: C.gray, letterSpacing: 0.5, marginBottom: 4 }}>
+                            {label.toUpperCase()}
+                          </Text>
+                          <Text style={{ fontSize: 15, fontWeight: '700', color: C.text }}>{fp.name}</Text>
+                          {!!fp.subtitle && (
+                            <Text style={{ fontSize: 13, color: C.text, marginTop: 2 }}>{fp.subtitle}</Text>
+                          )}
+                          {!!fp.context && (
+                            <Text style={{ fontSize: 12, color: C.gray, marginTop: 6, lineHeight: 17 }}>
+                              {fp.context}
+                            </Text>
+                          )}
+                          {!!fp.drill && (
+                            <Text style={{ fontSize: 12, color: C.orange, marginTop: 6, fontStyle: 'italic' }}>
+                              Drill: {fp.drill}
+                            </Text>
+                          )}
+                        </View>
+                      ) : null,
                   )}
 
                   <View style={s.nameActions}>
@@ -419,7 +459,7 @@ export default function ActionNeededScreen({ navigation }) {
                       <Text style={s.confirmBtnText}>Merge</Text>
                     </TouchableOpacity>
                     <TouchableOpacity style={s.denyBtn} onPress={() => handleRejectMerge(mr)} activeOpacity={0.8}>
-                      <Text style={s.denyBtnText}>Ignore</Text>
+                      <Text style={s.denyBtnText}>Keep both</Text>
                     </TouchableOpacity>
                   </View>
                 </View>

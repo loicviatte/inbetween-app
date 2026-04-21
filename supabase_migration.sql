@@ -31,6 +31,7 @@ create table if not exists public.focus_points (
   user_id uuid references public.users(id) on delete cascade not null,
   name text not null,
   normalized_name text not null,
+  category text check (category in ('Stability', 'Technicality', 'Strength', 'Creativity', 'Musicality')),
   count integer default 1,
   is_archived boolean default false,
   is_deleted boolean default false,

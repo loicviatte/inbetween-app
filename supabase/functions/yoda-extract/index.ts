@@ -41,14 +41,21 @@ function stripHyphens(str: string): string {
     .trim()
 }
 
-// Recursively walk a parsed JSON object and strip hyphens from every string.
-function sanitizeStrings<T>(value: T): T {
-  if (typeof value === 'string') return stripHyphens(value) as unknown as T
-  if (Array.isArray(value)) return value.map(sanitizeStrings) as unknown as T
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+// Recursively walk a parsed JSON object and strip hyphens from every string,
+// except UUID values and any key ending in _id (to protect primary keys).
+function sanitizeStrings<T>(value: T, parentKey?: string): T {
+  if (typeof value === 'string') {
+    if (UUID_RE.test(value)) return value as unknown as T
+    if (parentKey && /_id$|^id$/.test(parentKey)) return value as unknown as T
+    return stripHyphens(value) as unknown as T
+  }
+  if (Array.isArray(value)) return value.map((v) => sanitizeStrings(v, parentKey)) as unknown as T
   if (value && typeof value === 'object') {
     const out: Record<string, unknown> = {}
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      out[k] = sanitizeStrings(v)
+      out[k] = sanitizeStrings(v, k)
     }
     return out as unknown as T
   }
@@ -117,8 +124,9 @@ NOT a focus point:
 ## ASSIGNMENT RULES
 - Private lesson → assign all focus points to the student they are directed at
 - Public lesson → only assign a focus point to a student if their name is explicitly mentioned, OR if the coach uses directed language like "work on this for next class" / "you need to practice this"
-- General corrections (no student named) → coach_knowledge only, no focus point created
-- If you cannot confidently assign a correction to a specific student, do not create a focus point
+- Public lesson with a directive aimed at the whole class ("you guys", "everyone", "the class") that includes a concrete corrective action, drill, or priority → put it in "shared_focus_points" (applies to every student in the class). Same structure as a regular focus point, no student_id.
+- Generic motivational talk, admin, or vague observations → coach_knowledge only, no focus point created
+- If you cannot confidently assign a correction to a specific student or the whole class, do not create a focus point
 
 ## SELECTING FOCUS POINTS
 Extract all corrections first. Then select the most important ones as focus_points based on these criteria, in order of weight:
@@ -204,6 +212,16 @@ Bad drill examples (do NOT do this):
   with bullet points listing common mistakes. Anything starting with
   "First, ... Then, ... Finally, ...".
 
+### category
+Classify this focus point into exactly one of these five categories:
+- "Stability" — balance, posture, frame, hold, weight distribution, hip position, grounding
+- "Technicality" — footwork, steps, rotation, timing, lead/follow, CBM, alignment, rise/fall, swing/sway
+- "Strength" — power, drive, energy, speed, force, endurance, push/pull
+- "Creativity" — expression, artistry, performance, character, style, interpretation, emotion, presentation
+- "Musicality" — rhythm, beat, tempo, phrasing, accent, musical interpretation, syncopation
+
+Pick the best fit. Every focus point must have a category.
+
 ### Other fields
 - timestamp: MM:SS when first addressed (from paragraph timestamps)
 - mention_count: how many times this was addressed across the full lesson
@@ -252,6 +270,7 @@ Always return this exact structure:
           "mention_count": number,
           "explicit_priority": boolean,
           "tier": "critical" | "important" | "supporting",
+          "category": "Stability" | "Technicality" | "Strength" | "Creativity" | "Musicality",
           "merge_action": "auto_merge" | "notify_coach" | null,
           "existing_focus_point_id": string | null,
           "coach_signal": "positive" | "negative" | null
@@ -264,6 +283,20 @@ Always return this exact structure:
           "dance": [string]
         }
       ]
+    }
+  ],
+  "shared_focus_points": [
+    {
+      "title": string,
+      "subtitle": string,
+      "context": string,
+      "dance": [string],
+      "drill": string | null,
+      "timestamp": "MM:SS",
+      "mention_count": number,
+      "explicit_priority": boolean,
+      "tier": "critical" | "important" | "supporting",
+      "category": "Stability" | "Technicality" | "Strength" | "Creativity" | "Musicality"
     }
   ],
   "coach": {
@@ -392,7 +425,7 @@ No markdown, no explanation.${NO_HYPHEN_RULE}`
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify({
-      model: 'claude-haiku-4-5',
+      model: 'claude-sonnet-4-6',
       max_tokens: 3000,
       messages: [{ role: 'user', content: altPrompt }],
     }),
@@ -621,7 +654,7 @@ async function processRecord(record: ClassInputRecord): Promise<void> {
         'anthropic-version': '2023-06-01',
       },
       body: JSON.stringify({
-        model: 'claude-haiku-4-5',
+        model: 'claude-sonnet-4-6',
         max_tokens: 4000,
         system: effectiveSystemPrompt,
         messages: [{ role: 'user', content: userMessage }],

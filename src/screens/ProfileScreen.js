@@ -44,23 +44,6 @@ const PROFILE_CACHE_KEY = '@cache_profile';
 const HOME_CACHE_KEY = '@cache_home';
 
 const RADAR_CATEGORIES = ['Stability', 'Technicality', 'Strength', 'Creativity', 'Musicality'];
-// Checked in order of specificity — most specific first to avoid greedy matches
-const CATEGORY_KEYWORDS = {
-  Musicality:   ['music', 'rhythm', 'beat', 'tempo', 'phrasing', 'accent', 'musical', 'syncopation'],
-  Creativity:   ['expression', 'artistry', 'performance', 'character', 'style', 'interpret', 'emotion', 'feeling', 'presentation'],
-  Strength:     ['power', 'drive', 'energy', 'speed', 'strength', 'push', 'pull', 'force', 'endurance', 'stamina'],
-  Technicality: ['footwork', 'technique', 'step', 'action', 'rise', 'fall', 'swing', 'sway', 'rotation', 'turn', 'cbm', 'heel', 'toe', 'alignment', 'lead', 'follow', 'timing', 'contra'],
-  Stability:    ['balance', 'posture', 'hold', 'frame', 'weight', 'hip', 'standing', 'stable', 'grounding', 'position'],
-};
-const CATEGORY_CHECK_ORDER = ['Musicality', 'Creativity', 'Strength', 'Technicality', 'Stability'];
-
-function categorizeFocus(name) {
-  const lower = (name || '').toLowerCase();
-  for (const cat of CATEGORY_CHECK_ORDER) {
-    if (CATEGORY_KEYWORDS[cat].some((kw) => lower.includes(kw))) return cat;
-  }
-  return null; // unmatched — does not inflate any category
-}
 
 
 // ─── CoachSlot ────────────────────────────────────────────────────────────────
@@ -250,14 +233,13 @@ export default function ProfileScreen({ navigation }) {
       setPendingReviews(0);
     }
 
-    const top = topFocusPoints ?? [];
+    // Count active focus points per category — more FPs = more to work on = lower score
     const catCounts = { Stability: 0, Technicality: 0, Strength: 0, Creativity: 0, Musicality: 0 };
-    for (const fp of top) {
-      const cat = categorizeFocus(fp.name);
-      if (cat) catCounts[cat] += fp.count;
+    for (const fp of activeFocusPoints ?? []) {
+      if (fp.category && catCounts[fp.category] !== undefined) catCounts[fp.category]++;
     }
     const maxCat = Math.max(...Object.values(catCounts), 1);
-    const scores = RADAR_CATEGORIES.map((cat) => catCounts[cat] / maxCat);
+    const scores = RADAR_CATEGORIES.map((cat) => 1 - catCounts[cat] / maxCat);
 
     const stats = { totalClasses: classInputs?.length ?? 0, totalSessions, activeFocusAreas: activeFocusPoints?.length ?? 0 };
     setUser(userData);

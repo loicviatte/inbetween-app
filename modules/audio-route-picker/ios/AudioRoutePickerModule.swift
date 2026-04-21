@@ -1,5 +1,6 @@
 import ExpoModulesCore
 import AVKit
+import AVFoundation
 
 public class AudioRoutePickerModule: Module {
   public func definition() -> ModuleDefinition {
@@ -7,11 +8,16 @@ public class AudioRoutePickerModule: Module {
 
     AsyncFunction("presentPicker") { (promise: Promise) in
       DispatchQueue.main.async {
-        // AVRoutePickerView is the modern iOS audio route picker (iOS 11+)
-        // Same UI as Spotify, Apple Music, Control Center
-        let picker = AVRoutePickerView(frame: CGRect(x: -200, y: -200, width: 44, height: 44))
-        picker.tintColor = UIColor.systemOrange
+        NSLog("[AudioRoutePicker] presentPicker invoked")
 
+        // Ensure an active audio session so AVRoutePickerView has routes to show
+        do {
+          let session = AVAudioSession.sharedInstance()
+          try session.setCategory(.playAndRecord, mode: .default, options: [.allowBluetooth, .allowBluetoothA2DP, .defaultToSpeaker])
+          try session.setActive(true)
+        } catch {
+          NSLog("[AudioRoutePicker] audio session error: \(error)")
+        }
         guard
           let scene = UIApplication.shared.connectedScenes
             .filter({ $0.activationState == .foregroundActive })
@@ -19,22 +25,48 @@ public class AudioRoutePickerModule: Module {
             .first,
           let keyWindow = scene.windows.first(where: { $0.isKeyWindow })
         else {
+          NSLog("[AudioRoutePicker] no window")
           promise.reject("E_NO_WINDOW", "No active window found")
           return
         }
 
-        keyWindow.addSubview(picker)
+        var host: UIViewController? = keyWindow.rootViewController
+        while let presented = host?.presentedViewController {
+          host = presented
+        }
+        let hostView: UIView = host?.view ?? keyWindow
 
-        // Trigger the internal UIButton — opens the system route picker sheet
-        for subview in picker.subviews {
-          if let button = subview as? UIButton {
-            button.sendActions(for: .touchUpInside)
-            break
+        let picker = AVRoutePickerView(frame: CGRect(x: 0, y: 0, width: 44, height: 44))
+        picker.tintColor = UIColor.clear
+        picker.activeTintColor = UIColor.clear
+        picker.alpha = 0.01
+        hostView.addSubview(picker)
+        hostView.layoutIfNeeded()
+
+        func findButton(in view: UIView) -> UIButton? {
+          for sv in view.subviews {
+            if let b = sv as? UIButton { return b }
+            if let nested = findButton(in: sv) { return nested }
+          }
+          return nil
+        }
+
+        if let button = findButton(in: picker) {
+          NSLog("[AudioRoutePicker] tapping internal button")
+          button.sendActions(for: .touchUpInside)
+        } else {
+          NSLog("[AudioRoutePicker] no internal button found (subviews: \(picker.subviews.count))")
+          // Fallback: call private selector directly
+          let sel = NSSelectorFromString("_routePickerButtonTapped:")
+          if picker.responds(to: sel) {
+            NSLog("[AudioRoutePicker] using _routePickerButtonTapped fallback")
+            picker.perform(sel, with: picker)
+          } else {
+            NSLog("[AudioRoutePicker] no fallback selector available")
           }
         }
 
-        // Remove the off-screen view after the sheet has had time to appear
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
           picker.removeFromSuperview()
           promise.resolve(nil)
         }
