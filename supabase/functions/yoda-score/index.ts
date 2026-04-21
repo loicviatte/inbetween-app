@@ -125,6 +125,51 @@ async function processClassInput(supabase: any, payload: any): Promise<void> {
     await processStudentFocusPoints(supabase, studentId, studentJson, class_input_id, classDance, now, isGroupClass)
   }
 
+  // 2b. Process shared_focus_points (group-wide drills) — insert one row per student
+  // linked by shared_group_id so the coach can aggregate across students.
+  const sharedFps = aiData.shared_focus_points ?? []
+  if (isGroupClass && sharedFps.length > 0) {
+    const studentIds: string[] = (aiData.students ?? [])
+      .map((s: any) => s.student_id)
+      .filter((x: string) => !!x)
+    for (const sfp of sharedFps) {
+      const sharedGroupId = crypto.randomUUID()
+      const tier = (sfp.tier ?? 'supporting') as Tier
+      const rows = studentIds.map((sid) => ({
+        user_id: sid,
+        name: sfp.title,
+        normalized_name: String(sfp.title ?? '').toLowerCase().trim(),
+        subtitle: sfp.subtitle ?? null,
+        context: sfp.context ?? null,
+        dance: sfp.dance ?? [],
+        drill: sfp.drill ?? null,
+        tier,
+        category: sfp.category ?? null,
+        base_score: STARTING_SCORES[tier],
+        mention_count: sfp.mention_count ?? 0,
+        explicit_priority: sfp.explicit_priority ?? false,
+        first_timestamp: sfp.timestamp ?? null,
+        last_mentioned_at: now.toISOString(),
+        class_input_id: class_input_id,
+        source_class_input_id: class_input_id,
+        status: 'pending_coach',
+        coach_review_deadline: new Date(now.getTime() + 18 * 60 * 60 * 1000).toISOString(),
+        group_fp: true,
+        shared_group_id: sharedGroupId,
+        count: 0,
+        is_archived: false,
+        is_deleted: false,
+        is_other: false,
+      }))
+      const { error: sharedErr } = await supabase.from('focus_points').insert(rows)
+      if (sharedErr) {
+        console.error(`[yoda-score] shared_focus_points insert error:`, sharedErr.message)
+      } else {
+        console.log(`[yoda-score] Created shared focus point ${sfp.title} (group ${sharedGroupId}) for ${studentIds.length} students`)
+      }
+    }
+  }
+
   // 3. Check merge_requests older than MERGE_NOTIFY_STUDENT_DAYS → escalate to student
   const cutoff = new Date(now.getTime() - MERGE_NOTIFY_STUDENT_DAYS * 24 * 60 * 60 * 1000)
   const { data: staleMerges } = await supabase
@@ -243,6 +288,7 @@ async function processStudentFocusPoints(
             dance: fpJson.dance ?? [],
             drill: fpJson.drill ?? null,
             tier,
+            category: fpJson.category ?? null,
             base_score: STARTING_SCORES[tier],
             mention_count: fpJson.mention_count ?? 0,
             explicit_priority: fpJson.explicit_priority ?? false,
@@ -302,6 +348,7 @@ async function processStudentFocusPoints(
           dance: fpJson.dance ?? [],
           drill: fpJson.drill ?? null,
           tier,
+          category: fpJson.category ?? null,
           base_score: STARTING_SCORES[tier],
           mention_count: fpJson.mention_count ?? 0,
           explicit_priority: fpJson.explicit_priority ?? false,

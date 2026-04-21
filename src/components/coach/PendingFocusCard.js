@@ -28,8 +28,12 @@ export default function PendingFocusCard({
   const src = Array.isArray(fp.source_class_input) ? fp.source_class_input[0] : fp.source_class_input;
   const classSummary = src?.class_summary || null;
   const fpNameLower = fp.name?.trim().toLowerCase();
-  const studentNote =
-    src?.ai_primary_focus && fpNameLower && src.ai_primary_focus.trim().toLowerCase() === fpNameLower
+  // Student's note only makes sense for private lessons — practice_point_1/2 on class_inputs
+  // is populated from a single student's focus points and has no meaning in a group context.
+  const isGroup = src?.lesson_type === 'public' || src?.lesson_type === 'group' || !!fp.group_fp;
+  const studentNote = isGroup
+    ? null
+    : src?.ai_primary_focus && fpNameLower && src.ai_primary_focus.trim().toLowerCase() === fpNameLower
       ? src?.practice_point_1
       : src?.ai_secondary_focus && fpNameLower && src.ai_secondary_focus.trim().toLowerCase() === fpNameLower
         ? src?.practice_point_2

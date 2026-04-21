@@ -16,6 +16,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import Svg, { Circle } from 'react-native-svg';
 import { Audio } from 'expo-av';
+import * as FileSystem from 'expo-file-system/legacy';
 import { Colors, Fonts, Spacing } from '../../theme';
 import { useCoachData } from '../../context/CoachDataContext';
 import { getStudentFocusPoints, getStudentQuestions, getStudentRecentActivity } from '../../storage/coachStorage';
@@ -27,9 +28,51 @@ import {
 import { supabase } from '../../services/supabase/client';
 import { presentAudioRoutePicker } from 'audio-route-picker';
 
-const OPENAI_API_KEY = process.env.EXPO_PUBLIC_OPENAI_API_KEY;
+const ASSEMBLYAI_API_KEY = process.env.EXPO_PUBLIC_ASSEMBLYAI_API_KEY;
 
-// ~14 MB/hour — fits Whisper's 25 MB limit for classes up to ~100 min
+// Universal 3 Pro supports a free-form prompt (BETA). This is passed as the
+// `prompt` field on the create-transcript request.
+const DANCE_PROMPT = `You are transcribing a professional DanceSport class led by a Latin and Ballroom teacher.
+
+Your primary objective is absolute transcription accuracy. The transcript will be used by another system to extract technical dance information, so any incorrect word may cause data extraction errors.
+
+This is a highly specialized domain. You must prioritise dance terminology over common English interpretations.
+
+The class may include:
+- Latin dances: Cha Cha, Samba, Rumba, Paso Doble, Jive
+- Ballroom dances: Waltz, Tango, Viennese Waltz, Foxtrot, Quickstep
+
+You must accurately transcribe:
+- Step names (e.g. New York, Alemana, Fan, Natural Turn, Reverse Turn)
+- Technique terms (e.g. Cuban motion, contra body movement, CBM, CBMP, frame, connection)
+- Alignment terms (e.g. line of dance, diagonal wall, centre, wall)
+- Teacher shorthand and abbreviations
+- Rhythm and timing counts (e.g. one, two, three, cha-cha-cha, quick quick slow)
+
+Important rules:
+1. Always produce a verbatim transcript. Do not summarise, interpret, or rewrite.
+2. Do not replace unfamiliar dance words with more common English words.
+3. If a word sounds unusual but fits dance terminology, keep it exactly as spoken.
+4. Preserve all repetition, corrections, restarts, and filler words when they affect meaning.
+5. Preserve timing counts exactly as spoken, including repeated counts.
+6. When the teacher speaks while demonstrating, still transcribe the spoken content as normal.
+7. Do not normalise shorthand. If the teacher says "Alemana into fan", keep it exactly like that.
+
+Step sequence formatting:
+When a teacher lists multiple steps in sequence, keep them in the same order and separate them with commas or line breaks to make sequences clearly readable.
+
+Example:
+New York, spot turn, shoulder to shoulder, Alemana
+
+If there is uncertainty between:
+- a common English word
+- and a known DanceSport term
+
+You must prefer the DanceSport term.
+
+Never autocorrect technical dance vocabulary into more common words.`;
+
+// ~14 MB/hour audio — mono 16kHz/32kbps keeps files small for upload
 function getCoachRecordingOptions() {
   const base = Audio.RecordingOptionsPresets.HIGH_QUALITY;
   return {
@@ -39,19 +82,73 @@ function getCoachRecordingOptions() {
   };
 }
 
+function fmtTs(sec) {
+  const s = Math.max(0, Math.floor(sec || 0));
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return `${String(m).padStart(2, '0')}:${String(r).padStart(2, '0')}`;
+}
+
+// Format utterances as `[MM:SS - MM:SS] Speaker X: text` blocks
+function formatUtterances(utterances) {
+  if (!Array.isArray(utterances) || utterances.length === 0) return '';
+  return utterances
+    .map((u) => `[${fmtTs(u.start / 1000)} - ${fmtTs(u.end / 1000)}] Speaker ${u.speaker}: ${String(u.text || '').trim()}`)
+    .join('\n\n');
+}
+
 async function transcribeAudio(uri) {
-  if (!OPENAI_API_KEY) throw new Error('NO_OPENAI_KEY');
-  const formData = new FormData();
-  formData.append('file', { uri, type: 'audio/m4a', name: 'class.m4a' });
-  formData.append('model', 'whisper-1');
-  const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
-    body: formData,
+  if (!ASSEMBLYAI_API_KEY) throw new Error('NO_ASSEMBLYAI_KEY');
+
+  // 1. Upload audio file as raw binary (FileSystem.uploadAsync handles file:// URIs natively)
+  const upResult = await FileSystem.uploadAsync('https://api.assemblyai.com/v2/upload', uri, {
+    httpMethod: 'POST',
+    uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+    headers: {
+      authorization: ASSEMBLYAI_API_KEY,
+      'content-type': 'application/octet-stream',
+    },
   });
-  if (!res.ok) throw new Error(`Whisper ${res.status}: ${await res.text().catch(() => '')}`);
-  const data = await res.json();
-  return data.text || '';
+  if (upResult.status !== 200) {
+    throw new Error(`AssemblyAI upload ${upResult.status}: ${upResult.body?.slice(0, 200) || ''}`);
+  }
+  const { upload_url } = JSON.parse(upResult.body);
+
+  // 2. Create transcript job with DanceSport keyterms biasing
+  const createRes = await fetch('https://api.assemblyai.com/v2/transcript', {
+    method: 'POST',
+    headers: {
+      authorization: ASSEMBLYAI_API_KEY,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({
+      audio_url: upload_url,
+      speech_models: ['universal-3-pro'],
+      prompt: DANCE_PROMPT,
+      speaker_labels: true,
+      punctuate: true,
+      format_text: true,
+    }),
+  });
+  if (!createRes.ok) throw new Error(`AssemblyAI create ${createRes.status}: ${await createRes.text().catch(() => '')}`);
+  const { id: jobId } = await createRes.json();
+
+  // 3. Poll until completed (max ~10 min)
+  const deadline = Date.now() + 10 * 60 * 1000;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 2000));
+    const pollRes = await fetch(`https://api.assemblyai.com/v2/transcript/${jobId}`, {
+      headers: { authorization: ASSEMBLYAI_API_KEY },
+    });
+    if (!pollRes.ok) throw new Error(`AssemblyAI poll ${pollRes.status}`);
+    const job = await pollRes.json();
+    if (job.status === 'completed') {
+      const formatted = formatUtterances(job.utterances);
+      return formatted || job.text || '';
+    }
+    if (job.status === 'error') throw new Error(`AssemblyAI: ${job.error || 'unknown error'}`);
+  }
+  throw new Error('AssemblyAI transcription timed out');
 }
 
 // ── Palette ────────────────────────────────────────────────────────────────
@@ -250,13 +347,17 @@ export default function StartClassScreen({ navigation }) {
   function transcribeAndSubmit(uri, isPrivate, studentId, allStudents) {
     const run = async () => {
       try {
+        // Capture user.id BEFORE transcription — a long upload/poll can outlive the session
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) throw new Error('Not signed in — cannot save transcript.');
+        const userId = user.id;
+
         const transcript = await transcribeAudio(uri);
         if (!transcript?.trim()) return;
-        const { data: { user } } = await supabase.auth.getUser();
         const { data: classInput, error: insertErr } = await supabase
           .from('class_inputs')
           .insert({
-            user_id: user.id,
+            user_id: userId,
             transcript,
             lesson_type: isPrivate ? 'private' : 'group',
             student_id: isPrivate ? (studentId ?? null) : null,
@@ -272,6 +373,7 @@ export default function StartClassScreen({ navigation }) {
         }
       } catch (err) {
         console.warn('[StartClass] Background transcription failed:', err);
+        Alert.alert('Transcription failed', String(err?.message || err));
       }
     };
     run();
