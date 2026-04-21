@@ -25,7 +25,7 @@ import {
   clearActiveCoachClass,
 } from '../../storage/activeCoachClass';
 import { supabase } from '../../services/supabase/client';
-import { presentAudioRoutePicker } from '../../../modules/audio-route-picker';
+import { presentAudioRoutePicker } from 'audio-route-picker';
 
 const OPENAI_API_KEY = process.env.EXPO_PUBLIC_OPENAI_API_KEY;
 
