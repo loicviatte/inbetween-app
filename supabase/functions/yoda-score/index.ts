@@ -13,6 +13,7 @@ import {
   dbRowToFocusPoint,
   focusPointToDbUpdate,
 } from '../_shared/yoda-score.ts'
+import { normalizeFocusName } from '../_shared/normalize.ts'
 
 // ─── Deno / Supabase Edge Runtime globals ────────────────────────────────────
 
@@ -138,7 +139,7 @@ async function processClassInput(supabase: any, payload: any): Promise<void> {
       const rows = studentIds.map((sid) => ({
         user_id: sid,
         name: sfp.title,
-        normalized_name: String(sfp.title ?? '').toLowerCase().trim(),
+        normalized_name: normalizeFocusName(sfp.title),
         subtitle: sfp.subtitle ?? null,
         context: sfp.context ?? null,
         dance: sfp.dance ?? [],
@@ -282,7 +283,7 @@ async function processStudentFocusPoints(
           .insert({
             user_id: studentId,
             name: fpJson.title,
-            normalized_name: fpJson.title.toLowerCase().trim(),
+            normalized_name: normalizeFocusName(fpJson.title),
             subtitle: fpJson.subtitle ?? null,
             context: fpJson.context ?? null,
             dance: fpJson.dance ?? [],
@@ -343,7 +344,7 @@ async function processStudentFocusPoints(
         .insert({
           user_id: studentId,
           name: fpJson.title,
-          normalized_name: fpJson.title.toLowerCase().trim(),
+          normalized_name: normalizeFocusName(fpJson.title),
           subtitle: fpJson.subtitle ?? null,
           context: fpJson.context ?? null,
           dance: fpJson.dance ?? [],
@@ -423,7 +424,7 @@ async function processStudentFocusPoints(
   const otherRows = (studentJson.other_focus_points ?? []).map((ofp: any) => ({
     user_id: studentId,
     name: ofp.title,
-    normalized_name: ofp.title.toLowerCase().trim(),
+    normalized_name: normalizeFocusName(ofp.title),
     dance: ofp.dance ?? [],
     first_timestamp: ofp.timestamp ?? null,
     tier: 'supporting' as Tier,

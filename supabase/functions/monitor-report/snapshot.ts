@@ -94,33 +94,30 @@ export async function buildSnapshot(
   const emptyFilter = ['00000000-0000-0000-0000-000000000000']
   const studentFilter = studentIds.length ? studentIds : emptyFilter
 
+  // practice_logs uses completed_at (not created_at) as the truthful timestamp.
+  // merge_requests uses focus_a/focus_b (not source_focus_id/target_focus_id).
+  // focus_events table does not exist in this environment — skipped entirely.
   const [
     { data: focusPoints },
     { data: practiceLogs },
-    { data: focusEvents },
     { data: mergeRequests },
     { data: attendanceResponses },
     { data: scoreHistory },
   ] = await Promise.all([
     sb
       .from('focus_points')
-      .select('id, user_id, name, tier, status, mention_count, base_score, created_at, last_mentioned_at, alias_of, merge_candidate_id, merge_status, coach_review_deadline')
+      .select('id, user_id, name, tier, status, mention_count, base_score, created_at, last_mentioned_at, alias_of, merge_candidate_id, merge_status, coach_review_deadline, normalized_name')
       .in('user_id', studentFilter)
       .or(`last_mentioned_at.gte.${activeStudentCutoff},created_at.gte.${activeStudentCutoff}`)
       .or('is_deleted.is.null,is_deleted.eq.false'),
     sb
       .from('practice_logs')
-      .select('id, user_id, focus_point_id, created_at')
-      .gte('created_at', periodStart)
-      .lte('created_at', periodEnd),
-    sb
-      .from('focus_events')
-      .select('id, user_id, focus_point_id, event_type, created_at')
-      .gte('created_at', periodStart)
-      .lte('created_at', periodEnd),
+      .select('id, student_id, focus_point_id, duration_minutes, rating, completed_at')
+      .gte('completed_at', periodStart)
+      .lte('completed_at', periodEnd),
     sb
       .from('merge_requests')
-      .select('id, student_id, source_focus_id, target_focus_id, status, created_at')
+      .select('id, student_id, focus_a, focus_b, status, created_at, resolved_at')
       .gte('created_at', periodStart)
       .lte('created_at', periodEnd),
     sb
@@ -170,8 +167,7 @@ export async function buildSnapshot(
     })),
     focus_points: (focusPoints ?? []).filter((f) => !isExcludedUser(f.user_id)),
     focus_progress: (focusProgress ?? []).filter((f) => !isExcludedUser(f.user_id)),
-    practice_logs: (practiceLogs ?? []).filter((f) => !isExcludedUser(f.user_id)),
-    focus_events: (focusEvents ?? []).filter((f) => !isExcludedUser(f.user_id)),
+    practice_logs: (practiceLogs ?? []).filter((f) => !isExcludedUser(f.student_id)),
     merge_requests: (mergeRequests ?? []).filter((f) => !isExcludedUser(f.student_id)),
     attendance_responses: (attendanceResponses ?? []).filter((f) => !isExcludedUser(f.user_id)),
     focus_score_history: (scoreHistory ?? []).filter((f) => !isExcludedUser(f.user_id)),

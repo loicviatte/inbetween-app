@@ -1,5 +1,6 @@
 import { supabase } from '../services/supabase/client';
 import { computeAllStudentMetricsBatch } from '../utils/studentMetrics';
+import { normalizeFocusName } from '../utils/normalizeFocusName';
 
 async function getCoachId() {
   const { data: { user } } = await supabase.auth.getUser();
@@ -816,6 +817,13 @@ async function markFocusAddedNotificationsReadForStudent(studentId) {
 export async function editAndApproveFocusPoint(fpId, updates) {
   const allowed = ['name', 'subtitle', 'context', 'drill', 'tier'];
   const filtered = Object.fromEntries(Object.entries(updates).filter(([k]) => allowed.includes(k)));
+  // Keep normalized_name in sync whenever the human-facing name changes.
+  // Missing this step is what caused duplicate "Hip Settlement" focus points
+  // (name edited post-insert, normalized_name left stale — next AI match
+  // failed and inserted a new row).
+  if (Object.prototype.hasOwnProperty.call(filtered, 'name')) {
+    filtered.normalized_name = normalizeFocusName(filtered.name);
+  }
   const { data: fpRow } = await supabase
     .from('focus_points')
     .select('user_id')

@@ -1,4 +1,5 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { normalizeFocusName } from '../_shared/normalize.ts'
 
 declare global {
   const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void }
@@ -12,15 +13,6 @@ function urgencyToTier(score: number | null | undefined): 'critical' | 'importan
   if (s >= 8) return 'critical'
   if (s >= 5) return 'important'
   return 'supporting'
-}
-
-function normalize(s: string | null | undefined): string {
-  return (s ?? '')
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
 }
 
 interface FocusPayload {
@@ -160,7 +152,7 @@ async function process(supabase: any, payload: Payload): Promise<void> {
 
   for (const fp of focuses) {
     if (!fp.name) continue
-    const norm = normalize(fp.name)
+    const norm = normalizeFocusName(fp.name)
     const tier = urgencyToTier(fp.priority_score)
     const match = existingMap.get(norm)
 
