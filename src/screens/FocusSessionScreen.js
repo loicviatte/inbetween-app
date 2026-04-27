@@ -38,6 +38,11 @@ import {
   clearActiveSession,
   getSessionTimeLeft,
 } from '../storage/activeSession';
+import {
+  startFocusPoint as laStartFocusPoint,
+  updateFocusPoint as laUpdateFocusPoint,
+  endFocusPoint as laEndFocusPoint,
+} from 'live-activities';
 
 const OPENAI_API_KEY = process.env.EXPO_PUBLIC_OPENAI_API_KEY;
 
@@ -883,9 +888,19 @@ export default function FocusSessionScreen({ route, navigation }) {
     }, 1000);
   }
 
-  function startSession() {
+  async function startSession() {
     const startedAt = Date.now();
-    setActiveSession({ sessionId, focusPointId, focusPointName: focusPoint?.name, rank, sessionCount, duration, startedAt });
+    let liveActivityId = null;
+    try {
+      liveActivityId = await laStartFocusPoint({
+        focusPointName: focusPoint?.name || 'Focus point',
+        startedAt,
+        targetSec: duration ? duration * 60 : null,
+      });
+    } catch (err) {
+      console.warn('[FocusSession] Could not start live activity:', err);
+    }
+    setActiveSession({ sessionId, focusPointId, focusPointName: focusPoint?.name, rank, sessionCount, duration, startedAt, liveActivityId });
     setSessionActive(true);
     setSessionDone(false);
     setTimeLeft(duration * 60);
@@ -953,6 +968,10 @@ export default function FocusSessionScreen({ route, navigation }) {
       fakeStartedAt,
       null,
     );
+    const active = getActiveSession();
+    if (active?.liveActivityId) {
+      laEndFocusPoint(active.liveActivityId, false).catch(() => {});
+    }
     clearActiveSession();
     navigation.goBack();
   }
@@ -963,6 +982,9 @@ export default function FocusSessionScreen({ route, navigation }) {
     // Freeze HomeScreen countdown by storing remaining seconds
     const existing = getActiveSession();
     if (existing) setActiveSession({ ...existing, pausedRemaining: timeLeft });
+    if (existing?.liveActivityId) {
+      laUpdateFocusPoint(existing.liveActivityId, { isPaused: true }).catch(() => {});
+    }
   }
 
   function resumeSession() {
@@ -971,6 +993,9 @@ export default function FocusSessionScreen({ route, navigation }) {
     const newStartedAt = Date.now() - (duration * 60 - timeLeft) * 1000;
     const existing = getActiveSession();
     if (existing) setActiveSession({ ...existing, startedAt: newStartedAt, pausedRemaining: undefined });
+    if (existing?.liveActivityId) {
+      laUpdateFocusPoint(existing.liveActivityId, { isPaused: false }).catch(() => {});
+    }
     _startInterval(newStartedAt, duration);
   }
 
@@ -983,6 +1008,10 @@ export default function FocusSessionScreen({ route, navigation }) {
     setSessionActive(false);
     setSessionPaused(false);
     setTimeLeft(duration * 60);
+    const existing = getActiveSession();
+    if (existing?.liveActivityId) {
+      laEndFocusPoint(existing.liveActivityId, false).catch(() => {});
+    }
     clearActiveSession();
   }
 
@@ -1321,8 +1350,12 @@ I don't have that in your data, but you can send the question to your coach if y
   async function handleSave(feeling, note) {
     if (sessionCompletedRef.current) return;
     sessionCompletedRef.current = true;
-    const startedAtMs = getActiveSession()?.startedAt ?? null;
+    const active = getActiveSession();
+    const startedAtMs = active?.startedAt ?? null;
     await completeTrainingSession(sessionId, feeling, note, focusPointId, startedAtMs);
+    if (active?.liveActivityId) {
+      laEndFocusPoint(active.liveActivityId, true).catch(() => {});
+    }
     clearActiveSession();
     setShowFeelingModal(false);
     navigation.goBack();
@@ -1331,8 +1364,12 @@ I don't have that in your data, but you can send the question to your coach if y
   async function handleSkip() {
     if (sessionCompletedRef.current) return;
     sessionCompletedRef.current = true;
-    const startedAtMs = getActiveSession()?.startedAt ?? null;
+    const active = getActiveSession();
+    const startedAtMs = active?.startedAt ?? null;
     await completeTrainingSession(sessionId, null, null, focusPointId, startedAtMs, null);
+    if (active?.liveActivityId) {
+      laEndFocusPoint(active.liveActivityId, false).catch(() => {});
+    }
     clearActiveSession();
     setShowFeelingModal(false);
     navigation.goBack();

@@ -11,22 +11,37 @@ import {
   Modal,
   Pressable,
   Alert,
+  AppState,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import Svg, { Circle } from 'react-native-svg';
 import { Audio } from 'expo-av';
 import * as FileSystem from 'expo-file-system/legacy';
+import * as Notifications from 'expo-notifications';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Colors, Fonts, Spacing } from '../../theme';
 import { useCoachData } from '../../context/CoachDataContext';
 import { getStudentFocusPoints, getStudentQuestions, getStudentRecentActivity } from '../../storage/coachStorage';
 import {
   getActiveCoachClass,
   setActiveCoachClass,
+  patchActiveCoachClass,
   clearActiveCoachClass,
 } from '../../storage/activeCoachClass';
 import { supabase } from '../../services/supabase/client';
-import { presentAudioRoutePicker } from 'audio-route-picker';
+import {
+  presentAudioRoutePicker,
+  getCurrentInputRoute,
+  listAvailableInputs,
+  setPreferredInput,
+  addRouteChangeListener,
+} from 'audio-route-picker';
+import {
+  startCoachRecording as laStartCoachRecording,
+  updateCoachRecording as laUpdateCoachRecording,
+  endCoachRecording as laEndCoachRecording,
+} from 'live-activities';
 
 const ASSEMBLYAI_API_KEY = process.env.EXPO_PUBLIC_ASSEMBLYAI_API_KEY;
 
@@ -233,11 +248,107 @@ export default function StartClassScreen({ navigation }) {
   const [audioModalOpen, setAudioModalOpen] = useState(false);
   const [classStartedAt, setClassStartedAt] = useState(null);
   const [chronoMs, setChronoMs] = useState(0);
+  const [audioRoute, setAudioRoute] = useState(null);
+
+  // Mic picker (Prop 1) + live audio meter (Prop 3 badge)
+  const [availableInputs, setAvailableInputs] = useState([]);
+  const [selectedInputUid, setSelectedInputUid] = useState(null);
+  const [inputLevel, setInputLevel] = useState(-160); // dBFS, -160 = silence
+  const previewRecordingRef = useRef(null);
+  const inputRefreshIntervalRef = useRef(null);
+  const SOUND_GOOD_DBFS = -40;
+  // Searching pulse for "no BT mic" empty state. Two staggered rings that
+  // expand outward and fade — never travel back inward.
+  const searchRing1 = useRef(new Animated.Value(0)).current;
+  const searchRing2 = useRef(new Animated.Value(0)).current;
+  // Live wave bars (per-bar Animated.Value, scaled with native driver for 60fps)
+  const WAVE_BAR_COUNT = 24;
+  const waveBars = useRef(Array.from({ length: WAVE_BAR_COUNT }, () => new Animated.Value(0.1))).current;
+  // Debounced "sounds good" — only becomes true after the level stays above
+  // the threshold for ≥500ms straight, to avoid flickering on edge cases.
+  const aboveSinceRef = useRef(null);
+  const [sustainedSoundsGood, setSustainedSoundsGood] = useState(false);
+  // Custom in-app popup for "no mic selected" (replaces the native Alert)
+  const [noMicPromptOpen, setNoMicPromptOpen] = useState(false);
+  const phoneMicRef = useRef(null);
 
   // Microphone recording
   const recordingRef = useRef(null);
-  const [recordingUri, setRecordingUri] = useState(null);
+  // Chunked audio: every CHUNK_MS we stop the current Audio.Recording, push
+  // its URI to the chunks list and start a fresh one. Each chunk is a
+  // self-contained M4A so a corrupted segment never kills the whole class.
+  const [audioUris, setAudioUris] = useState([]);
+  const audioUrisRef = useRef([]);
+  const chunkRotationIntervalRef = useRef(null);
+  const rotatingChunkRef = useRef(false);
+  const CHUNK_MS = 3 * 60 * 1000; // 3 minutes
   const [micPermGranted, setMicPermGranted] = useState(null);
+  // Watchdog: when iOS suspends the app the recording stops even though
+  // wall-clock time keeps advancing. We freeze the chrono at the moment of
+  // interruption and prompt the coach to wrap up.
+  const interruptedAtMsRef = useRef(null);
+  const interruptAlertShownRef = useRef(false);
+  const liveActivityIdRef = useRef(null);
+  const routeChangeAlertShownRef = useRef(false);
+  // True when the active class is recording through a Bluetooth mic (incl.
+  // DJI mics whose name carries the brand). We add the class duration to a
+  // cumulative counter and prompt every BT_MIC_REMIND_MS of total airtime.
+  const usedBtMicRef = useRef(false);
+  const [chargeReminderInDebrief, setChargeReminderInDebrief] = useState(false);
+  const BT_MIC_REMIND_MS = 4 * 60 * 60 * 1000; // 4 hours
+  const BT_CUMUL_KEY = 'coach.btMic.cumulativeMs';
+  const BT_THRESHOLD_KEY = 'coach.btMic.reminderThresholdMs';
+
+  // While a class is being recorded, listen for audio route changes. If the
+  // selected mic disconnects mid-class, iOS silently falls back to the
+  // built-in mic — the coach must be told so they can decide to keep going
+  // on the iPhone or stop and reconnect.
+  useEffect(() => {
+    if (!classStartedAt) return;
+    routeChangeAlertShownRef.current = false;
+    const sub = addRouteChangeListener((e) => {
+      if (e.reason !== 'oldDeviceUnavailable') return;
+      if (routeChangeAlertShownRef.current) return;
+      routeChangeAlertShownRef.current = true;
+      const fallback = e.name ? ` (now using ${e.name})` : '';
+
+      // System notification — surfaces on lock screen / when app is in
+      // background. iOS hides this banner when the app is foregrounded, so
+      // the in-app Alert below covers that case.
+      try {
+        const trigger = Notifications.SchedulableTriggerInputTypes
+          ? { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: 1, repeats: false }
+          : { seconds: 1 };
+        Notifications.scheduleNotificationAsync({
+          content: {
+            title: '🎙️ Microphone disconnected',
+            body: `Your mic disconnected mid-class${fallback}. Open InBetween to keep going or stop the class.`,
+            sound: 'default',
+            interruptionLevel: 'timeSensitive',
+            badge: 1,
+          },
+          trigger,
+        }).catch(() => {});
+      } catch {}
+
+      Alert.alert(
+        '🎙️ Microphone disconnected',
+        `Your microphone disconnected mid-class${fallback}. The recording is continuing on the next available source.`,
+        [
+          { text: 'Keep recording', style: 'cancel' },
+          { text: 'Stop class', style: 'destructive', onPress: () => stopClass() },
+        ],
+      );
+    });
+    return () => { sub.remove(); };
+  }, [classStartedAt]);
+
+  // Heartbeat: while the rec is alive, we constantly push the LA stale-date
+  // and the "kill" notification forward by 15s. If the app gets killed, both
+  // fire shortly after — letting iOS dim the LA and show a notification
+  // prompting the coach to come back.
+  const heartbeatIntervalRef = useRef(null);
+  const killNotificationIdRef = useRef(null);
   const [classRecorded, setClassRecorded] = useState(false);
 
   // End-of-class debrief modal
@@ -249,9 +360,80 @@ export default function StartClassScreen({ navigation }) {
   useEffect(() => {
     if (!classStartedAt) return;
     const id = setInterval(() => {
-      setChronoMs(Date.now() - classStartedAt);
+      if (interruptedAtMsRef.current != null) {
+        setChronoMs(interruptedAtMsRef.current);
+      } else {
+        setChronoMs(Date.now() - classStartedAt);
+      }
     }, 500);
     return () => clearInterval(id);
+  }, [classStartedAt]);
+
+  // Poll the current audio input route while a class is running so the
+  // coach sees which mic actually captures the audio (Bluetooth headset,
+  // built-in mic, etc.). Updates every 2s.
+  useEffect(() => {
+    if (!classStartedAt) {
+      setAudioRoute(null);
+      return;
+    }
+    const tick = () => {
+      try { setAudioRoute(getCurrentInputRoute()); } catch {}
+    };
+    tick();
+    const id = setInterval(tick, 2000);
+    return () => clearInterval(id);
+  }, [classStartedAt]);
+
+  // Watch the recording status. If iOS killed the audio session while the app
+  // was suspended (or if anything else interrupted it), freeze the chrono at
+  // the real captured duration and let the coach decide whether to wrap up.
+  useEffect(() => {
+    if (!classStartedAt) return;
+    let cancelled = false;
+
+    const markInterrupted = () => {
+      if (interruptedAtMsRef.current != null) return;
+      interruptedAtMsRef.current = Date.now() - classStartedAt;
+      if (liveActivityIdRef.current) {
+        laUpdateCoachRecording(liveActivityIdRef.current, { isInterrupted: true }).catch(() => {});
+      }
+      if (interruptAlertShownRef.current) return;
+      interruptAlertShownRef.current = true;
+      Alert.alert(
+        'Enregistrement interrompu',
+        "L'enregistrement audio a été coupé (probablement parce que l'application a été fermée ou suspendue trop longtemps). Veux-tu arrêter le cours et utiliser ce qui a été capturé ?",
+        [
+          { text: 'Continuer le cours', style: 'cancel' },
+          { text: 'Arrêter le cours', style: 'destructive', onPress: () => stopClass() },
+        ],
+      );
+    };
+
+    const check = async () => {
+      if (cancelled) return;
+      const rec = recordingRef.current;
+      if (!rec) return;
+      try {
+        const status = await rec.getStatusAsync();
+        if (cancelled) return;
+        if (status.canRecord === false || status.isRecording === false) {
+          markInterrupted();
+        }
+      } catch {
+        markInterrupted();
+      }
+    };
+
+    const id = setInterval(check, 5000);
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') check();
+    });
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+      sub.remove();
+    };
   }, [classStartedAt]);
 
   // On first mount, restore a class that was started before the coach
@@ -288,55 +470,429 @@ export default function StartClassScreen({ navigation }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [students]);
 
+  async function scheduleKillNotification() {
+    if (killNotificationIdRef.current) {
+      try { await Notifications.cancelScheduledNotificationAsync(killNotificationIdRef.current); } catch {}
+      killNotificationIdRef.current = null;
+    }
+    try {
+      const trigger = Notifications.SchedulableTriggerInputTypes
+        ? { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: 1, repeats: false }
+        : { seconds: 1 };
+      killNotificationIdRef.current = await Notifications.scheduleNotificationAsync({
+        content: {
+          title: '🔴 Recording interrupted',
+          body: '⚠️ You left the app. Open InBetween to continue recording.',
+          sound: 'default',
+          interruptionLevel: 'timeSensitive',
+          badge: 1,
+        },
+        trigger,
+      });
+    } catch (err) {
+      console.warn('[StartClass] kill notification schedule failed:', err);
+    }
+  }
+
+  function startHeartbeat() {
+    stopHeartbeat();
+    // 1s heartbeat + 3s schedule = the notification fires within ~1-3s of
+    // the app being killed. Each beat also bumps lastHeartbeatAt on the
+    // persisted class so the relaunch path knows when the kill happened.
+    if (liveActivityIdRef.current) {
+      laUpdateCoachRecording(liveActivityIdRef.current, { staleSeconds: 5 }).catch(() => {});
+    }
+    scheduleKillNotification();
+    patchActiveCoachClass({ lastHeartbeatAt: Date.now() });
+    heartbeatIntervalRef.current = setInterval(() => {
+      if (liveActivityIdRef.current) {
+        laUpdateCoachRecording(liveActivityIdRef.current, { staleSeconds: 2 }).catch(() => {});
+      }
+      scheduleKillNotification();
+      patchActiveCoachClass({ lastHeartbeatAt: Date.now() });
+    }, 250);
+  }
+
+  function stopHeartbeat() {
+    if (heartbeatIntervalRef.current) {
+      clearInterval(heartbeatIntervalRef.current);
+      heartbeatIntervalRef.current = null;
+    }
+    if (killNotificationIdRef.current) {
+      Notifications.cancelScheduledNotificationAsync(killNotificationIdRef.current).catch(() => {});
+      killNotificationIdRef.current = null;
+    }
+    Notifications.setBadgeCountAsync(0).catch(() => {});
+  }
+
+  // Auto-resume the recording after the coach killed the app and tapped
+  // "Continue" on the relaunch alert. Restores audio + LA + heartbeat with
+  // the original startedAt so the chrono picks up where it left off.
+  const resumeStartedRef = useRef(false);
+  useEffect(() => {
+    if (resumeStartedRef.current) return;
+    const active = getActiveCoachClass();
+    if (!active?.pendingResume) return;
+    resumeStartedRef.current = true;
+    (async () => {
+      try {
+        const { granted } = await Audio.requestPermissionsAsync();
+        if (!granted) {
+          patchActiveCoachClass({ pendingResume: false });
+          return;
+        }
+        await Audio.setAudioModeAsync({
+          allowsRecordingIOS: true,
+          playsInSilentModeIOS: true,
+          staysActiveInBackground: true,
+        });
+        const { recording } = await Audio.Recording.createAsync(getCoachRecordingOptions());
+        recordingRef.current = recording;
+
+        interruptedAtMsRef.current = null;
+        interruptAlertShownRef.current = false;
+        setClassStartedAt(active.startedAt);
+        setChronoMs(Date.now() - active.startedAt);
+
+        const id = await laStartCoachRecording({
+          kind: active.kind,
+          studentName: active.studentName ?? null,
+          startedAt: active.startedAt,
+        });
+        liveActivityIdRef.current = id;
+        patchActiveCoachClass({ liveActivityId: id, pendingResume: false });
+        if (id) startHeartbeat();
+      } catch (err) {
+        console.warn('[StartClass] Could not resume recording:', err);
+        patchActiveCoachClass({ pendingResume: false });
+      }
+    })();
+  }, [students]);
+
+  async function refreshInputList() {
+    try {
+      const list = await listAvailableInputs();
+      setAvailableInputs(list);
+      // If the previously selected input has been disconnected, drop the
+      // selection so the coach is forced to pick again.
+      setSelectedInputUid((prev) => (prev && list.some((i) => i.uid === prev) ? prev : null));
+    } catch (err) {
+      console.warn('[StartClass] listAvailableInputs failed:', err);
+    }
+  }
+
+  function isPhoneMic(input) {
+    return input?.type === 'builtin';
+  }
+
+  function isExternalMic(input) {
+    return input && input.type !== 'builtin';
+  }
+
+  async function startPreviewMeter() {
+    await stopPreviewMeter();
+    try {
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+        staysActiveInBackground: false,
+      });
+      const { recording } = await Audio.Recording.createAsync(
+        Audio.RecordingOptionsPresets.LOW_QUALITY,
+        (status) => {
+          if (status?.isRecording && typeof status.metering === 'number') {
+            const level = status.metering;
+            setInputLevel(level);
+
+            // Latched "sounds good": once the level stays above the threshold
+            // for ≥200ms, flip to true and stay there until the coach picks a
+            // different input (pickInput resets it).
+            const now = Date.now();
+            if (level > SOUND_GOOD_DBFS) {
+              if (aboveSinceRef.current == null) aboveSinceRef.current = now;
+              if (now - aboveSinceRef.current >= 200) {
+                setSustainedSoundsGood(true);
+              }
+            } else {
+              aboveSinceRef.current = null;
+            }
+
+            // Drive each bar's scaleY toward (level + per-bar wobble) with a
+            // short timing → smooth 60fps interpolation between updates.
+            const amp = Math.max(0, Math.min(1, (level + 60) / 60));
+            for (let i = 0; i < waveBars.length; i++) {
+              const phase = i * 0.85 + now / 180;
+              const wobble = 0.5 + 0.5 * Math.sin(phase);
+              const target = 0.1 + amp * wobble * 0.95;
+              Animated.timing(waveBars[i], {
+                toValue: target,
+                duration: 90,
+                useNativeDriver: true,
+              }).start();
+            }
+          }
+        },
+        50, // poll every 50ms — feeds the 60fps bar interpolation
+      );
+      previewRecordingRef.current = recording;
+    } catch (err) {
+      console.warn('[StartClass] preview meter start failed:', err);
+    }
+  }
+
+  async function stopPreviewMeter() {
+    const r = previewRecordingRef.current;
+    previewRecordingRef.current = null;
+    if (!r) return;
+    try { await r.stopAndUnloadAsync(); } catch {}
+    try {
+      const uri = r.getURI();
+      if (uri) await FileSystem.deleteAsync(uri, { idempotent: true });
+    } catch {}
+  }
+
+  async function pickInput(uid) {
+    setSelectedInputUid(uid);
+    setInputLevel(-160);
+    aboveSinceRef.current = null;
+    setSustainedSoundsGood(false);
+    waveBars.forEach((b) => b.setValue(0.1));
+    try {
+      await setPreferredInput(uid);
+    } catch (err) {
+      console.warn('[StartClass] setPreferredInput failed:', err);
+    }
+    // Restart preview to pick up the new source's signal
+    await startPreviewMeter();
+  }
+
   async function openAudioModal() {
     const { granted } = await Audio.requestPermissionsAsync();
     setMicPermGranted(granted);
+    setSelectedInputUid(null);
+    setInputLevel(-160);
     setAudioModalOpen(true);
+    if (granted) {
+      await refreshInputList();
+      // Auto-refresh while modal stays open so newly connected BT devices
+      // appear without user action.
+      if (inputRefreshIntervalRef.current) clearInterval(inputRefreshIntervalRef.current);
+      inputRefreshIntervalRef.current = setInterval(() => { refreshInputList().catch(() => {}); }, 1500);
+      // Searching pulse — each ring goes 0→1 (expand + fade), then snaps
+      // back to 0 invisibly to start over. Two rings staggered so one
+      // is always mid-flight while the next emerges.
+      const ringLoop = (val) => Animated.loop(
+        Animated.timing(val, { toValue: 1, duration: 1800, useNativeDriver: true }),
+      );
+      searchRing1.setValue(0);
+      searchRing2.setValue(0);
+      ringLoop(searchRing1).start();
+      setTimeout(() => { ringLoop(searchRing2).start(); }, 900);
+    }
   }
+
+  async function closeAudioModal() {
+    setAudioModalOpen(false);
+    if (inputRefreshIntervalRef.current) {
+      clearInterval(inputRefreshIntervalRef.current);
+      inputRefreshIntervalRef.current = null;
+    }
+    searchRing1.stopAnimation();
+    searchRing2.stopAnimation();
+    aboveSinceRef.current = null;
+    setSustainedSoundsGood(false);
+    await stopPreviewMeter();
+  }
+  async function bumpBtMicUsageAndMaybeRemind(durationMs) {
+    if (!usedBtMicRef.current || !durationMs || durationMs <= 0) return false;
+    try {
+      const [cumStr, thrStr] = await Promise.all([
+        AsyncStorage.getItem(BT_CUMUL_KEY),
+        AsyncStorage.getItem(BT_THRESHOLD_KEY),
+      ]);
+      const cum = (Number(cumStr) || 0) + durationMs;
+      const thr = Number(thrStr) || BT_MIC_REMIND_MS;
+      await AsyncStorage.setItem(BT_CUMUL_KEY, String(cum));
+      if (cum >= thr) {
+        await AsyncStorage.setItem(BT_THRESHOLD_KEY, String(thr + BT_MIC_REMIND_MS));
+        return true;
+      }
+    } catch (err) {
+      console.warn('[StartClass] BT mic usage tracking failed:', err);
+    }
+    return false;
+  }
+
+  async function rotateChunk() {
+    if (rotatingChunkRef.current) return;
+    if (!recordingRef.current) return;
+    rotatingChunkRef.current = true;
+    try {
+      try {
+        await recordingRef.current.stopAndUnloadAsync();
+        const uri = recordingRef.current.getURI();
+        if (uri) {
+          audioUrisRef.current = [...audioUrisRef.current, uri];
+          setAudioUris(audioUrisRef.current);
+        }
+      } catch (err) {
+        console.warn('[StartClass] chunk rotation: stop failed:', err);
+      }
+      recordingRef.current = null;
+      try {
+        const { recording } = await Audio.Recording.createAsync(getCoachRecordingOptions());
+        recordingRef.current = recording;
+      } catch (err) {
+        console.warn('[StartClass] chunk rotation: restart failed:', err);
+      }
+    } finally {
+      rotatingChunkRef.current = false;
+    }
+  }
+
+  function startChunkRotation() {
+    stopChunkRotation();
+    chunkRotationIntervalRef.current = setInterval(() => {
+      rotateChunk().catch(() => {});
+    }, CHUNK_MS);
+  }
+
+  function stopChunkRotation() {
+    if (chunkRotationIntervalRef.current) {
+      clearInterval(chunkRotationIntervalRef.current);
+      chunkRotationIntervalRef.current = null;
+    }
+  }
+
   async function startClassNow() {
     setAudioModalOpen(false);
-    setRecordingUri(null);
+    if (inputRefreshIntervalRef.current) {
+      clearInterval(inputRefreshIntervalRef.current);
+      inputRefreshIntervalRef.current = null;
+    }
+    searchRing1.stopAnimation();
+    searchRing2.stopAnimation();
+    aboveSinceRef.current = null;
+    setSustainedSoundsGood(false);
+    await stopPreviewMeter();
+    audioUrisRef.current = [];
+    setAudioUris([]);
+
+    // Reset interruption watchdog state for the new class.
+    interruptedAtMsRef.current = null;
+    interruptAlertShownRef.current = false;
 
     // Start recording if permission was granted
     if (micPermGranted) {
       try {
-        await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+        await Audio.setAudioModeAsync({
+          allowsRecordingIOS: true,
+          playsInSilentModeIOS: true,
+          staysActiveInBackground: true,
+        });
         const { recording } = await Audio.Recording.createAsync(getCoachRecordingOptions());
         recordingRef.current = recording;
+        startChunkRotation();
+        try {
+          const route = getCurrentInputRoute();
+          const name = (route?.name || '').toLowerCase();
+          usedBtMicRef.current = !!route?.isBluetooth || /\bdji\b/.test(name);
+        } catch { usedBtMicRef.current = false; }
       } catch (err) {
         console.warn('[StartClass] Could not start recording:', err);
       }
     }
 
     const now = Date.now();
+    const kind = view === 'private-briefing' ? 'private' : 'group';
     setClassStartedAt(now);
     setChronoMs(0);
     setActiveCoachClass({
-      kind: view === 'private-briefing' ? 'private' : 'group',
+      kind,
       startedAt: now,
       studentId: selectedStudent?.id ?? null,
       studentName: selectedStudent?.name ?? null,
     });
+
+    try {
+      const id = await laStartCoachRecording({
+        kind,
+        studentName: selectedStudent?.name ?? null,
+        startedAt: now,
+      });
+      liveActivityIdRef.current = id;
+      if (id) {
+        patchActiveCoachClass({ liveActivityId: id });
+        try {
+          const perm = await Notifications.getPermissionsAsync();
+          if (perm.status !== 'granted') {
+            await Notifications.requestPermissionsAsync({
+              ios: { allowAlert: true, allowSound: true, allowBadge: true },
+            });
+          }
+        } catch {}
+        startHeartbeat();
+      }
+    } catch (err) {
+      console.warn('[StartClass] Could not start live activity:', err);
+    }
   }
   async function stopClass() {
-    // Stop recording and keep the URI for transcription in finishDebrief
+    stopChunkRotation();
+    // Stop recording and keep all chunk URIs for transcription in finishDebrief.
     if (recordingRef.current) {
       try {
         await recordingRef.current.stopAndUnloadAsync();
         const uri = recordingRef.current.getURI();
-        setRecordingUri(uri);
+        if (uri) {
+          audioUrisRef.current = [...audioUrisRef.current, uri];
+          setAudioUris(audioUrisRef.current);
+        }
       } catch (err) {
         console.warn('[StartClass] Could not stop recording:', err);
       }
       recordingRef.current = null;
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: false, staysActiveInBackground: false });
     }
 
-    setDebriefDurationMs(chronoMs);
+    stopHeartbeat();
+    if (liveActivityIdRef.current) {
+      try { await laEndCoachRecording(liveActivityIdRef.current); } catch {}
+      liveActivityIdRef.current = null;
+    }
+
+    // If the recording was interrupted, the freeze duration is the truth.
+    const finalDurationMs = interruptedAtMsRef.current != null ? interruptedAtMsRef.current : chronoMs;
+    interruptedAtMsRef.current = null;
+    interruptAlertShownRef.current = false;
+
+    setDebriefDurationMs(finalDurationMs);
     setDebriefNote('');
     setValidatedFpIds([]);
     setClassStartedAt(null);
     setChronoMs(0);
+
+    // Cumulative BT mic airtime: every 4h trigger a reminder both in-app
+    // (banner inside the debrief sheet) and as a system notification.
+    const shouldRemind = await bumpBtMicUsageAndMaybeRemind(finalDurationMs);
+    setChargeReminderInDebrief(shouldRemind);
+    if (shouldRemind) {
+      try {
+        const trigger = Notifications.SchedulableTriggerInputTypes
+          ? { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: 1, repeats: false }
+          : { seconds: 1 };
+        Notifications.scheduleNotificationAsync({
+          content: {
+            title: '🔋 Time to charge your mic',
+            body: "You've used your Bluetooth mic for 4h. Charge it before your next class.",
+            sound: 'default',
+            interruptionLevel: 'active',
+          },
+          trigger,
+        }).catch(() => {});
+      } catch {}
+    }
+
     setDebriefOpen(true);
   }
   function toggleValidateFp(id) {
@@ -344,7 +900,8 @@ export default function StartClassScreen({ navigation }) {
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
     );
   }
-  function transcribeAndSubmit(uri, isPrivate, studentId, allStudents) {
+  function transcribeAndSubmit(uris, isPrivate, studentId, allStudents) {
+    const list = Array.isArray(uris) ? uris.filter(Boolean) : (uris ? [uris] : []);
     const run = async () => {
       try {
         // Capture user.id BEFORE transcription — a long upload/poll can outlive the session
@@ -352,8 +909,19 @@ export default function StartClassScreen({ navigation }) {
         if (!user) throw new Error('Not signed in — cannot save transcript.');
         const userId = user.id;
 
-        const transcript = await transcribeAudio(uri);
-        if (!transcript?.trim()) return;
+        // Transcribe each chunk in order. A failed chunk is skipped (we keep
+        // the rest of the class) instead of aborting the whole submission.
+        const parts = [];
+        for (let i = 0; i < list.length; i++) {
+          try {
+            const part = await transcribeAudio(list[i]);
+            if (part?.trim()) parts.push(part.trim());
+          } catch (err) {
+            console.warn(`[StartClass] chunk ${i + 1}/${list.length} transcription failed:`, err);
+          }
+        }
+        const transcript = parts.join('\n\n').trim();
+        if (!transcript) return;
         const { data: classInput, error: insertErr } = await supabase
           .from('class_inputs')
           .insert({
@@ -380,14 +948,17 @@ export default function StartClassScreen({ navigation }) {
   }
 
   function finishDebrief() {
-    const uri = recordingUri;
+    const uris = audioUris;
     const isPrivate = view === 'private-briefing';
     setDebriefOpen(false);
-    setRecordingUri(null);
+    setAudioUris([]);
+    audioUrisRef.current = [];
+    setChargeReminderInDebrief(false);
+    usedBtMicRef.current = false;
     clearActiveCoachClass();
 
-    if (uri) {
-      transcribeAndSubmit(uri, isPrivate, selectedStudent?.id, students);
+    if (uris.length > 0) {
+      transcribeAndSubmit(uris, isPrivate, selectedStudent?.id, students);
       setClassRecorded(true);
       setTimeout(() => {
         setClassRecorded(false);
@@ -564,11 +1135,17 @@ export default function StartClassScreen({ navigation }) {
 
   function renderBottomBar() {
     if (classStartedAt) {
+      const isBT = !!audioRoute?.isBluetooth;
+      const routeName = audioRoute?.name || 'iPhone mic';
       return (
         <View style={s.bottomBar}>
           <View style={s.runningRow}>
             <View style={s.runningDot} />
             <Text style={s.runningTime}>{formatChrono(chronoMs)}</Text>
+            <View style={s.audioBadge}>
+              <View style={[s.audioBadgeDot, { backgroundColor: isBT ? '#4AAF52' : '#D44545' }]} />
+              <Text style={s.audioBadgeText} numberOfLines={1}>{routeName}</Text>
+            </View>
             <TouchableOpacity
               style={s.stopBtn}
               activeOpacity={0.88}
@@ -702,10 +1279,23 @@ export default function StartClassScreen({ navigation }) {
               </>
             )}
 
-            {recordingUri && (
+            {audioUris.length > 0 && (
               <View style={db.recBanner}>
                 <Ionicons name="mic" size={14} color={C.orange} />
-                <Text style={db.recBannerText}>Recording ready — will be transcribed on Done</Text>
+                <Text style={db.recBannerText}>
+                  {audioUris.length === 1
+                    ? 'Recording ready, will be transcribed on Done'
+                    : `${audioUris.length} segments captured, will be transcribed on Done`}
+                </Text>
+              </View>
+            )}
+
+            {chargeReminderInDebrief && (
+              <View style={db.recBanner}>
+                <Ionicons name="battery-charging" size={14} color={C.orange} />
+                <Text style={db.recBannerText}>
+                  Don't forget to charge your mic for next session
+                </Text>
               </View>
             )}
 
@@ -725,49 +1315,202 @@ export default function StartClassScreen({ navigation }) {
   }
 
   function renderAudioModal() {
+    const soundsGood = inputLevel > SOUND_GOOD_DBFS;
+    const externals = availableInputs.filter(isExternalMic);
+    const phoneMic = availableInputs.find(isPhoneMic);
     return (
       <Modal
         visible={audioModalOpen}
         transparent
         animationType="slide"
-        onRequestClose={() => setAudioModalOpen(false)}
+        onRequestClose={closeAudioModal}
       >
-        <Pressable style={ad.overlay} onPress={() => setAudioModalOpen(false)}>
+        <Pressable style={ad.overlay} onPress={closeAudioModal}>
           <Pressable style={ad.sheet} onPress={(e) => e.stopPropagation()}>
             <View style={ad.handle} />
             <View style={ad.iconWrap}>
               <Ionicons name="mic" size={24} color={micPermGranted === false ? C.red : C.orange} />
             </View>
-            <Text style={ad.title}>Ready to record</Text>
+            <Text style={ad.title}>Choose your mic</Text>
             <Text style={ad.subtitle}>
               {micPermGranted === false
-                ? 'Microphone access denied — enable it in Settings to record classes.'
-                : 'The class will be recorded and transcribed automatically.'}
+                ? 'Microphone access denied. Enable it in Settings to record classes.'
+                : 'Pick the audio source for this class. Speak to check the level.'}
             </Text>
 
-            <TouchableOpacity
-              style={ad.routeBtn}
-              activeOpacity={0.75}
-              onPress={handleOpenRoutePicker}
-            >
-              <View style={ad.routeBtnIcon}>
-                <Ionicons name="bluetooth" size={18} color={C.orange} />
+            {micPermGranted !== false && externals.length === 0 && (
+              <View style={ad.searching}>
+                <View style={ad.searchingCoreWrap}>
+                  <Animated.View
+                    style={[
+                      ad.searchingRing,
+                      {
+                        transform: [{ scale: searchRing1.interpolate({ inputRange: [0, 1], outputRange: [1, 2.4] }) }],
+                        opacity: searchRing1.interpolate({ inputRange: [0, 0.05, 1], outputRange: [0, 0.55, 0] }),
+                      },
+                    ]}
+                  />
+                  <Animated.View
+                    style={[
+                      ad.searchingRing,
+                      {
+                        transform: [{ scale: searchRing2.interpolate({ inputRange: [0, 1], outputRange: [1, 2.4] }) }],
+                        opacity: searchRing2.interpolate({ inputRange: [0, 0.05, 1], outputRange: [0, 0.55, 0] }),
+                      },
+                    ]}
+                  />
+                  <View style={ad.searchingCore}>
+                    <Ionicons name="bluetooth" size={18} color={C.orange} />
+                  </View>
+                </View>
+                <Text style={ad.searchingTitle}>Connect a Bluetooth mic</Text>
+                <Text style={ad.searchingSub}>Searching for nearby devices…</Text>
               </View>
-              <View style={{ flex: 1, minWidth: 0 }}>
-                <Text style={ad.routeBtnLabel}>Audio output</Text>
-                <Text style={ad.routeBtnSub}>AirPods, Bluetooth speaker…</Text>
+            )}
+
+            {micPermGranted !== false && externals.length > 0 && (
+              <View style={ad.chips}>
+                {externals.map((input) => {
+                  const selected = input.uid === selectedInputUid;
+                  return (
+                    <View
+                      key={input.uid}
+                      style={[
+                        ad.chip,
+                        selected && ad.chipSelected,
+                        selected && sustainedSoundsGood && ad.chipSelectedGood,
+                      ]}
+                    >
+                      <TouchableOpacity
+                        style={ad.chipRow}
+                        activeOpacity={0.85}
+                        onPress={() => pickInput(input.uid)}
+                      >
+                        <View
+                          style={[
+                            ad.chipIcon,
+                            selected && ad.chipIconSelected,
+                            selected && sustainedSoundsGood && ad.chipIconSelectedGood,
+                          ]}
+                        >
+                          <Ionicons
+                            name={input.isBluetooth ? 'bluetooth' : input.type === 'wired' ? 'headset' : 'mic'}
+                            size={16}
+                            color={selected ? C.text : C.gray}
+                          />
+                        </View>
+                        <View style={{ flex: 1, minWidth: 0 }}>
+                          <Text style={ad.chipName}>{input.name}</Text>
+                          <Text style={ad.chipMeta}>
+                            {input.type === 'bluetooth' ? 'Bluetooth' : input.type === 'wired' ? 'Wired' : input.type}
+                          </Text>
+                        </View>
+                        {selected && (
+                          <View
+                            style={[
+                              ad.chipDot,
+                              { backgroundColor: sustainedSoundsGood ? C.green : C.gray },
+                            ]}
+                          />
+                        )}
+                      </TouchableOpacity>
+                      {selected && (
+                        <View style={ad.waveBlock}>
+                          <View style={ad.waveBars}>
+                            {waveBars.map((anim, i) => (
+                              <Animated.View
+                                key={i}
+                                style={[
+                                  ad.waveBar,
+                                  {
+                                    backgroundColor: sustainedSoundsGood ? C.green : C.orange,
+                                    transform: [{ scaleY: anim }],
+                                  },
+                                ]}
+                              />
+                            ))}
+                          </View>
+                          <Text style={[ad.waveLabel, sustainedSoundsGood && { color: C.green }]}>
+                            {sustainedSoundsGood ? '● Sounds good' : '○ Listening…'}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+                  );
+                })}
               </View>
-              <Ionicons name="chevron-forward" size={16} color={C.gray} />
-            </TouchableOpacity>
+            )}
 
             <View style={ad.actions}>
-              <TouchableOpacity style={ad.btnStart} activeOpacity={0.88} onPress={startClassNow}>
+              <TouchableOpacity
+                style={ad.btnStart}
+                activeOpacity={0.88}
+                onPress={() => handleStartTap(phoneMic)}
+              >
                 <Text style={ad.btnStartText}>Start class</Text>
               </TouchableOpacity>
             </View>
           </Pressable>
+          {renderNoMicPrompt()}
         </Pressable>
       </Modal>
+    );
+  }
+
+  function handleStartTap(phoneMic) {
+    if (selectedInputUid) {
+      startClassNow();
+      return;
+    }
+    phoneMicRef.current = phoneMic ?? null;
+    setNoMicPromptOpen(true);
+  }
+
+  async function confirmUsePhoneMic() {
+    setNoMicPromptOpen(false);
+    const phoneMic = phoneMicRef.current;
+    if (phoneMic) {
+      try { await setPreferredInput(phoneMic.uid); } catch {}
+      setSelectedInputUid(phoneMic.uid);
+    }
+    startClassNow();
+  }
+
+  function dismissNoMicPrompt() {
+    setNoMicPromptOpen(false);
+    refreshInputList().catch(() => {});
+  }
+
+  function renderNoMicPrompt() {
+    if (!noMicPromptOpen) return null;
+    return (
+      <Pressable style={ad.popupOverlay} onPress={dismissNoMicPrompt}>
+        <Pressable style={ad.popupCard} onPress={(e) => e.stopPropagation()}>
+          <View style={ad.popupIconWrap}>
+            <Ionicons name="mic-off" size={22} color={C.orange} />
+          </View>
+          <Text style={ad.popupTitle}>No microphone selected</Text>
+          <Text style={ad.popupBody}>
+            A Bluetooth microphone is recommended for the best transcription quality.
+          </Text>
+          <View style={ad.popupActions}>
+            <TouchableOpacity
+              style={ad.popupBtnGhost}
+              activeOpacity={0.8}
+              onPress={confirmUsePhoneMic}
+            >
+              <Text style={ad.popupBtnGhostText}>Use phone's mic</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={ad.popupBtnPrimary}
+              activeOpacity={0.85}
+              onPress={dismissNoMicPrompt}
+            >
+              <Text style={ad.popupBtnPrimaryText}>Connect</Text>
+            </TouchableOpacity>
+          </View>
+        </Pressable>
+      </Pressable>
     );
   }
 
@@ -2594,12 +3337,33 @@ const s = StyleSheet.create({
     backgroundColor: '#D44545',
   },
   runningTime: {
-    flex: 1,
     fontFamily: Fonts.jakartaExtraBold,
     fontSize: 20,
     color: '#fff',
     letterSpacing: 0.5,
     fontVariant: ['tabular-nums'],
+  },
+  audioBadge: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderRadius: 999,
+  },
+  audioBadgeDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+  },
+  audioBadgeText: {
+    flex: 1,
+    fontFamily: Fonts.jakartaSemiBold,
+    fontSize: 11.5,
+    color: 'rgba(255,255,255,0.78)',
+    letterSpacing: 0.2,
   },
   stopBtn: {
     flexDirection: 'row',
@@ -2693,6 +3457,202 @@ const ad = StyleSheet.create({
     fontSize: 11,
     color: '#999',
     marginTop: 1,
+  },
+  chips: {
+    gap: 8,
+    marginBottom: 4,
+  },
+  chip: {
+    borderRadius: 14,
+    backgroundColor: '#F5F5F5',
+    borderWidth: 1.5,
+    borderColor: 'transparent',
+    overflow: 'hidden',
+  },
+  chipSelected: {
+    backgroundColor: '#FFF8E6',
+    borderColor: '#E8A838',
+  },
+  chipSelectedGood: {
+    backgroundColor: '#EEF8EE',
+    borderColor: '#4AAF52',
+  },
+  chipIconSelectedGood: {
+    backgroundColor: '#4AAF52',
+  },
+  chipRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+  },
+  waveBlock: {
+    paddingHorizontal: 14,
+    paddingBottom: 14,
+    paddingTop: 4,
+    gap: 8,
+  },
+  waveBars: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    height: 36,
+  },
+  waveBar: {
+    flex: 1,
+    height: 32,
+    borderRadius: 999,
+    minWidth: 0,
+  },
+  waveLabel: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 11,
+    color: '#888',
+    letterSpacing: 0.4,
+  },
+  searching: {
+    alignItems: 'center',
+    paddingVertical: 24,
+    paddingHorizontal: 14,
+    backgroundColor: '#F5F5F5',
+    borderRadius: 14,
+  },
+  searchingCoreWrap: {
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 14,
+  },
+  searchingCore: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: 'rgba(232,168,56,0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  searchingRing: {
+    position: 'absolute',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: 2,
+    borderColor: '#E8A838',
+  },
+  searchingTitle: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 14,
+    color: '#0E0E0E',
+    letterSpacing: -0.2,
+  },
+  searchingSub: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 11.5,
+    color: '#888',
+    marginTop: 4,
+  },
+  popupOverlay: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 28,
+    zIndex: 999,
+  },
+  popupCard: {
+    width: '100%',
+    maxWidth: 360,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 22,
+    padding: 22,
+    alignItems: 'center',
+  },
+  popupIconWrap: {
+    width: 52,
+    height: 52,
+    borderRadius: 16,
+    backgroundColor: 'rgba(232,168,56,0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 14,
+  },
+  popupTitle: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 17,
+    color: '#0E0E0E',
+    textAlign: 'center',
+    letterSpacing: -0.2,
+  },
+  popupBody: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 13,
+    color: '#666',
+    textAlign: 'center',
+    marginTop: 6,
+    marginBottom: 18,
+    lineHeight: 18,
+  },
+  popupActions: {
+    flexDirection: 'row',
+    gap: 8,
+    width: '100%',
+  },
+  popupBtnGhost: {
+    flex: 1,
+    backgroundColor: '#F2F2F2',
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  popupBtnGhostText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 13,
+    color: '#666',
+  },
+  popupBtnPrimary: {
+    flex: 1,
+    backgroundColor: '#E8A838',
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  popupBtnPrimaryText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 13,
+    color: '#0E0E0E',
+    letterSpacing: 0.4,
+  },
+  chipIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  chipIconSelected: {
+    backgroundColor: '#E8A838',
+  },
+  chipName: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 14,
+    color: '#0E0E0E',
+    letterSpacing: -0.2,
+  },
+  chipMeta: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 11,
+    color: '#888',
+    marginTop: 2,
+  },
+  chipDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    marginLeft: 8,
   },
   actions: {
     marginTop: 20,

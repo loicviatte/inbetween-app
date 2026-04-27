@@ -26,6 +26,7 @@
     "@react-navigation/native-stack": "^7.14.6",
     "@supabase/supabase-js": "^2.99.3",
     "audio-route-picker": "file:modules/audio-route-picker",
+    "live-activities": "file:modules/live-activities",
     "expo": "~54.0.0",
     "expo-av": "~16.0.8",
     "expo-blur": "~15.0.8",

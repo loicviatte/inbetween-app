@@ -1,5 +1,15 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Image } from 'react-native';
+import { View, Image, Alert } from 'react-native';
+import {
+  getActiveCoachRecordings as laGetActiveCoachRecordings,
+  endAllCoachRecordings as laEndAllCoachRecordings,
+} from 'live-activities';
+import { hydrateActiveSession } from './src/storage/activeSession';
+import {
+  hydrateActiveCoachClass,
+  getActiveCoachClass,
+  patchActiveCoachClass,
+} from './src/storage/activeCoachClass';
 import { NavigationContainer, DefaultTheme, createNavigationContainerRef } from '@react-navigation/native';
 import * as Notifications from 'expo-notifications';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
@@ -223,6 +233,64 @@ export default function App() {
   const [session, setSession] = useState(undefined); // undefined = loading
   const [userRole, setUserRole] = useState(null);    // null = not yet loaded
   const [userEmail, setUserEmail] = useState(null);
+
+  // App-wide check on launch: if a coach Live Activity is still alive but
+  // we have no in-memory state, the app was killed mid-recording. End the
+  // orphan LA, cancel any pending kill notifications still queued, and let
+  // the coach know the audio was lost.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      // Restore the student focus session in-memory store from disk so the
+      // chrono picks up where it left off across app kills.
+      await hydrateActiveSession();
+      // Same for the coach's active class — we need it in memory to know
+      // who was being recorded, when it started, and the LA we left behind.
+      await hydrateActiveCoachClass();
+      if (cancelled) return;
+      try {
+        const ids = await laGetActiveCoachRecordings();
+        if (cancelled) return;
+        if (ids.length === 0) return;
+
+        // Cancel any pending kill notifications still queued and clear the
+        // app icon badge — the coach is back in the app.
+        try { await Notifications.cancelAllScheduledNotificationsAsync(); } catch {}
+        try { await Notifications.setBadgeCountAsync(0); } catch {}
+
+        const persisted = getActiveCoachClass();
+
+        // Always end the orphan LA — we'll start a fresh one on resume.
+        await laEndAllCoachRecordings();
+
+        if (persisted) {
+          Alert.alert(
+            'Recording interrupted',
+            'Keep the app open to continue recording the class. Tap Continue to pick up where you left off.',
+            [
+              {
+                text: 'Continue',
+                style: 'default',
+                onPress: () => {
+                  patchActiveCoachClass({ pendingResume: true });
+                  if (navigationRef.isReady()) {
+                    try { navigationRef.navigate('StartClass'); } catch {}
+                  }
+                },
+              },
+            ],
+          );
+        } else {
+          Alert.alert(
+            'Recording interrupted',
+            'Your previous recording was interrupted. The class was not saved. Please start a new one.',
+            [{ text: 'OK', style: 'default' }],
+          );
+        }
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+  }, []);
   const [fontsLoaded] = useFonts({
     PlusJakartaSans_300Light,
     PlusJakartaSans_400Regular,

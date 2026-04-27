@@ -2,7 +2,7 @@
   "expo": {
     "name": "InBetween",
     "slug": "inbetween-app",
-    "version": "1.4.2",
+    "version": "1.5.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -14,11 +14,13 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.loicviatte.inbetweenapp",
-      "buildNumber": "1",
+      "buildNumber": "2",
       "appleTeamId": "66DQR8326F",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
-        "NSMicrophoneUsageDescription": "InBetween uses the microphone to let you dictate your class notes."
+        "NSMicrophoneUsageDescription": "InBetween uses the microphone to let you dictate your class notes.",
+        "UIBackgroundModes": ["audio"],
+        "NSSupportsLiveActivities": true
       }
     },
     "android": {
