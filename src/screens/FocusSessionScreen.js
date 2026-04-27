@@ -1434,8 +1434,16 @@ I don't have that in your data, but you can send the question to your coach if y
                       <Text style={[styles.focusContext, { position: 'absolute', opacity: 0, zIndex: -1 }]} onLayout={e => { if (!contextHeight) setContextHeight(e.nativeEvent.layout.height + 4); }}>
                         {focusPoint.context}
                       </Text>
-                      <Animated.View style={{ height: contextAnim.interpolate({ inputRange: [0, 1], outputRange: [0, contextHeight || 200], extrapolate: 'clamp' }), overflow: 'hidden' }}>
-                        <Text style={styles.focusContext}>{focusPoint.context}</Text>
+                      <Animated.View style={{ height: contextAnim.interpolate({ inputRange: [0, 1], outputRange: [0, Math.min(contextHeight || 200, 200)], extrapolate: 'clamp' }), overflow: 'hidden' }}>
+                        <ScrollView
+                          style={{ flex: 1 }}
+                          contentContainerStyle={{ paddingBottom: 4 }}
+                          nestedScrollEnabled
+                          showsVerticalScrollIndicator
+                          scrollEnabled={contextExpanded}
+                        >
+                          <Text style={styles.focusContext}>{focusPoint.context}</Text>
+                        </ScrollView>
                       </Animated.View>
                     </>
                   ) : null}
