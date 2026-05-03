@@ -16,7 +16,11 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import Svg, { Circle } from 'react-native-svg';
-import { Audio } from 'expo-av';
+import {
+  AudioModule,
+  RecordingPresets,
+  setAudioModeAsync,
+} from 'expo-audio';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Notifications from 'expo-notifications';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -42,6 +46,9 @@ import {
   updateCoachRecording as laUpdateCoachRecording,
   endCoachRecording as laEndCoachRecording,
 } from 'live-activities';
+import { isNewRecordingPipelineEnabled } from '../../services/featureFlags';
+import { enqueueChunk } from '../../storage/recordingQueue';
+import { pokeUploadWorker } from '../../services/uploadWorker';
 
 const ASSEMBLYAI_API_KEY = process.env.EXPO_PUBLIC_ASSEMBLYAI_API_KEY;
 
@@ -89,12 +96,33 @@ Never autocorrect technical dance vocabulary into more common words.`;
 
 // ~14 MB/hour audio — mono 16kHz/32kbps keeps files small for upload
 function getCoachRecordingOptions() {
-  const base = Audio.RecordingOptionsPresets.HIGH_QUALITY;
+  const base = RecordingPresets.HIGH_QUALITY;
   return {
     ...base,
+    numberOfChannels: 1,
+    bitRate: 32000,
+    sampleRate: 16000,
     android: { ...base.android, numberOfChannels: 1, bitRate: 32000, sampleRate: 16000 },
     ios: { ...base.ios, numberOfChannels: 1, bitRate: 32000, sampleRate: 16000 },
   };
+}
+
+async function createAndStartRecording(options) {
+  const recorder = new AudioModule.AudioRecorder(options);
+  await recorder.prepareToRecordAsync(options);
+  recorder.record();
+  return recorder;
+}
+
+async function stopAndUnloadRecording(recorder) {
+  if (!recorder) return null;
+  let uri = null;
+  try {
+    await recorder.stop();
+    uri = recorder.uri;
+  } catch {}
+  try { recorder.release?.(); } catch {}
+  return uri;
 }
 
 function fmtTs(sec) {
@@ -104,12 +132,43 @@ function fmtTs(sec) {
   return `${String(m).padStart(2, '0')}:${String(r).padStart(2, '0')}`;
 }
 
-// Format utterances as `[MM:SS - MM:SS] Speaker X: text` blocks
-function formatUtterances(utterances) {
+// Format utterances as `[MM:SS - MM:SS] <Label>: text` blocks.
+// `offsetMs` lets the caller shift all timestamps when stitching multiple
+// chunks of the same recording so the final transcript reads as a single
+// continuous timeline (each chunk natively starts at 00:00).
+// `speakerLabels` maps an AssemblyAI speaker id (e.g. "A") to a human label
+// like "Coach" / "Élève". Falls back to "Speaker A" if not provided.
+function formatUtterances(utterances, offsetMs = 0, speakerLabels = null) {
   if (!Array.isArray(utterances) || utterances.length === 0) return '';
   return utterances
-    .map((u) => `[${fmtTs(u.start / 1000)} - ${fmtTs(u.end / 1000)}] Speaker ${u.speaker}: ${String(u.text || '').trim()}`)
+    .map((u) => {
+      const startSec = (u.start + offsetMs) / 1000;
+      const endSec = (u.end + offsetMs) / 1000;
+      const label = (speakerLabels && speakerLabels[u.speaker]) || `Speaker ${u.speaker}`;
+      return `[${fmtTs(startSec)} - ${fmtTs(endSec)}] ${label}: ${String(u.text || '').trim()}`;
+    })
     .join('\n\n');
+}
+
+// Identify the "Coach" speaker per chunk by total speaking time. The speaker
+// who spoke the most is labeled "Coach", everyone else "Élève". For 1-on-1
+// classes this is ~99% reliable (coach speaks ~80%); for groups ~95% (coach
+// still dominant at ~60%). Returns a {speakerId: label} map.
+function identifyCoachSpeaker(utterances) {
+  if (!Array.isArray(utterances) || utterances.length === 0) return {};
+  const totals = {};
+  for (const u of utterances) {
+    const dur = Math.max(0, (u.end || 0) - (u.start || 0));
+    totals[u.speaker] = (totals[u.speaker] || 0) + dur;
+  }
+  const sorted = Object.entries(totals).sort((a, b) => b[1] - a[1]);
+  if (sorted.length === 0) return {};
+  const coachId = sorted[0][0];
+  const labels = {};
+  for (const id of Object.keys(totals)) {
+    labels[id] = id === coachId ? 'Coach' : 'Élève';
+  }
+  return labels;
 }
 
 async function transcribeAudio(uri) {
@@ -158,8 +217,16 @@ async function transcribeAudio(uri) {
     if (!pollRes.ok) throw new Error(`AssemblyAI poll ${pollRes.status}`);
     const job = await pollRes.json();
     if (job.status === 'completed') {
-      const formatted = formatUtterances(job.utterances);
-      return formatted || job.text || '';
+      // Return raw utterances + duration so the caller can stitch chunks
+      // into a single continuous timeline with cumulative timestamp offsets
+      // and per-chunk speaker re-labeling.
+      // audio_duration is in seconds; convert to ms for consistency.
+      const durationMs = Math.round((Number(job.audio_duration) || 0) * 1000);
+      return {
+        utterances: Array.isArray(job.utterances) ? job.utterances : [],
+        text: typeof job.text === 'string' ? job.text : '',
+        durationMs,
+      };
     }
     if (job.status === 'error') throw new Error(`AssemblyAI: ${job.error || 'unknown error'}`);
   }
@@ -248,6 +315,13 @@ export default function StartClassScreen({ navigation }) {
   const [audioModalOpen, setAudioModalOpen] = useState(false);
   const [classStartedAt, setClassStartedAt] = useState(null);
   const [chronoMs, setChronoMs] = useState(0);
+  // Mirror chronoMs in a ref. stopClass is called from places where the
+  // closure captures an old render (e.g. an Alert.alert button shown when
+  // the mic disconnected several minutes earlier — when the coach finally
+  // taps "Stop class", the captured stopClass references chronoMs from
+  // back then, not now). Reading from this ref inside stopClass gives us
+  // the truthful elapsed time at stop moment.
+  const chronoMsRef = useRef(0);
   const [audioRoute, setAudioRoute] = useState(null);
 
   // Mic picker (Prop 1) + live audio meter (Prop 3 badge)
@@ -274,14 +348,28 @@ export default function StartClassScreen({ navigation }) {
 
   // Microphone recording
   const recordingRef = useRef(null);
-  // Chunked audio: every CHUNK_MS we stop the current Audio.Recording, push
+  // Chunked audio: every CHUNK_MS we stop the current AudioRecorder, push
   // its URI to the chunks list and start a fresh one. Each chunk is a
   // self-contained M4A so a corrupted segment never kills the whole class.
   const [audioUris, setAudioUris] = useState([]);
   const audioUrisRef = useRef([]);
   const chunkRotationIntervalRef = useRef(null);
   const rotatingChunkRef = useRef(false);
+  // Guard against double-tap on the Stop button. Without this, two quick
+  // taps both enter stopClass, race on recordingRef.current, push the same
+  // chunk URI twice into audioUrisRef and double-trigger finalize-class
+  // (idempotent server-side but messy locally).
+  const stoppingRef = useRef(false);
   const CHUNK_MS = 3 * 60 * 1000; // 3 minutes
+  // New server-side pipeline (feature-flagged per user). When enabled, each
+  // chunk is uploaded to Supabase Storage during the class and a
+  // `class_recordings` row tracks the session. At Done, we call the
+  // `finalize-class` edge function and let the server orchestrate
+  // transcription + class_inputs creation. Falls back to the legacy
+  // client-side AssemblyAI flow when the flag is off.
+  const newPipelineRef = useRef(false);     // captured at startClassNow
+  const recordingIdRef = useRef(null);      // class_recordings.id when on new pipeline
+  const userIdRef = useRef(null);           // captured at startClassNow
   const [micPermGranted, setMicPermGranted] = useState(null);
   // Watchdog: when iOS suspends the app the recording stops even though
   // wall-clock time keeps advancing. We freeze the chrono at the moment of
@@ -350,6 +438,11 @@ export default function StartClassScreen({ navigation }) {
   const heartbeatIntervalRef = useRef(null);
   const killNotificationIdRef = useRef(null);
   const [classRecorded, setClassRecorded] = useState(false);
+  // Tracks the post-debrief popToTop timeout so we can cancel it if the
+  // screen unmounts (or the coach navigates manually) during the 2.5s
+  // success banner. Without this, popToTop fires on a stale navigation
+  // ref and triggers a React warning / potential crash.
+  const popToTopTimerRef = useRef(null);
 
   // End-of-class debrief modal
   const [debriefOpen, setDebriefOpen] = useState(false);
@@ -360,14 +453,26 @@ export default function StartClassScreen({ navigation }) {
   useEffect(() => {
     if (!classStartedAt) return;
     const id = setInterval(() => {
-      if (interruptedAtMsRef.current != null) {
-        setChronoMs(interruptedAtMsRef.current);
-      } else {
-        setChronoMs(Date.now() - classStartedAt);
-      }
+      const next = interruptedAtMsRef.current != null
+        ? interruptedAtMsRef.current
+        : (Date.now() - classStartedAt);
+      setChronoMs(next);
+      chronoMsRef.current = next;
     }, 500);
     return () => clearInterval(id);
   }, [classStartedAt]);
+
+  // Cleanup the post-debrief popToTop timer if the screen unmounts before
+  // the 2.5s success banner finishes (coach navigates away manually,
+  // app backgrounded, etc.).
+  useEffect(() => {
+    return () => {
+      if (popToTopTimerRef.current) {
+        clearTimeout(popToTopTimerRef.current);
+        popToTopTimerRef.current = null;
+      }
+    };
+  }, []);
 
   // Poll the current audio input route while a class is running so the
   // coach sees which mic actually captures the audio (Bluetooth headset,
@@ -415,7 +520,7 @@ export default function StartClassScreen({ navigation }) {
       const rec = recordingRef.current;
       if (!rec) return;
       try {
-        const status = await rec.getStatusAsync();
+        const status = rec.getStatus();
         if (cancelled) return;
         if (status.canRecord === false || status.isRecording === false) {
           markInterrupted();
@@ -447,7 +552,9 @@ export default function StartClassScreen({ navigation }) {
     if (!active) return;
     restoredRef.current = true;
     setClassStartedAt(active.startedAt);
-    setChronoMs(Date.now() - active.startedAt);
+    const elapsed = Date.now() - active.startedAt;
+    setChronoMs(elapsed);
+    chronoMsRef.current = elapsed;
     if (active.kind === 'private' && active.studentId) {
       const match = students.find((s) => s.id === active.studentId);
       if (match) {
@@ -496,21 +603,24 @@ export default function StartClassScreen({ navigation }) {
 
   function startHeartbeat() {
     stopHeartbeat();
-    // 1s heartbeat + 3s schedule = the notification fires within ~1-3s of
-    // the app being killed. Each beat also bumps lastHeartbeatAt on the
-    // persisted class so the relaunch path knows when the kill happened.
+    // 4s heartbeat + 7s LA staleSeconds + ~10s rescheduled kill notification.
+    // Each beat re-schedules the kill notif slightly into the future so the
+    // OS fires it within ~4-7 s of the app actually dying. The previous
+    // 250ms cadence was 16x more aggressive than needed and burned CPU /
+    // battery on long classes (50 000+ native calls per hour) without a
+    // matching benefit — iOS doesn't deliver "kill detection" any faster.
     if (liveActivityIdRef.current) {
-      laUpdateCoachRecording(liveActivityIdRef.current, { staleSeconds: 5 }).catch(() => {});
+      laUpdateCoachRecording(liveActivityIdRef.current, { staleSeconds: 10 }).catch(() => {});
     }
     scheduleKillNotification();
     patchActiveCoachClass({ lastHeartbeatAt: Date.now() });
     heartbeatIntervalRef.current = setInterval(() => {
       if (liveActivityIdRef.current) {
-        laUpdateCoachRecording(liveActivityIdRef.current, { staleSeconds: 2 }).catch(() => {});
+        laUpdateCoachRecording(liveActivityIdRef.current, { staleSeconds: 7 }).catch(() => {});
       }
       scheduleKillNotification();
       patchActiveCoachClass({ lastHeartbeatAt: Date.now() });
-    }, 250);
+    }, 4000);
   }
 
   function stopHeartbeat() {
@@ -536,23 +646,25 @@ export default function StartClassScreen({ navigation }) {
     resumeStartedRef.current = true;
     (async () => {
       try {
-        const { granted } = await Audio.requestPermissionsAsync();
+        const { granted } = await AudioModule.requestRecordingPermissionsAsync();
         if (!granted) {
           patchActiveCoachClass({ pendingResume: false });
           return;
         }
-        await Audio.setAudioModeAsync({
-          allowsRecordingIOS: true,
-          playsInSilentModeIOS: true,
-          staysActiveInBackground: true,
+        await setAudioModeAsync({
+          allowsRecording: true,
+          playsInSilentMode: true,
+          allowsBackgroundRecording: true,
+          shouldPlayInBackground: true,
         });
-        const { recording } = await Audio.Recording.createAsync(getCoachRecordingOptions());
-        recordingRef.current = recording;
+        recordingRef.current = await createAndStartRecording(getCoachRecordingOptions());
 
         interruptedAtMsRef.current = null;
         interruptAlertShownRef.current = false;
         setClassStartedAt(active.startedAt);
-        setChronoMs(Date.now() - active.startedAt);
+        const elapsed = Date.now() - active.startedAt;
+        setChronoMs(elapsed);
+        chronoMsRef.current = elapsed;
 
         const id = await laStartCoachRecording({
           kind: active.kind,
@@ -589,66 +701,73 @@ export default function StartClassScreen({ navigation }) {
     return input && input.type !== 'builtin';
   }
 
+  const previewMeterIntervalRef = useRef(null);
+
   async function startPreviewMeter() {
     await stopPreviewMeter();
     try {
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: false,
+      await setAudioModeAsync({
+        allowsRecording: true,
+        playsInSilentMode: true,
       });
-      const { recording } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.LOW_QUALITY,
-        (status) => {
-          if (status?.isRecording && typeof status.metering === 'number') {
-            const level = status.metering;
-            setInputLevel(level);
+      const previewOptions = { ...RecordingPresets.LOW_QUALITY, isMeteringEnabled: true };
+      const recorder = await createAndStartRecording(previewOptions);
+      previewRecordingRef.current = recorder;
 
-            // Latched "sounds good": once the level stays above the threshold
-            // for ≥200ms, flip to true and stay there until the coach picks a
-            // different input (pickInput resets it).
-            const now = Date.now();
-            if (level > SOUND_GOOD_DBFS) {
-              if (aboveSinceRef.current == null) aboveSinceRef.current = now;
-              if (now - aboveSinceRef.current >= 200) {
-                setSustainedSoundsGood(true);
-              }
-            } else {
-              aboveSinceRef.current = null;
-            }
+      previewMeterIntervalRef.current = setInterval(() => {
+        const r = previewRecordingRef.current;
+        if (!r) return;
+        let status;
+        try { status = r.getStatus(); } catch { return; }
+        if (!status?.isRecording || typeof status.metering !== 'number') return;
 
-            // Drive each bar's scaleY toward (level + per-bar wobble) with a
-            // short timing → smooth 60fps interpolation between updates.
-            const amp = Math.max(0, Math.min(1, (level + 60) / 60));
-            for (let i = 0; i < waveBars.length; i++) {
-              const phase = i * 0.85 + now / 180;
-              const wobble = 0.5 + 0.5 * Math.sin(phase);
-              const target = 0.1 + amp * wobble * 0.95;
-              Animated.timing(waveBars[i], {
-                toValue: target,
-                duration: 90,
-                useNativeDriver: true,
-              }).start();
-            }
+        const level = status.metering;
+        setInputLevel(level);
+
+        // Latched "sounds good": once the level stays above the threshold
+        // for ≥200ms, flip to true and stay there until the coach picks a
+        // different input (pickInput resets it).
+        const now = Date.now();
+        if (level > SOUND_GOOD_DBFS) {
+          if (aboveSinceRef.current == null) aboveSinceRef.current = now;
+          if (now - aboveSinceRef.current >= 200) {
+            setSustainedSoundsGood(true);
           }
-        },
-        50, // poll every 50ms — feeds the 60fps bar interpolation
-      );
-      previewRecordingRef.current = recording;
+        } else {
+          aboveSinceRef.current = null;
+        }
+
+        // Drive each bar's scaleY toward (level + per-bar wobble) with a
+        // short timing → smooth 60fps interpolation between updates.
+        const amp = Math.max(0, Math.min(1, (level + 60) / 60));
+        for (let i = 0; i < waveBars.length; i++) {
+          const phase = i * 0.85 + now / 180;
+          const wobble = 0.5 + 0.5 * Math.sin(phase);
+          const target = 0.1 + amp * wobble * 0.95;
+          Animated.timing(waveBars[i], {
+            toValue: target,
+            duration: 90,
+            useNativeDriver: true,
+          }).start();
+        }
+      }, 50);
     } catch (err) {
       console.warn('[StartClass] preview meter start failed:', err);
     }
   }
 
   async function stopPreviewMeter() {
+    if (previewMeterIntervalRef.current) {
+      clearInterval(previewMeterIntervalRef.current);
+      previewMeterIntervalRef.current = null;
+    }
     const r = previewRecordingRef.current;
     previewRecordingRef.current = null;
     if (!r) return;
-    try { await r.stopAndUnloadAsync(); } catch {}
-    try {
-      const uri = r.getURI();
-      if (uri) await FileSystem.deleteAsync(uri, { idempotent: true });
-    } catch {}
+    const uri = await stopAndUnloadRecording(r);
+    if (uri) {
+      try { await FileSystem.deleteAsync(uri, { idempotent: true }); } catch {}
+    }
   }
 
   async function pickInput(uid) {
@@ -667,7 +786,7 @@ export default function StartClassScreen({ navigation }) {
   }
 
   async function openAudioModal() {
-    const { granted } = await Audio.requestPermissionsAsync();
+    const { granted } = await AudioModule.requestRecordingPermissionsAsync();
     setMicPermGranted(granted);
     setSelectedInputUid(null);
     setInputLevel(-160);
@@ -728,20 +847,48 @@ export default function StartClassScreen({ navigation }) {
     if (!recordingRef.current) return;
     rotatingChunkRef.current = true;
     try {
+      let chunkUri = null;
       try {
-        await recordingRef.current.stopAndUnloadAsync();
-        const uri = recordingRef.current.getURI();
-        if (uri) {
-          audioUrisRef.current = [...audioUrisRef.current, uri];
+        chunkUri = await stopAndUnloadRecording(recordingRef.current);
+        if (chunkUri) {
+          audioUrisRef.current = [...audioUrisRef.current, chunkUri];
           setAudioUris(audioUrisRef.current);
         }
       } catch (err) {
         console.warn('[StartClass] chunk rotation: stop failed:', err);
       }
       recordingRef.current = null;
+      // New server-side pipeline: hand the just-rotated chunk to the
+      // upload queue + insert a class_recording_chunks row so finalize
+      // can later see it. Best-effort — failures are logged, the worker
+      // retries with backoff, and the legacy local list (audioUrisRef)
+      // remains as a forensic backup.
+      if (chunkUri && newPipelineRef.current && recordingIdRef.current && userIdRef.current) {
+        const idx = audioUrisRef.current.length - 1; // we just pushed
+        const recordingId = recordingIdRef.current;
+        const userId = userIdRef.current;
+        const storagePath = `${userId}/${recordingId}/${idx}.m4a`;
+        try {
+          await supabase.from('class_recording_chunks').upsert({
+            recording_id: recordingId,
+            idx,
+            status: 'pending',
+          });
+          await enqueueChunk({ recordingId, idx, fileUri: chunkUri, storagePath });
+          pokeUploadWorker();
+          // Heartbeat the recording so the cron sweep doesn't trip on a
+          // long class with backgrounded JS.
+          supabase
+            .from('class_recordings')
+            .update({ last_heartbeat_at: new Date().toISOString() })
+            .eq('id', recordingId)
+            .then(() => {}, () => {});
+        } catch (err) {
+          console.warn('[StartClass] new pipeline enqueue failed:', err);
+        }
+      }
       try {
-        const { recording } = await Audio.Recording.createAsync(getCoachRecordingOptions());
-        recordingRef.current = recording;
+        recordingRef.current = await createAndStartRecording(getCoachRecordingOptions());
       } catch (err) {
         console.warn('[StartClass] chunk rotation: restart failed:', err);
       }
@@ -782,16 +929,60 @@ export default function StartClassScreen({ navigation }) {
     interruptedAtMsRef.current = null;
     interruptAlertShownRef.current = false;
 
+    // Decide upfront which pipeline this session will use, then capture
+    // the recording id + user id into refs so chunk rotation (which runs
+    // outside React state) has stable values to read.
+    newPipelineRef.current = false;
+    recordingIdRef.current = null;
+    userIdRef.current = null;
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user && isNewRecordingPipelineEnabled(user)) {
+        const isPrivate = view === 'private-briefing';
+        const { data: rec, error: insertErr } = await supabase
+          .from('class_recordings')
+          .insert({
+            user_id: user.id,
+            lesson_type: isPrivate ? 'private' : 'group',
+            student_id: isPrivate ? (selectedStudent?.id ?? null) : null,
+            status: 'recording',
+            audio_folder: null, // filled in below once we have the row id
+          })
+          .select('id')
+          .single();
+        if (insertErr) throw insertErr;
+        const recordingId = rec.id;
+        await supabase
+          .from('class_recordings')
+          .update({ audio_folder: `${user.id}/${recordingId}/` })
+          .eq('id', recordingId);
+        if (!isPrivate && Array.isArray(students) && students.length > 0) {
+          await supabase
+            .from('class_recording_students')
+            .insert(students.map((s) => ({ recording_id: recordingId, student_id: s.id })));
+        }
+        newPipelineRef.current = true;
+        recordingIdRef.current = recordingId;
+        userIdRef.current = user.id;
+      }
+    } catch (err) {
+      console.warn('[StartClass] new pipeline init failed, falling back to legacy:', err);
+      // Reset so we definitely don't try to use partial state.
+      newPipelineRef.current = false;
+      recordingIdRef.current = null;
+      userIdRef.current = null;
+    }
+
     // Start recording if permission was granted
     if (micPermGranted) {
       try {
-        await Audio.setAudioModeAsync({
-          allowsRecordingIOS: true,
-          playsInSilentModeIOS: true,
-          staysActiveInBackground: true,
+        await setAudioModeAsync({
+          allowsRecording: true,
+          playsInSilentMode: true,
+          allowsBackgroundRecording: true,
+          shouldPlayInBackground: true,
         });
-        const { recording } = await Audio.Recording.createAsync(getCoachRecordingOptions());
-        recordingRef.current = recording;
+        recordingRef.current = await createAndStartRecording(getCoachRecordingOptions());
         startChunkRotation();
         try {
           const route = getCurrentInputRoute();
@@ -800,6 +991,23 @@ export default function StartClassScreen({ navigation }) {
         } catch { usedBtMicRef.current = false; }
       } catch (err) {
         console.warn('[StartClass] Could not start recording:', err);
+        // We just inserted a class_recordings row in the new-pipeline init
+        // above, but we can't actually record any chunks. Mark it
+        // discarded so it doesn't sit forever in the dashboard's "in
+        // progress" list and so the cron sweep stops looking at it.
+        if (newPipelineRef.current && recordingIdRef.current) {
+          supabase
+            .from('class_recordings')
+            .update({
+              status: 'discarded',
+              error: `recorder start failed: ${err?.message ?? String(err)}`,
+            })
+            .eq('id', recordingIdRef.current)
+            .then(() => {}, () => {});
+          newPipelineRef.current = false;
+          recordingIdRef.current = null;
+          userIdRef.current = null;
+        }
       }
     }
 
@@ -807,6 +1015,7 @@ export default function StartClassScreen({ navigation }) {
     const kind = view === 'private-briefing' ? 'private' : 'group';
     setClassStartedAt(now);
     setChronoMs(0);
+    chronoMsRef.current = 0;
     setActiveCoachClass({
       kind,
       startedAt: now,
@@ -838,21 +1047,54 @@ export default function StartClassScreen({ navigation }) {
     }
   }
   async function stopClass() {
+    // Idempotent: if a stop is already in progress, ignore re-entries.
+    // The Stop button's onPress fires on every tap and there's nothing
+    // disabling it during the async work below.
+    if (stoppingRef.current) return;
+    stoppingRef.current = true;
     stopChunkRotation();
+    // If a chunk rotation is mid-flight (it's currently nulling
+    // recordingRef.current and starting a new recorder), we MUST wait for
+    // it to finish — otherwise we'd leak a still-recording AudioRecorder
+    // and our chunk index would be off by one. The rotation completes
+    // quickly (stop + create_async ≈ 100-300 ms), so a short busy-wait is
+    // the simplest correct synchronization.
+    const rotationDeadline = Date.now() + 5000;
+    while (rotatingChunkRef.current && Date.now() < rotationDeadline) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
     // Stop recording and keep all chunk URIs for transcription in finishDebrief.
     if (recordingRef.current) {
       try {
-        await recordingRef.current.stopAndUnloadAsync();
-        const uri = recordingRef.current.getURI();
+        const uri = await stopAndUnloadRecording(recordingRef.current);
         if (uri) {
           audioUrisRef.current = [...audioUrisRef.current, uri];
           setAudioUris(audioUrisRef.current);
+          // New pipeline: enqueue the final chunk too. Same as rotateChunk
+          // but for the tail of the recording where there's no rotation.
+          if (newPipelineRef.current && recordingIdRef.current && userIdRef.current) {
+            const idx = audioUrisRef.current.length - 1;
+            const recordingId = recordingIdRef.current;
+            const userId = userIdRef.current;
+            const storagePath = `${userId}/${recordingId}/${idx}.m4a`;
+            try {
+              await supabase.from('class_recording_chunks').upsert({
+                recording_id: recordingId,
+                idx,
+                status: 'pending',
+              });
+              await enqueueChunk({ recordingId, idx, fileUri: uri, storagePath });
+              pokeUploadWorker();
+            } catch (err) {
+              console.warn('[StartClass] new pipeline final chunk enqueue failed:', err);
+            }
+          }
         }
       } catch (err) {
         console.warn('[StartClass] Could not stop recording:', err);
       }
       recordingRef.current = null;
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: false, staysActiveInBackground: false });
+      await setAudioModeAsync({ allowsRecording: false, allowsBackgroundRecording: false, shouldPlayInBackground: false });
     }
 
     stopHeartbeat();
@@ -862,7 +1104,10 @@ export default function StartClassScreen({ navigation }) {
     }
 
     // If the recording was interrupted, the freeze duration is the truth.
-    const finalDurationMs = interruptedAtMsRef.current != null ? interruptedAtMsRef.current : chronoMs;
+    // Otherwise read from the ref (NOT from the captured chronoMs state)
+    // so we get the latest tick — important when stopClass is called via
+    // a stale Alert.alert closure created minutes earlier.
+    const finalDurationMs = interruptedAtMsRef.current != null ? interruptedAtMsRef.current : chronoMsRef.current;
     interruptedAtMsRef.current = null;
     interruptAlertShownRef.current = false;
 
@@ -871,6 +1116,7 @@ export default function StartClassScreen({ navigation }) {
     setValidatedFpIds([]);
     setClassStartedAt(null);
     setChronoMs(0);
+    chronoMsRef.current = 0;
 
     // Cumulative BT mic airtime: every 4h trigger a reminder both in-app
     // (banner inside the debrief sheet) and as a system notification.
@@ -894,6 +1140,9 @@ export default function StartClassScreen({ navigation }) {
     }
 
     setDebriefOpen(true);
+    // Stop is now committed (debrief modal up). Allow future stop attempts
+    // (e.g. starting a new class then stopping that one).
+    stoppingRef.current = false;
   }
   function toggleValidateFp(id) {
     setValidatedFpIds((prev) =>
@@ -911,13 +1160,31 @@ export default function StartClassScreen({ navigation }) {
 
         // Transcribe each chunk in order. A failed chunk is skipped (we keep
         // the rest of the class) instead of aborting the whole submission.
+        // We accumulate `offsetMs` so the final transcript reads as a single
+        // continuous timeline (each chunk natively starts at 00:00). Per-chunk
+        // speaker re-labeling ("Coach"/"Élève" via dominant talker heuristic)
+        // gives stable role labels even though AssemblyAI numbers speakers
+        // independently in each chunk.
         const parts = [];
+        let offsetMs = 0;
         for (let i = 0; i < list.length; i++) {
           try {
-            const part = await transcribeAudio(list[i]);
-            if (part?.trim()) parts.push(part.trim());
+            const result = await transcribeAudio(list[i]);
+            const utterances = result?.utterances || [];
+            const speakerLabels = identifyCoachSpeaker(utterances);
+            const formatted = formatUtterances(utterances, offsetMs, speakerLabels);
+            const text = formatted || result?.text || '';
+            if (text.trim()) parts.push(text.trim());
+            // Advance the cumulative offset by the actual chunk duration.
+            // Fallback to CHUNK_MS if AssemblyAI didn't report a duration —
+            // keeps subsequent chunks roughly aligned even on degenerate input.
+            offsetMs += result?.durationMs > 0 ? result.durationMs : CHUNK_MS;
           } catch (err) {
             console.warn(`[StartClass] chunk ${i + 1}/${list.length} transcription failed:`, err);
+            // Even on failure, advance the offset by the expected chunk size
+            // so the timeline of subsequent chunks doesn't collapse onto the
+            // failed chunk's slot.
+            offsetMs += CHUNK_MS;
           }
         }
         const transcript = parts.join('\n\n').trim();
@@ -950,6 +1217,9 @@ export default function StartClassScreen({ navigation }) {
   function finishDebrief() {
     const uris = audioUris;
     const isPrivate = view === 'private-briefing';
+    const isNewPipeline = newPipelineRef.current;
+    const recordingId = recordingIdRef.current;
+
     setDebriefOpen(false);
     setAudioUris([]);
     audioUrisRef.current = [];
@@ -957,15 +1227,71 @@ export default function StartClassScreen({ navigation }) {
     usedBtMicRef.current = false;
     clearActiveCoachClass();
 
+    // Reset captured pipeline state — the next class can use a different
+    // pipeline if the user toggles the flag.
+    newPipelineRef.current = false;
+    recordingIdRef.current = null;
+    userIdRef.current = null;
+
     if (uris.length > 0) {
-      transcribeAndSubmit(uris, isPrivate, selectedStudent?.id, students);
+      if (isNewPipeline && recordingId) {
+        // New pipeline: chunks are already uploading / uploaded to Storage.
+        // Mark the recording 'ready' with the expected chunk count and call
+        // finalize-class. The edge function takes over from here. The coach
+        // is free to navigate away or start another class immediately.
+        finalizeNewPipelineRecording(recordingId, uris.length).catch((err) => {
+          console.warn('[StartClass] finalize-class call failed (will be picked up by cron):', err);
+        });
+      } else {
+        // Legacy path: client-side AssemblyAI per chunk.
+        transcribeAndSubmit(uris, isPrivate, selectedStudent?.id, students);
+      }
       setClassRecorded(true);
-      setTimeout(() => {
+      if (popToTopTimerRef.current) clearTimeout(popToTopTimerRef.current);
+      popToTopTimerRef.current = setTimeout(() => {
+        popToTopTimerRef.current = null;
         setClassRecorded(false);
-        navigation.popToTop();
+        try { navigation.popToTop(); } catch {}
       }, 2500);
     } else {
       navigation.popToTop();
+    }
+  }
+
+  // Mark a class_recordings ready and ask the server to finalize. Best-effort:
+  // even if this call fails, the cron retry sweep (transcribe-class-retry)
+  // will pick the recording up once chunks are fully uploaded.
+  async function finalizeNewPipelineRecording(recordingId, expectedChunks) {
+    try {
+      const { error: updErr } = await supabase
+        .from('class_recordings')
+        .update({
+          status: 'ready',
+          expected_chunks: expectedChunks,
+          ended_at: new Date().toISOString(),
+          last_heartbeat_at: new Date().toISOString(),
+        })
+        .eq('id', recordingId);
+      if (updErr) throw updErr;
+
+      // Always re-poke the upload worker so any still-pending chunks get
+      // attempted right away. finalize-class will return 202 "waiting" if
+      // chunks are still uploading; the cron will retry.
+      pokeUploadWorker();
+
+      const { data: { session } } = await supabase.auth.getSession();
+      const url = `${process.env.EXPO_PUBLIC_SUPABASE_URL}/functions/v1/finalize-class`;
+      // Fire-and-forget — we don't need to wait for the response.
+      fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session?.access_token ?? ''}`,
+        },
+        body: JSON.stringify({ recording_id: recordingId }),
+      }).catch(() => {});
+    } catch (err) {
+      console.warn('[StartClass] finalizeNewPipelineRecording error:', err);
     }
   }
 

@@ -562,6 +562,28 @@ async function processRecord(record: ClassInputRecord): Promise<void> {
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
   )
 
+  // Atomic claim: the webhook payload above is a snapshot. Concurrent
+  // deliveries (Supabase has at-least-once semantics) would each pass the
+  // status guard then both run the full extraction pipeline — duplicate
+  // focus points, duplicate Anthropic billing. Win the claim race by
+  // transitioning status from pending → processing in a single UPDATE
+  // that filters on the current state. The losing call's claim returns
+  // 0 rows and we bail.
+  const { data: claimed, error: claimErr } = await supabase
+    .from('class_inputs')
+    .update({ status: 'processing' })
+    .eq('id', id)
+    .is('raw_ai_json', null)
+    .neq('status', 'processing')
+    .neq('status', 'extracted')
+    .neq('status', 'scored')
+    .select('id')
+    .maybeSingle()
+  if (claimErr || !claimed) {
+    console.log(`[yoda-extract] Skipping ${id}: failed to claim (concurrent run or already done)`)
+    return
+  }
+
   // Load trainer feedback to enrich the system prompt
   let trainerFeedbackSection = ''
   try {
@@ -572,12 +594,6 @@ async function processRecord(record: ClassInputRecord): Promise<void> {
   const effectiveSystemPrompt = (trainerFeedbackSection
     ? SYSTEM_PROMPT + trainerFeedbackSection
     : SYSTEM_PROMPT) + NO_HYPHEN_RULE
-
-  // Mark as processing
-  await supabase
-    .from('class_inputs')
-    .update({ status: 'processing' })
-    .eq('id', id)
 
   try {
     // Resolve coach name

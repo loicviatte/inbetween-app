@@ -11,6 +11,7 @@ import { Ionicons } from '@expo/vector-icons';
 import Svg, { Circle } from 'react-native-svg';
 import { Colors, Fonts, Spacing } from '../../theme';
 import DashboardSkeleton from '../../components/DashboardSkeleton';
+import RecordingProcessingIndicator from '../../components/RecordingProcessingIndicator';
 import { useCoachData } from '../../context/CoachDataContext';
 import { getGroupClassThemeCandidates } from '../../storage/coachStorage';
 import { suggestGroupClassTheme } from '../../services/ai/anthropic';
@@ -533,6 +534,7 @@ export default function DashboardScreen({ navigation }) {
                 <Ionicons name="alert" size={14} color="#fff" />
               </TouchableOpacity>
             )}
+            <RecordingProcessingIndicator />
           </View>
         </View>
 

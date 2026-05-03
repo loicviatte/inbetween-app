@@ -24,7 +24,13 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 import Slider from '@react-native-community/slider';
-import { Audio } from 'expo-av';
+import {
+  AudioModule,
+  RecordingPresets,
+  setAudioModeAsync,
+  createAudioPlayer,
+  useAudioRecorder,
+} from 'expo-audio';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -102,12 +108,18 @@ const DANCES = [
 function SessionSkeletonBones() {
   const pulse = useRef(new Animated.Value(0.3)).current;
   useEffect(() => {
-    Animated.loop(
+    // Hold the loop reference so we can stop it on unmount. Without this,
+    // the animation keeps driving the native value (and any setState chains
+    // attached to it) after the skeleton is replaced — every focus-session
+    // open used to leak one of these.
+    const loop = Animated.loop(
       Animated.sequence([
         Animated.timing(pulse, { toValue: 0.8, duration: 800, useNativeDriver: true }),
         Animated.timing(pulse, { toValue: 0.3, duration: 800, useNativeDriver: true }),
-      ])
-    ).start();
+      ]),
+    );
+    loop.start();
+    return () => { try { loop.stop(); } catch {} };
   }, []);
 
   const Bone = ({ width, height, radius = 8, style }) => (
@@ -353,13 +365,13 @@ const MetronomeStrip = memo(function MetronomeStrip({ onRunningChange, onBeat, f
   useEffect(() => { bpmRef.current = BPM_VALUES[bpmIdx]; }, [bpmIdx]);
 
   useEffect(() => {
-    Audio.setAudioModeAsync({ playsInSilentModeIOS: true });
-    // 6 sounds: 0-2 = accent (downbeat), 3-5 = soft (off-beats)
-    Promise.all([0,1,2,3,4,5].map(() => Audio.Sound.createAsync(TICK_SOUND, { volume: 1.0 })))
-      .then(results => { soundPoolRef.current = results.map(r => r.sound); });
+    setAudioModeAsync({ playsInSilentMode: true }).catch(() => {});
+    // 6 players: 0-2 = accent (downbeat), 3-5 = soft (off-beats)
+    soundPoolRef.current = [0, 1, 2, 3, 4, 5].map(() => createAudioPlayer(TICK_SOUND));
     return () => {
       stopMetro();
-      soundPoolRef.current.forEach(s => s.unloadAsync());
+      soundPoolRef.current.forEach(p => { try { p.remove(); } catch {} });
+      soundPoolRef.current = [];
     };
   }, []);
 
@@ -367,17 +379,15 @@ const MetronomeStrip = memo(function MetronomeStrip({ onRunningChange, onBeat, f
     const pool = soundPoolRef.current;
     if (!pool.length) return;
     // Accent pool: 0-2, soft pool: 3-5
-    if (isDownbeat) {
-      const idx = poolIdxRef.current % 3;
-      pool[idx].setVolumeAsync(1.0).catch(() => {});
-      pool[idx].replayAsync().catch(() => {});
-      poolIdxRef.current = (poolIdxRef.current + 1) % 3;
-    } else {
-      const idx = 3 + (poolIdxRef.current % 3);
-      pool[idx].setVolumeAsync(0.35).catch(() => {});
-      pool[idx].replayAsync().catch(() => {});
-      poolIdxRef.current = (poolIdxRef.current + 1) % 3;
-    }
+    const baseIdx = isDownbeat ? 0 : 3;
+    const idx = baseIdx + (poolIdxRef.current % 3);
+    const player = pool[idx];
+    try {
+      player.volume = isDownbeat ? 1.0 : 0.35;
+      player.seekTo(0).catch(() => {});
+      player.play();
+    } catch {}
+    poolIdxRef.current = (poolIdxRef.current + 1) % 3;
   }
 
   function fireBeat(beatNum) {
@@ -760,7 +770,7 @@ export default function FocusSessionScreen({ route, navigation }) {
   const aiScrollRef = useRef(null);
   const [aiRecording, setAiRecording] = useState(false);
   const [aiTranscribing, setAiTranscribing] = useState(false);
-  const aiRecordingRef = useRef(null);
+  const aiRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
 
   function handleBeat() {
     beatAnim.setValue(1);
@@ -1300,14 +1310,14 @@ I don't have that in your data, but you can send the question to your coach if y
 
   async function startAiRecording() {
     try {
-      const { granted } = await Audio.requestPermissionsAsync();
+      const { granted } = await AudioModule.requestRecordingPermissionsAsync();
       if (!granted) {
         Alert.alert('Microphone permission denied', 'Go to Settings → InBetween → allow Microphone.');
         return;
       }
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
-      const { recording: rec } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
-      aiRecordingRef.current = rec;
+      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+      await aiRecorder.prepareToRecordAsync();
+      aiRecorder.record();
       setAiRecording(true);
     } catch (e) {
       Alert.alert('Recording error', e.message);
@@ -1315,13 +1325,12 @@ I don't have that in your data, but you can send the question to your coach if y
   }
 
   async function stopAiRecording() {
-    if (!aiRecordingRef.current) return;
+    if (!aiRecorder.isRecording) return;
     setAiRecording(false);
     setAiTranscribing(true);
     try {
-      await aiRecordingRef.current.stopAndUnloadAsync();
-      const uri = aiRecordingRef.current.getURI();
-      aiRecordingRef.current = null;
+      await aiRecorder.stop();
+      const uri = aiRecorder.uri;
       if (!uri) throw new Error('No audio file recorded');
       const text = await transcribeAudio(uri);
       if (text) setAiQuestion(prev => (prev ? prev + ' ' : '') + text);
@@ -1332,6 +1341,12 @@ I don't have that in your data, but you can send the question to your coach if y
         Alert.alert('Transcription failed', e.message);
       }
     } finally {
+      // Release the audio session so a 2nd tap of the mic isn't blocked by
+      // an already-active recording session on iOS. Without this,
+      // prepareToRecordAsync() throws on the next attempt.
+      try {
+        await setAudioModeAsync({ allowsRecording: false, playsInSilentMode: true });
+      } catch {}
       setAiTranscribing(false);
     }
   }

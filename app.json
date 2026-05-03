@@ -19,7 +19,9 @@
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
         "NSMicrophoneUsageDescription": "InBetween uses the microphone to let you dictate your class notes.",
-        "UIBackgroundModes": ["audio"],
+        "UIBackgroundModes": [
+          "audio"
+        ],
         "NSSupportsLiveActivities": true
       }
     },
@@ -30,7 +32,9 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "permissions": ["android.permission.RECORD_AUDIO"]
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -38,11 +42,12 @@
     "plugins": [
       "expo-font",
       [
-        "expo-av",
+        "expo-audio",
         {
           "microphonePermission": "InBetween uses the microphone to let you dictate your class notes."
         }
       ],
+      "expo-video",
       "@react-native-community/datetimepicker",
       [
         "expo-notifications",
@@ -60,7 +65,8 @@
           "resizeMode": "contain",
           "backgroundColor": "#000000"
         }
-      ]
+      ],
+      "expo-asset"
     ],
     "extra": {
       "eas": {

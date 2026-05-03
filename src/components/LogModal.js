@@ -34,6 +34,12 @@ import {
 } from '../storage/storage';
 import { urgencyToTier } from '../utils/algorithm';
 import { supabase } from '../services/supabase/client';
+import {
+  AudioModule,
+  RecordingPresets,
+  setAudioModeAsync,
+  useAudioRecorder,
+} from 'expo-audio';
 
 const OPENAI_API_KEY = process.env.EXPO_PUBLIC_OPENAI_API_KEY;
 
@@ -95,28 +101,21 @@ async function transcribeAudio(uri) {
 
 // ─── Mic button ───────────────────────────────────────────────────────────────
 
-let Audio = null;
-try { Audio = require('expo-av').Audio; } catch (_) {}
-
 function MicButton({ targetSetter }) {
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
-  const recordingRef = useRef(null);
+  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
 
   async function startRecording() {
-    if (!Audio) {
-      Alert.alert('Not available', 'expo-av is not installed. Run: npx expo install expo-av');
-      return;
-    }
     try {
-      const { granted } = await Audio.requestPermissionsAsync();
+      const { granted } = await AudioModule.requestRecordingPermissionsAsync();
       if (!granted) {
         Alert.alert('Microphone permission denied', 'Go to Settings → InBetween → allow Microphone.');
         return;
       }
-      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
-      const { recording: rec } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
-      recordingRef.current = rec;
+      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+      await recorder.prepareToRecordAsync();
+      recorder.record();
       setRecording(true);
     } catch (e) {
       console.warn('[MicButton] startRecording error:', e);
@@ -125,13 +124,12 @@ function MicButton({ targetSetter }) {
   }
 
   async function stopRecording() {
-    if (!recordingRef.current) return;
+    if (!recorder.isRecording) return;
     setRecording(false);
     setTranscribing(true);
     try {
-      await recordingRef.current.stopAndUnloadAsync();
-      const uri = recordingRef.current.getURI();
-      recordingRef.current = null;
+      await recorder.stop();
+      const uri = recorder.uri;
       if (!uri) throw new Error('No audio file recorded');
       const text = await transcribeAudio(uri);
       if (text) targetSetter((prev) => (prev ? prev + ' ' : '') + text);
@@ -147,6 +145,16 @@ function MicButton({ targetSetter }) {
         Alert.alert('Transcription failed', e.message);
       }
     } finally {
+      // Tear down the audio session so a 2nd tap of the mic on this screen
+      // (or playback in another component) isn't blocked by a still-active
+      // recording session. Without this, on iOS prepareToRecordAsync()
+      // throws on the next attempt and the mic silently fails.
+      try {
+        await setAudioModeAsync({
+          allowsRecording: false,
+          playsInSilentMode: true,
+        });
+      } catch {}
       setTranscribing(false);
     }
   }
@@ -321,20 +329,25 @@ export default function LogModal({ visible, onClose, onSubmitted, initialDraft }
     return () => { if (searchTimeout.current) clearTimeout(searchTimeout.current); };
   }, []);
 
-  // Load user profile once when modal opens
+  // Load user profile once when modal opens. The async chain has multiple
+  // awaits — if the user dismisses the modal before they all resolve, the
+  // setState calls below would land on an unmounted (or now-hidden) modal
+  // and stomp on a freshly-opened one. The `cancelled` guard short-circuits
+  // them.
   useEffect(() => {
     if (!visible) return;
+    let cancelled = false;
     (async () => {
       try {
         const { data: { user } } = await supabase.auth.getUser();
-        if (!user) return;
+        if (cancelled || !user) return;
 
-        // Load profile with both category coaches
         const { data: profile, error: profileErr } = await supabase
           .from('users')
           .select('dance_style, latin_coach_id, ballroom_coach_id, latinCoach:latin_coach_id(name), ballroomCoach:ballroom_coach_id(name)')
           .eq('id', user.id)
           .single();
+        if (cancelled) return;
 
         if (profileErr) console.warn('[LogModal] profile fetch error:', profileErr.message);
 
@@ -345,8 +358,6 @@ export default function LogModal({ visible, onClose, onSubmitted, initialDraft }
         const ballroomName =
           (Array.isArray(profile?.ballroomCoach) ? profile.ballroomCoach[0]?.name : profile?.ballroomCoach?.name) || null;
 
-        // Pre-fill with the coach from the OPPOSITE category of the last logged class
-        // so the teacher name alternates naturally between lessons.
         let defaultCoachName = null;
         const { data: lastClass } = await supabase
           .from('class_inputs')
@@ -356,24 +367,24 @@ export default function LogModal({ visible, onClose, onSubmitted, initialDraft }
           .order('created_at', { ascending: false })
           .limit(1)
           .maybeSingle();
+        if (cancelled) return;
 
         if (lastClass?.dance?.length > 0) {
           const lastWasLatin = lastClass.dance.some(d => LATIN_DANCES.includes(d));
-          // Suggest the opposite category's coach
           defaultCoachName = lastWasLatin ? ballroomName : latinName;
         }
-        // If opposite coach not set, fall back to whichever is available
         defaultCoachName = defaultCoachName ?? latinName ?? ballroomName;
 
-        if (defaultCoachName) {
+        if (!cancelled && defaultCoachName) {
           setLinkedCoachName(defaultCoachName);
           setTeacherName(defaultCoachName);
           setTeacherEditing(false);
         }
       } catch (e) {
-        console.warn('[LogModal] profile load error:', e);
+        if (!cancelled) console.warn('[LogModal] profile load error:', e);
       }
     })();
+    return () => { cancelled = true; };
   }, [visible]);
 
   // Pre-fill form state when retrying a failed draft

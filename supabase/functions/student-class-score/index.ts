@@ -36,10 +36,42 @@ Deno.serve(async (req: Request) => {
     return new Response(JSON.stringify({ error: 'Invalid payload' }), { status: 400 })
   }
 
+  // Auth: this function uses service-role for all writes, so we MUST verify
+  // the JWT manually. Without this, any unauthenticated POST with a
+  // known/guessable class_input_id can rewrite focus points and trigger
+  // push notifications.
+  const authHeader = req.headers.get('Authorization')
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 })
+  }
+  const userClient = createClient(
+    Deno.env.get('SUPABASE_URL')!,
+    Deno.env.get('SUPABASE_ANON_KEY')!,
+    { global: { headers: { Authorization: authHeader } } },
+  )
+  const { data: userData, error: userErr } = await userClient.auth.getUser()
+  if (userErr || !userData?.user) {
+    return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 })
+  }
+  const callerId = userData.user.id
+
   const supabase = createClient(
     Deno.env.get('SUPABASE_URL')!,
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
   )
+
+  // Verify the class_input belongs to the caller before scoring it.
+  const { data: ownerRow, error: ownerErr } = await supabase
+    .from('class_inputs')
+    .select('user_id')
+    .eq('id', payload.class_input_id)
+    .maybeSingle()
+  if (ownerErr) {
+    return new Response(JSON.stringify({ error: ownerErr.message }), { status: 500 })
+  }
+  if (!ownerRow || ownerRow.user_id !== callerId) {
+    return new Response(JSON.stringify({ error: 'Forbidden' }), { status: 403 })
+  }
 
   try {
     await process(supabase, payload)

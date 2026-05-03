@@ -318,9 +318,37 @@ async function handleRun() {
   )
 }
 
+function jwtRoleIs(authHeader: string, expectedRole: string): boolean {
+  const m = authHeader.match(/^\s*Bearer\s+(.+)$/i)
+  if (!m) return false
+  const token = m[1].trim()
+  const parts = token.split('.')
+  if (parts.length !== 3) return false
+  try {
+    let payload = parts[1].replace(/-/g, '+').replace(/_/g, '/')
+    const pad = payload.length % 4
+    if (pad) payload += '='.repeat(4 - pad)
+    const decoded = JSON.parse(atob(payload))
+    return decoded?.role === expectedRole
+  } catch {
+    return false
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method !== 'POST') {
     return new Response('Method not allowed', { status: 405 })
+  }
+  // Auth: monitor-report incurs Claude Sonnet 8K + DB queries + Telegram +
+  // PDF rendering. Without auth, any anonymous POST burns budget. Only
+  // accept service-role JWT (used by the pg_cron sweep configured in the
+  // monitoring_reports migration).
+  const authHeader = req.headers.get('Authorization') || ''
+  if (!jwtRoleIs(authHeader, 'service_role')) {
+    return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+      status: 401,
+      headers: { 'content-type': 'application/json' },
+    })
   }
   try {
     return await handleRun()
