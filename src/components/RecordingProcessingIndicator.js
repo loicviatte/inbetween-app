@@ -99,17 +99,17 @@ export default function RecordingProcessingIndicator() {
         <Pressable style={styles.backdrop} onPress={() => setModalOpen(false)}>
           <Pressable style={styles.sheet} onPress={() => {}}>
             <View style={styles.sheetHeader}>
-              <Text style={styles.title}>Cours en traitement</Text>
+              <Text style={styles.title}>Classes processing</Text>
               <Pressable onPress={() => setModalOpen(false)} hitSlop={10}>
                 <Ionicons name="close" size={22} color={Colors.text} />
               </Pressable>
             </View>
             <Text style={styles.subtitle}>
-              Tu peux fermer l'app — le serveur termine en arrière-plan et tu recevras une notif quand c'est prêt.
+              You can close the app — the server finishes in the background and you'll get a notification when it's ready.
             </Text>
 
             {inFlight.length === 0 && Object.keys(queueCounts).length === 0 && (
-              <Text style={styles.empty}>Tout est synchronisé.</Text>
+              <Text style={styles.empty}>Everything is synced.</Text>
             )}
 
             {inFlight.map((r) => {
@@ -119,7 +119,7 @@ export default function RecordingProcessingIndicator() {
                   <ActivityIndicator size="small" color={Colors.text} />
                   <View style={{ flex: 1, marginLeft: 10 }}>
                     <Text style={styles.rowTitle}>
-                      {r.lesson_type === 'private' ? 'Cours privé' : 'Cours de groupe'}
+                      {r.lesson_type === 'private' ? 'Private class' : 'Group class'}
                     </Text>
                     <Text style={styles.rowMeta}>
                       {labelForStatus(r.status, q, r.expected_chunks)}
@@ -138,11 +138,11 @@ export default function RecordingProcessingIndicator() {
                   <View key={`q-${rid}`} style={styles.row}>
                     <ActivityIndicator size="small" color={Colors.text} />
                     <View style={{ flex: 1, marginLeft: 10 }}>
-                      <Text style={styles.rowTitle}>Upload en cours</Text>
+                      <Text style={styles.rowTitle}>Uploading</Text>
                       <Text style={styles.rowMeta}>
-                        {q.uploading > 0 && `${q.uploading} en envoi · `}
-                        {q.pending > 0 && `${q.pending} en attente · `}
-                        {q.failed > 0 && `${q.failed} erreur(s) (retry auto)`}
+                        {q.uploading > 0 && `${q.uploading} sending · `}
+                        {q.pending > 0 && `${q.pending} pending · `}
+                        {q.failed > 0 && `${q.failed} error(s) (auto retry)`}
                       </Text>
                     </View>
                   </View>
@@ -158,10 +158,10 @@ export default function RecordingProcessingIndicator() {
 function labelForStatus(status, q, expected) {
   const localPending = q ? q.pending + q.uploading : 0;
   if (status === 'ready') {
-    if (localPending > 0) return `Envoi des derniers segments (${localPending}/${expected ?? '?'})`;
-    return 'Préparation pour transcription';
+    if (localPending > 0) return `Uploading final segments (${localPending}/${expected ?? '?'})`;
+    return 'Preparing for transcription';
   }
-  if (status === 'transcribing') return 'Transcription en cours (5-15 min)';
+  if (status === 'transcribing') return 'Transcription in progress (5-15 min)';
   return status;
 }
 

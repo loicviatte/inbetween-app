@@ -258,8 +258,8 @@ async function sendTranscriptReadyPush(userId: string, classInputId: string) {
   await supabase.from('notifications').insert({
     user_id: userId,
     type: 'transcript_ready',
-    title: 'Cours transcrit',
-    body: 'Ta classe est prête à être notée.',
+    title: 'Class transcribed',
+    body: 'Your class is ready to review.',
     data: { class_input_id: classInputId },
   })
 }
