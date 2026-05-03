@@ -51,6 +51,7 @@
   },
   "private": true,
   "devDependencies": {
+    "@bacons/apple-targets": "^4.0.6",
     "@types/react": "~19.1.10",
     "typescript": "~5.9.2"
   }
