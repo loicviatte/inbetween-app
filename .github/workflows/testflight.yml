@@ -44,6 +44,7 @@ jobs:
           EXPO_PUBLIC_ANTHROPIC_API_KEY: ${{ secrets.EXPO_PUBLIC_ANTHROPIC_API_KEY }}
           EXPO_PUBLIC_OPENAI_API_KEY: ${{ secrets.EXPO_PUBLIC_OPENAI_API_KEY }}
           EXPO_PUBLIC_GOOGLE_PLACES_API_KEY: ${{ secrets.EXPO_PUBLIC_GOOGLE_PLACES_API_KEY }}
+          EXPO_PUBLIC_ASSEMBLYAI_API_KEY: ${{ secrets.EXPO_PUBLIC_ASSEMBLYAI_API_KEY }}
         run: eas build --platform ios --profile production --non-interactive --local --output ${{ github.workspace }}/build.ipa
 
       - name: Save .ipa as GitHub artifact
