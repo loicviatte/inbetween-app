@@ -577,6 +577,15 @@ export default function StartClassScreen({ navigation }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [students]);
 
+  // The trigger interval here MUST be safely longer than the heartbeat
+  // cadence in startHeartbeat. The heartbeat re-schedules the kill notif
+  // every tick — if the trigger fires before the next tick can cancel it,
+  // the user sees a "Recording interrupted" notification while the app is
+  // still happily recording. Heartbeat is 4 s, so 12 s gives 3 ticks of
+  // margin before the notif would fire. When the app actually dies, the
+  // last heartbeat's notif fires ~12 s later, which is the right UX.
+  const KILL_NOTIF_DELAY_SECONDS = 12;
+
   async function scheduleKillNotification() {
     if (killNotificationIdRef.current) {
       try { await Notifications.cancelScheduledNotificationAsync(killNotificationIdRef.current); } catch {}
@@ -584,8 +593,8 @@ export default function StartClassScreen({ navigation }) {
     }
     try {
       const trigger = Notifications.SchedulableTriggerInputTypes
-        ? { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: 1, repeats: false }
-        : { seconds: 1 };
+        ? { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: KILL_NOTIF_DELAY_SECONDS, repeats: false }
+        : { seconds: KILL_NOTIF_DELAY_SECONDS };
       killNotificationIdRef.current = await Notifications.scheduleNotificationAsync({
         content: {
           title: '🔴 Recording interrupted',
@@ -632,6 +641,14 @@ export default function StartClassScreen({ navigation }) {
       Notifications.cancelScheduledNotificationAsync(killNotificationIdRef.current).catch(() => {});
       killNotificationIdRef.current = null;
     }
+    // Defensive: if a previous build (1.5.2 and earlier) shipped the
+    // mis-scheduled 1-second kill notif and the user has a backlog of
+    // already-delivered "Recording interrupted" banners stacked in their
+    // notification center, dismiss them all so they go away when the
+    // class ends. Also covers the unlikely case where the cancel above
+    // races a notif that already became delivered.
+    Notifications.cancelAllScheduledNotificationsAsync().catch(() => {});
+    Notifications.dismissAllNotificationsAsync().catch(() => {});
     Notifications.setBadgeCountAsync(0).catch(() => {});
   }
 
