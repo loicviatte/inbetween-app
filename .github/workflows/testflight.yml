@@ -37,23 +37,6 @@ jobs:
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
 
-      - name: Build iOS locally (no cloud credits)
-        env:
-          EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
-          EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
-          EXPO_PUBLIC_ANTHROPIC_API_KEY: ${{ secrets.EXPO_PUBLIC_ANTHROPIC_API_KEY }}
-          EXPO_PUBLIC_OPENAI_API_KEY: ${{ secrets.EXPO_PUBLIC_OPENAI_API_KEY }}
-          EXPO_PUBLIC_GOOGLE_PLACES_API_KEY: ${{ secrets.EXPO_PUBLIC_GOOGLE_PLACES_API_KEY }}
-          EXPO_PUBLIC_ASSEMBLYAI_API_KEY: ${{ secrets.EXPO_PUBLIC_ASSEMBLYAI_API_KEY }}
-        run: eas build --platform ios --profile production --non-interactive --local --output ${{ github.workspace }}/build.ipa
-
-      - name: Save .ipa as GitHub artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-${{ github.sha }}
-          path: ${{ github.workspace }}/build.ipa
-          retention-days: 7
-
       - name: Decode App Store Connect API Key
         env:
           ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}
@@ -93,6 +76,28 @@ jobs:
             fi
           fi
           echo "✓ AuthKey_${ASC_KEY_ID}.p8 ready ($(wc -c < "$KEY_PATH") bytes)."
+
+      - name: Build iOS locally (no cloud credits)
+        env:
+          EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
+          EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
+          EXPO_PUBLIC_ANTHROPIC_API_KEY: ${{ secrets.EXPO_PUBLIC_ANTHROPIC_API_KEY }}
+          EXPO_PUBLIC_OPENAI_API_KEY: ${{ secrets.EXPO_PUBLIC_OPENAI_API_KEY }}
+          EXPO_PUBLIC_GOOGLE_PLACES_API_KEY: ${{ secrets.EXPO_PUBLIC_GOOGLE_PLACES_API_KEY }}
+          EXPO_PUBLIC_ASSEMBLYAI_API_KEY: ${{ secrets.EXPO_PUBLIC_ASSEMBLYAI_API_KEY }}
+          # ASC API key lets EAS auto-provision App IDs + Provisioning Profiles
+          # for new targets (e.g. widget extensions) without an interactive prompt.
+          EXPO_ASC_API_KEY_PATH: /Users/runner/.appstoreconnect/private_keys/AuthKey_${{ secrets.ASC_KEY_ID }}.p8
+          EXPO_ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          EXPO_ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: eas build --platform ios --profile production --non-interactive --local --output ${{ github.workspace }}/build.ipa
+
+      - name: Save .ipa as GitHub artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ github.sha }}
+          path: ${{ github.workspace }}/build.ipa
+          retention-days: 7
 
       - name: Upload to TestFlight via altool
         run: |
