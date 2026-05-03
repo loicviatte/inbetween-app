@@ -431,12 +431,13 @@ export default function StartClassScreen({ navigation }) {
     return () => { sub.remove(); };
   }, [classStartedAt]);
 
-  // Heartbeat: while the rec is alive, we constantly push the LA stale-date
-  // and the "kill" notification forward by 15s. If the app gets killed, both
-  // fire shortly after — letting iOS dim the LA and show a notification
-  // prompting the coach to come back.
+  // Heartbeat: refreshes the Live Activity stale-date and persists
+  // lastHeartbeatAt to AsyncStorage every few seconds while a class is
+  // running. The previous "kill notification" mechanism that piggybacked
+  // on this was removed in 1.5.4 — locking the phone (a normal user
+  // action) was firing the notif because iOS suspended JS and the next
+  // re-schedule never ran.
   const heartbeatIntervalRef = useRef(null);
-  const killNotificationIdRef = useRef(null);
   const [classRecorded, setClassRecorded] = useState(false);
   // Tracks the post-debrief popToTop timeout so we can cancel it if the
   // screen unmounts (or the coach navigates manually) during the 2.5s
@@ -577,57 +578,35 @@ export default function StartClassScreen({ navigation }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [students]);
 
-  // The trigger interval here MUST be safely longer than the heartbeat
-  // cadence in startHeartbeat. The heartbeat re-schedules the kill notif
-  // every tick — if the trigger fires before the next tick can cancel it,
-  // the user sees a "Recording interrupted" notification while the app is
-  // still happily recording. Heartbeat is 4 s, so 12 s gives 3 ticks of
-  // margin before the notif would fire. When the app actually dies, the
-  // last heartbeat's notif fires ~12 s later, which is the right UX.
-  const KILL_NOTIF_DELAY_SECONDS = 12;
-
-  async function scheduleKillNotification() {
-    if (killNotificationIdRef.current) {
-      try { await Notifications.cancelScheduledNotificationAsync(killNotificationIdRef.current); } catch {}
-      killNotificationIdRef.current = null;
-    }
-    try {
-      const trigger = Notifications.SchedulableTriggerInputTypes
-        ? { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: KILL_NOTIF_DELAY_SECONDS, repeats: false }
-        : { seconds: KILL_NOTIF_DELAY_SECONDS };
-      killNotificationIdRef.current = await Notifications.scheduleNotificationAsync({
-        content: {
-          title: '🔴 Recording interrupted',
-          body: '⚠️ You left the app. Open InBetween to continue recording.',
-          sound: 'default',
-          interruptionLevel: 'timeSensitive',
-          badge: 1,
-        },
-        trigger,
-      });
-    } catch (err) {
-      console.warn('[StartClass] kill notification schedule failed:', err);
-    }
-  }
+  // The "kill notification" mechanism is removed entirely. Its purpose was
+  // to alert the coach if the app process actually died mid-class — but the
+  // way iOS schedules notifications doesn't let us tell the difference
+  // between "app process died" and "phone is locked", so the notif fired
+  // any time the user locked their phone, falsely claiming the recording
+  // was stopped (the audio session keeps recording in background; locking
+  // is a normal user action and should NOT trigger an alarming alert).
+  //
+  // Detection of an actual kill still works via App.js' mount-time check
+  // for orphan Live Activities — the next time the user opens the app
+  // after a process death, they get a "Recording interrupted" alert with
+  // a Continue button. That's the right place for that UX.
+  //
+  // The heartbeat below is kept for two unrelated purposes:
+  //   - LA staleSeconds: the lock-screen Live Activity dims itself if
+  //     it stops getting refreshes, giving the coach a visual cue.
+  //   - activeCoachClass.lastHeartbeatAt: persisted to AsyncStorage so
+  //     the relaunch path knows when the kill happened.
 
   function startHeartbeat() {
     stopHeartbeat();
-    // 4s heartbeat + 7s LA staleSeconds + ~10s rescheduled kill notification.
-    // Each beat re-schedules the kill notif slightly into the future so the
-    // OS fires it within ~4-7 s of the app actually dying. The previous
-    // 250ms cadence was 16x more aggressive than needed and burned CPU /
-    // battery on long classes (50 000+ native calls per hour) without a
-    // matching benefit — iOS doesn't deliver "kill detection" any faster.
     if (liveActivityIdRef.current) {
       laUpdateCoachRecording(liveActivityIdRef.current, { staleSeconds: 10 }).catch(() => {});
     }
-    scheduleKillNotification();
     patchActiveCoachClass({ lastHeartbeatAt: Date.now() });
     heartbeatIntervalRef.current = setInterval(() => {
       if (liveActivityIdRef.current) {
         laUpdateCoachRecording(liveActivityIdRef.current, { staleSeconds: 7 }).catch(() => {});
       }
-      scheduleKillNotification();
       patchActiveCoachClass({ lastHeartbeatAt: Date.now() });
     }, 4000);
   }
@@ -637,16 +616,11 @@ export default function StartClassScreen({ navigation }) {
       clearInterval(heartbeatIntervalRef.current);
       heartbeatIntervalRef.current = null;
     }
-    if (killNotificationIdRef.current) {
-      Notifications.cancelScheduledNotificationAsync(killNotificationIdRef.current).catch(() => {});
-      killNotificationIdRef.current = null;
-    }
-    // Defensive: if a previous build (1.5.2 and earlier) shipped the
-    // mis-scheduled 1-second kill notif and the user has a backlog of
-    // already-delivered "Recording interrupted" banners stacked in their
-    // notification center, dismiss them all so they go away when the
-    // class ends. Also covers the unlikely case where the cancel above
-    // races a notif that already became delivered.
+    // Defensive cleanup: previous builds (1.5.0 → 1.5.3) shipped the
+    // self-firing "Recording interrupted" notif. Users who upgrade from
+    // those builds may have a stack of already-delivered notifs; dismiss
+    // them on every class end so the lock screen / notification center
+    // is clean.
     Notifications.cancelAllScheduledNotificationsAsync().catch(() => {});
     Notifications.dismissAllNotificationsAsync().catch(() => {});
     Notifications.setBadgeCountAsync(0).catch(() => {});
@@ -690,7 +664,10 @@ export default function StartClassScreen({ navigation }) {
         });
         liveActivityIdRef.current = id;
         patchActiveCoachClass({ liveActivityId: id, pendingResume: false });
-        if (id) startHeartbeat();
+        // Always start heartbeat — even if the Live Activity didn't
+        // start (e.g. user disabled them in iOS Settings), we still need
+        // lastHeartbeatAt persistence for kill detection.
+        startHeartbeat();
       } catch (err) {
         console.warn('[StartClass] Could not resume recording:', err);
         patchActiveCoachClass({ pendingResume: false });
@@ -928,6 +905,24 @@ export default function StartClassScreen({ navigation }) {
     }
   }
 
+  // One-shot hint shown the first time a coach starts a class without a
+  // working Live Activity — most commonly because iOS Settings has
+  // disabled the LA permission for InBetween. Recording still works in
+  // background; the LA is the lock-screen reassurance widget.
+  const LA_HINT_SHOWN_KEY = 'coach.liveActivityHintShown.v1';
+  async function maybeShowLiveActivityHint() {
+    try {
+      const seen = await AsyncStorage.getItem(LA_HINT_SHOWN_KEY);
+      if (seen === '1') return;
+      await AsyncStorage.setItem(LA_HINT_SHOWN_KEY, '1');
+    } catch { return; }
+    Alert.alert(
+      'Lock-screen widget unavailable',
+      "Recording will continue normally even if you lock your phone. To see a Live Activity on your lock screen showing the class is recording, enable Live Activities for InBetween: Settings → InBetween → Live Activities.",
+      [{ text: 'Got it', style: 'default' }],
+    );
+  }
+
   async function startClassNow() {
     setAudioModalOpen(false);
     if (inputRefreshIntervalRef.current) {
@@ -1057,11 +1052,23 @@ export default function StartClassScreen({ navigation }) {
             });
           }
         } catch {}
-        startHeartbeat();
+      } else {
+        // LA didn't start (most often: Live Activities disabled in iOS
+        // Settings, iOS < 16.2, or Low Power Mode). The recording itself
+        // still works because background audio is independent of LA. We
+        // don't show a blocking alert — just log so we have visibility
+        // and so the heartbeat below can still run for state persistence.
+        console.warn('[StartClass] Live Activity did not start (id=null). Recording continues without lock-screen widget.');
+        await maybeShowLiveActivityHint();
       }
     } catch (err) {
       console.warn('[StartClass] Could not start live activity:', err);
+      await maybeShowLiveActivityHint();
     }
+    // Heartbeat runs regardless of LA success: it persists
+    // lastHeartbeatAt to AsyncStorage which the App.js mount-time
+    // recovery flow uses to detect orphan classes after a process kill.
+    startHeartbeat();
   }
   async function stopClass() {
     // Idempotent: if a stop is already in progress, ignore re-entries.
