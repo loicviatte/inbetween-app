@@ -32,7 +32,20 @@ import {
   useAudioRecorder,
 } from 'expo-audio';
 import { Ionicons } from '@expo/vector-icons';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { BlurView } from 'expo-blur';
+import * as Haptics from 'expo-haptics';
+import { LinearGradient } from 'expo-linear-gradient';
+import Svg, {
+  Defs,
+  RadialGradient,
+  LinearGradient as SvgLinearGradient,
+  Stop,
+  Circle as SvgCircle,
+  Path as SvgPath,
+  G as SvgG,
+  Text as SvgText,
+} from 'react-native-svg';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Colors, Fonts, Spacing } from '../theme';
 import { getFocusPoints, getClassInputsForFocus, getClassInputs, getTrainingSessionsThisWeek, getTeacherContextForAI, askCoach } from '../storage/storage';
@@ -72,7 +85,7 @@ async function transcribeAudio(uri) {
   return data.text || '';
 }
 
-const DURATIONS = [0.17, 5, 10, 15, 20, 25, 30, 45, 60, 90]; // 0.17 ≈ 10s for testing
+const DURATIONS = [5, 10, 15, 20, 25, 30, 45, 60, 90];
 const TICK_SOUND = require('../../assets/metronome_tick.wav');
 
 const FEELINGS = [
@@ -244,90 +257,14 @@ function ClassInputModal({ input, onClose }) {
   );
 }
 
-// ─── Linked Class Notes ───────────────────────────────────────────────────────
+// ─── Coach note (linked-class pager removed) ──────────────────────────────────
 
-function LinkedClassPage({ inputs, loading, onSelect }) {
-  if (loading) {
-    return (
-      <View style={ln.wrap}>
-        <ActivityIndicator size="small" color="rgba(255,255,255,0.3)" />
-      </View>
-    );
-  }
-  if (!inputs.length) return null;
+function FocusPager({ focusPoint }) {
+  if (!focusPoint?.coach_note) return null;
   return (
     <View style={ln.wrap}>
-      <Text style={ln.heading}>Linked Class</Text>
-      {inputs.slice(0, 3).map((inp) => (
-        <TouchableOpacity key={inp.id} style={ln.row} onPress={() => onSelect(inp)} activeOpacity={0.7}>
-          <Text style={ln.date}>{formatDate(inp.created_at)}</Text>
-          <Text style={ln.text} numberOfLines={1}>{inp.practice_point_1}</Text>
-          <Text style={ln.arrow}>›</Text>
-        </TouchableOpacity>
-      ))}
-    </View>
-  );
-}
-
-function FocusPager({ focusPoint, inputs, loading, onSelect }) {
-  const hasNote = !!focusPoint?.coach_note;
-  const hasClasses = loading || inputs.length > 0;
-  const totalPages = hasNote && hasClasses ? 2 : 1;
-
-  const [page, setPage] = useState(0);
-  const totalPagesRef = useRef(totalPages);
-  totalPagesRef.current = totalPages;
-
-  const panResponder = useRef(PanResponder.create({
-    onMoveShouldSetPanResponder: (_, { dx, dy }) =>
-      totalPagesRef.current > 1 && Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > 8,
-    onPanResponderRelease: (_, { dx }) => {
-      if (dx < -30) setPage(p => Math.min(p + 1, totalPagesRef.current - 1));
-      else if (dx > 30) setPage(p => Math.max(p - 1, 0));
-    },
-  })).current;
-
-  if (!hasNote && !hasClasses) return null;
-
-  if (totalPages === 1) {
-    if (hasNote) return (
-      <View style={ln.wrap}>
-        <Text style={ln.heading}>Coach</Text>
-        <Text style={ln.coachNoteText}>{focusPoint.coach_note}</Text>
-      </View>
-    );
-    return <LinkedClassPage inputs={inputs} loading={loading} onSelect={onSelect} />;
-  }
-
-  return (
-    <View {...panResponder.panHandlers}>
-      {page === 0 ? (
-        <View style={ln.wrap}>
-          <View style={ln.pageHeader}>
-            <Text style={ln.heading}>Coach</Text>
-            <Text style={ln.swipeHint}>swipe ›</Text>
-          </View>
-          <Text style={ln.coachNoteText}>{focusPoint.coach_note}</Text>
-        </View>
-      ) : (
-        <View style={ln.wrap}>
-          <View style={ln.pageHeader}>
-            <Text style={ln.heading}>Linked Class</Text>
-            <Text style={ln.swipeHint}>‹ swipe</Text>
-          </View>
-          {inputs.slice(0, 3).map((inp) => (
-            <TouchableOpacity key={inp.id} style={ln.row} onPress={() => onSelect(inp)} activeOpacity={0.7}>
-              <Text style={ln.date}>{formatDate(inp.created_at)}</Text>
-              <Text style={ln.text} numberOfLines={1}>{inp.practice_point_1}</Text>
-              <Text style={ln.arrow}>›</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-      )}
-      <View style={ln.dots}>
-        <View style={[ln.dot, page === 0 && ln.dotActive]} />
-        <View style={[ln.dot, page === 1 && ln.dotActive]} />
-      </View>
+      <Text style={ln.heading}>Coach</Text>
+      <Text style={ln.coachNoteText}>{focusPoint.coach_note}</Text>
     </View>
   );
 }
@@ -591,11 +528,361 @@ function FeelingSlider({ value, onChange }) {
 
 // ─── Session Feeling Modal ────────────────────────────────────────────────────
 
-function SessionFeelingModal({ visible, focusName, onSave, onSkip }) {
+// ─── Cinematic backdrop (dark night sky with gold beam from below) ──────
+// Recreates the "spotlight on stage" feel: a large radial gold glow rising
+// from the bottom of the screen, a hint of gold from the top, a faint
+// horizon line, plus a wide light beam fanning up from the floor.
+const STAR_PATH = 'M 0 -14 L 3.5 -3.5 L 14 0 L 3.5 3.5 L 0 14 L -3.5 3.5 L -14 0 L -3.5 -3.5 Z';
+
+function CineBackdrop({ pulse }) {
+  const beamOpacity    = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.6, 1] });
+  const horizonOpacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.4, 0.85] });
+  const haloOpacity    = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.55, 1] });
+  return (
+    <View style={fm.cineCanvas} pointerEvents="none">
+      {/* Big halo behind the number — full-bleed so the gradient never
+          looks bounded. cy=22% sits roughly behind the number's centre. */}
+      <Animated.View style={[StyleSheet.absoluteFillObject, { opacity: haloOpacity }]}>
+        <Svg width="100%" height="100%" preserveAspectRatio="none">
+          <Defs>
+            <RadialGradient id="cineNumberHalo" cx="50%" cy="22%" r="55%" fx="50%" fy="22%">
+              <Stop offset="0%"   stopColor="#FFD978" stopOpacity="0.50" />
+              <Stop offset="25%"  stopColor="#E8B530" stopOpacity="0.32" />
+              <Stop offset="55%"  stopColor="#E8B530" stopOpacity="0.10" />
+              <Stop offset="100%" stopColor="#E8B530" stopOpacity="0" />
+            </RadialGradient>
+          </Defs>
+          <SvgCircle cx="50%" cy="22%" r="80%" fill="url(#cineNumberHalo)" />
+        </Svg>
+      </Animated.View>
+      {/* Bottom rising gold glow */}
+      <Animated.View style={[fm.cineGlowBottom, { opacity: beamOpacity }]}>
+        <Svg width="100%" height="100%" preserveAspectRatio="none">
+          <Defs>
+            <RadialGradient id="cineBottom" cx="50%" cy="110%" r="70%" fx="50%" fy="110%">
+              <Stop offset="0%"   stopColor="#E8B530" stopOpacity="0.55" />
+              <Stop offset="30%"  stopColor="#E8B530" stopOpacity="0.18" />
+              <Stop offset="65%"  stopColor="#000000" stopOpacity="0" />
+            </RadialGradient>
+          </Defs>
+          <SvgCircle cx="50%" cy="100%" r="100%" fill="url(#cineBottom)" />
+        </Svg>
+      </Animated.View>
+      {/* Horizon line */}
+      <Animated.View style={[fm.cineHorizon, { opacity: horizonOpacity }]}>
+        <LinearGradient
+          colors={['transparent', 'rgba(232,181,48,0.45)', 'transparent']}
+          locations={[0, 0.5, 1]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 0 }}
+          style={StyleSheet.absoluteFillObject}
+        />
+      </Animated.View>
+      {/* Wide light beam fanning up from floor */}
+      <Animated.View style={[fm.cineBeam, { opacity: beamOpacity }]}>
+        <Svg width="100%" height="100%" preserveAspectRatio="none">
+          <Defs>
+            <RadialGradient id="cineBeam" cx="50%" cy="100%" r="50%" fx="50%" fy="100%">
+              <Stop offset="0%"   stopColor="#E8B530" stopOpacity="0.18" />
+              <Stop offset="70%"  stopColor="#E8B530" stopOpacity="0" />
+            </RadialGradient>
+          </Defs>
+          <SvgCircle cx="50%" cy="100%" r="100%" fill="url(#cineBeam)" />
+        </Svg>
+      </Animated.View>
+    </View>
+  );
+}
+
+// Huge number rendered as SVG text so we can fill it with a proper
+// top-to-bottom linear gradient (RN's <Text> can't do this natively). The
+// glow lives in the cinematic backdrop layer instead — keeping it here
+// would crop into a square the size of the SVG's viewbox.
+//
+// `variant` toggles between a cool white gradient (the previous number,
+// before the reveal) and the warm gold gradient (the new number that lands
+// after the roll). The colour shift drives the "before / after" beat of
+// the celebration without any extra animation work.
+const GRADIENT_STOPS = {
+  white: [
+    { offset: '0%',   color: '#FFFFFF' },
+    { offset: '35%',  color: '#F2F2F2' },
+    { offset: '70%',  color: '#CFCFCF' },
+    { offset: '100%', color: '#8A8A8A' },
+  ],
+  gold: [
+    { offset: '0%',   color: '#FFE9B0' },
+    { offset: '35%',  color: '#F6D27A' },
+    { offset: '70%',  color: '#E8B530' },
+    { offset: '100%', color: '#B5851A' },
+  ],
+};
+
+function GoldNumber({ value, gradientId, variant = 'gold' }) {
+  const stops = GRADIENT_STOPS[variant] || GRADIENT_STOPS.gold;
+  return (
+    <View style={fm.goldNumberWrap}>
+      <Svg width="100%" height={210}>
+        <Defs>
+          <SvgLinearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+            {stops.map((s) => (
+              <Stop key={s.offset} offset={s.offset} stopColor={s.color} />
+            ))}
+          </SvgLinearGradient>
+        </Defs>
+        <SvgText
+          x="50%"
+          y="178"
+          fontSize="200"
+          fontFamily={Fonts.ttExtraBold}
+          fontWeight="800"
+          fill={`url(#${gradientId})`}
+          textAnchor="middle"
+        >
+          {value}
+        </SvgText>
+      </Svg>
+    </View>
+  );
+}
+
+// ─── Sparkle burst (SVG stars exploding outward) ─────────────────────────
+// Replaces the ✨ emoji with 6 four-pointed stars that orbit out from the
+// number once the increment lands. `progress` is an Animated.Value 0→1
+// driving every particle's translate / scale / opacity.
+const SPARKLE_PARTICLES = [
+  { angle: -1.55, distance: 110, delay: 0,    size: 26, color: '#FFE3A0' },
+  { angle: -0.45, distance: 140, delay: 0.06, size: 20, color: '#FFCD75' },
+  { angle:  0.55, distance: 120, delay: 0.12, size: 22, color: '#FFFFFF' },
+  { angle:  1.65, distance: 100, delay: 0.04, size: 18, color: '#FFCD75' },
+  { angle:  2.75, distance: 130, delay: 0.10, size: 24, color: '#FFE3A0' },
+  { angle: -2.55, distance: 115, delay: 0.02, size: 16, color: '#FFFFFF' },
+];
+
+function SparkleStar({ progress, angle, distance, delay, size, color }) {
+  const dx = Math.cos(angle) * distance;
+  const dy = Math.sin(angle) * distance;
+  const t = Math.min(0.95, delay + 0.35);
+  const tx = progress.interpolate({ inputRange: [delay, t, 1], outputRange: [0, dx, dx * 1.08], extrapolate: 'clamp' });
+  const ty = progress.interpolate({ inputRange: [delay, t, 1], outputRange: [0, dy, dy * 1.08], extrapolate: 'clamp' });
+  const scale = progress.interpolate({
+    inputRange: [delay, delay + 0.15, t, 0.9, 1],
+    outputRange: [0, 1.4, 1, 1, 0],
+    extrapolate: 'clamp',
+  });
+  const opacity = progress.interpolate({
+    inputRange: [delay, delay + 0.1, 0.85, 1],
+    outputRange: [0, 1, 1, 0],
+    extrapolate: 'clamp',
+  });
+  const rot = progress.interpolate({
+    inputRange: [delay, 1],
+    outputRange: ['-25deg', '40deg'],
+    extrapolate: 'clamp',
+  });
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={[
+        fm.countSparkleParticle,
+        { transform: [{ translateX: tx }, { translateY: ty }, { scale }, { rotate: rot }], opacity },
+      ]}
+    >
+      <Svg width={size} height={size} viewBox="-14 -14 28 28">
+        <SvgPath d={STAR_PATH} fill={color} />
+      </Svg>
+    </Animated.View>
+  );
+}
+
+// Drum-roll session count reveal. The badge enters with a punchy scale, the
+// previous number then trembles + slowly grows to build anticipation, then
+// pops up and out while the new number bounces in from below. Custom SVG
+// sparkles burst outward + a sunburst halo pulses behind the whole thing.
+// Calls `onComplete` once the whole sequence is done so the parent can fade
+// in the "How did it go?" content afterwards.
+function SessionCountBadge({ prev, next, visible, onComplete }) {
+  const enterScale = useRef(new Animated.Value(0)).current;
+  const shake = useRef(new Animated.Value(0)).current;
+  const prevScale = useRef(new Animated.Value(1)).current;
+  const glowPulse = useRef(new Animated.Value(0)).current;
+  const sunburstSpin = useRef(new Animated.Value(0)).current;
+  const roll = useRef(new Animated.Value(0)).current;
+  const sparkleProgress = useRef(new Animated.Value(0)).current;
+  const completeRef = useRef(false);
+  const hapticTimersRef = useRef([]);
+
+  useEffect(() => {
+    if (!visible) return;
+    completeRef.current = false;
+    enterScale.setValue(0);
+    shake.setValue(0);
+    prevScale.setValue(1);
+    glowPulse.setValue(0);
+    sunburstSpin.setValue(0);
+    roll.setValue(0);
+    sparkleProgress.setValue(0);
+
+    // Haptic timeline: ride along with the visual sequence so the phone
+    // *feels* the drum roll. Timings are in ms from the moment visible flips
+    // to true and were derived from the spring/timing durations below.
+    hapticTimersRef.current.forEach(clearTimeout);
+    hapticTimersRef.current = [];
+    const tick = (ms, fn) => {
+      const t = setTimeout(() => { fn().catch(() => {}); }, ms);
+      hapticTimersRef.current.push(t);
+    };
+    // Soft bump as the badge lands.
+    tick(420, () => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light));
+    // Drum roll: 5 light selection ticks accelerating toward the reveal.
+    tick(900,  () => Haptics.selectionAsync());
+    tick(1080, () => Haptics.selectionAsync());
+    tick(1240, () => Haptics.selectionAsync());
+    tick(1380, () => Haptics.selectionAsync());
+    tick(1500, () => Haptics.selectionAsync());
+    // Heavy impact the moment the new number lands.
+    tick(1820, () => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy));
+    // Success buzz when the sparkle burst pops.
+    tick(2420, () => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success));
+
+    // Build the drum-roll shake out of short alternating impulses.
+    const shakeImpulses = [];
+    for (let i = 0; i < 14; i += 1) {
+      shakeImpulses.push(
+        Animated.timing(shake, {
+          toValue: i % 2 === 0 ? 1 : -1,
+          duration: 55,
+          useNativeDriver: true,
+        }),
+      );
+    }
+    shakeImpulses.push(
+      Animated.timing(shake, { toValue: 0, duration: 60, useNativeDriver: true }),
+    );
+
+    // Slow, continuous rotation of the sunburst rays the entire time the
+    // badge is visible — runs in parallel with the main sequence.
+    Animated.timing(sunburstSpin, {
+      toValue: 1,
+      duration: 4500,
+      useNativeDriver: true,
+    }).start();
+
+    Animated.sequence([
+      Animated.delay(120),
+      // Punchy entrance
+      Animated.spring(enterScale, { toValue: 1, useNativeDriver: true, tension: 55, friction: 6 }),
+      Animated.delay(180),
+      // Drum roll: prev tremors while slowly growing, halo pulses brighter.
+      Animated.parallel([
+        Animated.sequence(shakeImpulses),
+        Animated.timing(prevScale, { toValue: 1.18, duration: 850, useNativeDriver: true }),
+        Animated.timing(glowPulse, { toValue: 1, duration: 850, useNativeDriver: true }),
+      ]),
+      // Roll: prev shoots up out of frame, new bounces up from below
+      Animated.spring(roll, { toValue: 1, useNativeDriver: true, tension: 85, friction: 8 }),
+      // Sparkle burst — particles fly outward from the centre of the number
+      Animated.timing(sparkleProgress, { toValue: 1, duration: 1100, useNativeDriver: true }),
+    ]).start(() => {
+      if (!completeRef.current) {
+        completeRef.current = true;
+        onComplete?.();
+      }
+    });
+
+    return () => {
+      hapticTimersRef.current.forEach(clearTimeout);
+      hapticTimersRef.current = [];
+    };
+  }, [visible]);
+
+  const shakeTx       = shake.interpolate({ inputRange: [-1, 1], outputRange: [-7, 7] });
+  const prevTranslate = roll.interpolate({ inputRange: [0, 1], outputRange: [0, -90] });
+  const prevOpacity   = roll.interpolate({ inputRange: [0, 0.4, 1], outputRange: [1, 0, 0] });
+  const nextTranslate = roll.interpolate({ inputRange: [0, 1], outputRange: [90, 0] });
+  const nextOpacity   = roll.interpolate({ inputRange: [0, 0.6, 1], outputRange: [0, 0, 1] });
+
+  return (
+    <Animated.View style={[fm.countBadge, { transform: [{ scale: enterScale }] }]}>
+      {SPARKLE_PARTICLES.map((p, i) => (
+        <SparkleStar key={i} progress={sparkleProgress} {...p} />
+      ))}
+      <View style={fm.countNumberWrap}>
+        <Animated.View
+          style={[
+            fm.countNumberAbsolute,
+            {
+              transform: [
+                { translateY: prevTranslate },
+                { translateX: shakeTx },
+                { scale: prevScale },
+              ],
+              opacity: prevOpacity,
+            },
+          ]}
+        >
+          <GoldNumber value={prev} gradientId="goldPrev" variant="white" />
+        </Animated.View>
+        <Animated.View
+          style={[
+            fm.countNumberAbsolute,
+            { transform: [{ translateY: nextTranslate }], opacity: nextOpacity },
+          ]}
+        >
+          <GoldNumber value={next} gradientId="goldNext" variant="gold" />
+        </Animated.View>
+      </View>
+    </Animated.View>
+  );
+}
+
+function SessionFeelingModal({ visible, focusName, prevSessionCount, onSave, onSkip }) {
+  const { height: screenHeight } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
   const [feelingIdx, setFeelingIdx] = useState(2);
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
   const slideAnim = useRef(new Animated.Value(600)).current;
+  const contentFade = useRef(new Animated.Value(0)).current;
+  // Drives the badge from screen-centre (during the drum roll) up to its
+  // resting position at the top of the modal once the reveal finishes.
+  const centerLift = useRef(new Animated.Value(1)).current;
+  // Lifts the bottom glass card above the keyboard when the user taps the
+  // note field. Driven by Keyboard show/hide events.
+  const cardLift = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (!visible) return;
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const showSub = Keyboard.addListener(showEvent, (e) => {
+      const kbHeight = e.endCoordinates?.height ?? 0;
+      // Lift the card just above the keyboard. Subtract the bottom safe-area
+      // inset because the card already sits that far above the screen edge.
+      const lift = Math.max(0, kbHeight - insets.bottom - 8);
+      Animated.timing(cardLift, {
+        toValue: -lift,
+        duration: e.duration ?? 250,
+        useNativeDriver: true,
+      }).start();
+    });
+    const hideSub = Keyboard.addListener(hideEvent, (e) => {
+      Animated.timing(cardLift, {
+        toValue: 0,
+        duration: e.duration ?? 250,
+        useNativeDriver: true,
+      }).start();
+    });
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, [visible, insets.bottom]);
+
+  // Distance the badge starts below its resting top position so it sits at
+  // roughly the visual centre of the screen during phase 1. Padding-top of
+  // the modal is 32px and the badge takes ~280px of height.
+  const centerOffset = Math.max(60, screenHeight / 2 - 240);
 
   useEffect(() => {
     if (visible) {
@@ -603,6 +890,8 @@ function SessionFeelingModal({ visible, focusName, onSave, onSkip }) {
       setNote('');
       setSaving(false);
       slideAnim.setValue(600);
+      contentFade.setValue(0);
+      centerLift.setValue(1);
       Animated.spring(slideAnim, {
         toValue: 0,
         useNativeDriver: true,
@@ -612,6 +901,23 @@ function SessionFeelingModal({ visible, focusName, onSave, onSkip }) {
     }
   }, [visible]);
 
+  function handleAnimationComplete() {
+    Animated.parallel([
+      Animated.spring(centerLift, {
+        toValue: 0,
+        useNativeDriver: true,
+        tension: 50,
+        friction: 11,
+      }),
+      Animated.timing(contentFade, {
+        toValue: 1,
+        duration: 420,
+        delay: 120,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }
+
   async function handleSave() {
     if (saving) return;
     setSaving(true);
@@ -619,39 +925,83 @@ function SessionFeelingModal({ visible, focusName, onSave, onSkip }) {
     await onSave(label, note.trim() || null);
   }
 
+  const badgeTranslateY = centerLift.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, centerOffset],
+  });
+
+  const nextCount = prevSessionCount + 1;
+
   return (
     <Modal visible={visible} transparent animationType="none" onRequestClose={() => {}}>
       <Animated.View style={[fm.container, { transform: [{ translateY: slideAnim }] }]} onStartShouldSetResponder={() => { Keyboard.dismiss(); return false; }}>
 
-        <View style={fm.content}>
-          <Text style={fm.focusLabel}>{focusName}</Text>
-          <Text style={fm.title}>Session Complete ✓</Text>
-          <Text style={fm.subtitle}>How did it go?</Text>
+        <CineBackdrop pulse={contentFade} />
 
-          <FeelingSlider value={feelingIdx} onChange={setFeelingIdx} />
-
-          <TextInput
-            style={fm.noteInput}
-            placeholder="Any notes? (optional)"
-            placeholderTextColor="rgba(17,12,17,0.25)"
-            multiline
-            numberOfLines={3}
-            maxLength={300}
-            value={note}
-            onChangeText={setNote}
-            textAlignVertical="top"
+        <Animated.View style={[fm.badgeFloater, { transform: [{ translateY: badgeTranslateY }] }]}>
+          <SessionCountBadge
+            prev={prevSessionCount}
+            next={nextCount}
+            visible={visible}
+            onComplete={handleAnimationComplete}
           />
+          <Animated.View style={[fm.eyebrowBlock, { opacity: contentFade }]}>
+            <View style={fm.eyebrowDashRow}>
+              <View style={fm.eyebrowDash} />
+              <Text style={fm.eyebrowFocus} numberOfLines={1}>{(focusName || '').toUpperCase()}</Text>
+              <View style={fm.eyebrowDash} />
+            </View>
+            <Text style={fm.eyebrowSessions}>
+              {nextCount} {nextCount === 1 ? 'SESSION' : 'SESSIONS'}
+            </Text>
+          </Animated.View>
+        </Animated.View>
 
-        </View>
+        <Animated.View style={[fm.glassCard, { opacity: contentFade, bottom: insets.bottom + 14, transform: [{ translateY: cardLift }] }]}>
+          <BlurView intensity={30} tint="dark" style={StyleSheet.absoluteFill} />
+          <View style={fm.glassInner}>
+            <Text style={fm.questionText}>How did it go?</Text>
 
-        <View style={fm.btnWrap}>
-          <TouchableOpacity style={fm.saveBtn} onPress={handleSave} activeOpacity={0.88} disabled={saving}>
-            <Text style={fm.saveBtnText}>{saving ? 'Saving…' : 'Save & Continue'}</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={fm.skipBtn} onPress={onSkip} activeOpacity={0.7}>
-            <Text style={fm.skipBtnText}>Skip</Text>
-          </TouchableOpacity>
-        </View>
+            <View style={fm.pillsRow}>
+              {FEELINGS.map((f, i) => {
+                const on = feelingIdx === i;
+                return (
+                  <TouchableOpacity
+                    key={i}
+                    style={[fm.pill, on && fm.pillSel]}
+                    activeOpacity={0.7}
+                    onPress={() => setFeelingIdx(i)}
+                  >
+                    <Text
+                      style={[fm.pillText, on && fm.pillTextSel]}
+                      numberOfLines={1}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.8}
+                    >
+                      {f.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            <TextInput
+              style={fm.noteDark}
+              placeholder="Add a note (optional)"
+              placeholderTextColor="rgba(255,255,255,0.4)"
+              multiline
+              numberOfLines={2}
+              maxLength={300}
+              value={note}
+              onChangeText={setNote}
+              textAlignVertical="top"
+            />
+
+            <TouchableOpacity style={fm.ctaBtn} onPress={handleSave} activeOpacity={0.88} disabled={saving}>
+              <Text style={fm.ctaText}>{saving ? 'Saving…' : 'Continue'}</Text>
+            </TouchableOpacity>
+          </View>
+        </Animated.View>
 
       </Animated.View>
     </Modal>
@@ -732,7 +1082,7 @@ export default function FocusSessionScreen({ route, navigation }) {
   const [classInputs, setClassInputs] = useState([]);
   const [notesLoading, setNotesLoading] = useState(true);
   const [selectedInput, setSelectedInput] = useState(null);
-  const [duration, setDuration] = useState(25);
+  const [duration, setDuration] = useState(15);
   const [sessionActive, setSessionActive] = useState(false);
   const [sessionPaused, setSessionPaused] = useState(false);
   const [sessionDone, setSessionDone] = useState(false);
@@ -776,7 +1126,7 @@ export default function FocusSessionScreen({ route, navigation }) {
     beatAnim.setValue(1);
     Animated.timing(beatAnim, { toValue: 0, duration: 200, useNativeDriver: false }).start();
   }
-  const [timeLeft, setTimeLeft] = useState(25 * 60);
+  const [timeLeft, setTimeLeft] = useState(15 * 60);
   const [overTime, setOverTime] = useState(0);
   const overTimeRef = useRef(0);
 
@@ -1214,10 +1564,11 @@ I don't have that in your data, but you can send the question to your coach if y
 9. Plain text only — no markdown, no **, no bullet symbols, no headers.`;
   }
 
-  async function handleAiSend() {
-    const text = aiQuestion.trim();
+  async function handleAiSend(textOverride) {
+    const raw = typeof textOverride === 'string' ? textOverride : aiQuestion;
+    const text = raw.trim();
     if (!text || aiSending) return;
-    setAiQuestion('');
+    if (typeof textOverride !== 'string') setAiQuestion('');
     Keyboard.dismiss();
     const newMessages = [...aiMessages, { role: 'user', content: text }];
     setAiMessages(newMessages);
@@ -1308,6 +1659,29 @@ I don't have that in your data, but you can send the question to your coach if y
     ));
   }
 
+  // Pre-written conversation starters shown in the empty state. Tapping one
+  // either fires it through the normal AI send flow, or — for "Ask my coach"
+  // — primes the conversation with a synthetic prompt asking for the
+  // student's question (the regular send flow then handles that question:
+  // AI answers if it can, otherwise the existing "Send to coach" CTA fires).
+  const AI_SUGGESTIONS = [
+    { key: 'why', label: 'Why this focus point?', send: 'Why this focus point?' },
+    { key: 'understand', label: "I'm not sure I understand", send: "I'm not sure I understand this focus point. Can you explain it more simply?" },
+    { key: 'ask-coach', label: 'Ask my coach', primer: true },
+  ];
+
+  function handleSuggestion(s) {
+    if (s.primer) {
+      setAiMessages([{
+        role: 'assistant',
+        content: "What's your question for your coach? Type it below — I'll try to answer first, and forward it if I can't.",
+      }]);
+      setTimeout(() => aiScrollRef.current?.scrollToEnd({ animated: true }), 50);
+    } else {
+      handleAiSend(s.send);
+    }
+  }
+
   async function startAiRecording() {
     try {
       const { granted } = await AudioModule.requestRecordingPermissionsAsync();
@@ -1396,6 +1770,12 @@ I don't have that in your data, but you can send the question to your coach if y
   const dataReady = !!focusPoint;
 
   return (
+    <View style={{ flex: 1 }}>
+    <LinearGradient
+      colors={['#F2F2EF', '#F8F2E2', '#F4EAD0', '#FFFFFF', '#FFFFFF']}
+      locations={[0, 0.22, 0.42, 0.6, 1]}
+      style={StyleSheet.absoluteFillObject}
+    />
     <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
 
       {/* ── Fixed header (shared across all pages) ── */}
@@ -1415,6 +1795,15 @@ I don't have that in your data, but you can send the question to your coach if y
 
           {/* Focus Card — expands downward to include AI chat, same as "read more" */}
           <View style={styles.focusCard}>
+            {/* Gold accent — concentrated top-right (offset from Home's bottom-right) */}
+            <LinearGradient
+              colors={['rgba(242,185,64,0.22)', 'transparent', 'transparent']}
+              locations={[0, 0.55, 1]}
+              start={{ x: 1, y: 0 }}
+              end={{ x: 0, y: 1 }}
+              style={[StyleSheet.absoluteFillObject, { borderRadius: 16 }]}
+              pointerEvents="none"
+            />
 
             {/* "?" toggle — always visible, absolute positioned */}
             {dataReady && (
@@ -1464,7 +1853,7 @@ I don't have that in your data, but you can send the question to your coach if y
                   ) : null}
                 </View>
               ) : null}
-              <FocusPager focusPoint={focusPoint} inputs={classInputs} loading={notesLoading} onSelect={setSelectedInput} />
+              <FocusPager focusPoint={focusPoint} />
             </View>
             )}
 
@@ -1480,7 +1869,19 @@ I don't have that in your data, but you can send the question to your coach if y
               onContentSizeChange={() => aiScrollRef.current?.scrollToEnd({ animated: true })}
             >
               {aiMessages.length === 0 && !aiSending && (
-                <Text style={styles.aiCardEmptyText}>Ask a question about your focus point or training.</Text>
+                <View style={styles.suggestionsWrap}>
+                  <Text style={styles.aiCardEmptyText}>Not sure where to start?</Text>
+                  {AI_SUGGESTIONS.map((s) => (
+                    <TouchableOpacity
+                      key={s.key}
+                      style={styles.suggestionBubble}
+                      activeOpacity={0.75}
+                      onPress={() => handleSuggestion(s)}
+                    >
+                      <Text style={styles.suggestionText}>{s.label}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
               )}
               {aiMessages.map((msg, i) => (
                 <View key={i}>
@@ -1622,7 +2023,9 @@ I don't have that in your data, but you can send the question to your coach if y
                   </View>
                 </>
               ) : (
-                <DurationPicker value={duration} onChange={(d) => { closeMetro(); setDuration(d); setTimeLeft(d * 60); }} />
+                <View style={{ marginTop: 56 }}>
+                  <DurationPicker value={duration} onChange={(d) => { closeMetro(); setDuration(d); setTimeLeft(d * 60); }} />
+                </View>
               )}
             </View>
           </View>
@@ -1665,9 +2068,11 @@ I don't have that in your data, but you can send the question to your coach if y
           {sessionActive && sessionPaused && (
             <View style={styles.pausedRow}>
               <TouchableOpacity style={styles.resumeBtn} onPress={resumeSession} activeOpacity={0.88}>
-                <Text style={styles.resumeBtnText}>▶  Resume</Text>
+                <Ionicons name="play" size={14} color="#000" />
+                <Text style={styles.resumeBtnText}>Resume</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.stopBtn} onPress={() => setShowStopConfirm(true)} activeOpacity={0.85}>
+                <Ionicons name="stop" size={14} color={Colors.secondary} />
                 <Text style={styles.stopBtnText}>Stop</Text>
               </TouchableOpacity>
             </View>
@@ -1709,7 +2114,7 @@ I don't have that in your data, but you can send the question to your coach if y
                 onPress={() => setShowStopConfirm(false)}
                 activeOpacity={0.8}
               >
-                <Text style={styles.stopConfirmCancelText}>Cancel</Text>
+                <Text style={styles.stopConfirmCancelText}>Continue training</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.stopConfirmConfirm}
@@ -1726,6 +2131,7 @@ I don't have that in your data, but you can send the question to your coach if y
       <SessionFeelingModal
         visible={showFeelingModal}
         focusName={focusPoint?.name || ''}
+        prevSessionCount={sessionCount}
         onSave={handleSave}
         onSkip={handleSkip}
       />
@@ -1752,13 +2158,14 @@ I don't have that in your data, but you can send the question to your coach if y
         </View>
       </Modal>
     </SafeAreaView>
+    </View>
   );
 }
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: Colors.background },
+  safe: { flex: 1, backgroundColor: 'transparent' },
 
   header: {
     flexDirection: 'row',
@@ -1801,6 +2208,7 @@ const styles = StyleSheet.create({
     fontSize: 24,
     color: Colors.white,
     lineHeight: 30,
+    marginTop: 14,
   },
   subtitleWrap: {
     marginTop: 8,
@@ -2033,12 +2441,12 @@ const styles = StyleSheet.create({
     gap: 16,
   },
   startBtn: {
-    backgroundColor: '#FF9D00',
+    backgroundColor: Colors.orange,
     borderRadius: 14,
     paddingVertical: 17,
     alignItems: 'center',
   },
-  startBtnText: { fontFamily: Fonts.jakartaExtraBold, fontSize: 15, color: '#000', letterSpacing: 1 },
+  startBtnText: { fontFamily: Fonts.ttExtraBold, fontSize: 15, color: '#000', letterSpacing: 1 },
 
   pauseBtn: {
     borderRadius: 14,
@@ -2069,18 +2477,24 @@ const styles = StyleSheet.create({
   },
   resumeBtn: {
     flex: 1,
+    flexDirection: 'row',
     backgroundColor: Colors.orange,
     borderRadius: 14,
     paddingVertical: 14,
     alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
   },
   resumeBtnText: { fontFamily: Fonts.jakartaBold, fontSize: 14, color: '#000' },
 
   stopBtn: {
     flex: 1,
+    flexDirection: 'row',
     borderRadius: 14,
     paddingVertical: 14,
     alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
     borderWidth: 1,
     borderColor: 'rgba(17,12,17,0.15)',
     overflow: 'hidden',
@@ -2126,31 +2540,29 @@ const styles = StyleSheet.create({
     marginBottom: 24,
   },
   stopConfirmActions: {
-    flexDirection: 'row',
+    flexDirection: 'column',
     gap: 10,
   },
   stopConfirmCancel: {
-    flex: 1,
     borderRadius: 12,
-    paddingVertical: 13,
+    paddingVertical: 14,
     alignItems: 'center',
-    backgroundColor: Colors.black,
+    backgroundColor: Colors.orange,
   },
   stopConfirmCancelText: {
     fontFamily: Fonts.jakartaExtraBold,
     fontSize: 14,
-    color: Colors.white,
+    color: Colors.black,
   },
   stopConfirmConfirm: {
-    flex: 1,
     borderRadius: 12,
-    paddingVertical: 13,
+    paddingVertical: 14,
     alignItems: 'center',
     borderWidth: 1,
     borderColor: 'rgba(17,12,17,0.15)',
   },
   stopConfirmConfirmText: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.jakartaExtraBold,
     fontSize: 14,
     color: Colors.secondary,
   },
@@ -2190,6 +2602,26 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: 'rgba(255,255,255,0.3)',
     lineHeight: 20,
+  },
+  suggestionsWrap: {
+    alignItems: 'flex-end',
+    gap: 8,
+  },
+  suggestionBubble: {
+    alignSelf: 'flex-end',
+    maxWidth: '90%',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.18)',
+    backgroundColor: 'rgba(255,255,255,0.06)',
+  },
+  suggestionText: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 13,
+    color: 'rgba(255,255,255,0.85)',
+    lineHeight: 18,
   },
   aiCardBubble: {
     maxWidth: '90%',
@@ -2270,14 +2702,15 @@ const styles = StyleSheet.create({
   },
   aiCardInput: {
     flex: 1,
-    minHeight: 36,
+    height: 36,
     backgroundColor: 'rgba(255,255,255,0.08)',
     borderRadius: 18,
     paddingHorizontal: 14,
-    paddingVertical: 8,
+    paddingVertical: 0,
     fontFamily: Fonts.jakartaRegular,
     fontSize: 13,
     color: '#FFFFFF',
+    textAlignVertical: 'center',
   },
   aiCardSendBtn: {
     width: 32,
@@ -2680,73 +3113,213 @@ const sl = StyleSheet.create({
 const fm = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: Colors.white,
-    paddingHorizontal: 24,
-    paddingTop: 80,
-    paddingBottom: 44,
-    justifyContent: 'space-between',
+    backgroundColor: '#050505',
   },
   content: {
     alignItems: 'center',
   },
-  focusLabel: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 11,
-    color: Colors.secondary,
-    letterSpacing: 0.3,
-    marginBottom: 12,
-    textAlign: 'center',
+  // ── Cinematic backdrop layers ──────────────────────────────────────────
+  cineCanvas: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#050505',
   },
-  title: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 28,
-    color: Colors.black,
-    textAlign: 'center',
-    marginBottom: 6,
-    letterSpacing: -0.3,
+  cineGlowBottom: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: '70%',
   },
-  subtitle: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 15,
-    color: Colors.secondary,
-    textAlign: 'center',
-    marginBottom: 44,
+  cineGlowTop: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    height: '40%',
+    opacity: 1,
   },
-  noteInput: {
-    width: '100%',
-    minHeight: 86,
-    borderWidth: 1,
-    borderColor: 'rgba(17,12,17,0.1)',
-    borderRadius: 14,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 14,
-    color: Colors.black,
-    backgroundColor: Colors.statCardBg,
-    lineHeight: 21,
+  cineHorizon: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: '36%',
+    height: 1,
   },
-  btnWrap: { gap: 4 },
-  saveBtn: {
-    backgroundColor: Colors.orange,
-    borderRadius: 14,
-    paddingVertical: 17,
+  cineBeam: {
+    position: 'absolute',
+    left: '-30%',
+    right: '-30%',
+    bottom: 0,
+    height: '55%',
+  },
+  badgeFloater: {
+    position: 'absolute',
+    top: 90,
+    left: 0,
+    right: 0,
     alignItems: 'center',
   },
-  saveBtnText: {
-    fontFamily: Fonts.jakartaExtraBold,
+  eyebrowBlock: {
+    width: '100%',
+    alignItems: 'center',
+    marginTop: 24,
+    paddingHorizontal: 28,
+  },
+  eyebrowDashRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+    gap: 14,
+    marginBottom: 10,
+  },
+  eyebrowDash: {
+    flex: 1,
+    height: 1,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+  },
+  eyebrowFocus: {
+    fontFamily: Fonts.ttExtraBold,
+    fontSize: 17,
+    color: '#FFFFFF',
+    letterSpacing: 3.4,
+    textAlign: 'center',
+    flexShrink: 1,
+  },
+  eyebrowSessions: {
+    fontFamily: Fonts.ttExtraBold,
+    fontSize: 13,
+    color: '#E8B530',
+    letterSpacing: 4,
+    textAlign: 'center',
+  },
+  questionText: {
+    fontFamily: Fonts.ttExtraBold,
+    fontSize: 22,
+    color: '#FFFFFF',
+    textAlign: 'center',
+    letterSpacing: -0.4,
+    marginBottom: 16,
+  },
+
+  // ── Session count reveal (drum-roll number roll on dark cine bg) ───────
+  countBadge: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+    overflow: 'visible',
+  },
+  countSparkleParticle: {
+    position: 'absolute',
+    top: '50%',
+    left: '50%',
+    marginTop: -14,
+    marginLeft: -14,
+  },
+  countNumberWrap: {
+    height: 240,
+    width: 360,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'visible',
+  },
+  countNumberAbsolute: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    width: '100%',
+    alignItems: 'center',
+  },
+  goldNumberWrap: {
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'visible',
+  },
+  // ── Glass card at bottom (dark blur) ──────────────────────────────────
+  glassCard: {
+    position: 'absolute',
+    left: 14,
+    right: 14,
+    borderRadius: 24,
+    overflow: 'hidden',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: 'rgba(20,20,22,0.62)',
+  },
+  glassInner: {
+    paddingHorizontal: 18,
+    paddingTop: 18,
+    paddingBottom: 14,
+  },
+  pillsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 4,
+    marginBottom: 14,
+  },
+  pill: {
+    flex: 1,
+    paddingHorizontal: 2,
+    paddingVertical: 9,
+    borderRadius: 16,
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.08)',
+  },
+  pillSel: {
+    backgroundColor: '#E8B530',
+    borderColor: 'transparent',
+  },
+  pillText: {
+    fontFamily: Fonts.jakartaBold,
+    fontSize: 10,
+    color: 'rgba(255,255,255,0.62)',
+    letterSpacing: 0,
+  },
+  pillTextSel: {
+    color: '#0A0A0A',
+  },
+  noteDark: {
+    width: '100%',
+    minHeight: 56,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 13,
+    color: '#FFFFFF',
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.06)',
+    marginBottom: 14,
+  },
+  ctaBtn: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    paddingVertical: 16,
+    alignItems: 'center',
+    shadowColor: '#FFFFFF',
+    shadowOpacity: 0.25,
+    shadowOffset: { width: 0, height: 8 },
+    shadowRadius: 22,
+    elevation: 6,
+  },
+  ctaText: {
+    fontFamily: Fonts.ttExtraBold,
     fontSize: 15,
-    color: '#000',
-    letterSpacing: 0.3,
+    color: '#0A0A0A',
+    letterSpacing: 0.4,
   },
   skipBtn: {
-    paddingVertical: 14,
+    paddingVertical: 12,
     alignItems: 'center',
   },
-  skipBtnText: {
+  skipText: {
     fontFamily: Fonts.jakartaMedium,
-    fontSize: 14,
-    color: Colors.secondary,
+    fontSize: 13,
+    color: 'rgba(255,255,255,0.45)',
   },
   motivationRow: {
     flexDirection: 'row',

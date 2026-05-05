@@ -1,5 +1,6 @@
 import { supabase } from '../services/supabase/client';
 import { computeAllStudentMetricsBatch } from '../utils/studentMetrics';
+import { categoryFromStyle } from '../utils/danceCategory';
 import { normalizeFocusName } from '../utils/normalizeFocusName';
 
 async function getCoachId() {
@@ -187,7 +188,7 @@ export async function getMyStudents() {
       .in('user_id', studentIds),
     supabase
       .from('focus_points')
-      .select('id, name, user_id, status, tier, merge_action')
+      .select('id, name, user_id, status, tier, merge_action, dance')
       .in('user_id', studentIds)
       .eq('is_deleted', false)
       .eq('is_other', false),
@@ -278,7 +279,10 @@ export async function getMyStudents() {
 
   // Compute the shared Retention / Motivation / Health metrics for every
   // student in a single pass using pre-fetched data (no extra DB calls).
-  const metricsByStudent = computeAllStudentMetricsBatch(studentIds, allFocuses, allLogs);
+  // Filter to the coach's own dance category so a Latin coach only sees Latin
+  // metrics (and vice versa). Dual-style coaches get unfiltered totals.
+  const coachCategory = categoryFromStyle(me?.dance_style);
+  const metricsByStudent = computeAllStudentMetricsBatch(studentIds, allFocuses, allLogs, coachCategory);
 
   return students
     .map(s => {

@@ -47,7 +47,9 @@ import {
 import PendingFocusCard from '../../components/coach/PendingFocusCard';
 import RejectFocusSheet from '../../components/coach/RejectFocusSheet';
 import { getNotifications, deleteNotification } from '../../storage/notificationsStorage';
+import { getUser } from '../../storage/storage';
 import { getAllStudentMetrics } from '../../utils/studentMetrics';
+import { categoryFromStyle } from '../../utils/danceCategory';
 import FocusPointEditSheet from '../../components/FocusPointEditSheet';
 import { useCoachData } from '../../context/CoachDataContext';
 
@@ -366,6 +368,10 @@ export default function StudentDetailScreen({ route, navigation }) {
   const [nameMatches, setNameMatches] = useState([]);
   const [lastClassDate, setLastClassDate] = useState(null);
   const [metrics, setMetrics] = useState({ progression: 0, retention: 100, global: 0 });
+  // Coach's dance category, used to filter metrics. Held in a ref because the
+  // realtime subscription closure (set up once per studentId) needs the latest
+  // value, but stateful re-renders wouldn't re-bind that closure.
+  const coachCategoryRef = useRef(null);
   const [loading, setLoading] = useState(true);
 
   const [activeTab, setActiveTab] = useState('activity'); // information | activity | actions
@@ -424,6 +430,13 @@ export default function StudentDetailScreen({ route, navigation }) {
       async function load() {
         setLoading(true);
         try {
+          // Coach-side metrics are scoped to the coach's own dance_style:
+          // a Latin coach sees Latin metrics, a Ballroom coach sees Ballroom.
+          // 'Latin & Ballroom' coaches (no filter) see everything.
+          const me = await getUser().catch(() => null);
+          const cat = categoryFromStyle(me?.dance_style);
+          coachCategoryRef.current = cat;
+
           const [p, fp, act, qs, pfp, lcd, m, notifs, { data: merges }] = await Promise.all([
             getStudentProfile(studentId),
             getStudentFocusPoints(studentId),
@@ -431,7 +444,7 @@ export default function StudentDetailScreen({ route, navigation }) {
             getStudentQuestions(studentId),
             getPendingFocusPoints(studentId),
             getStudentLastClassDate(studentId),
-            getAllStudentMetrics(studentId),
+            getAllStudentMetrics(studentId, cat),
             getNotifications().catch(() => []),
             supabase
               .from('merge_requests')
@@ -511,7 +524,7 @@ export default function StudentDetailScreen({ route, navigation }) {
               const [act, lcd, m] = await Promise.all([
                 getStudentRecentActivity(studentId, 30),
                 getStudentLastClassDate(studentId),
-                getAllStudentMetrics(studentId),
+                getAllStudentMetrics(studentId, coachCategoryRef.current),
               ]);
               if (active) {
                 setActivity(act);

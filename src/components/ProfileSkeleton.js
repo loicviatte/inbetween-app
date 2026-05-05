@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { View, StyleSheet, Animated } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Spacing } from '../theme';
 
 function Bone({ width, height, radius = 8, style }) {
@@ -24,57 +25,67 @@ export default function ProfileSkeleton() {
   }, []);
 
   return (
-    <SafeAreaView style={sk.safe} edges={['top']}>
-      <Animated.View style={{ flex: 1, opacity: pulse }}>
-        {/* Header */}
-        <View style={sk.header}>
-          <Bone width={36} height={36} radius={18} />
-          <Bone width={36} height={36} radius={18} />
-        </View>
+    <View style={{ flex: 1 }}>
+      <LinearGradient
+        colors={['#F7F6F3', '#F4EFDC', '#F9DF9B']}
+        locations={[0, 0.55, 1]}
+        start={{ x: 0.1, y: 0 }}
+        end={{ x: 0.95, y: 1 }}
+        style={StyleSheet.absoluteFillObject}
+      />
+      <SafeAreaView style={sk.safe} edges={['top']}>
+        <Animated.View style={{ flex: 1, opacity: pulse }}>
+          {/* Header */}
+          <View style={sk.header}>
+            <Bone width={44} height={44} radius={14} />
+            <Bone width={56} height={32} radius={16} />
+          </View>
 
-        {/* Avatar + name */}
-        <View style={sk.profile}>
-          <Bone width={72} height={72} radius={36} style={{ marginBottom: 14 }} />
-          <Bone width={140} height={20} radius={6} style={{ marginBottom: 6 }} />
-          <Bone width={100} height={14} radius={4} />
-        </View>
+          {/* Avatar + name */}
+          <View style={sk.profile}>
+            <Bone width={88} height={88} radius={44} style={{ marginBottom: 10 }} />
+            <Bone width={160} height={26} radius={6} style={{ marginBottom: 6 }} />
+            <Bone width={180} height={14} radius={4} />
+          </View>
 
-        {/* Stats row */}
-        <View style={sk.statsRow}>
-          <Bone width={0} height={60} radius={14} style={{ flex: 1 }} />
-        </View>
+          {/* Glance card */}
+          <View style={sk.row}>
+            <Bone width={0} height={120} radius={18} style={{ flex: 1 }} />
+          </View>
 
-        {/* Radar placeholder */}
-        <View style={sk.radar}>
-          <Bone width={180} height={180} radius={90} />
-        </View>
-      </Animated.View>
-    </SafeAreaView>
+          {/* Readiness card */}
+          <View style={sk.row}>
+            <Bone width={0} height={170} radius={20} style={{ flex: 1 }} />
+          </View>
+
+          {/* Strengths card */}
+          <View style={sk.row}>
+            <Bone width={0} height={260} radius={20} style={{ flex: 1 }} />
+          </View>
+        </Animated.View>
+      </SafeAreaView>
+    </View>
   );
 }
 
 const sk = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#fff' },
+  safe: { flex: 1, backgroundColor: 'transparent' },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: Spacing.side,
     paddingTop: 16,
-    paddingBottom: 14,
+    paddingBottom: 12,
   },
   profile: {
     alignItems: 'center',
-    marginTop: 10,
-    marginBottom: 24,
+    marginTop: 6,
+    marginBottom: 14,
   },
-  statsRow: {
+  row: {
     paddingHorizontal: Spacing.side,
-    marginBottom: 24,
-  },
-  radar: {
-    alignItems: 'center',
-    marginTop: 10,
+    marginTop: 14,
   },
   bone: {
     backgroundColor: 'rgba(17,12,17,0.06)',

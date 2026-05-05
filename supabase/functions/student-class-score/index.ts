@@ -8,6 +8,20 @@ declare global {
 const LATIN_DANCES = ['Cha Cha', 'Samba', 'Rumba', 'Paso Doble', 'Jive']
 const REVIEW_WINDOW_MS = 18 * 60 * 60 * 1000
 
+// Marker dances used when a focus point is created without an explicit
+// dance list (the user logged a class without selecting any dances). Stored
+// as a single-element array so it visually pills clean and so
+// categoryFromDances() routes the FP into the right Latin/Ballroom ranking.
+const LATIN_FALLBACK = ['Cha Cha']
+const BALLROOM_FALLBACK = ['Waltz']
+
+function fallbackDanceForCoachStyle(danceStyle: string | null | undefined): string[] {
+  const ds = (danceStyle ?? '').toLowerCase()
+  if (ds === 'latin') return LATIN_FALLBACK
+  if (ds === 'ballroom' || ds === 'standard') return BALLROOM_FALLBACK
+  return []
+}
+
 function urgencyToTier(score: number | null | undefined): 'critical' | 'important' | 'supporting' {
   const s = score ?? 5
   if (s >= 8) return 'critical'
@@ -175,6 +189,18 @@ async function process(supabase: any, payload: Payload): Promise<void> {
   const deadline = new Date(now.getTime() + REVIEW_WINDOW_MS).toISOString()
   const targetStatus = coachId ? 'pending_coach' : 'active'
 
+  // Resolve the dance list new FPs will inherit. Priority: the class's own
+  // dance list → the reviewing coach's dance_style → empty (rare edge case).
+  let fpDance: string[] = danceList
+  if (fpDance.length === 0 && coachId) {
+    const { data: coachRow } = await supabase
+      .from('users')
+      .select('dance_style')
+      .eq('id', coachId)
+      .single()
+    fpDance = fallbackDanceForCoachStyle(coachRow?.dance_style)
+  }
+
   console.log(
     `[student-class-score] class=${class_input_id} student=${studentId} coach=${coachId} ` +
       `teacher_name="${ci.teacher_name ?? ''}" dance=${JSON.stringify(danceList)} focuses=${focuses.length}`,
@@ -220,6 +246,7 @@ async function process(supabase: any, payload: Payload): Promise<void> {
         tier,
         base_score: fp.priority_score,
         drill: fp.drill ?? null,
+        dance: fpDance,
         status: targetStatus,
         source_class_input_id: class_input_id,
         class_input_id: class_input_id,

@@ -228,8 +228,46 @@ Pick the best fit. Every focus point must have a category.
 - explicit_priority: true if coach used words like "most important", "above all", "focus on this", "before anything else"
 
 ## CLASS SUMMARY
-For each student, write a "class_summary": one sentence (max 20 words) summarizing what was worked on overall during this lesson. It should read naturally, like a note a student would write after class. Focus on the main themes, not individual corrections.
-Examples: "Worked mainly on hip action in Rumba and maintaining back connection throughout the Cha-cha.", "Focus on footwork timing in Quickstep and posture in Waltz."
+For each student, write a "class_summary" as a thorough recap of the whole lesson — proper meeting minutes, not a teaser. The student should be able to re read this weeks later and reconstruct what was actually covered without watching the video again. Cover EVERY meaningful idea raised during the class; do not pick three favourites and skip the rest.
+
+Required structure (use literal newline characters \\n inside the JSON string to separate lines):
+
+1. Overview paragraph: 2 to 4 full sentences describing the overall theme, the dance(s) worked on, and the main thread the coach pulled through. This is prose, not bullets.
+
+2. A blank line.
+
+3. The literal header "Topics covered:" on its own line.
+
+4. One bullet per distinct teaching point raised in the lesson. Use as many bullets as the transcript actually contains, but never fewer than 2 and never more than 10. Each bullet:
+   - Starts with "• " (bullet character + one space).
+   - Names the technique, principle, or correction.
+   - Explains WHAT to do and WHY in one or two complete sentences (12 to 30 words).
+   - Quotes or paraphrases the coach when the wording is memorable.
+   - Stays specific to this lesson; never invent points that were not discussed.
+
+5. A blank line.
+
+6. The literal header "Drills:" on its own line — INCLUDE THIS SECTION ONLY if the coach prescribed at least one concrete drill. Then one bullet per drill, formatted "• Drill name: reps, sets, duration, and any cue the coach attached." If no drill was prescribed, omit the header and the section entirely.
+
+7. A blank line (only if Drills section was rendered).
+
+8. The literal header "Watch out:" on its own line — INCLUDE THIS SECTION ONLY if the coach gave explicit warnings or pointed at recurring mistakes. Then 1 to 3 bullets describing what to avoid. If nothing of the kind was said, omit the section entirely.
+
+9. A blank line (only if Watch out section was rendered).
+
+10. The literal header "Next session focus:" on its own line — INCLUDE THIS SECTION ONLY if the coach explicitly named something to prepare or revisit next time. Then 1 or 2 short bullets. If not mentioned, omit the section entirely.
+
+Rules:
+- Be exhaustive but not redundant. If the coach repeats a point, summarise it once.
+- Always include the Overview and Topics covered sections; the other sections are conditional.
+- Use proper sentences; do not write keyword fragments.
+- No hyphens, en dashes, or em dashes anywhere (per the global style rule).
+- Do not number bullets. Do not capitalise the entire bullet. End every full sentence with a period.
+- Keep the language faithful to what the coach actually said. Do not embellish.
+
+Example value of "class_summary" (for a longer lesson; shorter lessons should still hit the structure but with fewer bullets):
+
+"This session focused on building genuine speed in Jive while keeping the rest of the technique honest. The coach framed speed as the urgent priority for the student and contrasted it with Rumba, where the same conditioning would be counter productive. Most of the hour was spent translating that priority into a single, repeatable conditioning drill.\\n\\nTopics covered:\\n• Speed in Jive comes from leg drive, not upper body tension. Crisp kicks must survive the increased tempo.\\n• Use the full diagonal of the studio so the body learns to recover speed across distance, not just short bursts.\\n• Slow walk back between sprints lets the heart rate drop and protects technique on the next rep.\\n• Specificity matters: this conditioning is not needed in Rumba and would actually hurt that dance's quality.\\n\\nDrills:\\n• Studio sprint intervals: full studio length sprint then slow walk back, 10 reps inside one minute, 2 minute pause, 5 sets.\\n\\nWatch out:\\n• Tendency to slow down on the second half of the bar once fatigue sets in.\\n\\nNext session focus:\\n• Bring evidence the sprint drill was practised before the next lesson so we can build on it."
 
 ## OTHER FOCUS POINTS
 All corrections that did not qualify as focus_points go here.

@@ -1,12 +1,14 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { View, Text, StyleSheet, Pressable, ScrollView, ActivityIndicator, Animated, PanResponder } from 'react-native';
+import { View, Text, StyleSheet, Pressable, ScrollView, ActivityIndicator, Animated, PanResponder, Modal } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Fonts, Spacing } from '../theme';
 import { getNotifications, markAllNotificationsRead, deleteNotification } from '../storage/notificationsStorage';
 import { supabase } from '../services/supabase/client';
 import { locallyRespondedAttendance, locallyResolvedNameMatches } from '../storage/attendanceState';
+import { respondToAttendance } from '../storage/storage';
 import { GenericListSkeleton } from '../components/Skeleton';
+import NotificationDetailSheet from '../components/NotificationDetailSheet';
 
 const ATTENDANCE_TYPES = new Set(['attendance_check', 'group_class_attendance']);
 const ACTIONABLE_TYPES = new Set(['attendance_check', 'group_class_attendance', 'merge_request_student', 'name_match_confirm']);
@@ -19,6 +21,12 @@ const COACH_ACTION_TYPES = new Set([
   'merge_request',
   'name_match_confirm',
 ]);
+// Read-only notif types — tapping opens an info popup instead of navigating.
+const POPUP_READONLY_TYPES = new Set([
+  'coach_request_accepted',
+  'coach_request_declined',
+  'focus_point_rejected',
+]);
 
 // Typographic category labels. Used instead of iconography to convey notification
 // type — feels editorial / premium rather than cluttered with mismatched glyphs.
@@ -29,6 +37,7 @@ const TYPE_CONFIG = {
   group_class_attendance:  { label: 'Attendance',  color: Colors.orange, cta: 'Confirm attendance' },
   focus_points_added:      { label: 'Review',      color: Colors.orange },
   focus_point_added:       { label: 'Review',      color: Colors.orange },
+  focus_point_rejected:    { label: 'Declined',    color: '#FF3B30' },
   merge_request:           { label: 'Merge',       color: '#5788E6' },
   merge_request_student:   { label: 'Merge',       color: '#5788E6', cta: 'Review' },
   name_match_confirm:      { label: 'Name match',  color: '#FF9500', cta: 'Confirm' },
@@ -170,10 +179,11 @@ const swipeStyles = StyleSheet.create({
 export default function NotificationsScreen({ navigation }) {
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [respondedClassInputIds, setRespondedClassInputIds] = useState(new Set());
+  const [respondedAttendances, setRespondedAttendances] = useState(new Map());
   const [pendingClassInputIds, setPendingClassInputIds] = useState(new Set());
   const [currentUserId, setCurrentUserId] = useState(null);
   const [scrollEnabled, setScrollEnabled] = useState(true);
+  const [activeNotif, setActiveNotif] = useState(null);
   const initiallyUnread = useRef(new Set());
 
   async function refreshCoachPending() {
@@ -193,17 +203,44 @@ export default function NotificationsScreen({ navigation }) {
     deleteNotification(id);
   }
 
+  function getPriorAttendance(classInputId) {
+    if (!classInputId) return undefined;
+    if (locallyRespondedAttendance.has(classInputId)) {
+      return locallyRespondedAttendance.get(classInputId);
+    }
+    if (respondedAttendances.has(classInputId)) {
+      return respondedAttendances.get(classInputId);
+    }
+    return undefined;
+  }
+
+  async function handleAttendanceChange(classInputId, attended) {
+    const response = attended ? 'yes' : 'no';
+    await respondToAttendance(classInputId, response);
+    locallyRespondedAttendance.set(classInputId, attended);
+    setRespondedAttendances(prev => {
+      const next = new Map(prev);
+      next.set(classInputId, attended);
+      return next;
+    });
+  }
+
   function handleNotificationPress(notif) {
     if (notif.type === 'attendance_check' || notif.type === 'group_class_attendance') {
       if (!notif.data) return;
-      const responded = respondedClassInputIds.has(notif.data.class_input_id) ||
-        locallyRespondedAttendance.has(notif.data.class_input_id);
-      if (responded) return;
+      const prior = getPriorAttendance(notif.data.class_input_id);
+      if (typeof prior === 'boolean') {
+        // Already responded — open the edit popup instead of re-routing.
+        setActiveNotif(notif);
+        return;
+      }
       navigation.navigate('AttendanceConfirm', {
         classInputId: notif.data.class_input_id,
         coachName: notif.data.coach_name,
         classDate: notif.data.lesson_date ?? notif.data.class_date,
       });
+    } else if (POPUP_READONLY_TYPES.has(notif.type)) {
+      setActiveNotif(notif);
     } else if (COACH_ACTION_TYPES.has(notif.type)) {
       // The same type ('focus_point_added' singular) is reused by two
       // unrelated triggers: a coach-side one (data has student_id) and a
@@ -217,6 +254,9 @@ export default function NotificationsScreen({ navigation }) {
       }
     } else if (notif.type === 'merge_request_student' && notif.data?.merge_request_id) {
       navigation.navigate('MergeReview', { mergeRequestId: notif.data.merge_request_id });
+    } else {
+      // Fallback for any unknown type — at least show the content rather than no-op.
+      setActiveNotif(notif);
     }
   }
 
@@ -226,9 +266,11 @@ export default function NotificationsScreen({ navigation }) {
     if (!userId) return;
     const { data } = await supabase
       .from('attendance_responses')
-      .select('class_input_id')
+      .select('class_input_id, attended')
       .eq('student_id', userId);
-    setRespondedClassInputIds(new Set((data ?? []).map(r => r.class_input_id)));
+    const map = new Map();
+    for (const r of (data ?? [])) map.set(r.class_input_id, r.attended);
+    setRespondedAttendances(map);
   }
 
   useEffect(() => {
@@ -239,12 +281,14 @@ export default function NotificationsScreen({ navigation }) {
       const [data, responsesRes] = await Promise.all([
         getNotifications(),
         userId
-          ? supabase.from('attendance_responses').select('class_input_id').eq('student_id', userId)
+          ? supabase.from('attendance_responses').select('class_input_id, attended').eq('student_id', userId)
           : Promise.resolve({ data: [] }),
       ]);
       initiallyUnread.current = new Set(data.filter(n => !n.read).map(n => n.id));
       setNotifications(data);
-      setRespondedClassInputIds(new Set((responsesRes.data ?? []).map(r => r.class_input_id)));
+      const map = new Map();
+      for (const r of (responsesRes.data ?? [])) map.set(r.class_input_id, r.attended);
+      setRespondedAttendances(map);
       await refreshCoachPending();
       setLoading(false);
       setTimeout(() => markAllNotificationsRead(), 2000);
@@ -297,7 +341,7 @@ export default function NotificationsScreen({ navigation }) {
               const config = TYPE_CONFIG[notif.type] ?? { icon: 'notifications-outline', color: Colors.secondary };
               const alreadyResponded =
                 (ATTENDANCE_TYPES.has(notif.type) && (
-                  respondedClassInputIds.has(notif.data?.class_input_id) ||
+                  respondedAttendances.has(notif.data?.class_input_id) ||
                   locallyRespondedAttendance.has(notif.data?.class_input_id)
                 )) ||
                 (notif.type === 'name_match_confirm' && locallyResolvedNameMatches.has(notif.id));
@@ -393,6 +437,28 @@ export default function NotificationsScreen({ navigation }) {
           )}
         </ScrollView>
       )}
+
+      <Modal
+        visible={!!activeNotif}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setActiveNotif(null)}
+      >
+        {activeNotif && (
+          <NotificationDetailSheet
+            notif={activeNotif}
+            priorAttendance={
+              ATTENDANCE_TYPES.has(activeNotif.type)
+                ? getPriorAttendance(activeNotif.data?.class_input_id)
+                : undefined
+            }
+            onClose={() => setActiveNotif(null)}
+            onAttendanceChange={(attended) =>
+              handleAttendanceChange(activeNotif.data?.class_input_id, attended)
+            }
+          />
+        )}
+      </Modal>
     </SafeAreaView>
   );
 }

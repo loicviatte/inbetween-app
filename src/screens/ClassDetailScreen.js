@@ -9,73 +9,52 @@ import {
   FlatList,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Fonts, Spacing } from '../theme';
 import { getClassInputs, getNotesLinkedToClass, getNotes, saveNote } from '../storage/storage';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
+// Editorial palette — same constants used across the redesigned screens.
+const GOLD_500 = '#E8B530';
+const GOLD_300 = '#F6D27A';
+const INK_950 = '#0A0A0A';
+const FG_2 = 'rgba(10,10,10,0.72)';
+const FG_3 = 'rgba(10,10,10,0.45)';
+const LINE = 'rgba(10,10,10,0.09)';
+const LINE_2 = 'rgba(10,10,10,0.05)';
+const TILE_BG = 'rgba(255,255,255,0.65)';
+const SOFT_INK_BG = 'rgba(10,10,10,0.04)';
+
+const PAGE_GRADIENT_COLORS = ['#F2F2EF', '#F8F2E2', '#F4EAD0', '#FFFFFF', '#FFFFFF'];
+const PAGE_GRADIENT_LOCATIONS = [0, 0.4, 0.7, 0.85, 1];
+
 function formatDate(isoOrTs) {
   const d = new Date(isoOrTs);
   return `${MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
 }
 
-function MetaChip({ icon, label }) {
-  if (!label) return null;
-  return (
-    <View style={s.metaChip}>
-      {icon && <Ionicons name={icon} size={11} color={Colors.secondary} />}
-      <Text style={s.metaChipText}>{label}</Text>
-    </View>
-  );
+function getInitials(name) {
+  if (!name) return '';
+  return name
+    .split(' ')
+    .filter(Boolean)
+    .map((p) => p[0])
+    .join('')
+    .slice(0, 2)
+    .toUpperCase();
 }
 
-function SectionTitle({ label, action, onAction }) {
-  return (
-    <View style={s.sectionTitleRow}>
-      <Text style={s.sectionTitle}>{label}</Text>
-      {action && (
-        <TouchableOpacity onPress={onAction} activeOpacity={0.7}>
-          <Text style={s.sectionAction}>{action}</Text>
-        </TouchableOpacity>
-      )}
-    </View>
-  );
+function isPrivateLesson(lessonType) {
+  return lessonType !== 'group' && lessonType !== 'public';
 }
 
-function ContentCard({ label, text, urgency }) {
-  if (!text) return null;
-  const filled = Math.round(urgency ?? 0);
-  return (
-    <View style={s.contentCard}>
-      <Text style={s.contentCardLabel}>{label}</Text>
-      <Text style={s.contentCardText}>{text}</Text>
-      {urgency != null && (
-        <View style={s.urgencyRow}>
-          <Text style={s.urgencyLabel}>Urgency</Text>
-          <View style={s.urgencyBar}>
-            {[1,2,3,4,5].map((n) => (
-              <View
-                key={n}
-                style={[s.urgencySegment, n <= filled && s.urgencySegmentFilled]}
-              />
-            ))}
-          </View>
-          <Text style={s.urgencyValue}>{filled}/5</Text>
-        </View>
-      )}
-    </View>
-  );
-}
-
-
-const TIER_COLOR = { critical: '#FF4B4B', important: '#F5A623', supporting: '#ACADB9' };
 const TIER_ORDER = { critical: 0, important: 1, supporting: 2 };
 
 function sortFocusPoints(fps) {
   return [...fps]
-    .sort((a, b) => (TIER_ORDER[a.tier] ?? 3) - (TIER_ORDER[b.tier] ?? 3))
-    .slice(0, 3);
+    .sort((a, b) => (TIER_ORDER[a.tier] ?? 3) - (TIER_ORDER[b.tier] ?? 3));
 }
 
 function NotePicker({ visible, allNotes, linkedIds, onToggle, onDone }) {
@@ -127,6 +106,73 @@ function NotePicker({ visible, allNotes, linkedIds, onToggle, onDone }) {
   );
 }
 
+// ─── Sub-components ───────────────────────────────────────────────────
+
+function Pill({ children, variant = 'default', avatar, shrink = false }) {
+  const wrap = [
+    s.pill,
+    variant === 'gold' && s.pillGold,
+    variant === 'rec' && s.pillRec,
+    shrink && { flexShrink: 1, minWidth: 0 },
+  ];
+  const text = [
+    s.pillText,
+    variant === 'gold' && s.pillTextGold,
+    variant === 'rec' && s.pillTextRec,
+  ];
+  return (
+    <View style={wrap}>
+      {variant === 'rec' && <View style={s.pillRecDot} />}
+      {!!avatar && (
+        <View style={s.pillAvatar}>
+          <Text style={s.pillAvatarText}>{avatar}</Text>
+        </View>
+      )}
+      <Text style={text} numberOfLines={1} ellipsizeMode="tail">{children}</Text>
+    </View>
+  );
+}
+
+function SectionEyebrow({ label }) {
+  return (
+    <View style={s.sectionEyebrow}>
+      <Text style={s.sectionEyebrowText}>{label}</Text>
+      <View style={s.sectionEyebrowRule} />
+    </View>
+  );
+}
+
+function FocusCard({ index, focus }) {
+  return (
+    <View style={s.focusCard}>
+      <Text style={s.focusMeta}>Focus {index + 1}</Text>
+      <Text style={s.focusTitle} numberOfLines={2}>{focus.name}</Text>
+      {!!focus.subtitle && (
+        <Text style={s.focusBody} numberOfLines={3}>{focus.subtitle}</Text>
+      )}
+    </View>
+  );
+}
+
+function LinkedNoteCard({ note, onPress }) {
+  return (
+    <TouchableOpacity style={s.linkedNoteCard} onPress={onPress} activeOpacity={0.78}>
+      <View style={s.linkedNoteIcon}>
+        <Ionicons name="document-text-outline" size={16} color={FG_3} />
+      </View>
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={s.linkedNoteTitle} numberOfLines={1}>{note.title || 'Untitled'}</Text>
+        {!!note.content && (
+          <Text style={s.linkedNoteBody} numberOfLines={2}>{note.content}</Text>
+        )}
+      </View>
+      <Ionicons name="chevron-forward" size={14} color={FG_3} />
+    </TouchableOpacity>
+  );
+}
+
+// ─── Main screen ──────────────────────────────────────────────────────
+
 export default function ClassDetailScreen({ route, navigation }) {
   const { inputId } = route.params;
   const [item, setItem] = useState(null);
@@ -146,435 +192,519 @@ export default function ClassDetailScreen({ route, navigation }) {
 
   useEffect(() => { load(); }, [inputId]);
 
-  useEffect(() => {
-    if (!item) return;
-    const label = item.title || item.ai_primary_focus || 'Class';
-    navigation.setOptions({ headerBackTitle: label, title: label });
-  }, [item]);
-
   function handleToggleNote(note) {
     const isLinked = note.linked_class_input_id === inputId;
     const updated = { ...note, linked_class_input_id: isLinked ? null : inputId };
     if (isLinked) {
-      setLinkedNotes(prev => prev.filter(n => n.id !== note.id));
+      setLinkedNotes((prev) => prev.filter((n) => n.id !== note.id));
     } else {
-      setLinkedNotes(prev => [...prev, updated]);
+      setLinkedNotes((prev) => [...prev, updated]);
     }
-    setAllNotes(prev => prev.map(n => n.id === note.id ? updated : n));
+    setAllNotes((prev) => prev.map((n) => (n.id === note.id ? updated : n)));
     saveNote(updated);
   }
 
-  if (!item) return null;
+  if (!item) {
+    return (
+      <View style={{ flex: 1 }}>
+        <LinearGradient
+          colors={PAGE_GRADIENT_COLORS}
+          locations={PAGE_GRADIENT_LOCATIONS}
+          style={StyleSheet.absoluteFillObject}
+        />
+        <SafeAreaView style={s.safe} edges={['top']} />
+      </View>
+    );
+  }
 
   const linkedIds = linkedNotes.map((n) => n.id);
   const title = item.title || item.ai_primary_focus || 'Class Log';
-  const isAutomatic = !!item.transcript;
+  const isRecorded = !!item.transcript;
   const teacherDisplay = item.teacher_name || item._teacher_fallback || null;
+  const teacherInitials = getInitials(teacherDisplay);
+  const focusPoints = item.focus_points ? sortFocusPoints(item.focus_points) : [];
+  const lessonTypeLabel = item.lesson_type
+    ? (isPrivateLesson(item.lesson_type) ? 'Private' : 'Group')
+    : null;
 
   return (
-    <SafeAreaView style={s.safe} edges={['top']}>
+    <View style={{ flex: 1 }}>
+      <LinearGradient
+        colors={PAGE_GRADIENT_COLORS}
+        locations={PAGE_GRADIENT_LOCATIONS}
+        style={StyleSheet.absoluteFillObject}
+      />
+      <SafeAreaView style={s.safe} edges={['top']}>
 
-      {/* ── Header ── */}
-      <View style={s.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={s.backBtn} activeOpacity={0.7}>
-          <Ionicons name="chevron-back" size={22} color={Colors.black} />
-        </TouchableOpacity>
-        <Text style={s.headerTitle} numberOfLines={1}>{title}</Text>
-        <View style={{ width: 36 }} />
-      </View>
-
-      <ScrollView contentContainerStyle={s.content} showsVerticalScrollIndicator={false}>
-
-        {/* ── Meta row ── */}
-        <View style={s.metaRow}>
-          <MetaChip icon="calendar-outline" label={formatDate(item.created_at)} />
-          {!!item.dance && <MetaChip icon="musical-notes-outline" label={item.dance} />}
-          {!!item.lesson_type && <MetaChip label={item.lesson_type} />}
+        {/* ── Top bar ── */}
+        <View style={s.topBar}>
+          <TouchableOpacity
+            style={s.iconBtn}
+            onPress={() => navigation.goBack()}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="chevron-back" size={20} color={INK_950} />
+          </TouchableOpacity>
+          <View style={{ width: 40, height: 40 }} />
         </View>
 
-        {/* ── Badges row: teacher + input type ── */}
-        <View style={s.badgeRow}>
-          {!!teacherDisplay && (
-            <View style={s.teacherBadge}>
-              <Ionicons name="person-circle-outline" size={13} color="#7A4A00" />
-              <Text style={s.teacherBadgeText}>{teacherDisplay}</Text>
-            </View>
-          )}
-          <View style={[s.inputBadge, isAutomatic ? s.inputBadgeAuto : s.inputBadgeManual]}>
-            <Ionicons
-              name={isAutomatic ? 'sparkles-outline' : 'create-outline'}
-              size={11}
-              color={isAutomatic ? '#4A6FD4' : '#7A7A8A'}
+        <ScrollView
+          contentContainerStyle={s.scroll}
+          showsVerticalScrollIndicator={false}
+        >
+          {/* ── Hero card (dark) ── */}
+          <View style={s.heroCard}>
+            <LinearGradient
+              colors={['#4A3A18', '#1F1810', '#0A0A0A']}
+              locations={[0, 0.4, 0.85]}
+              start={{ x: 0.85, y: 1.18 }}
+              end={{ x: 0.05, y: -0.2 }}
+              style={StyleSheet.absoluteFillObject}
             />
-            <Text style={[s.inputBadgeText, isAutomatic ? s.inputBadgeTextAuto : s.inputBadgeTextManual]}>
-              {isAutomatic ? 'AI extracted' : 'Manual input'}
-            </Text>
-          </View>
-        </View>
-
-        {/* ── Class Summary ── */}
-        {!!item.class_summary && (
-          <View style={s.section}>
-            <SectionTitle label="Class Summary" />
-            <View style={s.metaCard}>
-              <Text style={s.metaCardText}>{item.class_summary}</Text>
+            <View style={s.heroTopRow}>
+              <Text style={s.heroDate}>{formatDate(item.created_at)}</Text>
+              {!!teacherDisplay && (
+                <Text style={s.heroTeacher} numberOfLines={1} ellipsizeMode="tail">
+                  {teacherDisplay}
+                </Text>
+              )}
             </View>
-          </View>
-        )}
-
-        {/* ── Focus Points ── */}
-        {item.focus_points?.length > 0 && (() => {
-          const fps = sortFocusPoints(item.focus_points);
-          return (
-            <View style={s.section}>
-              <SectionTitle label="Focus Points" />
-              <View style={s.metaCard}>
-                {fps.map((fp, idx) => {
-                  const color = TIER_COLOR[fp.tier] || Colors.activeLog;
-                  return (
-                    <React.Fragment key={fp.id || idx}>
-                      {idx > 0 && <View style={s.metaDivider} />}
-                      <View style={s.fpRow}>
-                        <View style={[s.fpDot, { backgroundColor: color }]} />
-                        <View style={s.fpText}>
-                          <Text style={s.fpName}>{fp.name}</Text>
-                          {!!fp.subtitle && (
-                            <Text style={s.fpSubtitle}>{fp.subtitle}</Text>
-                          )}
-                        </View>
-                      </View>
-                    </React.Fragment>
-                  );
-                })}
+            <View style={s.heroPills}>
+              {!!lessonTypeLabel && <Pill>{lessonTypeLabel}</Pill>}
+              {isRecorded ? (
+                <Pill variant="rec">Recorded</Pill>
+              ) : (
+                <Pill>Manual input</Pill>
+              )}
+            </View>
+            <Text style={s.heroTitle} numberOfLines={3}>{title}</Text>
+            <View style={s.heroStatsRow}>
+              <View style={[s.heroStat, s.heroStatDivider]}>
+                <Text style={s.heroStatN}>{focusPoints.length}</Text>
+                <Text style={s.heroStatL}>Focus</Text>
+              </View>
+              <View style={s.heroStat}>
+                <Text style={s.heroStatN}>{linkedNotes.length}</Text>
+                <Text style={s.heroStatL}>Notes</Text>
               </View>
             </View>
-          );
-        })()}
+          </View>
 
-        {/* ── Linked Notes ── */}
-        <View style={s.section}>
-          <SectionTitle
-            label="Linked Notes"
-            action="+ Link"
-            onAction={() => setPickerVisible(true)}
-          />
+          {/* ── Class summary ── */}
+          {!!item.class_summary && (
+            <>
+              <SectionEyebrow label="Class summary" />
+              <View style={s.summaryCard}>
+                <Text style={s.summaryText}>{item.class_summary}</Text>
+              </View>
+            </>
+          )}
+
+          {/* ── Focus points ── */}
+          {focusPoints.length > 0 && (
+            <>
+              <SectionEyebrow label="Focus points" />
+              <View style={s.focusList}>
+                {focusPoints.map((fp, idx) => (
+                  <FocusCard key={fp.id || idx} index={idx} focus={fp} />
+                ))}
+              </View>
+            </>
+          )}
+
+          {/* ── Linked notes (Variation A: Ghost button) ── */}
+          <SectionEyebrow label="Linked notes" />
           {linkedNotes.length === 0 ? (
-            <View style={s.emptyNotes}>
-              <Text style={s.emptyNotesText}>No notes linked yet.</Text>
+            <View style={s.linkA}>
+              <View style={s.linkAIcon}>
+                <Ionicons name="link-outline" size={14} color={FG_3} />
+              </View>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={s.linkATitle}>No notes linked</Text>
+                <Text style={s.linkASubtitle}>Tie a saved note to this class.</Text>
+              </View>
+              <TouchableOpacity
+                style={s.linkABtn}
+                onPress={() => setPickerVisible(true)}
+                activeOpacity={0.78}
+              >
+                <Ionicons name="add" size={11} color={INK_950} />
+                <Text style={s.linkABtnText}>Link</Text>
+              </TouchableOpacity>
             </View>
           ) : (
-            linkedNotes.map((note) => (
+            <View style={{ gap: 9 }}>
+              {linkedNotes.map((note) => (
+                <LinkedNoteCard
+                  key={note.id}
+                  note={note}
+                  onPress={() => navigation.navigate('NoteDetail', { noteId: note.id, backLabel: title })}
+                />
+              ))}
               <TouchableOpacity
-                key={note.id}
-                style={s.noteItem}
-                onPress={() => navigation.navigate('NoteDetail', { noteId: note.id, backLabel: title })}
-                activeOpacity={0.75}
+                style={s.linkMoreBtn}
+                onPress={() => setPickerVisible(true)}
+                activeOpacity={0.78}
               >
-                <View style={s.noteAccent} />
-                <View style={{ flex: 1 }}>
-                  <Text style={s.noteTitle}>{note.title || 'Untitled'}</Text>
-                  {note.content ? (
-                    <Text style={s.notePreview} numberOfLines={2}>{note.content}</Text>
-                  ) : null}
-                </View>
-                <Ionicons name="chevron-forward" size={16} color="#ACADB9" />
+                <Ionicons name="add" size={11} color={FG_2} />
+                <Text style={s.linkMoreBtnText}>Link another note</Text>
               </TouchableOpacity>
-            ))
+            </View>
           )}
-        </View>
+        </ScrollView>
 
-      </ScrollView>
-
-      <NotePicker
-        visible={pickerVisible}
-        allNotes={allNotes}
-        linkedIds={linkedIds}
-        onToggle={handleToggleNote}
-        onDone={() => setPickerVisible(false)}
-      />
-    </SafeAreaView>
+        <NotePicker
+          visible={pickerVisible}
+          allNotes={allNotes}
+          linkedIds={linkedIds}
+          onToggle={handleToggleNote}
+          onDone={() => setPickerVisible(false)}
+        />
+      </SafeAreaView>
+    </View>
   );
 }
 
 const s = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#FAFAFA' },
+  safe: { flex: 1, backgroundColor: 'transparent' },
 
-  // ── Header ──────────────────────────────────────────────
-  header: {
+  // ── Top bar ──────────────────────────────────────────────
+  topBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: Spacing.side,
-    paddingTop: 10,
-    paddingBottom: 10,
-    backgroundColor: '#FAFAFA',
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 14,
   },
-  backBtn: {
-    width: 36,
-    height: 36,
+  iconBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.55)',
+    borderWidth: 1,
+    borderColor: LINE,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  headerTitle: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 15,
-    color: Colors.black,
-    flex: 1,
-    textAlign: 'center',
-    paddingHorizontal: 8,
-    letterSpacing: -0.2,
+
+  // ── Scroll content ───────────────────────────────────────
+  scroll: {
+    paddingHorizontal: 18,
+    paddingBottom: 40,
   },
 
-  // ── Content ──────────────────────────────────────────────
-  content: {
-    paddingHorizontal: Spacing.side,
-    paddingTop: 4,
-    paddingBottom: 52,
-  },
-
-  // ── Meta chips row ───────────────────────────────────────
-  metaRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 7,
-    marginBottom: 24,
-  },
-  metaChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    backgroundColor: Colors.white,
-    borderRadius: 20,
-    paddingHorizontal: 11,
-    paddingVertical: 5,
+  // ── Hero card (dark) ─────────────────────────────────────
+  heroCard: {
+    borderRadius: 18,
+    paddingHorizontal: 18,
+    paddingTop: 14,
+    paddingBottom: 16,
     borderWidth: 1,
-    borderColor: '#EFEFEF',
+    borderColor: 'rgba(240,194,74,0.28)',
+    overflow: 'hidden',
+    marginBottom: 4,
   },
-  metaChipText: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 12,
-    color: Colors.secondary,
-    textTransform: 'capitalize',
-  },
-
-  // ── Badges row ───────────────────────────────────────────
-  badgeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: 24,
-    marginTop: -10,
-  },
-  teacherBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    backgroundColor: 'rgba(245,166,35,0.1)',
-    borderRadius: 20,
-    paddingHorizontal: 11,
-    paddingVertical: 5,
-    borderWidth: 1,
-    borderColor: 'rgba(245,166,35,0.22)',
-  },
-  teacherBadgeText: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 12,
-    color: '#7A4A00',
-  },
-  inputBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    borderRadius: 20,
-    paddingHorizontal: 11,
-    paddingVertical: 5,
-    borderWidth: 1,
-  },
-  inputBadgeAuto: {
-    backgroundColor: 'rgba(74,111,212,0.08)',
-    borderColor: 'rgba(74,111,212,0.18)',
-  },
-  inputBadgeManual: {
-    backgroundColor: 'rgba(122,122,138,0.07)',
-    borderColor: 'rgba(122,122,138,0.18)',
-  },
-  inputBadgeText: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 12,
-  },
-  inputBadgeTextAuto: { color: '#4A6FD4' },
-  inputBadgeTextManual: { color: '#7A7A8A' },
-
-  // ── Section ──────────────────────────────────────────────
-  section: { marginBottom: 24 },
-  sectionTitleRow: {
+  heroTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 12,
-  },
-  sectionTitle: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 11,
-    color: Colors.secondary,
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-  },
-  sectionAction: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 13,
-    color: Colors.activeFocus,
-  },
-
-  // ── Meta card (white, bordered) ──────────────────────────
-  metaCard: {
-    backgroundColor: Colors.white,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: '#EFEFEF',
-    paddingHorizontal: 16,
-    paddingVertical: 16,
-    shadowColor: '#000',
-    shadowOpacity: 0.04,
-    shadowOffset: { width: 0, height: 2 },
-    shadowRadius: 8,
-    elevation: 1,
     gap: 10,
+    marginBottom: 6,
   },
-  metaCardLabel: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 10,
-    color: Colors.secondary,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-    marginBottom: 4,
-  },
-  metaCardText: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 15,
-    color: Colors.black,
-    lineHeight: 23,
-  },
-  metaDivider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: '#F0F0F0',
-    marginVertical: 4,
-  },
-
-  // ── Urgency ──────────────────────────────────────────────
-  urgencyRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    marginTop: 8,
-  },
-  urgencyLabel: {
+  heroDate: {
     fontFamily: Fonts.jakartaMedium,
     fontSize: 11,
-    color: Colors.secondary,
+    color: 'rgba(255,255,255,0.55)',
+    letterSpacing: 0.2,
   },
-  urgencyBar: {
+  heroTeacher: {
+    flexShrink: 1,
+    fontFamily: Fonts.jakartaBold,
+    fontSize: 11,
+    color: GOLD_300,
+    letterSpacing: 0.2,
+    textAlign: 'right',
+  },
+  heroPills: {
     flexDirection: 'row',
-    gap: 3,
-    flex: 1,
+    gap: 4,
+    marginBottom: 10,
   },
-  urgencySegment: {
+  heroTitle: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 24,
+    color: '#FFFFFF',
+    letterSpacing: -0.6,
+    lineHeight: 28,
+    marginBottom: 14,
+  },
+  heroStatsRow: {
+    flexDirection: 'row',
+    paddingTop: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(255,255,255,0.10)',
+  },
+  heroStat: {
     flex: 1,
+    alignItems: 'center',
+    gap: 3,
+  },
+  heroStatDivider: {
+    borderRightWidth: StyleSheet.hairlineWidth,
+    borderRightColor: 'rgba(255,255,255,0.10)',
+  },
+  heroStatN: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 18,
+    color: '#FFFFFF',
+    letterSpacing: -0.36,
+    lineHeight: 20,
+  },
+  heroStatL: {
+    fontFamily: Fonts.jakartaBold,
+    fontSize: 8.5,
+    color: 'rgba(255,255,255,0.55)',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+
+  // ── Pills (inside hero) ──────────────────────────────────
+  pill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.14)',
+  },
+  pillGold: {
+    backgroundColor: 'rgba(232,181,48,0.16)',
+    borderColor: 'rgba(232,181,48,0.34)',
+  },
+  pillRec: {
+    backgroundColor: 'rgba(212,69,69,0.14)',
+    borderColor: 'rgba(212,69,69,0.34)',
+  },
+  pillRecDot: {
+    width: 4,
     height: 4,
     borderRadius: 2,
-    backgroundColor: '#F0F0F0',
+    backgroundColor: '#FF6B6B',
   },
-  urgencySegmentFilled: {
-    backgroundColor: Colors.activeLog,
+  pillAvatar: {
+    width: 11,
+    height: 11,
+    borderRadius: 5.5,
+    backgroundColor: GOLD_500,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: -2,
   },
-  urgencyValue: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 11,
-    color: Colors.secondary,
+  pillAvatarText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 6,
+    color: INK_950,
+    letterSpacing: 0,
+  },
+  pillText: {
+    fontFamily: Fonts.jakartaBold,
+    fontSize: 8.5,
+    color: 'rgba(255,255,255,0.72)',
+    letterSpacing: 0.3,
+  },
+  pillTextGold: {
+    color: GOLD_300,
+  },
+  pillTextRec: {
+    color: '#FF8C8C',
   },
 
-  // ── Focus point rows (inside metaCard) ───────────────────
-  fpRow: {
+  // ── Section eyebrow ──────────────────────────────────────
+  sectionEyebrow: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 12,
+    alignItems: 'center',
+    gap: 10,
+    paddingTop: 18,
+    paddingBottom: 8,
+    paddingHorizontal: 4,
   },
-  fpDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    marginTop: 5,
-    flexShrink: 0,
+  sectionEyebrowText: {
+    fontFamily: Fonts.jakartaBold,
+    fontSize: 10.5,
+    color: GOLD_500,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
   },
-  fpText: {
+  sectionEyebrowRule: {
     flex: 1,
-  },
-  fpName: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 14,
-    color: Colors.black,
-    marginBottom: 2,
-  },
-  fpSubtitle: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 13,
-    color: Colors.secondary,
-    lineHeight: 19,
+    height: 1,
+    backgroundColor: LINE_2,
   },
 
-  // ── Empty notes ──────────────────────────────────────────
-  emptyNotes: {
-    backgroundColor: Colors.white,
-    borderRadius: 14,
+  // ── Class summary card ──────────────────────────────────
+  summaryCard: {
+    backgroundColor: TILE_BG,
     borderWidth: 1,
-    borderColor: '#EFEFEF',
-    padding: 16,
-    alignItems: 'center',
+    borderColor: LINE,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
   },
-  emptyNotesText: {
+  summaryText: {
     fontFamily: Fonts.jakartaRegular,
-    fontSize: 13,
-    color: Colors.secondary,
+    fontSize: 13.5,
+    color: INK_950,
+    lineHeight: 20,
   },
 
-  // ── Note items ───────────────────────────────────────────
-  noteItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    backgroundColor: Colors.white,
-    borderRadius: 14,
+  // ── Focus point cards ───────────────────────────────────
+  focusList: {
+    gap: 9,
+  },
+  focusCard: {
+    backgroundColor: TILE_BG,
     borderWidth: 1,
-    borderColor: '#EFEFEF',
-    padding: 14,
-    marginBottom: 8,
-    shadowColor: '#000',
-    shadowOpacity: 0.03,
-    shadowOffset: { width: 0, height: 1 },
-    shadowRadius: 4,
-    elevation: 1,
+    borderColor: LINE,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
   },
-  noteAccent: {
-    width: 3,
-    alignSelf: 'stretch',
-    backgroundColor: '#5788E6',
-    borderRadius: 2,
+  focusMeta: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 9.5,
+    color: '#7A5A10',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+    marginBottom: 4,
   },
-  noteTitle: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 14,
-    color: Colors.black,
+  focusTitle: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 14.5,
+    color: INK_950,
+    letterSpacing: -0.16,
+    lineHeight: 17.4,
     marginBottom: 3,
   },
-  notePreview: {
+  focusBody: {
     fontFamily: Fonts.jakartaRegular,
     fontSize: 12,
-    color: Colors.secondary,
+    color: FG_3,
     lineHeight: 17,
   },
 
-  // ── Note picker modal ────────────────────────────────────
+  // ── Linked notes — Variation A (Ghost button) ───────────
+  linkA: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 11,
+    backgroundColor: 'rgba(255,255,255,0.55)',
+    borderWidth: 1,
+    borderColor: LINE,
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
+  linkAIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    backgroundColor: SOFT_INK_BG,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  linkATitle: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 13,
+    color: INK_950,
+    letterSpacing: -0.06,
+    marginBottom: 1,
+  },
+  linkASubtitle: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 11,
+    color: FG_3,
+    lineHeight: 15,
+  },
+  linkABtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: LINE,
+    backgroundColor: 'transparent',
+    flexShrink: 0,
+  },
+  linkABtnText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 10,
+    color: INK_950,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+
+  // ── Linked notes (when notes exist) ─────────────────────
+  linkedNoteCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: TILE_BG,
+    borderWidth: 1,
+    borderColor: LINE,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+  },
+  linkedNoteIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    backgroundColor: SOFT_INK_BG,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  linkedNoteTitle: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 13.5,
+    color: INK_950,
+    letterSpacing: -0.1,
+    marginBottom: 2,
+  },
+  linkedNoteBody: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 12,
+    color: FG_3,
+    lineHeight: 17,
+  },
+  linkMoreBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    marginTop: 4,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: LINE,
+    backgroundColor: 'transparent',
+  },
+  linkMoreBtnText: {
+    fontFamily: Fonts.jakartaBold,
+    fontSize: 11,
+    color: FG_2,
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+  },
+
+  // ── Note picker modal (kept) ─────────────────────────────
   pickerOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.45)',

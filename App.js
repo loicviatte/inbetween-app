@@ -18,25 +18,14 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-import {
-  useFonts,
-  PlusJakartaSans_300Light,
-  PlusJakartaSans_400Regular,
-  PlusJakartaSans_500Medium,
-  PlusJakartaSans_600SemiBold,
-  PlusJakartaSans_700Bold,
-  PlusJakartaSans_800ExtraBold,
-} from '@expo-google-fonts/plus-jakarta-sans';
-import {
-  Montserrat_500Medium,
-  Montserrat_600SemiBold,
-  Montserrat_800ExtraBold,
-} from '@expo-google-fonts/montserrat';
+import { useFonts } from 'expo-font';
 import { supabase } from './src/services/supabase/client';
 import { getOrCreateInviteCode } from './src/storage/coachStorage';
 import { ProfileProvider } from './src/context/ProfileContext';
 import { CoachDataProvider } from './src/context/CoachDataContext';
 import CoachTabHeader from './src/components/CoachTabHeader';
+import { LinearGradient } from 'expo-linear-gradient';
+import { StyleSheet } from 'react-native';
 
 const navigationRef = createNavigationContainerRef();
 
@@ -86,20 +75,43 @@ const AppTheme = {
 // ─── Student Navigator ────────────────────────────────────────────────────────
 
 function MainTabs() {
+  // Track the active tab so we can render the profile-only backdrop gradient
+  // BEHIND the navigator. The navigator's scene container has overflow:'hidden'
+  // so a screen-level gradient can't bleed past the tab bar — but a navigator-
+  // level backdrop fills the entire viewport (incl. the safe-area below the
+  // bar). On TRAIN/LOG the backdrop is hidden, so they keep the default white.
+  const [activeRoute, setActiveRoute] = useState('TRAIN');
   return (
-    <Tab.Navigator
-      initialRouteName="TRAIN"
-      tabBar={(props) => <CustomTabBar {...props} />}
-      screenOptions={{
-        headerShown: false,
-        lazy: false,
-        tabBarStyle: { backgroundColor: 'transparent', borderTopWidth: 0, elevation: 0 },
-      }}
-    >
-      <Tab.Screen name="PROFILE" component={ProfileScreen} />
-      <Tab.Screen name="TRAIN" component={HomeScreen} />
-      <Tab.Screen name="LOG" component={LogScreen} />
-    </Tab.Navigator>
+    <View style={{ flex: 1 }}>
+      {activeRoute === 'PROFILE' && (
+        <LinearGradient
+          colors={['#F7F6F3', '#F4EFDC', '#F9DF9B']}
+          locations={[0, 0.55, 1]}
+          start={{ x: 0.1, y: 0 }}
+          end={{ x: 0.95, y: 1 }}
+          style={StyleSheet.absoluteFillObject}
+        />
+      )}
+      <Tab.Navigator
+        initialRouteName="TRAIN"
+        tabBar={(props) => <CustomTabBar {...props} />}
+        screenListeners={{
+          state: (e) => {
+            const r = e.data?.state?.routes?.[e.data.state.index];
+            if (r?.name) setActiveRoute(r.name);
+          },
+        }}
+        screenOptions={{
+          headerShown: false,
+          lazy: false,
+          tabBarStyle: { backgroundColor: 'transparent', borderTopWidth: 0, elevation: 0 },
+        }}
+      >
+        <Tab.Screen name="PROFILE" component={ProfileScreen} />
+        <Tab.Screen name="TRAIN" component={HomeScreen} />
+        <Tab.Screen name="LOG" component={LogScreen} />
+      </Tab.Navigator>
+    </View>
   );
 }
 
@@ -308,15 +320,15 @@ export default function App() {
     };
   }, []);
   const [fontsLoaded] = useFonts({
-    PlusJakartaSans_300Light,
-    PlusJakartaSans_400Regular,
-    PlusJakartaSans_500Medium,
-    PlusJakartaSans_600SemiBold,
-    PlusJakartaSans_700Bold,
-    PlusJakartaSans_800ExtraBold,
-    Montserrat_500Medium,
-    Montserrat_600SemiBold,
-    Montserrat_800ExtraBold,
+    'TTTravelsNext-Light': require('./assets/fonts/TTTravelsNext-Light.ttf'),
+    'TTTravelsNext-Regular': require('./assets/fonts/TTTravelsNext-Regular.ttf'),
+    'TTTravelsNext-Medium': require('./assets/fonts/TTTravelsNext-Medium.ttf'),
+    'TTTravelsNext-DemiBold': require('./assets/fonts/TTTravelsNext-DemiBold.ttf'),
+    'TTTravelsNext-Bold': require('./assets/fonts/TTTravelsNext-Bold.ttf'),
+    'TTTravelsNext-ExtraBold': require('./assets/fonts/TTTravelsNext-ExtraBold.ttf'),
+    'BricolageGrotesque-Light': require('@expo-google-fonts/bricolage-grotesque/300Light/BricolageGrotesque_300Light.ttf'),
+    'BricolageGrotesque-Regular': require('@expo-google-fonts/bricolage-grotesque/400Regular/BricolageGrotesque_400Regular.ttf'),
+    'BricolageGrotesque-Medium': require('@expo-google-fonts/bricolage-grotesque/500Medium/BricolageGrotesque_500Medium.ttf'),
   });
 
   async function loadRole(userId) {
