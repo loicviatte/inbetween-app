@@ -18,6 +18,7 @@ import * as Clipboard2 from 'expo-clipboard';
 import { Colors, Fonts, Spacing } from '../../theme';
 import { getUser, saveUserProfile } from '../../storage/storage';
 import { getOrCreateInviteCode, getMyStudents } from '../../storage/coachStorage';
+import { clearUserCaches } from '../../storage/userCaches';
 import { supabase } from '../../services/supabase/client';
 import { CoachProfileScreenSkeleton } from '../../components/Skeleton';
 import { Ionicons } from '@expo/vector-icons';
@@ -140,6 +141,7 @@ export default function CoachProfileScreen({ navigation }) {
   }
 
   async function handleLogout() {
+    await clearUserCaches();
     await supabase.auth.signOut();
   }
 

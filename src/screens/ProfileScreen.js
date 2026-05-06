@@ -40,6 +40,7 @@ import {
 import { supabase } from '../services/supabase/client';
 import RadarChart, { RADAR_LABELS } from '../components/RadarChart';
 import { useProfile } from '../context/ProfileContext';
+import { clearUserCaches } from '../storage/userCaches';
 
 const AVATAR_KEY = '@profile_photo';
 const PROFILE_CACHE_KEY = '@cache_profile';
@@ -481,7 +482,11 @@ export default function ProfileScreen({ navigation }) {
   }
 
   async function handleLogout() {
-    await AsyncStorage.multiRemove(['@cache_log', HOME_CACHE_KEY, PROFILE_CACHE_KEY]);
+    // Clear the in-memory avatar first so the next user doesn't see this
+    // user's photo flash before the network fetch resolves.
+    setAvatarUri(null);
+    setInitials(null);
+    await clearUserCaches();
     await supabase.auth.signOut();
   }
 

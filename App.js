@@ -6,6 +6,7 @@ import {
 } from 'live-activities';
 import { hydrateActiveSession } from './src/storage/activeSession';
 import { hydrateRecordingQueue } from './src/storage/recordingQueue';
+import { reconcileAuthUser } from './src/storage/userCaches';
 import { pokeUploadWorker } from './src/services/uploadWorker';
 import {
   hydrateActiveCoachClass,
@@ -436,14 +437,19 @@ export default function App() {
   }
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session: s } }) => {
+    supabase.auth.getSession().then(async ({ data: { session: s } }) => {
+      // Wipe caches before any user-specific UI mounts if the resolved user
+      // differs from the last one we saw — prevents the previous account's
+      // avatar / cached data from flashing during the new session.
+      await reconcileAuthUser(s?.user?.id ?? null);
       setSession(s ?? null);
       setUserEmail(s?.user?.email ?? null);
       if (s?.user?.id) loadRole(s.user.id);
       else if (!s) setUserRole(null);
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, s) => {
+      await reconcileAuthUser(s?.user?.id ?? null);
       setSession(s ?? null);
       setUserEmail(s?.user?.email ?? null);
       if (s?.user?.id) {
