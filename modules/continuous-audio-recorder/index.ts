@@ -79,7 +79,13 @@ export interface StartResult {
   };
 }
 
-interface NativeContinuousAudioRecorderModule extends NativeModule {
+type RecorderEventsMap = {
+  chunkReady: (e: ChunkReadyEvent) => void;
+  error: (e: RecorderErrorEvent) => void;
+  mediaServicesReset: (e: MediaServicesResetEvent) => void;
+};
+
+declare class NativeContinuousAudioRecorderModule extends NativeModule<RecorderEventsMap> {
   start(options: StartOptions): Promise<StartResult>;
   stop(): Promise<{ lastChunkUri: string | null }>;
   isRecording(): boolean;

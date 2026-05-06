@@ -27,6 +27,8 @@ import {
 } from '../../storage/activeCoachClass';
 import { supabase } from '../../services/supabase/client';
 import { presentAudioRoutePicker } from 'audio-route-picker';
+import ContinuousAudioRecorder from 'continuous-audio-recorder';
+import { isNativeRecorderEnabled } from '../../services/featureFlags';
 
 const ASSEMBLYAI_API_KEY = process.env.EXPO_PUBLIC_ASSEMBLYAI_API_KEY;
 
@@ -97,7 +99,7 @@ function formatUtterances(utterances) {
     .join('\n\n');
 }
 
-async function transcribeAudio(uri) {
+async function runTranscriptionJob(uri) {
   if (!ASSEMBLYAI_API_KEY) throw new Error('NO_ASSEMBLYAI_KEY');
 
   // 1. Upload audio file as raw binary (FileSystem.uploadAsync handles file:// URIs natively)
@@ -142,13 +144,46 @@ async function transcribeAudio(uri) {
     });
     if (!pollRes.ok) throw new Error(`AssemblyAI poll ${pollRes.status}`);
     const job = await pollRes.json();
-    if (job.status === 'completed') {
-      const formatted = formatUtterances(job.utterances);
-      return formatted || job.text || '';
-    }
+    if (job.status === 'completed') return job;
     if (job.status === 'error') throw new Error(`AssemblyAI: ${job.error || 'unknown error'}`);
   }
   throw new Error('AssemblyAI transcription timed out');
+}
+
+async function transcribeAudio(uri) {
+  const job = await runTranscriptionJob(uri);
+  const formatted = formatUtterances(job.utterances);
+  return formatted || job.text || '';
+}
+
+// Transcribe N chunks sequentially, applying a running offset so utterance
+// timestamps reflect the wall-clock position in the class instead of the
+// chunk-local time. Speaker labels are prefixed with chunk number since
+// AssemblyAI doesn't preserve diarization across separate jobs.
+async function transcribeChunks(chunks) {
+  if (!Array.isArray(chunks) || chunks.length === 0) return '';
+  if (chunks.length === 1) return transcribeAudio(chunks[0].uri);
+
+  let offsetMs = 0;
+  const combined = [];
+  const plainTexts = [];
+  for (let i = 0; i < chunks.length; i++) {
+    const c = chunks[i];
+    const job = await runTranscriptionJob(c.uri);
+    const chunkLabel = i + 1;
+    const utterances = (job.utterances || []).map((u) => ({
+      start: (u.start || 0) + offsetMs,
+      end: (u.end || 0) + offsetMs,
+      speaker: `${chunkLabel}.${u.speaker}`,
+      text: u.text,
+    }));
+    combined.push(...utterances);
+    if (typeof job.text === 'string' && job.text.trim()) plainTexts.push(job.text);
+    const reportedMs = job.audio_duration ? job.audio_duration * 1000 : (c.durationMs || 0);
+    offsetMs += reportedMs;
+  }
+  if (combined.length > 0) return formatUtterances(combined);
+  return plainTexts.join('\n\n');
 }
 
 // ── Palette ────────────────────────────────────────────────────────────────
@@ -223,7 +258,7 @@ function MiniGauge({ value, label }) {
 // ── Main Component ─────────────────────────────────────────────────────────
 // ════════════════════════════════════════════════════════════════════════════
 export default function StartClassScreen({ navigation }) {
-  const { students } = useCoachData();
+  const { students, user } = useCoachData();
 
   const [view, setView] = useState('select');
   const [selectedStudent, setSelectedStudent] = useState(null);
@@ -237,8 +272,18 @@ export default function StartClassScreen({ navigation }) {
   // Microphone recording
   const recordingRef = useRef(null);
   const [recordingUri, setRecordingUri] = useState(null);
+  const recordingChunksRef = useRef([]);
   const [micPermGranted, setMicPermGranted] = useState(null);
   const [classRecorded, setClassRecorded] = useState(false);
+
+  // Native recorder (iOS-only, behind feature flag — see featureFlags.js).
+  // When enabled, we use a single AVAudioEngine that never restarts, with
+  // chunks rotated natively. usingNativeRef tracks whether this class is
+  // running on the native path (sticky for the duration of the class).
+  const usingNativeRef = useRef(false);
+  const nativeChunksRef = useRef([]);
+  const nativeSubsRef = useRef([]);
+  const nativeOutputDirRef = useRef(null);
 
   // End-of-class debrief modal
   const [debriefOpen, setDebriefOpen] = useState(false);
@@ -293,18 +338,70 @@ export default function StartClassScreen({ navigation }) {
     setMicPermGranted(granted);
     setAudioModalOpen(true);
   }
+  async function tryStartNativeRecorder() {
+    // Allocate a per-class output dir so chunks from prior classes don't
+    // collide and don't accumulate forever.
+    const dir = `${FileSystem.documentDirectory}coach-class-${Date.now()}`;
+    await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+
+    nativeChunksRef.current = [];
+    nativeOutputDirRef.current = dir;
+
+    const subs = [];
+    subs.push(
+      ContinuousAudioRecorder.addChunkReadyListener((e) => {
+        nativeChunksRef.current.push({ uri: e.uri, idx: e.idx, durationMs: e.durationMs });
+      })
+    );
+    subs.push(
+      ContinuousAudioRecorder.addErrorListener((e) => {
+        console.warn('[StartClass] Native recorder error:', e);
+      })
+    );
+    subs.push(
+      ContinuousAudioRecorder.addMediaServicesResetListener((e) => {
+        console.warn('[StartClass] Native recorder media services reset:', e);
+      })
+    );
+    nativeSubsRef.current = subs;
+
+    try {
+      await ContinuousAudioRecorder.start({ outputDir: dir });
+      usingNativeRef.current = true;
+    } catch (err) {
+      // Cleanup subs we registered before propagating the failure to the caller
+      // so it can fall back to expo-av.
+      subs.forEach((s) => { try { s.remove(); } catch {} });
+      nativeSubsRef.current = [];
+      nativeOutputDirRef.current = null;
+      throw err;
+    }
+  }
+
   async function startClassNow() {
     setAudioModalOpen(false);
     setRecordingUri(null);
+    recordingChunksRef.current = [];
 
     // Start recording if permission was granted
     if (micPermGranted) {
-      try {
-        await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
-        const { recording } = await Audio.Recording.createAsync(getCoachRecordingOptions());
-        recordingRef.current = recording;
-      } catch (err) {
-        console.warn('[StartClass] Could not start recording:', err);
+      let nativeStarted = false;
+      if (isNativeRecorderEnabled(user)) {
+        try {
+          await tryStartNativeRecorder();
+          nativeStarted = true;
+        } catch (err) {
+          console.warn('[StartClass] Native recorder failed, falling back to expo-av:', err);
+        }
+      }
+      if (!nativeStarted) {
+        try {
+          await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+          const { recording } = await Audio.Recording.createAsync(getCoachRecordingOptions());
+          recordingRef.current = recording;
+        } catch (err) {
+          console.warn('[StartClass] Could not start recording:', err);
+        }
       }
     }
 
@@ -319,12 +416,41 @@ export default function StartClassScreen({ navigation }) {
     });
   }
   async function stopClass() {
-    // Stop recording and keep the URI for transcription in finishDebrief
-    if (recordingRef.current) {
+    if (usingNativeRef.current) {
+      let stopResult = null;
+      try {
+        stopResult = await ContinuousAudioRecorder.stop();
+      } catch (err) {
+        console.warn('[StartClass] Could not stop native recorder:', err);
+      }
+      // The native stop() emits a final chunkReady before resolving, but JS
+      // event delivery is asynchronous — give the listener a tick to land
+      // before we tear it down and read nativeChunksRef.
+      await new Promise((r) => setTimeout(r, 100));
+
+      (nativeSubsRef.current || []).forEach((s) => { try { s.remove(); } catch {} });
+      nativeSubsRef.current = [];
+      usingNativeRef.current = false;
+
+      let chunks = (nativeChunksRef.current || []).slice().sort((a, b) => a.idx - b.idx);
+      // Backstop: if the listener never delivered the final chunk, fall back
+      // to the URI returned synchronously by stop() so we don't lose audio.
+      if (chunks.length === 0 && stopResult?.lastChunkUri) {
+        chunks = [{ uri: stopResult.lastChunkUri, idx: 0, durationMs: chronoMs }];
+      }
+      if (chunks.length > 0) {
+        recordingChunksRef.current = chunks;
+        setRecordingUri(chunks[0].uri);
+      }
+    } else if (recordingRef.current) {
+      // Stop recording and keep the URI for transcription in finishDebrief
       try {
         await recordingRef.current.stopAndUnloadAsync();
         const uri = recordingRef.current.getURI();
-        setRecordingUri(uri);
+        if (uri) {
+          recordingChunksRef.current = [{ uri, idx: 0, durationMs: chronoMs }];
+          setRecordingUri(uri);
+        }
       } catch (err) {
         console.warn('[StartClass] Could not stop recording:', err);
       }
@@ -344,15 +470,15 @@ export default function StartClassScreen({ navigation }) {
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
     );
   }
-  function transcribeAndSubmit(uri, isPrivate, studentId, allStudents) {
+  function transcribeAndSubmit(chunks, isPrivate, studentId, allStudents) {
     const run = async () => {
       try {
         // Capture user.id BEFORE transcription — a long upload/poll can outlive the session
-        const { data: { user } } = await supabase.auth.getUser();
-        if (!user) throw new Error('Not signed in — cannot save transcript.');
-        const userId = user.id;
+        const { data: { user: authUser } } = await supabase.auth.getUser();
+        if (!authUser) throw new Error('Not signed in — cannot save transcript.');
+        const userId = authUser.id;
 
-        const transcript = await transcribeAudio(uri);
+        const transcript = await transcribeChunks(chunks);
         if (!transcript?.trim()) return;
         const { data: classInput, error: insertErr } = await supabase
           .from('class_inputs')
@@ -380,14 +506,15 @@ export default function StartClassScreen({ navigation }) {
   }
 
   function finishDebrief() {
-    const uri = recordingUri;
+    const chunks = recordingChunksRef.current || [];
     const isPrivate = view === 'private-briefing';
     setDebriefOpen(false);
     setRecordingUri(null);
+    recordingChunksRef.current = [];
     clearActiveCoachClass();
 
-    if (uri) {
-      transcribeAndSubmit(uri, isPrivate, selectedStudent?.id, students);
+    if (chunks.length > 0) {
+      transcribeAndSubmit(chunks, isPrivate, selectedStudent?.id, students);
       setClassRecorded(true);
       setTimeout(() => {
         setClassRecorded(false);
