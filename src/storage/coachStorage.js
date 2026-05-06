@@ -376,7 +376,7 @@ export async function getMyStudents() {
 export async function getStudentProfile(studentId) {
   const { data } = await supabase
     .from('users')
-    .select('id, name, dance_style, main_studio, last_active_date, avatar_url')
+    .select('id, name, dance_style, last_active_date, avatar_url, studio:studios!users_studio_id_fkey(id, name)')
     .eq('id', studentId)
     .single();
   if (!data) return null;

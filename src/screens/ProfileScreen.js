@@ -20,6 +20,7 @@ import { Ionicons } from '@expo/vector-icons';
 import Svg, { Circle } from 'react-native-svg';
 import TabHeader from '../components/TabHeader';
 import ProfileSkeleton from '../components/ProfileSkeleton';
+import StudioPicker from '../components/StudioPicker';
 import { useFocusEffect } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -155,7 +156,7 @@ function CoachSlot({ label, coach, code, onCodeChange, linking, linkError, onAdd
             <Text style={coachStyles.coachName}>{coach.name}</Text>
             {coach.pending
               ? <Text style={coachStyles.coachStudio}>Waiting for {coach.name?.split(' ')[0] || 'coach'} to accept…</Text>
-              : (!!coach.main_studio && <Text style={coachStyles.coachStudio}>{coach.main_studio}</Text>)
+              : (!!coach.studio?.name && <Text style={coachStyles.coachStudio}>{coach.studio.name}</Text>)
             }
           </View>
           <TouchableOpacity onPress={onUnlink} activeOpacity={0.6} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
@@ -194,59 +195,6 @@ function CoachSlot({ label, coach, code, onCodeChange, linking, linkError, onAdd
   );
 }
 
-const PLACES_KEY = process.env.EXPO_PUBLIC_GOOGLE_PLACES_API_KEY;
-
-function PlacesInput({ value, onChangeText, onPlaceSelect }) {
-  const [suggestions, setSuggestions] = useState([]);
-  const debounceRef = useRef(null);
-
-  function handleChange(text) {
-    onChangeText(text);
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    if (!PLACES_KEY || !text || text.length < 2) { setSuggestions([]); return; }
-    debounceRef.current = setTimeout(async () => {
-      try {
-        const url = `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(text)}&types=establishment&key=${PLACES_KEY}`;
-        const res = await fetch(url);
-        const json = await res.json();
-        setSuggestions(json.predictions?.slice(0, 5) || []);
-      } catch { setSuggestions([]); }
-    }, 350);
-  }
-
-  function handleSelect(p) {
-    const name = p.structured_formatting?.main_text || p.description;
-    onChangeText(name);
-    setSuggestions([]);
-    onPlaceSelect(name, p.place_id);
-  }
-
-  return (
-    <View>
-      <TextInput
-        style={em.input}
-        value={value}
-        onChangeText={handleChange}
-        placeholder="Search for a studio or address"
-        placeholderTextColor="rgba(17,12,17,0.3)"
-        autoCorrect={false}
-      />
-      {suggestions.length > 0 && (
-        <View style={em.suggestions}>
-          {suggestions.map((p) => (
-            <TouchableOpacity key={p.place_id} style={em.suggestion} onPress={() => handleSelect(p)} activeOpacity={0.7}>
-              <Text style={em.suggestionMain} numberOfLines={1}>{p.structured_formatting?.main_text || p.description}</Text>
-              {!!p.structured_formatting?.secondary_text && (
-                <Text style={em.suggestionSub} numberOfLines={1}>{p.structured_formatting.secondary_text}</Text>
-              )}
-            </TouchableOpacity>
-          ))}
-        </View>
-      )}
-    </View>
-  );
-}
-
 export default function ProfileScreen({ navigation }) {
   const { setAvatarUri, setInitials } = useProfile();
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -258,8 +206,7 @@ export default function ProfileScreen({ navigation }) {
   const [readiness, setReadiness] = useState(null);
   const [editVisible, setEditVisible] = useState(false);
   const [editName, setEditName] = useState('');
-  const [editStudio, setEditStudio] = useState('');
-  const [editStudioPlaceId, setEditStudioPlaceId] = useState(null);
+  const [editStudio, setEditStudio] = useState(null);
   const [editStyle, setEditStyle] = useState('');
   const [saving, setSaving] = useState(false);
   const [photoUri, _setPhotoUri] = useState(null);
@@ -453,8 +400,7 @@ export default function ProfileScreen({ navigation }) {
 
   function openEdit() {
     setEditName(user?.name || '');
-    setEditStudio(user?.main_studio || '');
-    setEditStudioPlaceId(user?.main_studio_place_id || null);
+    setEditStudio(user?.studio || null);
     setEditStyle(user?.dance_style || '');
     setEditVisible(true);
   }
@@ -463,9 +409,9 @@ export default function ProfileScreen({ navigation }) {
     if (saving) return;
     setSaving(true);
     const name = editName.trim();
-    const main_studio = editStudio.trim();
-    await saveUserProfile({ name, main_studio, main_studio_place_id: editStudioPlaceId, dance_style: editStyle });
-    setUser(prev => ({ ...prev, name, main_studio, main_studio_place_id: editStudioPlaceId, dance_style: editStyle }));
+    const studio_id = editStudio?.id || null;
+    await saveUserProfile({ name, studio_id, dance_style: editStyle });
+    setUser(prev => ({ ...prev, name, studio_id, studio: editStudio, dance_style: editStyle }));
     if (editStyle === 'Latin & Ballroom') {
       const [lc, bc] = await Promise.all([
         getMyCoachForCategory('latin'),
@@ -604,9 +550,9 @@ export default function ProfileScreen({ navigation }) {
 
               <Text style={styles.name} numberOfLines={1}>{user?.name || 'Your Name'}</Text>
 
-              {!!user?.main_studio && (
+              {!!user?.studio?.name && (
                 <Text style={styles.studioName} numberOfLines={1} ellipsizeMode="tail">
-                  {user.main_studio}
+                  {user.studio.name}
                 </Text>
               )}
               {!!user?.dance_style && (
@@ -765,13 +711,9 @@ export default function ProfileScreen({ navigation }) {
 
                   <View style={em.field}>
                     <Text style={em.fieldLabel}>Main Studio</Text>
-                    <PlacesInput
+                    <StudioPicker
                       value={editStudio}
-                      onChangeText={setEditStudio}
-                      onPlaceSelect={(name, placeId) => {
-                        setEditStudio(name);
-                        setEditStudioPlaceId(placeId || null);
-                      }}
+                      onChange={setEditStudio}
                     />
                   </View>
 
@@ -1358,23 +1300,6 @@ const em = StyleSheet.create({
   saveBtnText: { fontFamily: Fonts.jakartaBold, fontSize: 15, color: Colors.white },
   cancelBtn: { paddingVertical: 14, alignItems: 'center' },
   cancelBtnText: { fontFamily: Fonts.jakartaRegular, fontSize: 14, color: Colors.secondary },
-
-  suggestions: {
-    backgroundColor: Colors.white,
-    borderWidth: 0.5,
-    borderColor: Colors.statCardBorder,
-    borderRadius: 12,
-    marginTop: 4,
-    overflow: 'hidden',
-  },
-  suggestion: {
-    paddingHorizontal: 14,
-    paddingVertical: 11,
-    borderBottomWidth: 0.5,
-    borderBottomColor: Colors.statCardBorder,
-  },
-  suggestionMain: { fontFamily: Fonts.jakartaMedium, fontSize: 14, color: Colors.black },
-  suggestionSub: { fontFamily: Fonts.jakartaRegular, fontSize: 11, color: Colors.secondary, marginTop: 1 },
 });
 
 const coachStyles = StyleSheet.create({

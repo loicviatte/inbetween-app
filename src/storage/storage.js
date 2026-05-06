@@ -1,7 +1,7 @@
 import { supabase } from '../services/supabase/client';
 import { categoryFromStyle, categoryFromDances } from '../utils/danceCategory';
 
-async function getUserId() {
+export async function getUserId() {
   const { data: { session } } = await supabase.auth.getSession();
   if (!session?.user) throw new Error('Not authenticated');
   return session.user.id;
@@ -32,15 +32,15 @@ export async function getUser() {
   const userId = await getUserId();
   const { data } = await supabase
     .from('users')
-    .select('*')
+    .select('*, studio:studios!users_studio_id_fkey(id, name)')
     .eq('id', userId)
     .single();
   return data;
 }
 
-export async function saveUserProfile({ name, main_studio, main_studio_place_id, dance_style }) {
+export async function saveUserProfile({ name, studio_id, dance_style }) {
   const userId = await getUserId();
-  await supabase.from('users').update({ name, main_studio, main_studio_place_id, dance_style }).eq('id', userId);
+  await supabase.from('users').update({ name, studio_id, dance_style }).eq('id', userId);
 }
 
 export async function updateUserSummary(summary) {
@@ -591,7 +591,7 @@ async function _linkToCoachByCategory(userId, inviteCode, category) {
 
   const { data: coach } = await supabase
     .from('users')
-    .select('id, name, role, main_studio, dance_style')
+    .select('id, name, role, dance_style, studio:studios!users_studio_id_fkey(id, name)')
     .eq('invite_code', code)
     .eq('role', 'coach')
     .maybeSingle();
@@ -674,7 +674,7 @@ export async function unlinkCoachForCategory(category) {
 async function _coachWithPending(coachId, pending) {
   const { data: coach } = await supabase
     .from('users')
-    .select('id, name, main_studio, dance_style')
+    .select('id, name, dance_style, studio:studios!users_studio_id_fkey(id, name)')
     .eq('id', coachId)
     .single();
   return coach ? { ...coach, pending } : null;
