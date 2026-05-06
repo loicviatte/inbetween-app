@@ -50,12 +50,16 @@ const MONTH_FULL = ['January', 'February', 'March', 'April', 'May', 'June', 'Jul
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 // ── Color constants for the editorial design ───────────────────────────
-const GOLD_500 = '#E8B530';
-const GOLD_L1  = 'rgba(232,181,48,0.30)';
-const GOLD_L2  = 'rgba(232,181,48,0.55)';
-const ORANGE_500 = '#F08C2E';
-const ORANGE_L1  = 'rgba(240,140,46,0.30)';
-const ORANGE_L2  = 'rgba(240,140,46,0.55)';
+// "Class" accent (group classes + ADD button + section eyebrow) is green.
+// "Training" accent (training-only days) reuses the warm yellow of the
+// HomeScreen "Start Now" button (Colors.orange = #F2B940) so the two pages
+// share a visual cue. Private classes stay deep blue.
+const GREEN_500 = '#34D058';
+const GREEN_L1  = 'rgba(52,208,88,0.30)';
+const GREEN_L2  = 'rgba(52,208,88,0.55)';
+const YELLOW_500 = '#F2B940';
+const YELLOW_L1  = 'rgba(242,185,64,0.30)';
+const YELLOW_L2  = 'rgba(242,185,64,0.55)';
 const PRIVATE_BLUE = '#2E4670';
 // Notes tab accent — used for the "ADD" button and the section eyebrow
 // when the NOTES tab is active.
@@ -310,19 +314,19 @@ function MonthlyOverview({ classes, trainings = [], onDayPress, collapsedAnim })
                   let fontWeight = '500';
 
                   if (info.level === 'l1') {
-                    cellBg = GOLD_L1; textColor = 'rgba(10,10,10,0.55)';
+                    cellBg = GREEN_L1; textColor = 'rgba(10,10,10,0.55)';
                   } else if (info.level === 'l2') {
-                    cellBg = GOLD_L2; textColor = 'rgba(10,10,10,0.65)';
+                    cellBg = GREEN_L2; textColor = 'rgba(10,10,10,0.65)';
                   } else if (info.level === 'l3') {
-                    cellBg = GOLD_500; textColor = INK_950; fontWeight = '700';
+                    cellBg = GREEN_500; textColor = INK_950; fontWeight = '700';
                   } else if (info.level === 'private') {
                     cellBg = PRIVATE_BLUE; textColor = '#fff'; fontWeight = '700';
                   } else if (info.level === 't1') {
-                    cellBg = ORANGE_L1; textColor = 'rgba(10,10,10,0.55)';
+                    cellBg = YELLOW_L1; textColor = 'rgba(10,10,10,0.55)';
                   } else if (info.level === 't2') {
-                    cellBg = ORANGE_L2; textColor = 'rgba(10,10,10,0.65)';
+                    cellBg = YELLOW_L2; textColor = 'rgba(10,10,10,0.65)';
                   } else if (info.level === 't3') {
-                    cellBg = ORANGE_500; textColor = INK_950; fontWeight = '700';
+                    cellBg = YELLOW_500; textColor = INK_950; fontWeight = '700';
                   }
 
                   const tappable = classItems.length > 0 || trainingItems.length > 0;
@@ -361,11 +365,11 @@ function MonthlyOverview({ classes, trainings = [], onDayPress, collapsedAnim })
 
         <View style={ov.legend}>
           <View style={ov.scaleRow}>
-            <View style={[ov.scaleSquare, { backgroundColor: GOLD_500 }]} />
+            <View style={[ov.scaleSquare, { backgroundColor: GREEN_500 }]} />
             <Text style={ov.scaleLbl}>Class</Text>
           </View>
           <View style={ov.scaleRow}>
-            <View style={[ov.scaleSquare, { backgroundColor: ORANGE_500 }]} />
+            <View style={[ov.scaleSquare, { backgroundColor: YELLOW_500 }]} />
             <Text style={ov.scaleLbl}>Training</Text>
           </View>
           <View style={ov.scaleRow}>
@@ -961,7 +965,7 @@ export default function LogScreen({ navigation }) {
                   <Ionicons
                     name="add"
                     size={18}
-                    color={activeTab === 'NOTES' ? NOTES_BLUE : GOLD_500}
+                    color={activeTab === 'NOTES' ? NOTES_BLUE : GREEN_500}
                   />
                 </View>
               </TouchableOpacity>
@@ -1086,7 +1090,7 @@ export default function LogScreen({ navigation }) {
                   <Switch
                     value={dontRemind}
                     onValueChange={setDontRemind}
-                    trackColor={{ false: '#E0E0E0', true: GOLD_500 }}
+                    trackColor={{ false: '#E0E0E0', true: GREEN_500 }}
                     thumbColor="#fff"
                   />
                 </TouchableOpacity>
@@ -1147,7 +1151,7 @@ const ov = StyleSheet.create({
   lbl: {
     fontFamily: Fonts.jakartaBold,
     fontSize: 11,
-    color: GOLD_500,
+    color: GREEN_500,
     letterSpacing: 0.8,
     textTransform: 'uppercase',
   },
@@ -1432,7 +1436,7 @@ const styles = StyleSheet.create({
   sectionHeaderText: {
     fontFamily: Fonts.jakartaBold,
     fontSize: 11,
-    color: GOLD_500,
+    color: GREEN_500,
     letterSpacing: 0.8,
     textTransform: 'uppercase',
   },
@@ -1516,7 +1520,7 @@ const styles = StyleSheet.create({
     paddingRight: 6,
     gap: 10,
     borderRadius: 999,
-    backgroundColor: GOLD_500,
+    backgroundColor: GREEN_500,
   },
   addBtnText: {
     fontFamily: Fonts.jakartaExtraBold,

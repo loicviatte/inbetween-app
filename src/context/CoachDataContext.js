@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import { AppState } from 'react-native';
 import { getMyStudents, getCoachActivityFeed, getPendingCoachRequests, getCoachNotes, getPendingFocusPoints } from '../storage/coachStorage';
 import { getUser } from '../storage/storage';
 import { getNotifications } from '../storage/notificationsStorage';
@@ -85,6 +86,16 @@ export function CoachDataProvider({ children }) {
   // Load once on mount
   useEffect(() => {
     loadAll();
+  }, [loadAll]);
+
+  // Refresh when the app returns to the foreground — without this the coach
+  // can sit on the home screen while a student sends a request and never see
+  // the new pending row until they manually re-launch the app.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') loadAll();
+    });
+    return () => sub.remove();
   }, [loadAll]);
 
   // Refresh in background (no loading state) — called on tab focus

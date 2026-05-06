@@ -382,6 +382,13 @@ export default function App() {
       navigationRef.navigate('Dashboard');
       return;
     }
+    if (type === 'coach_request_received') {
+      // Open the STUDENTS tab — pending requests render at the top of the
+      // list with accept/reject buttons, which is exactly what the coach
+      // wants to do after tapping the push.
+      navigationRef.navigate('CoachMainTabs', { screen: 'STUDENTS' });
+      return;
+    }
     if (type && COACH_ACTION_TYPES.has(type)) {
       navigationRef.navigate('ActionNeeded');
     } else {

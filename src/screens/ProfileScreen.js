@@ -117,16 +117,21 @@ function FocusReadyRow({ row, isLast }) {
 // ─── CoachSlot — compact row for the glance card ──────────────────────────────
 function GlanceTeacher({ category, coach, onPress }) {
   const isAdd = !coach;
+  const isPending = !!coach?.pending;
   const initials = coach?.name?.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase() || '+';
+  const displayName = isPending
+    ? 'Waiting to accept…'
+    : (coach?.name || 'Add teacher');
+  const muted = isAdd || isPending;
   return (
     <TouchableOpacity style={glance.tCard} onPress={onPress} activeOpacity={0.75}>
-      <View style={[glance.tAvatar, isAdd && glance.tAvatarAdd]}>
-        <Text style={[glance.tAvatarText, isAdd && glance.tAvatarTextAdd]}>{initials}</Text>
+      <View style={[glance.tAvatar, muted && glance.tAvatarAdd]}>
+        <Text style={[glance.tAvatarText, muted && glance.tAvatarTextAdd]}>{initials}</Text>
       </View>
       <View style={{ flex: 1, minWidth: 0 }}>
-        <Text style={[glance.tDance, isAdd && glance.tDanceAdd]}>{category.toUpperCase()}</Text>
-        <Text style={[glance.tName, isAdd && glance.tNameAdd]} numberOfLines={1}>
-          {coach?.name || 'Add teacher'}
+        <Text style={[glance.tDance, muted && glance.tDanceAdd]}>{category.toUpperCase()}</Text>
+        <Text style={[glance.tName, muted && glance.tNameAdd]} numberOfLines={1}>
+          {displayName}
         </Text>
       </View>
     </TouchableOpacity>
@@ -147,7 +152,10 @@ function CoachSlot({ label, coach, code, onCodeChange, linking, linkError, onAdd
           </View>
           <View style={coachStyles.coachInfo}>
             <Text style={coachStyles.coachName}>{coach.name}</Text>
-            {!!coach.main_studio && <Text style={coachStyles.coachStudio}>{coach.main_studio}</Text>}
+            {coach.pending
+              ? <Text style={coachStyles.coachStudio}>Waiting for {coach.name?.split(' ')[0] || 'coach'} to accept…</Text>
+              : (!!coach.main_studio && <Text style={coachStyles.coachStudio}>{coach.main_studio}</Text>)
+            }
           </View>
           <TouchableOpacity onPress={onUnlink} activeOpacity={0.6} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
             <Ionicons name="close" size={18} color={Colors.secondary} />

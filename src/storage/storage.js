@@ -591,7 +591,7 @@ async function _linkToCoachByCategory(userId, inviteCode, category) {
 
   const { data: coach } = await supabase
     .from('users')
-    .select('id, name, role')
+    .select('id, name, role, main_studio, dance_style')
     .eq('invite_code', code)
     .eq('role', 'coach')
     .maybeSingle();
@@ -609,9 +609,9 @@ async function _linkToCoachByCategory(userId, inviteCode, category) {
   if (existing) {
     if (existing.status === 'accepted') {
       await supabase.from('users').update({ [coachIdField]: coach.id }).eq('id', userId);
-      return { coach, alreadyLinked: true };
+      return { coach: { ...coach, pending: false }, alreadyLinked: true };
     }
-    if (existing.status === 'pending') return { coach, pending: true };
+    if (existing.status === 'pending') return { coach: { ...coach, pending: true }, pending: true };
   }
 
   await supabase.from('coach_requests').insert({
@@ -621,7 +621,7 @@ async function _linkToCoachByCategory(userId, inviteCode, category) {
     category,
   });
 
-  return { coach, pending: true };
+  return { coach: { ...coach, pending: true }, pending: true };
 }
 
 // For single-style students (Latin or Ballroom) — category derived from dance_style
@@ -646,6 +646,15 @@ export async function unlinkCoach() {
   const category = categoryFromStyle(me?.dance_style);
   if (!category) return;
   const field = category === 'latin' ? 'latin_coach_id' : 'ballroom_coach_id';
+  // Hard-delete the request row (any status) so the coach loses RLS access
+  // and stops seeing the student. Then null the column on users for
+  // belt-and-suspenders. Order matters: delete first so the coach's read
+  // policy via coach_requests fails immediately.
+  await supabase
+    .from('coach_requests')
+    .delete()
+    .eq('student_id', userId)
+    .eq('category', category);
   await supabase.from('users').update({ [field]: null }).eq('id', userId);
 }
 
@@ -653,7 +662,22 @@ export async function unlinkCoach() {
 export async function unlinkCoachForCategory(category) {
   const userId = await getUserId();
   const field = category === 'latin' ? 'latin_coach_id' : 'ballroom_coach_id';
+  await supabase
+    .from('coach_requests')
+    .delete()
+    .eq('student_id', userId)
+    .eq('category', category);
   await supabase.from('users').update({ [field]: null }).eq('id', userId);
+}
+
+// Lookup a coach by id and tag the pending state. Returns null if not found.
+async function _coachWithPending(coachId, pending) {
+  const { data: coach } = await supabase
+    .from('users')
+    .select('id, name, main_studio, dance_style')
+    .eq('id', coachId)
+    .single();
+  return coach ? { ...coach, pending } : null;
 }
 
 // For single-style students
@@ -666,30 +690,30 @@ export async function getMyCoach() {
     .single();
 
   const category = categoryFromStyle(me?.dance_style);
-  let coachId = category === 'latin' ? me?.latin_coach_id : me?.ballroom_coach_id;
+  if (!category) return null;
+  const coachId = category === 'latin' ? me?.latin_coach_id : me?.ballroom_coach_id;
 
-  // Fallback: if columns not yet backfilled, check coach_requests directly
-  if (!coachId) {
-    const { data: req } = await supabase
-      .from('coach_requests')
-      .select('coach_id')
-      .eq('student_id', userId)
-      .eq('status', 'accepted')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    coachId = req?.coach_id ?? null;
-  }
+  // Accepted link wins — the users column is the source of truth.
+  if (coachId) return _coachWithPending(coachId, false);
 
-  if (!coachId) return null;
+  // Otherwise surface the latest accepted-or-pending request so the UI can
+  // show "Waiting to accept…" until the coach responds (or "Add teacher"
+  // if there's no request at all). Prefer accepted over pending — alphabetical
+  // ascending puts 'accepted' before 'pending' so a stale accepted row isn't
+  // overshadowed by a newer pending one.
+  const { data: req } = await supabase
+    .from('coach_requests')
+    .select('coach_id, status')
+    .eq('student_id', userId)
+    .eq('category', category)
+    .in('status', ['accepted', 'pending'])
+    .order('status', { ascending: true })
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
 
-  const { data: coach } = await supabase
-    .from('users')
-    .select('id, name, main_studio, dance_style')
-    .eq('id', coachId)
-    .single();
-
-  return coach || null;
+  if (!req?.coach_id) return null;
+  return _coachWithPending(req.coach_id, req.status === 'pending');
 }
 
 // For 'Latin & Ballroom' students
@@ -703,41 +727,30 @@ export async function getMyCoachForCategory(category) {
     .eq('id', userId)
     .single();
 
-  let coachId = me?.[field];
+  if (me?.[field]) return _coachWithPending(me[field], false);
 
-  // Fallback: when the student was on a single-style profile, the category
-  // column on users may never have been populated. Look up accepted
-  // coach_requests for this category and adopt the most recent one, so
-  // switching to 'Latin & Ballroom' does not lose a pre-existing link.
-  if (!coachId) {
-    const { data: req } = await supabase
-      .from('coach_requests')
-      .select('coach_id, created_at')
-      .eq('student_id', userId)
-      .eq('status', 'accepted')
-      .eq('category', category)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    coachId = req?.coach_id ?? null;
-    // Self heal the users column so the next read is a single round trip.
-    if (coachId) {
-      await supabase
-        .from('users')
-        .update({ [field]: coachId })
-        .eq('id', userId);
-    }
+  // Fallback: surface accepted requests not yet backfilled into users, plus
+  // pending requests waiting on the coach. Accepted wins over pending.
+  const { data: req } = await supabase
+    .from('coach_requests')
+    .select('coach_id, status, created_at')
+    .eq('student_id', userId)
+    .eq('category', category)
+    .in('status', ['accepted', 'pending'])
+    .order('status', { ascending: true })  // 'accepted' < 'pending' alphabetically
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!req?.coach_id) return null;
+
+  // Self-heal the users column for accepted requests so the next read is
+  // one round trip (preserves the original behaviour).
+  if (req.status === 'accepted') {
+    await supabase.from('users').update({ [field]: req.coach_id }).eq('id', userId);
   }
 
-  if (!coachId) return null;
-
-  const { data: coach } = await supabase
-    .from('users')
-    .select('id, name, main_studio, dance_style')
-    .eq('id', coachId)
-    .single();
-
-  return coach || null;
+  return _coachWithPending(req.coach_id, req.status === 'pending');
 }
 
 // ─── Student → Coach Messages ─────────────────────────────────────────────────

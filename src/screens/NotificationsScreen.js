@@ -31,6 +31,7 @@ const POPUP_READONLY_TYPES = new Set([
 // Typographic category labels. Used instead of iconography to convey notification
 // type — feels editorial / premium rather than cluttered with mismatched glyphs.
 const TYPE_CONFIG = {
+  coach_request_received:  { label: 'Request',     color: Colors.orange, cta: 'Review' },
   coach_request_accepted:  { label: 'Request',     color: '#34C759' },
   coach_request_declined:  { label: 'Request',     color: '#FF3B30' },
   attendance_check:        { label: 'Attendance',  color: Colors.orange, cta: 'Confirm attendance' },
@@ -254,6 +255,10 @@ export default function NotificationsScreen({ navigation }) {
       }
     } else if (notif.type === 'merge_request_student' && notif.data?.merge_request_id) {
       navigation.navigate('MergeReview', { mergeRequestId: notif.data.merge_request_id });
+    } else if (notif.type === 'coach_request_received') {
+      // CoachHomeScreen is the STUDENTS tab inside CoachMainTabs and surfaces
+      // pending requests at the top of the list with accept/reject buttons.
+      navigation.navigate('CoachMainTabs', { screen: 'STUDENTS' });
     } else {
       // Fallback for any unknown type — at least show the content rather than no-op.
       setActiveNotif(notif);
