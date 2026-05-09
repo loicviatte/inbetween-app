@@ -1,5 +1,11 @@
 import ExpoModulesCore
 import AVFoundation
+import os.log
+
+private let log = OSLog(subsystem: "com.loicviatte.inbetweenapp", category: "ContinuousAudioRecorder")
+private func dbg(_ msg: String) {
+    os_log("%{public}@", log: log, type: .info, msg)
+}
 
 struct StartOptionsRecord: Record {
     @Field var outputDir: String = ""
@@ -13,8 +19,11 @@ public class ContinuousAudioRecorderModule: Module {
     private let stateLock = NSLock()
     private let engine = AVAudioEngine()
 
-    private var converter: AVAudioConverter?
-    private var outputFormat: AVAudioFormat?
+    // Format the tap will deliver buffers in (= native input format, e.g.
+    // 48kHz mono Float32 on iPhone). Used to install the tap and to size
+    // AVAudioFile's processing format. Captured at start; rebuilt on
+    // configuration change if the input route changes.
+    private var inputCaptureFormat: AVAudioFormat?
     private var fileSettings: [String: Any] = [:]
 
     private var currentFile: AVAudioFile?
@@ -33,6 +42,19 @@ public class ContinuousAudioRecorderModule: Module {
     private var recording: Bool = false
     private var lastFinishedUri: URL?
     private var notifObservers: [NSObjectProtocol] = []
+    private var tapBufferCount: Int = 0
+    private var tapBytesWritten: Int = 0
+    private var startedAt: Date?
+
+    // CRITICAL: file writes (especially AAC encoding) must NOT happen on the
+    // tap callback thread. The tap runs on a real-time audio thread and MUST
+    // return in microseconds. Encoding + file I/O takes ~10ms per write, which
+    // causes iOS to drop subsequent audio buffers (we lost ~70% of audio in
+    // testing before this fix). All writes are dispatched to this serial queue.
+    private let writeQueue = DispatchQueue(
+        label: "com.loicviatte.continuous-audio-recorder.write",
+        qos: .userInitiated
+    )
 
     public func definition() -> ModuleDefinition {
         Name("ContinuousAudioRecorder")
@@ -102,12 +124,19 @@ public class ContinuousAudioRecorderModule: Module {
         // Audio session
         let session = AVAudioSession.sharedInstance()
         do {
+            // mode .measurement disables iOS audio processing chain (gain
+            // shaping, AGC) and asks for raw audio — what we want for
+            // transcription. Critically, NO .mixWithOthers: that option puts
+            // iOS in power-saving audio path which drops 70% of samples
+            // between hardware and tap. For recording we need full-rate.
             try session.setCategory(
                 .playAndRecord,
-                mode: .default,
-                options: [.allowBluetooth, .defaultToSpeaker, .mixWithOthers]
+                mode: .measurement,
+                options: [.allowBluetooth, .defaultToSpeaker]
             )
-            try session.setPreferredSampleRate(self.sampleRateOpt)
+            // Do NOT set preferredSampleRate — asking for 16kHz can make iOS
+            // throttle the hardware sampling itself. Let iOS use native rate
+            // (48kHz on iPhone) and we resample in the tap.
             try session.setActive(true)
         } catch {
             stateLock.unlock()
@@ -118,30 +147,7 @@ public class ContinuousAudioRecorderModule: Module {
             )
         }
 
-        // Output format (for tap converter and AVAudioFile processing)
-        guard let outputFormat = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: self.sampleRateOpt,
-            channels: AVAudioChannelCount(self.channelsOpt),
-            interleaved: false
-        ) else {
-            stateLock.unlock()
-            throw recorderError(
-                code: "output_format",
-                message: "Failed to construct output format",
-                ns: nil
-            )
-        }
-        self.outputFormat = outputFormat
-
-        self.fileSettings = [
-            AVFormatIDKey: kAudioFormatMPEG4AAC,
-            AVSampleRateKey: self.sampleRateOpt,
-            AVNumberOfChannelsKey: self.channelsOpt,
-            AVEncoderBitRateKey: self.bitRateOpt,
-        ]
-
-        // Engine input format
+        // Engine input format (native hardware rate — typically 48kHz)
         let inputNode = engine.inputNode
         let inputFormat = inputNode.outputFormat(forBus: 0)
         guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
@@ -153,15 +159,25 @@ public class ContinuousAudioRecorderModule: Module {
             )
         }
 
-        guard let conv = AVAudioConverter(from: inputFormat, to: outputFormat) else {
-            stateLock.unlock()
-            throw recorderError(
-                code: "tap_install",
-                message: "Cannot create converter \(inputFormat) → \(outputFormat)",
-                ns: nil
-            )
-        }
-        self.converter = conv
+        // Skip our own AVAudioConverter. Record at native input rate (48kHz
+        // typically) directly to AAC. AssemblyAI accepts any sample rate.
+        // The previous attempt with explicit converter produced more output
+        // frames than physically possible (1.64× input duration), suggesting
+        // the converter has internal state we're not feeding correctly.
+        // Recording native sidesteps the issue.
+        self.inputCaptureFormat = inputFormat
+        
+
+        // File format MUST match what we'll feed AVAudioFile.write — i.e. the
+        // native input format. AAC bitrate scales with sample rate; 24kbps is
+        // OK for 16kHz mono speech but too low for 48kHz. Use 48 kbps.
+        let nativeBitRate = inputFormat.sampleRate >= 32000 ? 48000 : self.bitRateOpt
+        self.fileSettings = [
+            AVFormatIDKey: kAudioFormatMPEG4AAC,
+            AVSampleRateKey: inputFormat.sampleRate,
+            AVNumberOfChannelsKey: Int(inputFormat.channelCount),
+            AVEncoderBitRateKey: nativeBitRate,
+        ]
 
         // Open first chunk file before installing tap so we never drop the first frames
         do {
@@ -199,12 +215,16 @@ public class ContinuousAudioRecorderModule: Module {
         }
 
         recording = true
+        tapBufferCount = 0
+        tapBytesWritten = 0
+        startedAt = Date()
         let firstUri = self.currentChunkUri?.absoluteString ?? ""
         let inputSampleRate = inputFormat.sampleRate
         let inputChannels = Int(inputFormat.channelCount)
         stateLock.unlock()
 
         registerNotifications()
+        dbg("START ok — input \(inputSampleRate)Hz/\(inputChannels)ch → output \(self.sampleRateOpt)Hz/\(self.channelsOpt)ch, chunkMs=\(self.chunkDurationMs), file=\(firstUri)")
 
         return [
             "firstChunkUri": firstUri,
@@ -218,57 +238,69 @@ public class ContinuousAudioRecorderModule: Module {
     // MARK: - Tap
 
     private func handleTapBuffer(_ inputBuffer: AVAudioPCMBuffer) {
-        guard let converter = self.converter, let outputFormat = self.outputFormat else { return }
-
-        let ratio = outputFormat.sampleRate / inputBuffer.format.sampleRate
-        let outCapacity = AVAudioFrameCount(Double(inputBuffer.frameLength) * ratio + 1024)
-        guard outCapacity > 0,
-              let outBuffer = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: outCapacity) else {
-            return
+        // Log raw input characteristics every 12th tap so we can verify what
+        // iOS is actually delivering (size, format).
+        if (tapBufferCount + 1) % 12 == 1 {
+            dbg("TAP raw input — frames=\(inputBuffer.frameLength) format=\(inputBuffer.format.sampleRate)Hz/\(inputBuffer.format.channelCount)ch")
         }
 
-        var error: NSError?
-        var inputProvided = false
-        let status = converter.convert(to: outBuffer, error: &error) { _, outStatus in
-            if inputProvided {
-                outStatus.pointee = .noDataNow
-                return nil
+        let frameLen = Int(inputBuffer.frameLength)
+        let inputSampleRate = inputBuffer.format.sampleRate
+
+        // Dispatch the actual write off the audio thread. AVAudioFile.write
+        // does AAC encoding (and sample rate conversion since file settings
+        // target 16kHz while input is 48kHz) which would block the tap if
+        // run synchronously here. Since iOS already throttles the tap heavily
+        // we want to be sure we don't add more delay.
+        writeQueue.async { [weak self] in
+            guard let self = self else { return }
+            self.stateLock.lock()
+            defer { self.stateLock.unlock() }
+            guard let file = self.currentFile else {
+                self.tapBufferCount += 1
+                if self.tapBufferCount % 12 == 1 {
+                    dbg("TAP fired but currentFile=nil (count=\(self.tapBufferCount), elapsed=\(self.elapsedMs())ms)")
+                }
+                return
             }
-            inputProvided = true
-            outStatus.pointee = .haveData
-            return inputBuffer
+            do {
+                try file.write(from: inputBuffer)
+                self.tapBufferCount += 1
+                // Track wall-clock-equivalent of audio written (input rate)
+                self.tapBytesWritten += Int(Double(frameLen) * 1000.0 / inputSampleRate) // ms
+                if self.tapBufferCount % 12 == 1 {
+                    dbg("TAP write ok — count=\(self.tapBufferCount) elapsed=\(self.elapsedMs())ms inFrames=\(frameLen) totAudioMs=\(self.tapBytesWritten)")
+                }
+            } catch {
+                dbg("TAP write FAILED at count=\(self.tapBufferCount) elapsed=\(self.elapsedMs())ms: \(error.localizedDescription)")
+                self.emitError(code: "file_write", message: error.localizedDescription, ns: error as NSError)
+            }
         }
+    }
 
-        if let error = error {
-            self.emitError(code: "convert_failed", message: error.localizedDescription, ns: error)
-            return
-        }
-        guard status == .haveData || status == .endOfStream else { return }
-        if outBuffer.frameLength == 0 { return }
-
-        stateLock.lock()
-        defer { stateLock.unlock() }
-        guard let file = self.currentFile else { return }
-        do {
-            try file.write(from: outBuffer)
-        } catch {
-            self.emitError(code: "file_write", message: error.localizedDescription, ns: error as NSError)
-        }
+    private func elapsedMs() -> Int {
+        guard let st = startedAt else { return 0 }
+        return Int(Date().timeIntervalSince(st) * 1000)
     }
 
     // MARK: - Chunk file management
 
     // Caller must hold stateLock.
     private func openNextChunkFileLocked() throws {
-        guard let outputDir = self.outputDirUrl else { return }
+        guard let outputDir = self.outputDirUrl,
+              let processingFormat = self.inputCaptureFormat else { return }
         let idx = self.currentChunkIdx
         let url = outputDir.appendingPathComponent(String(format: "chunk_%04d.m4a", idx))
         try? FileManager.default.removeItem(at: url)
+        // Use the convenience init that defaults processingFormat to match
+        // the file's settings sample rate. We pass commonFormat/interleaved
+        // matching the input buffers we'll write so write(from:) accepts
+        // them directly.
         let file = try AVAudioFile(
             forWriting: url,
             settings: self.fileSettings,
-            commonFormat: .pcmFormatFloat32,
-            interleaved: false
+            commonFormat: processingFormat.commonFormat,
+            interleaved: processingFormat.isInterleaved
         )
         self.currentFile = file
         self.currentChunkUri = url
@@ -330,10 +362,12 @@ public class ContinuousAudioRecorderModule: Module {
     // MARK: - Stop
 
     private func stopRecording() throws -> [String: Any?] {
+        dbg("STOP called — elapsed=\(elapsedMs())ms tapBuffers=\(tapBufferCount) bytesWritten=\(tapBytesWritten) engineRunning=\(engine.isRunning)")
         stateLock.lock()
         guard recording else {
             let last = self.lastFinishedUri?.absoluteString
             stateLock.unlock()
+            dbg("STOP — already stopped, returning lastChunkUri=\(String(describing: last))")
             return ["lastChunkUri": last as Any?]
         }
 
@@ -346,11 +380,19 @@ public class ContinuousAudioRecorderModule: Module {
         let uri = self.currentChunkUri
         let idx = self.currentChunkIdx
         let startTime = self.currentChunkStartedAt
+
+        self.recording = false
+        stateLock.unlock()
+
+        // Flush any in-flight writes before tearing down the file. Without
+        // this, the last ~100ms of audio is lost because writeQueue is async.
+        writeQueue.sync {}
+
+        // Now safe to release the file (finalize the m4a moov atom).
+        stateLock.lock()
         self.currentFile = nil
         self.currentChunkUri = nil
         self.currentChunkStartedAt = nil
-
-        self.recording = false
         stateLock.unlock()
 
         unregisterNotifications()
@@ -409,6 +451,7 @@ public class ContinuousAudioRecorderModule: Module {
         guard let info = note.userInfo,
               let typeRaw = info[AVAudioSessionInterruptionTypeKey] as? UInt,
               let type = AVAudioSession.InterruptionType(rawValue: typeRaw) else { return }
+        dbg("INTERRUPTION fired — type=\(type == .began ? "began" : "ended") elapsed=\(elapsedMs())ms engineRunning=\(engine.isRunning)")
         switch type {
         case .began:
             // Engine pauses automatically; wait for .ended.
@@ -432,6 +475,7 @@ public class ContinuousAudioRecorderModule: Module {
     }
 
     private func handleMediaServicesReset() {
+        dbg("MEDIA SERVICES RESET fired — elapsed=\(elapsedMs())ms")
         self.sendEvent("mediaServicesReset", [
             "at": ISO8601DateFormatter().string(from: Date())
         ])
@@ -448,17 +492,14 @@ public class ContinuousAudioRecorderModule: Module {
             try AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
             try AVAudioSession.sharedInstance().setCategory(
                 .playAndRecord,
-                mode: .default,
-                options: [.allowBluetooth, .defaultToSpeaker, .mixWithOthers]
+                mode: .measurement,
+                options: [.allowBluetooth, .defaultToSpeaker]
             )
             try AVAudioSession.sharedInstance().setActive(true)
 
             let inputNode = engine.inputNode
             let inputFormat = inputNode.outputFormat(forBus: 0)
-            if let outFormat = self.outputFormat,
-               let conv = AVAudioConverter(from: inputFormat, to: outFormat) {
-                self.converter = conv
-            }
+            self.inputCaptureFormat = inputFormat
             inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] (buffer, _) in
                 self?.handleTapBuffer(buffer)
             }
@@ -474,13 +515,57 @@ public class ContinuousAudioRecorderModule: Module {
         stateLock.unlock()
     }
 
+    // (logged at top of handleConfigurationChange below)
+    // AVAudioEngineConfigurationChange fires when the engine's I/O config
+    // changes — e.g. iOS finalizes the input route after start, the user
+    // plugs/unplugs headphones, or the system reconfigures the audio path.
+    // CRITICAL: iOS REMOVES the input tap automatically when this fires.
+    // Without reinstalling, the tap callback stops being invoked, no audio
+    // is captured, and the m4a file just gets finalized at whatever
+    // duration was captured up to that point. (This is the root cause of
+    // the "10-second cutoff" we hit during the first integration test.)
+    // Symptoms: file stops growing silently, no error event fires.
     private func handleConfigurationChange() {
+        dbg("CONFIG CHANGE fired — elapsed=\(elapsedMs())ms recording=\(recording) engineRunning=\(engine.isRunning)")
         stateLock.lock()
         defer { stateLock.unlock() }
-        let inputFormat = engine.inputNode.outputFormat(forBus: 0)
-        if let outFormat = self.outputFormat,
-           let conv = AVAudioConverter(from: inputFormat, to: outFormat) {
-            self.converter = conv
+        guard recording else { return }
+
+        // The old tap was removed by iOS as part of the reset. Read the new
+        // input format (may differ from the original — e.g. different sample
+        // rate after route change) and reinstall.
+        let inputNode = engine.inputNode
+        let newInputFormat = inputNode.outputFormat(forBus: 0)
+        guard newInputFormat.sampleRate > 0,
+              newInputFormat.channelCount > 0 else {
+            self.emitError(
+                code: "config_change_invalid_format",
+                message: "Invalid input format after configuration change: \(newInputFormat)",
+                ns: nil
+            )
+            return
+        }
+        self.inputCaptureFormat = newInputFormat
+
+        // Defensive removeTap in case iOS didn't actually clear it. Removing
+        // a non-existent tap is safe.
+        inputNode.removeTap(onBus: 0)
+        inputNode.installTap(onBus: 0, bufferSize: 4096, format: newInputFormat) { [weak self] (buffer, _) in
+            self?.handleTapBuffer(buffer)
+        }
+
+        // The engine may have been stopped by iOS as well. Restart if needed.
+        if !engine.isRunning {
+            do {
+                engine.prepare()
+                try engine.start()
+            } catch {
+                self.emitError(
+                    code: "config_change_engine_restart_failed",
+                    message: error.localizedDescription,
+                    ns: error as NSError
+                )
+            }
         }
     }
 

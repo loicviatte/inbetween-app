@@ -2,7 +2,7 @@
   "expo": {
     "name": "InBetween",
     "slug": "inbetween-app",
-    "version": "1.5.6",
+    "version": "1.5.7",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -14,7 +14,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.loicviatte.inbetweenapp",
-      "buildNumber": "2",
+      "buildNumber": "3",
       "appleTeamId": "66DQR8326F",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,

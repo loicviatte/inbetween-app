@@ -46,9 +46,10 @@ import {
   updateCoachRecording as laUpdateCoachRecording,
   endCoachRecording as laEndCoachRecording,
 } from 'live-activities';
-import { isNewRecordingPipelineEnabled } from '../../services/featureFlags';
+import { isNewRecordingPipelineEnabled, isNativeRecorderEnabled } from '../../services/featureFlags';
 import { enqueueChunk } from '../../storage/recordingQueue';
 import { pokeUploadWorker } from '../../services/uploadWorker';
+import ContinuousAudioRecorder from 'continuous-audio-recorder';
 
 const ASSEMBLYAI_API_KEY = process.env.EXPO_PUBLIC_ASSEMBLYAI_API_KEY;
 
@@ -370,6 +371,15 @@ export default function StartClassScreen({ navigation }) {
   const newPipelineRef = useRef(false);     // captured at startClassNow
   const recordingIdRef = useRef(null);      // class_recordings.id when on new pipeline
   const userIdRef = useRef(null);           // captured at startClassNow
+  // Native iOS recorder (continuous-audio-recorder). When the per-user flag
+  // is on, audio CAPTURE goes through a single AVAudioEngine that never
+  // restarts — chunks are rotated natively (file-only swap) instead of by
+  // stopping/starting expo-audio's AudioRecorder, which trips
+  // expo/expo#21782 the moment the app is backgrounded at rotation time.
+  // The downstream pipeline (enqueue → upload → finalize-class) is the same.
+  const usingNativeRecorderRef = useRef(false);
+  const nativeRecorderSubsRef = useRef([]);
+  const nativeRecorderOutputDirRef = useRef(null);
   const [micPermGranted, setMicPermGranted] = useState(null);
   // Watchdog: when iOS suspends the app the recording stops even though
   // wall-clock time keeps advancing. We freeze the chrono at the moment of
@@ -836,6 +846,40 @@ export default function StartClassScreen({ navigation }) {
     return false;
   }
 
+  // Push a finalized chunk URI into the local list AND (when on the new
+  // server-side pipeline) into the upload queue + heartbeat the recording.
+  // Single source of truth used by:
+  //   - legacy expo-audio rotateChunk (fires on stop/restart cycle)
+  //   - native recorder chunkReady event (fires on rotated file close)
+  //   - stopClass tail-chunk path
+  async function recordChunkUri(chunkUri) {
+    if (!chunkUri) return;
+    audioUrisRef.current = [...audioUrisRef.current, chunkUri];
+    setAudioUris(audioUrisRef.current);
+
+    if (!newPipelineRef.current || !recordingIdRef.current || !userIdRef.current) return;
+    const idx = audioUrisRef.current.length - 1;
+    const recordingId = recordingIdRef.current;
+    const userId = userIdRef.current;
+    const storagePath = `${userId}/${recordingId}/${idx}.m4a`;
+    try {
+      await supabase.from('class_recording_chunks').upsert({
+        recording_id: recordingId,
+        idx,
+        status: 'pending',
+      });
+      await enqueueChunk({ recordingId, idx, fileUri: chunkUri, storagePath });
+      pokeUploadWorker();
+      supabase
+        .from('class_recordings')
+        .update({ last_heartbeat_at: new Date().toISOString() })
+        .eq('id', recordingId)
+        .then(() => {}, () => {});
+    } catch (err) {
+      console.warn('[StartClass] chunk enqueue failed:', err);
+    }
+  }
+
   async function rotateChunk() {
     if (rotatingChunkRef.current) return;
     if (!recordingRef.current) return;
@@ -844,43 +888,11 @@ export default function StartClassScreen({ navigation }) {
       let chunkUri = null;
       try {
         chunkUri = await stopAndUnloadRecording(recordingRef.current);
-        if (chunkUri) {
-          audioUrisRef.current = [...audioUrisRef.current, chunkUri];
-          setAudioUris(audioUrisRef.current);
-        }
       } catch (err) {
         console.warn('[StartClass] chunk rotation: stop failed:', err);
       }
       recordingRef.current = null;
-      // New server-side pipeline: hand the just-rotated chunk to the
-      // upload queue + insert a class_recording_chunks row so finalize
-      // can later see it. Best-effort — failures are logged, the worker
-      // retries with backoff, and the legacy local list (audioUrisRef)
-      // remains as a forensic backup.
-      if (chunkUri && newPipelineRef.current && recordingIdRef.current && userIdRef.current) {
-        const idx = audioUrisRef.current.length - 1; // we just pushed
-        const recordingId = recordingIdRef.current;
-        const userId = userIdRef.current;
-        const storagePath = `${userId}/${recordingId}/${idx}.m4a`;
-        try {
-          await supabase.from('class_recording_chunks').upsert({
-            recording_id: recordingId,
-            idx,
-            status: 'pending',
-          });
-          await enqueueChunk({ recordingId, idx, fileUri: chunkUri, storagePath });
-          pokeUploadWorker();
-          // Heartbeat the recording so the cron sweep doesn't trip on a
-          // long class with backgrounded JS.
-          supabase
-            .from('class_recordings')
-            .update({ last_heartbeat_at: new Date().toISOString() })
-            .eq('id', recordingId)
-            .then(() => {}, () => {});
-        } catch (err) {
-          console.warn('[StartClass] new pipeline enqueue failed:', err);
-        }
-      }
+      await recordChunkUri(chunkUri);
       try {
         recordingRef.current = await createAndStartRecording(getCoachRecordingOptions());
       } catch (err) {
@@ -903,6 +915,67 @@ export default function StartClassScreen({ navigation }) {
       clearInterval(chunkRotationIntervalRef.current);
       chunkRotationIntervalRef.current = null;
     }
+  }
+
+  // Attempts to start the native iOS continuous recorder. On success, the
+  // module rotates chunks every CHUNK_MS at the file layer and emits one
+  // chunkReady event per finalized chunk; we route those into the same
+  // pipeline (recordChunkUri) the legacy rotation feeds. On failure throws,
+  // and the caller falls back to expo-audio.
+  async function tryStartNativeRecorder() {
+    // Per-class output dir so chunk files from different classes don't
+    // collide and stay scoped for cleanup later.
+    const dirSuffix = recordingIdRef.current || `local-${Date.now()}`;
+    const dir = `${FileSystem.documentDirectory}coach-class-${dirSuffix}`;
+    await FileSystem.makeDirectoryAsync(dir, { intermediates: true });
+    nativeRecorderOutputDirRef.current = dir;
+
+    const subs = [];
+    subs.push(ContinuousAudioRecorder.addChunkReadyListener((e) => {
+      // recordChunkUri pushes into audioUrisRef + enqueues for upload.
+      // Native idx is for forensics; the JS path uses audioUrisRef.length-1
+      // as the canonical idx (matches legacy ordering).
+      recordChunkUri(e?.uri).catch((err) => {
+        console.warn('[StartClass] native chunkReady handler failed:', err);
+      });
+    }));
+    subs.push(ContinuousAudioRecorder.addErrorListener((e) => {
+      console.warn('[StartClass] Native recorder error:', e);
+    }));
+    subs.push(ContinuousAudioRecorder.addMediaServicesResetListener((e) => {
+      console.warn('[StartClass] Native recorder media services reset:', e);
+    }));
+    nativeRecorderSubsRef.current = subs;
+
+    try {
+      await ContinuousAudioRecorder.start({
+        outputDir: dir,
+        chunkDurationMs: CHUNK_MS,
+      });
+      usingNativeRecorderRef.current = true;
+    } catch (err) {
+      subs.forEach((s) => { try { s.remove(); } catch {} });
+      nativeRecorderSubsRef.current = [];
+      nativeRecorderOutputDirRef.current = null;
+      throw err;
+    }
+  }
+
+  async function stopNativeRecorder() {
+    let stopResult = null;
+    try {
+      stopResult = await ContinuousAudioRecorder.stop();
+    } catch (err) {
+      console.warn('[StartClass] Could not stop native recorder:', err);
+    }
+    // Native stop() emits the final chunkReady event before resolving,
+    // but JS event delivery is asynchronous — give the listener a tick to
+    // land before we tear it down. Without this we'd lose the tail.
+    await new Promise((r) => setTimeout(r, 150));
+    (nativeRecorderSubsRef.current || []).forEach((s) => { try { s.remove(); } catch {} });
+    nativeRecorderSubsRef.current = [];
+    usingNativeRecorderRef.current = false;
+    return stopResult;
   }
 
   // One-shot hint shown the first time a coach starts a class without a
@@ -994,8 +1067,25 @@ export default function StartClassScreen({ navigation }) {
           allowsBackgroundRecording: true,
           shouldPlayInBackground: true,
         });
-        recordingRef.current = await createAndStartRecording(getCoachRecordingOptions());
-        startChunkRotation();
+
+        // Native iOS recorder path (per-user flag). Captures via a single
+        // AVAudioEngine that never restarts; chunk rotation is handled
+        // natively. Falls through to the legacy expo-audio path on failure.
+        let nativeStarted = false;
+        try {
+          const { data: { user: authUser } } = await supabase.auth.getUser();
+          if (isNativeRecorderEnabled(authUser)) {
+            await tryStartNativeRecorder();
+            nativeStarted = true;
+          }
+        } catch (err) {
+          console.warn('[StartClass] Native recorder start failed, falling back to expo-audio:', err);
+        }
+
+        if (!nativeStarted) {
+          recordingRef.current = await createAndStartRecording(getCoachRecordingOptions());
+          startChunkRotation();
+        }
         try {
           const route = getCurrentInputRoute();
           const name = (route?.name || '').toLowerCase();
@@ -1076,49 +1166,38 @@ export default function StartClassScreen({ navigation }) {
     // disabling it during the async work below.
     if (stoppingRef.current) return;
     stoppingRef.current = true;
-    stopChunkRotation();
-    // If a chunk rotation is mid-flight (it's currently nulling
-    // recordingRef.current and starting a new recorder), we MUST wait for
-    // it to finish — otherwise we'd leak a still-recording AudioRecorder
-    // and our chunk index would be off by one. The rotation completes
-    // quickly (stop + create_async ≈ 100-300 ms), so a short busy-wait is
-    // the simplest correct synchronization.
-    const rotationDeadline = Date.now() + 5000;
-    while (rotatingChunkRef.current && Date.now() < rotationDeadline) {
-      await new Promise((r) => setTimeout(r, 50));
-    }
-    // Stop recording and keep all chunk URIs for transcription in finishDebrief.
-    if (recordingRef.current) {
-      try {
-        const uri = await stopAndUnloadRecording(recordingRef.current);
-        if (uri) {
-          audioUrisRef.current = [...audioUrisRef.current, uri];
-          setAudioUris(audioUrisRef.current);
-          // New pipeline: enqueue the final chunk too. Same as rotateChunk
-          // but for the tail of the recording where there's no rotation.
-          if (newPipelineRef.current && recordingIdRef.current && userIdRef.current) {
-            const idx = audioUrisRef.current.length - 1;
-            const recordingId = recordingIdRef.current;
-            const userId = userIdRef.current;
-            const storagePath = `${userId}/${recordingId}/${idx}.m4a`;
-            try {
-              await supabase.from('class_recording_chunks').upsert({
-                recording_id: recordingId,
-                idx,
-                status: 'pending',
-              });
-              await enqueueChunk({ recordingId, idx, fileUri: uri, storagePath });
-              pokeUploadWorker();
-            } catch (err) {
-              console.warn('[StartClass] new pipeline final chunk enqueue failed:', err);
-            }
-          }
-        }
-      } catch (err) {
-        console.warn('[StartClass] Could not stop recording:', err);
-      }
-      recordingRef.current = null;
+
+    if (usingNativeRecorderRef.current) {
+      // Native path: no JS rotation interval to cancel and no busy-wait
+      // to do. stopNativeRecorder triggers a final chunkReady event that
+      // the listener routes through recordChunkUri (push + enqueue), then
+      // the function waits 150 ms for the event to land before tearing
+      // listeners down so we don't lose the tail.
+      await stopNativeRecorder();
       await setAudioModeAsync({ allowsRecording: false, allowsBackgroundRecording: false, shouldPlayInBackground: false });
+    } else {
+      stopChunkRotation();
+      // If a chunk rotation is mid-flight (it's currently nulling
+      // recordingRef.current and starting a new recorder), we MUST wait for
+      // it to finish — otherwise we'd leak a still-recording AudioRecorder
+      // and our chunk index would be off by one. The rotation completes
+      // quickly (stop + create_async ≈ 100-300 ms), so a short busy-wait is
+      // the simplest correct synchronization.
+      const rotationDeadline = Date.now() + 5000;
+      while (rotatingChunkRef.current && Date.now() < rotationDeadline) {
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      // Stop recording and keep all chunk URIs for transcription in finishDebrief.
+      if (recordingRef.current) {
+        try {
+          const uri = await stopAndUnloadRecording(recordingRef.current);
+          await recordChunkUri(uri);
+        } catch (err) {
+          console.warn('[StartClass] Could not stop recording:', err);
+        }
+        recordingRef.current = null;
+        await setAudioModeAsync({ allowsRecording: false, allowsBackgroundRecording: false, shouldPlayInBackground: false });
+      }
     }
 
     stopHeartbeat();
