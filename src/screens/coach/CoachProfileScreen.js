@@ -4,7 +4,6 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  ScrollView,
   Modal,
   Pressable,
   TextInput,
@@ -18,62 +17,11 @@ import * as Clipboard2 from 'expo-clipboard';
 import { Colors, Fonts, Spacing } from '../../theme';
 import { getUser, saveUserProfile } from '../../storage/storage';
 import { getOrCreateInviteCode, getMyStudents } from '../../storage/coachStorage';
+import { clearUserCaches } from '../../storage/userCaches';
 import { supabase } from '../../services/supabase/client';
 import { CoachProfileScreenSkeleton } from '../../components/Skeleton';
+import StudioPicker from '../../components/StudioPicker';
 import { Ionicons } from '@expo/vector-icons';
-
-const PLACES_KEY = process.env.EXPO_PUBLIC_GOOGLE_PLACES_API_KEY;
-
-function PlacesInput({ value, onChangeText, onPlaceSelect }) {
-  const [suggestions, setSuggestions] = useState([]);
-  const debounceRef = useRef(null);
-
-  function handleChange(text) {
-    onChangeText(text);
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    if (!PLACES_KEY || !text || text.length < 2) { setSuggestions([]); return; }
-    debounceRef.current = setTimeout(async () => {
-      try {
-        const url = `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(text)}&types=establishment&key=${PLACES_KEY}`;
-        const res = await fetch(url);
-        const json = await res.json();
-        setSuggestions(json.predictions?.slice(0, 5) || []);
-      } catch { setSuggestions([]); }
-    }, 350);
-  }
-
-  function handleSelect(p) {
-    const name = p.structured_formatting?.main_text || p.description;
-    onChangeText(name);
-    setSuggestions([]);
-    onPlaceSelect(name, p.place_id);
-  }
-
-  return (
-    <View>
-      <TextInput
-        style={em.input}
-        value={value}
-        onChangeText={handleChange}
-        placeholder="Search for a studio or address"
-        placeholderTextColor="rgba(17,12,17,0.3)"
-        autoCorrect={false}
-      />
-      {suggestions.length > 0 && (
-        <View style={em.suggestions}>
-          {suggestions.map((p) => (
-            <TouchableOpacity key={p.place_id} style={em.suggestion} onPress={() => handleSelect(p)} activeOpacity={0.7}>
-              <Text style={em.suggestionMain} numberOfLines={1}>{p.structured_formatting?.main_text || p.description}</Text>
-              {!!p.structured_formatting?.secondary_text && (
-                <Text style={em.suggestionSub} numberOfLines={1}>{p.structured_formatting.secondary_text}</Text>
-              )}
-            </TouchableOpacity>
-          ))}
-        </View>
-      )}
-    </View>
-  );
-}
 
 export default function CoachProfileScreen({ navigation }) {
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -85,8 +33,7 @@ export default function CoachProfileScreen({ navigation }) {
   const [copied, setCopied] = useState(false);
   const [editVisible, setEditVisible] = useState(false);
   const [editName, setEditName] = useState('');
-  const [editStudio, setEditStudio] = useState('');
-  const [editStudioPlaceId, setEditStudioPlaceId] = useState(null);
+  const [editStudio, setEditStudio] = useState(null);
   const [editStyle, setEditStyle] = useState('');
   const [saving, setSaving] = useState(false);
 
@@ -122,8 +69,7 @@ export default function CoachProfileScreen({ navigation }) {
 
   function openEdit() {
     setEditName(user?.name || '');
-    setEditStudio(user?.main_studio || '');
-    setEditStudioPlaceId(user?.main_studio_place_id || null);
+    setEditStudio(user?.studio || null);
     setEditStyle(user?.dance_style || '');
     setEditVisible(true);
   }
@@ -132,14 +78,15 @@ export default function CoachProfileScreen({ navigation }) {
     if (saving) return;
     setSaving(true);
     const name = editName.trim();
-    const main_studio = editStudio.trim();
-    await saveUserProfile({ name, main_studio, main_studio_place_id: editStudioPlaceId, dance_style: editStyle });
-    setUser(prev => ({ ...prev, name, main_studio, main_studio_place_id: editStudioPlaceId, dance_style: editStyle }));
+    const studio_id = editStudio?.id || null;
+    await saveUserProfile({ name, studio_id, dance_style: editStyle });
+    setUser(prev => ({ ...prev, name, studio_id, studio: editStudio, dance_style: editStyle }));
     setSaving(false);
     setEditVisible(false);
   }
 
   async function handleLogout() {
+    await clearUserCaches();
     await supabase.auth.signOut();
   }
 
@@ -180,8 +127,8 @@ export default function CoachProfileScreen({ navigation }) {
           </View>
           <Text style={styles.name}>{user?.name || 'Your Name'}</Text>
           <Text style={styles.role}>Coach</Text>
-          {!!user?.main_studio && (
-            <Text style={styles.info}>{user.main_studio}</Text>
+          {!!user?.studio?.name && (
+            <Text style={styles.info}>{user.studio.name}</Text>
           )}
           {!!user?.dance_style && (
             <Text style={styles.info}>{user.dance_style}</Text>
@@ -244,13 +191,10 @@ export default function CoachProfileScreen({ navigation }) {
 
               <View style={em.field}>
                 <Text style={em.fieldLabel}>Studio</Text>
-                <PlacesInput
+                <StudioPicker
                   value={editStudio}
-                  onChangeText={setEditStudio}
-                  onPlaceSelect={(name, placeId) => {
-                    setEditStudio(name);
-                    setEditStudioPlaceId(placeId || null);
-                  }}
+                  onChange={setEditStudio}
+                  allowCreate
                 />
               </View>
 
@@ -511,20 +455,4 @@ const em = StyleSheet.create({
   saveBtnText: { fontFamily: Fonts.jakartaExtraBold, fontSize: 15, color: '#000' },
   cancelBtn: { paddingVertical: 14, alignItems: 'center' },
   cancelBtnText: { fontFamily: Fonts.jakartaMedium, fontSize: 14, color: Colors.secondary },
-  suggestions: {
-    backgroundColor: Colors.white,
-    borderWidth: 0.5,
-    borderColor: Colors.statCardBorder,
-    borderRadius: 12,
-    marginTop: 4,
-    overflow: 'hidden',
-  },
-  suggestion: {
-    paddingHorizontal: 14,
-    paddingVertical: 11,
-    borderBottomWidth: 0.5,
-    borderBottomColor: Colors.statCardBorder,
-  },
-  suggestionMain: { fontFamily: Fonts.jakartaMedium, fontSize: 14, color: Colors.black },
-  suggestionSub: { fontFamily: Fonts.jakartaRegular, fontSize: 11, color: Colors.secondary, marginTop: 1 },
 });

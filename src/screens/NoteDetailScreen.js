@@ -20,11 +20,10 @@ import { useFocusEffect } from '@react-navigation/native';
 import { Colors, Fonts, Spacing } from '../theme';
 import { getNoteById, saveNote, deleteNote, getClassInputs } from '../storage/storage';
 
+import { useVideoPlayer, VideoView } from 'expo-video';
+
 let ImagePicker = null;
 try { ImagePicker = require('expo-image-picker'); } catch (_) {}
-
-let ExpoAV = null;
-try { ExpoAV = require('expo-av'); } catch (_) {}
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -51,38 +50,25 @@ function formatNoteTimestamp(ts) {
 // ─── Video player modal ───────────────────────────────────────────────────────
 
 function VideoPlayerModal({ uri, onClose }) {
-  if (!uri) return null;
-
-  if (!ExpoAV) {
-    return (
-      <Modal visible animationType="fade" transparent onRequestClose={onClose}>
-        <View style={vm.overlay}>
-          <View style={vm.errorBox}>
-            <Text style={vm.errorText}>Video playback is not available in this environment.</Text>
-            <TouchableOpacity style={vm.errorBtn} onPress={onClose}>
-              <Text style={vm.errorBtnText}>Close</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-    );
-  }
-
-  const { Video, ResizeMode } = ExpoAV;
+  const player = useVideoPlayer(uri || null, (p) => {
+    if (uri) p.play();
+  });
 
   return (
-    <Modal visible animationType="fade" transparent onRequestClose={onClose}>
+    <Modal visible={!!uri} animationType="fade" transparent onRequestClose={onClose}>
       <View style={vm.overlay}>
         <TouchableOpacity style={vm.closeBtn} onPress={onClose} activeOpacity={0.8}>
           <Ionicons name="close" size={20} color="#fff" />
         </TouchableOpacity>
-        <Video
-          source={{ uri }}
-          style={vm.video}
-          useNativeControls
-          resizeMode={ResizeMode?.CONTAIN ?? 'contain'}
-          shouldPlay
-        />
+        {uri ? (
+          <VideoView
+            player={player}
+            style={vm.video}
+            contentFit="contain"
+            nativeControls
+            allowsFullscreen
+          />
+        ) : null}
       </View>
     </Modal>
   );

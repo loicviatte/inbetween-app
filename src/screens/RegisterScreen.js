@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -14,13 +14,24 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { supabase } from '../services/supabase/client';
 import { Colors, Fonts, Spacing } from '../theme';
 import { Ionicons } from '@expo/vector-icons';
+import { filterStudios, hasExactMatch } from '../utils/studioMatch';
 
 export default function RegisterScreen({ navigation }) {
-  const [step, setStep] = useState('role'); // 'role' | 'form'
+  const [step, setStep] = useState('role'); // 'role' | 'form' | 'studio' | 'success'
   const [role, setRole] = useState('');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+
+  // Studio step state. The user types in studioQuery; we filter the list as
+  // they type. Picking a row sets selectedStudioId. A coach can also tap
+  // "Create '<typed>'" to defer studio creation until after signUp completes.
+  const [studios, setStudios] = useState([]);
+  const [studiosLoading, setStudiosLoading] = useState(false);
+  const [studioQuery, setStudioQuery] = useState('');
+  const [selectedStudioId, setSelectedStudioId] = useState(null);
+  const [createMode, setCreateMode] = useState(false);
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -29,7 +40,7 @@ export default function RegisterScreen({ navigation }) {
     setStep('form');
   }
 
-  async function handleRegister() {
+  async function handleContinue() {
     if (!name.trim() || !email.trim() || !password.trim()) {
       setError('Please fill in all fields.');
       return;
@@ -38,36 +49,96 @@ export default function RegisterScreen({ navigation }) {
       setError('Password must be at least 6 characters.');
       return;
     }
+    setError('');
+    setStep('studio');
+  }
+
+  // Load studios when entering the studio step. RLS allows anon SELECT, so
+  // this works without an authenticated session.
+  useEffect(() => {
+    if (step !== 'studio') return;
+    let cancelled = false;
+    setStudiosLoading(true);
+    supabase
+      .from('studios')
+      .select('id, name')
+      .order('name', { ascending: true })
+      .then(({ data }) => {
+        if (cancelled) return;
+        setStudios(data || []);
+        setStudiosLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [step]);
+
+  async function handleSubmit() {
+    if (createMode) {
+      if (!studioQuery.trim()) {
+        setError('Type the name of your studio.');
+        return;
+      }
+    } else if (!selectedStudioId) {
+      setError('Pick your studio.');
+      return;
+    }
+
     setLoading(true);
     setError('');
-    const { data, error: err } = await supabase.auth.signUp({
+
+    const { data, error: signUpErr } = await supabase.auth.signUp({
       email: email.trim(),
       password,
       options: { data: { name: name.trim(), role } },
     });
 
-    if (err) {
+    if (signUpErr) {
       setLoading(false);
-      setError(err.message);
+      setError(signUpErr.message);
       return;
     }
 
-    // Update role in DB (trigger may have already created the row)
-    if (data?.user?.id) {
+    const userId = data?.user?.id;
+
+    // Email confirmation enabled → no session yet, can't write the studio.
+    // Studio assignment happens once the user confirms + logs in (they'll see
+    // the empty slot in their profile).
+    if (!data?.session) {
+      if (userId) {
+        await supabase.from('users').update({ role }).eq('id', userId);
+      }
+      setLoading(false);
+      setStep('success');
+      return;
+    }
+
+    // Coach is registering a brand-new studio.
+    let studioId = selectedStudioId;
+    if (createMode) {
+      const { data: created, error: createErr } = await supabase
+        .from('studios')
+        .insert({ name: studioQuery.trim(), created_by: userId })
+        .select('id')
+        .single();
+      if (createErr) {
+        setLoading(false);
+        setError(createErr.code === '23505'
+          ? 'A studio with that name already exists.'
+          : (createErr.message || 'Could not create studio.'));
+        return;
+      }
+      studioId = created.id;
+    }
+
+    if (userId) {
       await supabase
         .from('users')
-        .update({ role })
-        .eq('id', data.user.id);
+        .update({ role, studio_id: studioId })
+        .eq('id', userId);
     }
 
     setLoading(false);
-
-    // If email confirmation is disabled, session is returned immediately
-    // and onAuthStateChange in App.js handles the redirect automatically.
-    // If confirmation is still enabled, session is null → show a message.
-    if (!data?.session) {
-      setStep('success');
-    }
+    // App.js's onAuthStateChange will swap to the home navigator now that
+    // session + studio_id are in place.
   }
 
   if (step === 'success') {
@@ -143,6 +214,132 @@ export default function RegisterScreen({ navigation }) {
     );
   }
 
+  if (step === 'studio') {
+    const allowCreate = role === 'coach';
+    const trimmed = studioQuery.trim();
+    const matches = filterStudios(studios, studioQuery);
+    const showCreate = allowCreate && trimmed.length >= 2 && !hasExactMatch(studios, trimmed);
+
+    return (
+      <SafeAreaView style={styles.safe}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.kv}
+        >
+          <ScrollView
+            contentContainerStyle={styles.content}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
+            <TouchableOpacity onPress={() => { setStep('form'); setError(''); }} style={styles.backBtn} activeOpacity={0.7}>
+              <Text style={styles.backText}>← Back</Text>
+            </TouchableOpacity>
+
+            <Text style={styles.logo}>EE</Text>
+            <Text style={styles.title}>Your studio</Text>
+            <Text style={styles.subtitle}>
+              {allowCreate
+                ? 'Search the studio you teach at — or create a new one.'
+                : 'Search the studio you train at.'}
+            </Text>
+
+            <View style={studioStyles.searchWrap}>
+              <Ionicons name="search" size={16} color={Colors.secondary} style={studioStyles.searchIcon} />
+              <TextInput
+                style={studioStyles.searchInput}
+                value={studioQuery}
+                onChangeText={(t) => {
+                  setStudioQuery(t);
+                  // Typing past the picked match unselects it so the user can
+                  // freely refine the search.
+                  if (selectedStudioId) {
+                    const stillMatches = studios.find((s) => s.id === selectedStudioId);
+                    if (!stillMatches || stillMatches.name.toLowerCase() !== t.trim().toLowerCase()) {
+                      setSelectedStudioId(null);
+                    }
+                  }
+                  setCreateMode(false);
+                  setError('');
+                }}
+                placeholder="Search by name…"
+                placeholderTextColor="rgba(17,12,17,0.3)"
+                autoCorrect={false}
+                autoCapitalize="words"
+              />
+              {!!studioQuery && (
+                <TouchableOpacity
+                  onPress={() => { setStudioQuery(''); setSelectedStudioId(null); setCreateMode(false); }}
+                  hitSlop={8}
+                  style={studioStyles.searchClear}
+                >
+                  <Ionicons name="close-circle" size={16} color={Colors.secondary} />
+                </TouchableOpacity>
+              )}
+            </View>
+
+            {studiosLoading ? (
+              <View style={{ paddingVertical: 40, alignItems: 'center' }}>
+                <ActivityIndicator color={Colors.black} />
+              </View>
+            ) : (
+              <View>
+                {matches.map((s) => {
+                  const active = !createMode && selectedStudioId === s.id;
+                  return (
+                    <TouchableOpacity
+                      key={s.id}
+                      style={[studioStyles.row, active && studioStyles.rowActive]}
+                      onPress={() => { setSelectedStudioId(s.id); setStudioQuery(s.name); setCreateMode(false); setError(''); }}
+                      activeOpacity={0.75}
+                    >
+                      <Text style={[studioStyles.rowText, active && studioStyles.rowTextActive]} numberOfLines={1}>
+                        {s.name}
+                      </Text>
+                      {active && <Ionicons name="checkmark" size={18} color={Colors.black} />}
+                    </TouchableOpacity>
+                  );
+                })}
+
+                {matches.length === 0 && trimmed.length > 0 && !showCreate && (
+                  <Text style={studioStyles.empty}>No studios match "{trimmed}".</Text>
+                )}
+
+                {showCreate && (
+                  <TouchableOpacity
+                    style={[studioStyles.createRow, createMode && studioStyles.createRowActive]}
+                    onPress={() => { setCreateMode(true); setSelectedStudioId(null); setError(''); }}
+                    activeOpacity={0.75}
+                  >
+                    <Ionicons name="add" size={18} color={Colors.black} />
+                    <Text style={studioStyles.createRowText} numberOfLines={1}>
+                      Create "{trimmed}"
+                    </Text>
+                    {createMode && <Ionicons name="checkmark" size={18} color={Colors.black} />}
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
+
+            {!!error && <Text style={styles.error}>{error}</Text>}
+
+            <TouchableOpacity
+              style={styles.primaryBtn}
+              onPress={handleSubmit}
+              disabled={loading}
+              activeOpacity={0.85}
+            >
+              {loading
+                ? <ActivityIndicator color={Colors.white} />
+                : <Text style={styles.primaryBtnText}>CREATE ACCOUNT</Text>
+              }
+            </TouchableOpacity>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </SafeAreaView>
+    );
+  }
+
+  // step === 'form'
   return (
     <SafeAreaView style={styles.safe}>
       <KeyboardAvoidingView
@@ -150,7 +347,7 @@ export default function RegisterScreen({ navigation }) {
         style={styles.kv}
       >
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-          <TouchableOpacity onPress={() => setStep('role')} style={styles.backBtn} activeOpacity={0.7}>
+          <TouchableOpacity onPress={() => { setStep('role'); setError(''); }} style={styles.backBtn} activeOpacity={0.7}>
             <Text style={styles.backText}>← Back</Text>
           </TouchableOpacity>
 
@@ -198,15 +395,10 @@ export default function RegisterScreen({ navigation }) {
 
             <TouchableOpacity
               style={styles.primaryBtn}
-              onPress={handleRegister}
-              disabled={loading}
+              onPress={handleContinue}
               activeOpacity={0.85}
             >
-              {loading ? (
-                <ActivityIndicator color={Colors.white} />
-              ) : (
-                <Text style={styles.primaryBtnText}>CREATE ACCOUNT</Text>
-              )}
+              <Text style={styles.primaryBtnText}>CONTINUE</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -381,5 +573,82 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.jakartaRegular,
     fontSize: 12,
     color: Colors.secondary,
+  },
+});
+
+const studioStyles = StyleSheet.create({
+  searchWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    backgroundColor: Colors.white,
+    marginBottom: 16,
+  },
+  searchIcon: { marginRight: 8 },
+  searchInput: {
+    flex: 1,
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 15,
+    color: Colors.black,
+    paddingVertical: 14,
+  },
+  searchClear: { marginLeft: 8 },
+
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderRadius: 12,
+    backgroundColor: Colors.white,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    marginBottom: 8,
+  },
+  rowActive: {
+    borderColor: Colors.black,
+    backgroundColor: 'rgba(232,181,48,0.12)',
+  },
+  rowText: {
+    flex: 1,
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 15,
+    color: Colors.black,
+    marginRight: 8,
+  },
+  rowTextActive: { fontFamily: Fonts.jakartaExtraBold },
+
+  empty: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 13,
+    color: Colors.secondary,
+    paddingVertical: 12,
+  },
+
+  createRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: Colors.black,
+    borderStyle: 'dashed',
+    backgroundColor: 'transparent',
+    marginTop: 4,
+  },
+  createRowActive: {
+    backgroundColor: 'rgba(232,181,48,0.12)',
+  },
+  createRowText: {
+    flex: 1,
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 14,
+    color: Colors.black,
   },
 });

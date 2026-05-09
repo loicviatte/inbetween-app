@@ -14,6 +14,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Fonts, Spacing } from '../theme';
 import { supabase } from '../services/supabase/client';
+import { clearUserCaches } from '../storage/userCaches';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -938,6 +939,7 @@ export default function TrainerReviewScreen({ navigation }) {
   }
 
   async function handleLogout() {
+    await clearUserCaches();
     await supabase.auth.signOut();
   }
 

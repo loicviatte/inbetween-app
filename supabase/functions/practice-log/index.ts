@@ -10,11 +10,23 @@ Deno.serve(async (req: Request) => {
     return new Response(JSON.stringify({ error: 'Invalid payload' }), { status: 400 })
   }
 
-  // Auth check — request must come from an authenticated user
+  // Auth check — verify the JWT is real and matches the claimed student_id.
+  // Without this, any caller with any non-empty bearer token could log
+  // practice for ANY student, since service-role bypasses RLS below.
   const authHeader = req.headers.get('Authorization')
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 })
   }
+  const userClient = createClient(
+    Deno.env.get('SUPABASE_URL')!,
+    Deno.env.get('SUPABASE_ANON_KEY')!,
+    { global: { headers: { Authorization: authHeader } } },
+  )
+  const { data: userData, error: userErr } = await userClient.auth.getUser()
+  if (userErr || !userData?.user) {
+    return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 })
+  }
+  const callerId = userData.user.id
 
   const { focus_point_id, duration_minutes, rating, student_id } = body
 
@@ -22,6 +34,16 @@ Deno.serve(async (req: Request) => {
     return new Response(
       JSON.stringify({ error: 'focus_point_id, duration_minutes, rating, student_id are required' }),
       { status: 400 },
+    )
+  }
+
+  // Practice logs can only be written for the authenticated student. This
+  // mirrors the RLS policy on `practice_logs` (auth.uid() = student_id) so
+  // service-role doesn't accidentally bypass the intended boundary.
+  if (callerId !== student_id) {
+    return new Response(
+      JSON.stringify({ error: 'student_id does not match authenticated user' }),
+      { status: 403 },
     )
   }
 

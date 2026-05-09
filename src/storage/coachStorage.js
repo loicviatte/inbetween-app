@@ -1,5 +1,7 @@
 import { supabase } from '../services/supabase/client';
 import { computeAllStudentMetricsBatch } from '../utils/studentMetrics';
+import { categoryFromStyle } from '../utils/danceCategory';
+import { normalizeFocusName } from '../utils/normalizeFocusName';
 
 async function getCoachId() {
   const { data: { user } } = await supabase.auth.getUser();
@@ -186,7 +188,7 @@ export async function getMyStudents() {
       .in('user_id', studentIds),
     supabase
       .from('focus_points')
-      .select('id, name, user_id, status, tier, merge_action')
+      .select('id, name, user_id, status, tier, merge_action, dance')
       .in('user_id', studentIds)
       .eq('is_deleted', false)
       .eq('is_other', false),
@@ -277,7 +279,10 @@ export async function getMyStudents() {
 
   // Compute the shared Retention / Motivation / Health metrics for every
   // student in a single pass using pre-fetched data (no extra DB calls).
-  const metricsByStudent = computeAllStudentMetricsBatch(studentIds, allFocuses, allLogs);
+  // Filter to the coach's own dance category so a Latin coach only sees Latin
+  // metrics (and vice versa). Dual-style coaches get unfiltered totals.
+  const coachCategory = categoryFromStyle(me?.dance_style);
+  const metricsByStudent = computeAllStudentMetricsBatch(studentIds, allFocuses, allLogs, coachCategory);
 
   return students
     .map(s => {
@@ -371,7 +376,7 @@ export async function getMyStudents() {
 export async function getStudentProfile(studentId) {
   const { data } = await supabase
     .from('users')
-    .select('id, name, dance_style, main_studio, last_active_date, avatar_url')
+    .select('id, name, dance_style, last_active_date, avatar_url, studio:studios!users_studio_id_fkey(id, name)')
     .eq('id', studentId)
     .single();
   if (!data) return null;
@@ -816,6 +821,13 @@ async function markFocusAddedNotificationsReadForStudent(studentId) {
 export async function editAndApproveFocusPoint(fpId, updates) {
   const allowed = ['name', 'subtitle', 'context', 'drill', 'tier'];
   const filtered = Object.fromEntries(Object.entries(updates).filter(([k]) => allowed.includes(k)));
+  // Keep normalized_name in sync whenever the human-facing name changes.
+  // Missing this step is what caused duplicate "Hip Settlement" focus points
+  // (name edited post-insert, normalized_name left stale — next AI match
+  // failed and inserted a new row).
+  if (Object.prototype.hasOwnProperty.call(filtered, 'name')) {
+    filtered.normalized_name = normalizeFocusName(filtered.name);
+  }
   const { data: fpRow } = await supabase
     .from('focus_points')
     .select('user_id')

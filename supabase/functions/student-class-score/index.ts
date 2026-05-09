@@ -1,4 +1,5 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { normalizeFocusName } from '../_shared/normalize.ts'
 
 declare global {
   const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void }
@@ -7,20 +8,25 @@ declare global {
 const LATIN_DANCES = ['Cha Cha', 'Samba', 'Rumba', 'Paso Doble', 'Jive']
 const REVIEW_WINDOW_MS = 18 * 60 * 60 * 1000
 
+// Marker dances used when a focus point is created without an explicit
+// dance list (the user logged a class without selecting any dances). Stored
+// as a single-element array so it visually pills clean and so
+// categoryFromDances() routes the FP into the right Latin/Ballroom ranking.
+const LATIN_FALLBACK = ['Cha Cha']
+const BALLROOM_FALLBACK = ['Waltz']
+
+function fallbackDanceForCoachStyle(danceStyle: string | null | undefined): string[] {
+  const ds = (danceStyle ?? '').toLowerCase()
+  if (ds === 'latin') return LATIN_FALLBACK
+  if (ds === 'ballroom' || ds === 'standard') return BALLROOM_FALLBACK
+  return []
+}
+
 function urgencyToTier(score: number | null | undefined): 'critical' | 'important' | 'supporting' {
   const s = score ?? 5
   if (s >= 8) return 'critical'
   if (s >= 5) return 'important'
   return 'supporting'
-}
-
-function normalize(s: string | null | undefined): string {
-  return (s ?? '')
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
 }
 
 interface FocusPayload {
@@ -44,10 +50,42 @@ Deno.serve(async (req: Request) => {
     return new Response(JSON.stringify({ error: 'Invalid payload' }), { status: 400 })
   }
 
+  // Auth: this function uses service-role for all writes, so we MUST verify
+  // the JWT manually. Without this, any unauthenticated POST with a
+  // known/guessable class_input_id can rewrite focus points and trigger
+  // push notifications.
+  const authHeader = req.headers.get('Authorization')
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 })
+  }
+  const userClient = createClient(
+    Deno.env.get('SUPABASE_URL')!,
+    Deno.env.get('SUPABASE_ANON_KEY')!,
+    { global: { headers: { Authorization: authHeader } } },
+  )
+  const { data: userData, error: userErr } = await userClient.auth.getUser()
+  if (userErr || !userData?.user) {
+    return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 })
+  }
+  const callerId = userData.user.id
+
   const supabase = createClient(
     Deno.env.get('SUPABASE_URL')!,
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
   )
+
+  // Verify the class_input belongs to the caller before scoring it.
+  const { data: ownerRow, error: ownerErr } = await supabase
+    .from('class_inputs')
+    .select('user_id')
+    .eq('id', payload.class_input_id)
+    .maybeSingle()
+  if (ownerErr) {
+    return new Response(JSON.stringify({ error: ownerErr.message }), { status: 500 })
+  }
+  if (!ownerRow || ownerRow.user_id !== callerId) {
+    return new Response(JSON.stringify({ error: 'Forbidden' }), { status: 403 })
+  }
 
   try {
     await process(supabase, payload)
@@ -151,6 +189,18 @@ async function process(supabase: any, payload: Payload): Promise<void> {
   const deadline = new Date(now.getTime() + REVIEW_WINDOW_MS).toISOString()
   const targetStatus = coachId ? 'pending_coach' : 'active'
 
+  // Resolve the dance list new FPs will inherit. Priority: the class's own
+  // dance list → the reviewing coach's dance_style → empty (rare edge case).
+  let fpDance: string[] = danceList
+  if (fpDance.length === 0 && coachId) {
+    const { data: coachRow } = await supabase
+      .from('users')
+      .select('dance_style')
+      .eq('id', coachId)
+      .single()
+    fpDance = fallbackDanceForCoachStyle(coachRow?.dance_style)
+  }
+
   console.log(
     `[student-class-score] class=${class_input_id} student=${studentId} coach=${coachId} ` +
       `teacher_name="${ci.teacher_name ?? ''}" dance=${JSON.stringify(danceList)} focuses=${focuses.length}`,
@@ -160,7 +210,7 @@ async function process(supabase: any, payload: Payload): Promise<void> {
 
   for (const fp of focuses) {
     if (!fp.name) continue
-    const norm = normalize(fp.name)
+    const norm = normalizeFocusName(fp.name)
     const tier = urgencyToTier(fp.priority_score)
     const match = existingMap.get(norm)
 
@@ -196,6 +246,7 @@ async function process(supabase: any, payload: Payload): Promise<void> {
         tier,
         base_score: fp.priority_score,
         drill: fp.drill ?? null,
+        dance: fpDance,
         status: targetStatus,
         source_class_input_id: class_input_id,
         class_input_id: class_input_id,

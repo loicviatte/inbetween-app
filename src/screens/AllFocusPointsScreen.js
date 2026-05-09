@@ -13,17 +13,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { Colors, Fonts, Spacing } from '../theme';
 import { getAllFocusPointsRanked } from '../utils/algorithm';
 import { getUser } from '../storage/storage';
+import { categoryFromDances } from '../utils/danceCategory';
 import { GenericListSkeleton } from '../components/Skeleton';
-
-// Same partition used by storage.js / categoryFromDances. Kept local so
-// filtering stays instant without a round-trip.
-const LATIN_DANCES = ['Cha Cha', 'Samba', 'Rumba', 'Paso Doble', 'Jive'];
-
-function fpCategory(fp) {
-  const dances = Array.isArray(fp.dance) ? fp.dance : [];
-  if (dances.length === 0) return null;
-  return LATIN_DANCES.some((d) => dances.includes(d)) ? 'latin' : 'ballroom';
-}
 
 const TIER_COLOR = {
   critical:  '#FF4B4B',
@@ -121,7 +112,7 @@ export default function AllFocusPointsScreen({ navigation }) {
 
   const showFilter = danceStyle === 'Latin & Ballroom';
   const filteredPoints = showFilter && filter !== 'all'
-    ? points.filter((p) => fpCategory(p) === filter)
+    ? points.filter((p) => categoryFromDances(p.dance) === filter)
     : points;
 
   return (

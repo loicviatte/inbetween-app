@@ -7,7 +7,7 @@ import { useProfile } from '../context/ProfileContext';
 import { getNotifications } from '../storage/notificationsStorage';
 import { locallyRespondedAttendance } from '../storage/attendanceState';
 
-export default function TabHeader({ navigation, onProfilePress, editMode = false }) {
+export default function TabHeader({ navigation, onProfilePress, editMode = false, center = null }) {
   const { avatarUri, initials: contextInitials } = useProfile();
 
   const [cachedPhoto, setCachedPhoto] = useState(null);
@@ -89,8 +89,19 @@ export default function TabHeader({ navigation, onProfilePress, editMode = false
         )}
       </TouchableOpacity>
 
+      {center && (
+        <View style={styles.center} pointerEvents="box-none">
+          {center}
+        </View>
+      )}
+
       {editMode ? (
-        <TouchableOpacity onPress={handleProfilePress} activeOpacity={0.7} hitSlop={{ top: 8, bottom: 8, left: 12, right: 12 }}>
+        <TouchableOpacity
+          onPress={handleProfilePress}
+          activeOpacity={0.7}
+          style={styles.editPill}
+          hitSlop={{ top: 8, bottom: 8, left: 12, right: 12 }}
+        >
           <Text style={styles.editLabel}>Edit</Text>
         </TouchableOpacity>
       ) : (
@@ -115,20 +126,36 @@ const styles = StyleSheet.create({
     paddingTop: 16,
     paddingBottom: 12,
   },
-  notifBtn: {
-    width: 36,
-    height: 36,
+  center: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 0,
     alignItems: 'center',
     justifyContent: 'center',
   },
+  notifBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 8,
+    elevation: 2,
+  },
   notifBadge: {
     position: 'absolute',
-    top: 0,
-    right: 0,
+    top: 6,
+    right: 6,
     backgroundColor: Colors.orange,
     borderRadius: 8,
-    minWidth: 16,
-    height: 16,
+    minWidth: 14,
+    height: 14,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 3,
@@ -139,27 +166,38 @@ const styles = StyleSheet.create({
     color: '#fff',
   },
   avatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 46,
+    height: 46,
+    borderRadius: 23,
     backgroundColor: '#F0D9A0',
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
   },
   avatarText: {
     fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 14,
+    fontSize: 16,
     color: '#8A6A2E',
   },
   avatarPhoto: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+  },
+  editPill: {
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    backgroundColor: 'rgba(255,255,255,0.55)',
+    borderWidth: 1,
+    borderColor: 'rgba(10,10,10,0.09)',
+    borderRadius: 999,
   },
   editLabel: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 14,
-    color: Colors.black,
+    fontFamily: Fonts.jakartaSemiBold,
+    fontSize: 12,
+    color: 'rgba(10,10,10,0.72)',
+    letterSpacing: 0.4,
   },
 });

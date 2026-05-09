@@ -2,7 +2,7 @@
   "expo": {
     "name": "InBetween",
     "slug": "inbetween-app",
-    "version": "1.4.2",
+    "version": "1.5.7",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -14,11 +14,15 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.loicviatte.inbetweenapp",
-      "buildNumber": "1",
+      "buildNumber": "3",
       "appleTeamId": "66DQR8326F",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
-        "NSMicrophoneUsageDescription": "InBetween uses the microphone to let you dictate your class notes."
+        "NSMicrophoneUsageDescription": "InBetween uses the microphone to let you dictate your class notes.",
+        "UIBackgroundModes": [
+          "audio"
+        ],
+        "NSSupportsLiveActivities": true
       }
     },
     "android": {
@@ -28,7 +32,9 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "permissions": ["android.permission.RECORD_AUDIO"]
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -36,11 +42,12 @@
     "plugins": [
       "expo-font",
       [
-        "expo-av",
+        "expo-audio",
         {
           "microphonePermission": "InBetween uses the microphone to let you dictate your class notes."
         }
       ],
+      "expo-video",
       "@react-native-community/datetimepicker",
       [
         "expo-notifications",
@@ -58,7 +65,9 @@
           "resizeMode": "contain",
           "backgroundColor": "#000000"
         }
-      ]
+      ],
+      "expo-asset",
+      "@bacons/apple-targets"
     ],
     "extra": {
       "eas": {

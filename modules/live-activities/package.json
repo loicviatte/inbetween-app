@@ -1,0 +1,8 @@
+{
+  "name": "live-activities",
+  "version": "1.0.0",
+  "description": "iOS Live Activities + Dynamic Island for InBetween (coach recording, student focus point)",
+  "main": "index.ts",
+  "author": "loicviatte",
+  "license": "MIT"
+}

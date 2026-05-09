@@ -1,0 +1,8 @@
+{
+  "name": "continuous-audio-recorder",
+  "version": "0.1.0",
+  "description": "Native iOS continuous audio recorder for InBetween. Single AVAudioEngine that never restarts, with periodic chunk rotation handled natively to avoid the expo-av/expo-audio bug where prepareToRecord fails after stop in background (expo/expo#21782).",
+  "main": "index.ts",
+  "author": "loicviatte",
+  "license": "MIT"
+}
