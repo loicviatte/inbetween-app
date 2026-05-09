@@ -13,6 +13,7 @@ import {
   dbRowToFocusPoint,
   focusPointToDbUpdate,
 } from '../_shared/yoda-score.ts'
+import { normalizeFocusName } from '../_shared/normalize.ts'
 
 // ─── Deno / Supabase Edge Runtime globals ────────────────────────────────────
 
@@ -135,13 +136,14 @@ async function processClassInput(supabase: any, payload: any): Promise<void> {
     for (const sfp of sharedFps) {
       const sharedGroupId = crypto.randomUUID()
       const tier = (sfp.tier ?? 'supporting') as Tier
+      const sharedDance = (sfp.dance && sfp.dance.length > 0) ? sfp.dance : classDance
       const rows = studentIds.map((sid) => ({
         user_id: sid,
         name: sfp.title,
-        normalized_name: String(sfp.title ?? '').toLowerCase().trim(),
+        normalized_name: normalizeFocusName(sfp.title),
         subtitle: sfp.subtitle ?? null,
         context: sfp.context ?? null,
-        dance: sfp.dance ?? [],
+        dance: sharedDance,
         drill: sfp.drill ?? null,
         tier,
         category: sfp.category ?? null,
@@ -205,6 +207,19 @@ async function processClassInput(supabase: any, payload: any): Promise<void> {
 
 const LATIN_DANCES_TS = ['Cha Cha', 'Samba', 'Rumba', 'Paso Doble', 'Jive']
 
+// Marker dances used when a focus point would otherwise be inserted with an
+// empty dance list. Stored as a single-element array so it pills cleanly and
+// so categoryFromDances() routes it into the right Latin/Ballroom ranking.
+const LATIN_FALLBACK = ['Cha Cha']
+const BALLROOM_FALLBACK = ['Waltz']
+
+function fallbackDanceForCoachStyle(danceStyle: string | null | undefined): string[] {
+  const ds = (danceStyle ?? '').toLowerCase()
+  if (ds === 'latin') return LATIN_FALLBACK
+  if (ds === 'ballroom' || ds === 'standard') return BALLROOM_FALLBACK
+  return []
+}
+
 function coachIdFromRow(row: any, classDance: string[]): string | null {
   const isLatin = classDance.some(d => LATIN_DANCES_TS.includes(d))
   return isLatin ? (row?.latin_coach_id ?? null) : (row?.ballroom_coach_id ?? null)
@@ -227,6 +242,18 @@ async function processStudentFocusPoints(
     .single()
   const coachId: string | null = coachIdFromRow(studentRow, classDance)
   const studentName: string = studentRow?.name ?? 'your student'
+
+  // Resolve default dance new FPs will inherit when neither the AI nor the
+  // class supplies one. Falls back to the reviewing coach's dance_style.
+  let defaultDance: string[] = classDance
+  if (defaultDance.length === 0 && coachId) {
+    const { data: coachRow } = await supabase
+      .from('users')
+      .select('dance_style')
+      .eq('id', coachId)
+      .single()
+    defaultDance = fallbackDanceForCoachStyle(coachRow?.dance_style)
+  }
 
   // Load all non-past, non-other focus points for this student
   const { data: rows, error } = await supabase
@@ -282,10 +309,10 @@ async function processStudentFocusPoints(
           .insert({
             user_id: studentId,
             name: fpJson.title,
-            normalized_name: fpJson.title.toLowerCase().trim(),
+            normalized_name: normalizeFocusName(fpJson.title),
             subtitle: fpJson.subtitle ?? null,
             context: fpJson.context ?? null,
-            dance: fpJson.dance ?? [],
+            dance: (fpJson.dance && fpJson.dance.length > 0) ? fpJson.dance : defaultDance,
             drill: fpJson.drill ?? null,
             tier,
             category: fpJson.category ?? null,
@@ -343,10 +370,10 @@ async function processStudentFocusPoints(
         .insert({
           user_id: studentId,
           name: fpJson.title,
-          normalized_name: fpJson.title.toLowerCase().trim(),
+          normalized_name: normalizeFocusName(fpJson.title),
           subtitle: fpJson.subtitle ?? null,
           context: fpJson.context ?? null,
-          dance: fpJson.dance ?? [],
+          dance: (fpJson.dance && fpJson.dance.length > 0) ? fpJson.dance : defaultDance,
           drill: fpJson.drill ?? null,
           tier,
           category: fpJson.category ?? null,
@@ -423,8 +450,8 @@ async function processStudentFocusPoints(
   const otherRows = (studentJson.other_focus_points ?? []).map((ofp: any) => ({
     user_id: studentId,
     name: ofp.title,
-    normalized_name: ofp.title.toLowerCase().trim(),
-    dance: ofp.dance ?? [],
+    normalized_name: normalizeFocusName(ofp.title),
+    dance: (ofp.dance && ofp.dance.length > 0) ? ofp.dance : defaultDance,
     first_timestamp: ofp.timestamp ?? null,
     tier: 'supporting' as Tier,
     base_score: 5,

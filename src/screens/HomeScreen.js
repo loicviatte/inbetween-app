@@ -4,15 +4,17 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  ScrollView,
   ActivityIndicator,
   Alert,
   Image,
   Animated,
   Modal,
+  Pressable,
 } from 'react-native';
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { LinearGradient } from 'expo-linear-gradient';
+import { Ionicons } from '@expo/vector-icons';
 import TabHeader from '../components/TabHeader';
 import * as Clipboard from 'expo-clipboard';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -37,9 +39,12 @@ import {
 import { generateCoachShareSummary } from '../services/ai/anthropic';
 import LogModal from '../components/LogModal';
 import HomeSkeleton from '../components/HomeSkeleton';
+import MetricGauge from '../components/MetricGauge';
+import { getAllStudentMetrics } from '../utils/studentMetrics';
 
 const SHARE_LOADING_MSGS = ['Gathering your notes...', 'Writing summary...', 'Almost ready...'];
 const HOME_CACHE_KEY = '@cache_home';
+const CATEGORY_STORAGE_KEY = 'train_category_filter';
 
 function formatTime(seconds) {
   const s = Math.max(0, Math.floor(seconds));
@@ -63,6 +68,71 @@ function fmtTime(iso) {
   const h = d.getHours(), m = d.getMinutes();
   const ampm = h >= 12 ? 'PM' : 'AM';
   return `${h % 12 || 12}:${m.toString().padStart(2, '0')} ${ampm}`;
+}
+
+function currentWeekRange() {
+  const now = new Date();
+  const dow = (now.getDay() + 6) % 7; // 0 = Mon
+  const mon = new Date(now);
+  mon.setDate(now.getDate() - dow);
+  const sun = new Date(mon);
+  sun.setDate(mon.getDate() + 6);
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  if (mon.getMonth() === sun.getMonth()) {
+    return `${months[mon.getMonth()]} ${mon.getDate()} – ${sun.getDate()}`;
+  }
+  return `${months[mon.getMonth()]} ${mon.getDate()} – ${months[sun.getMonth()]} ${sun.getDate()}`;
+}
+
+function CategoryToggle({ category, onPress }) {
+  const label = category === 'latin' ? 'Latin' : 'Ballroom';
+  return (
+    <TouchableOpacity
+      style={s.toggle}
+      onPress={onPress}
+      activeOpacity={0.75}
+    >
+      <Text style={s.toggleLabel}>{label}</Text>
+      <Ionicons name="chevron-down" size={16} color={Colors.black} />
+    </TouchableOpacity>
+  );
+}
+
+function CategoryPicker({ visible, current, onSelect, onClose }) {
+  return (
+    <Modal
+      visible={visible}
+      animationType="fade"
+      transparent
+      onRequestClose={onClose}
+    >
+      <Pressable style={s.pickerBackdrop} onPress={onClose}>
+        <SafeAreaView edges={['top']} style={s.pickerAnchor} pointerEvents="box-none">
+          <Pressable style={s.pickerSheet} onPress={(e) => e.stopPropagation()}>
+            {[
+              { key: 'latin', label: 'Latin' },
+              { key: 'ballroom', label: 'Ballroom' },
+            ].map((opt, i) => {
+              const on = opt.key === current;
+              return (
+                <TouchableOpacity
+                  key={opt.key}
+                  style={[s.pickerRow, i > 0 && s.pickerRowDivider]}
+                  activeOpacity={0.65}
+                  onPress={() => onSelect(opt.key)}
+                >
+                  <Text style={s.pickerLabel}>{opt.label}</Text>
+                  {on && (
+                    <Ionicons name="checkmark" size={18} color="#FFFFFF" style={s.pickerCheck} />
+                  )}
+                </TouchableOpacity>
+              );
+            })}
+          </Pressable>
+        </SafeAreaView>
+      </Pressable>
+    </Modal>
+  );
 }
 
 function WeekHeatmap({ activity, onDayPress }) {
@@ -111,6 +181,10 @@ export default function HomeScreen({ navigation }) {
   const [classesThisWeek, setClassesThisWeek] = useState(0);
   const [focusTrainedThisWeek, setFocusTrainedThisWeek] = useState(0);
   const [weekActivity, setWeekActivity] = useState({});
+  const [metrics, setMetrics] = useState({ progression: 0, retention: 100, global: 0 });
+  const [showFilter, setShowFilter] = useState(false);
+  const [category, setCategory] = useState(null); // 'latin' | 'ballroom' | null
+  const [pickerVisible, setPickerVisible] = useState(false);
   const [dayModal, setDayModal] = useState(null);
   const [logModalVisible, setLogModalVisible] = useState(false);
   const [photoUri, setPhotoUri] = useState(null);
@@ -121,10 +195,25 @@ export default function HomeScreen({ navigation }) {
   const [isLoading, setIsLoading] = useState(true);
   const hasLoadedRef = useRef(false);
 
-  async function load() {
-    const [u, slots, sessions, classes, focusTrained, wa, savedPhoto] = await Promise.all([
-      getUser(),
-      getSlots(),
+  async function load(catOverride) {
+    // Determine which category filter to apply. Only dual-style users get
+    // the Latin/Ballroom toggle; single-style users see everything as before.
+    const u = await getUser();
+    const isBoth = u?.dance_style === 'Latin & Ballroom';
+    let cat = catOverride;
+    if (cat === undefined) {
+      if (isBoth) {
+        const saved = await AsyncStorage.getItem(CATEGORY_STORAGE_KEY).catch(() => null);
+        cat = saved === 'ballroom' ? 'ballroom' : 'latin';
+      } else {
+        cat = null;
+      }
+    }
+    setShowFilter(isBoth);
+    setCategory(cat);
+
+    const [slots, sessions, classes, focusTrained, wa, savedPhoto] = await Promise.all([
+      getSlots(cat),
       getTrainingSessionsThisWeek(),
       getSessionsThisWeek(),
       getFocusTrainedThisWeek(),
@@ -146,12 +235,27 @@ export default function HomeScreen({ navigation }) {
     ]);
     setSessionCount(c1);
     setSlot2Count(c2);
+    let m = { progression: 0, retention: 100, global: 0 };
+    if (u?.id) {
+      try { m = await getAllStudentMetrics(u.id, cat); } catch {}
+      setMetrics(m);
+    }
     AsyncStorage.setItem(HOME_CACHE_KEY, JSON.stringify({
       user: u, slot1: slots.slot1, slot2: slots.slot2, slot3: slots.slot3,
       sessionCount: c1, slot2Count: c2,
       sessionsThisWeek: sessions, classesThisWeek: classes,
-      focusTrainedThisWeek: focusTrained, weekActivity: wa || {},
+      focusTrainedThisWeek: focusTrained, weekActivity: wa || {}, metrics: m,
+      category: cat,
     })).catch(() => {});
+  }
+
+  async function handleSelectCategory(next) {
+    setPickerVisible(false);
+    if (next === category) return;
+    AsyncStorage.setItem(CATEGORY_STORAGE_KEY, next).catch(() => {});
+    setIsLoading(true);
+    try { await load(next); } catch {}
+    setIsLoading(false);
   }
 
   useFocusEffect(useCallback(() => {
@@ -165,6 +269,8 @@ export default function HomeScreen({ navigation }) {
           if (raw) {
             const c = JSON.parse(raw);
             setUser(c.user);
+            setShowFilter(c.user?.dance_style === 'Latin & Ballroom');
+            setCategory(c.category ?? null);
             setSlot1(c.slot1);
             setSlot2(c.slot2);
             setSlot3(c.slot3 || null);
@@ -174,6 +280,7 @@ export default function HomeScreen({ navigation }) {
             setClassesThisWeek(c.classesThisWeek || 0);
             setFocusTrainedThisWeek(c.focusTrainedThisWeek || 0);
             setWeekActivity(c.weekActivity || {});
+            if (c.metrics) setMetrics(c.metrics);
             setIsLoading(false);
           }
         } catch {}
@@ -274,24 +381,54 @@ export default function HomeScreen({ navigation }) {
   }
 
   return (
+    <View style={{ flex: 1 }}>
+      <LinearGradient
+        colors={['#F2F2EF', '#F8F2E2', '#F4EAD0', '#FFFFFF', '#FFFFFF']}
+        locations={[0, 0.4, 0.7, 0.85, 1]}
+        style={StyleSheet.absoluteFillObject}
+      />
     <SafeAreaView style={s.safe} edges={['top', 'left', 'right']}>
       <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
 
-      <TabHeader navigation={navigation} />
+      <TabHeader
+        navigation={navigation}
+        center={
+          showFilter ? (
+            <CategoryToggle
+              category={category}
+              onPress={() => setPickerVisible(true)}
+            />
+          ) : null
+        }
+      />
 
       {/* ── Top section ── */}
       <View style={[s.scroll, s.scrollContent]}>
 
         {/* Hero card */}
         <View style={s.hero}>
-          <View style={s.heroBadge}>
-            <Text style={s.heroBadgeText}>{isSessionActive ? 'SESSION STARTED' : "TODAY'S FOCUS"}</Text>
+          <LinearGradient
+            colors={['transparent', 'transparent', 'rgba(242,185,64,0.18)']}
+            locations={[0, 0.3, 1]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={[StyleSheet.absoluteFillObject, { borderRadius: 20 }]}
+            pointerEvents="none"
+          />
+          <View style={s.heroTopRow}>
+            <View style={s.heroBadge}>
+              <Text style={s.heroBadgeText}>{isSessionActive ? 'SESSION STARTED' : "TODAY'S FOCUS"}</Text>
+            </View>
+            <Text style={s.heroCounter}>{ordinal(sessionCount + 1).toUpperCase()} SESSION</Text>
           </View>
           <Text style={s.heroFocusName} numberOfLines={2}>
             {activeFocusName || 'No focus yet'}
           </Text>
-          <Text style={s.heroSession}>{ordinal(sessionCount + 1)} Session</Text>
-          {!isSessionActive && heroMessage ? (
+          {!slot1 && !isSessionActive ? (
+            <Text style={s.heroEmptyHint}>
+              Log your next class to see your next focus points appear.
+            </Text>
+          ) : !isSessionActive && heroMessage ? (
             <Text style={s.heroMessage} numberOfLines={3}>{heroMessage}</Text>
           ) : null}
           {activeSession ? (
@@ -313,7 +450,7 @@ export default function HomeScreen({ navigation }) {
                 {countdown > 0 ? (
                   <Text style={s.inProgressTimer}>{formatTime(countdown)}</Text>
                 ) : (
-                  <Text style={[s.inProgressTimer, { color: '#FF9D00' }]}>
+                  <Text style={[s.inProgressTimer, { color: Colors.orange }]}>
                     + {formatTime(homeOverTime)}
                   </Text>
                 )}
@@ -328,6 +465,7 @@ export default function HomeScreen({ navigation }) {
               disabled={starting}
             >
               <Text style={s.startBtnText}>{starting ? 'Starting…' : 'Start Now'}</Text>
+              {!starting && <Text style={s.startBtnArrow}>→</Text>}
             </TouchableOpacity>
           )}
         </View>
@@ -339,51 +477,41 @@ export default function HomeScreen({ navigation }) {
           <View style={s.orLine} />
         </View>
 
-        {/* Alt row: scrollable cards + All Focus Points */}
+        {/* Alt row: 2 alt focus cards + All */}
         <View style={s.altRow}>
-          <View style={s.altScrollWrap}>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={s.altScroll}
-            >
-              {slot2 && (
-                <TouchableOpacity
-                  style={[s.altCard, isSessionActive && s.altCardLocked]}
-                  onPress={() => handleStartSession(slot2, 1, slot2Count)}
-                  activeOpacity={0.8}
-                  disabled={starting || isSessionActive}
-                >
-                  <View style={s.altCardHeader}>
-                    <Text style={s.altTryLabel}>Try instead</Text>
-                    {isSessionActive && <Text style={s.altLockIcon}>🔒</Text>}
-                  </View>
-                  <Text style={s.altName} numberOfLines={2}>{slot2.name}</Text>
-                </TouchableOpacity>
-              )}
-              <TouchableOpacity
-                style={[s.altCard, s.altCardComingUp]}
-                onPress={() => setComingUpModal(true)}
-                activeOpacity={0.8}
-              >
-                <View style={s.altCardHeader}>
-                  <Text style={s.altTryLabel}>Coming up</Text>
-                </View>
-                <Text style={s.altName} numberOfLines={2}>
-                  {slot3 ? slot3.name : '—'}
-                </Text>
-              </TouchableOpacity>
-            </ScrollView>
-          </View>
-          <View style={s.altFixed}>
+          {slot2 && (
             <TouchableOpacity
-              style={s.allFocusBtn}
-              onPress={() => navigation.navigate('AllFocusPoints')}
+              style={[s.altCard, isSessionActive && s.altCardLocked]}
+              onPress={() => handleStartSession(slot2, 1, slot2Count)}
               activeOpacity={0.8}
+              disabled={starting || isSessionActive}
             >
-              <Text style={s.allFocusBtnText}>All focus{'\n'}points</Text>
+              <View style={s.altCardHeader}>
+                <Text style={s.altTryLabel}>Try instead</Text>
+                {isSessionActive && <Text style={s.altLockIcon}>🔒</Text>}
+              </View>
+              <Text style={s.altName} numberOfLines={2}>{slot2.name}</Text>
             </TouchableOpacity>
-          </View>
+          )}
+          <TouchableOpacity
+            style={[s.altCard, s.altCardComingUp]}
+            onPress={() => setComingUpModal(true)}
+            activeOpacity={0.8}
+          >
+            <View style={s.altCardHeader}>
+              <Text style={s.altTryLabel}>Coming up</Text>
+            </View>
+            <Text style={s.altName} numberOfLines={2}>
+              {slot3 ? slot3.name : '—'}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={s.allFocusBtn}
+            onPress={() => navigation.navigate('AllFocusPoints')}
+            activeOpacity={0.8}
+          >
+            <Text style={s.allFocusBtnText}>All</Text>
+          </TouchableOpacity>
         </View>
       </View>
 
@@ -393,24 +521,22 @@ export default function HomeScreen({ navigation }) {
         <View style={s.weekSection}>
           <View style={s.sectionLabelRow}>
             <Text style={s.sectionLabel}>THIS WEEK</Text>
-            <View style={s.sectionLabelLine} />
+            <Text style={s.sectionDate}>{currentWeekRange()}</Text>
           </View>
           <WeekHeatmap activity={weekActivity} onDayPress={(i) => setDayModal(i)} />
         </View>
 
-        {/* Stats bar */}
-        <View style={s.statsBar}>
-          <View style={s.statItem}>
+        {/* Stats cards */}
+        <View style={s.statsRow}>
+          <View style={s.statCard}>
             <Text style={s.statValue}>{sessionsThisWeek}</Text>
             <Text style={s.statLabel}>Training</Text>
           </View>
-          <View style={s.statSep} />
-          <View style={s.statItem}>
+          <View style={s.statCard}>
             <Text style={s.statValue}>{classesThisWeek}</Text>
             <Text style={s.statLabel}>Class</Text>
           </View>
-          <View style={s.statSep} />
-          <View style={s.statItem}>
+          <View style={s.statCard}>
             <Text style={s.statValue}>{focusTrainedThisWeek}</Text>
             <Text style={s.statLabel}>Focus Trained</Text>
           </View>
@@ -422,6 +548,13 @@ export default function HomeScreen({ navigation }) {
         visible={logModalVisible}
         onClose={() => setLogModalVisible(false)}
         onSubmitted={() => { setLogModalVisible(false); load(); }}
+      />
+
+      <CategoryPicker
+        visible={pickerVisible}
+        current={category}
+        onSelect={handleSelectCategory}
+        onClose={() => setPickerVisible(false)}
       />
 
       <Modal visible={comingUpModal} transparent animationType="fade" onRequestClose={() => setComingUpModal(false)}>
@@ -478,6 +611,7 @@ export default function HomeScreen({ navigation }) {
       </Modal>
       </Animated.View>
     </SafeAreaView>
+    </View>
   );
 }
 
@@ -486,19 +620,17 @@ const h = StyleSheet.create({
   row: { flexDirection: 'row', gap: 6 },
   cell: {
     flex: 1,
-    paddingVertical: 8,
-    backgroundColor: '#F2F2F2',
-    borderRadius: 10,
+    aspectRatio: 1,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 2,
-    borderColor: 'transparent',
   },
-  cellToday: { backgroundColor: '#fff', borderColor: '#F5A623' },
-  label: { fontFamily: Fonts.jakartaBold, fontSize: 12, color: '#C8C8C8' },
-  labelToday: { color: '#F5A623' },
-  dots: { flexDirection: 'row', gap: 3, marginTop: 4, height: 5 },
-  dot: { width: 5, height: 5, borderRadius: 2.5 },
+  cellToday: { backgroundColor: '#0D0D12' },
+  label: { fontFamily: Fonts.jakartaSemiBold, fontSize: 14, color: '#0D0D12' },
+  labelToday: { color: Colors.orange },
+  dots: { flexDirection: 'row', gap: 3, marginTop: 3, height: 5 },
+  dot: { width: 4, height: 4, borderRadius: 2 },
   dotSession: { backgroundColor: '#4A90D9' },
   dotClass: { backgroundColor: '#4CD964' },
 });
@@ -558,7 +690,7 @@ const dm = StyleSheet.create({
 
 // ─── Main styles ──────────────────────────────────────────────────────────────
 const s = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#fff' },
+  safe: { flex: 1, backgroundColor: 'transparent' },
   scroll: {},
   scrollContent: {
     paddingHorizontal: 20,
@@ -604,10 +736,66 @@ const s = StyleSheet.create({
     borderRadius: 18,
   },
 
+  // ── Latin / Ballroom toggle (centered in TabHeader, Instagram-style) ────
+  toggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+  },
+  toggleLabel: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 18,
+    color: Colors.black,
+    letterSpacing: -0.3,
+  },
+  pickerBackdrop: {
+    flex: 1,
+    backgroundColor: 'transparent',
+  },
+  pickerAnchor: {
+    alignItems: 'center',
+    paddingTop: 50,
+  },
+  pickerSheet: {
+    minWidth: 220,
+    borderRadius: 16,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(28,28,30,0.96)',
+    shadowColor: '#000',
+    shadowOpacity: 0.35,
+    shadowOffset: { width: 0, height: 10 },
+    shadowRadius: 22,
+    elevation: 14,
+  },
+  pickerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 15,
+    minWidth: 220,
+  },
+  pickerRowDivider: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(255,255,255,0.15)',
+  },
+  pickerLabel: {
+    fontFamily: Fonts.jakartaSemiBold,
+    fontSize: 15,
+    color: '#FFFFFF',
+    flex: 1,
+  },
+  pickerCheck: {
+    marginLeft: 12,
+  },
+
   // Hero card
   hero: {
     backgroundColor: '#1C1C1E',
     borderRadius: 20,
+    borderWidth: 2,
+    borderColor: 'rgba(242,185,64,0.45)',
     padding: 20,
     paddingBottom: 18,
     marginBottom: 12,
@@ -617,13 +805,24 @@ const s = StyleSheet.create({
     shadowRadius: 12,
     elevation: 8,
   },
+  heroTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 14,
+  },
   heroBadge: {
     alignSelf: 'flex-start',
-    backgroundColor: '#F5A623',
+    backgroundColor: Colors.orange,
     borderRadius: 6,
     paddingHorizontal: 10,
     paddingVertical: 4,
-    marginBottom: 14,
+  },
+  heroCounter: {
+    fontFamily: Fonts.ttLight,
+    fontSize: 11,
+    color: 'rgba(255,255,255,0.55)',
+    letterSpacing: 0.6,
   },
   heroBadgeText: {
     fontFamily: Fonts.jakartaExtraBold,
@@ -640,12 +839,6 @@ const s = StyleSheet.create({
     lineHeight: 34,
     marginBottom: 4,
   },
-  heroSession: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 12,
-    color: 'rgba(255,255,255,0.3)',
-    marginBottom: 10,
-  },
   heroMessage: {
     fontFamily: Fonts.jakartaRegular,
     fontSize: 13,
@@ -653,16 +846,32 @@ const s = StyleSheet.create({
     lineHeight: 20,
     marginBottom: 18,
   },
+  heroEmptyHint: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 13,
+    color: 'rgba(255,255,255,0.6)',
+    lineHeight: 19,
+    marginBottom: 18,
+  },
   startBtn: {
-    backgroundColor: '#F5A623',
+    backgroundColor: Colors.orange,
     borderRadius: 13,
     paddingVertical: 16,
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
   },
   startBtnText: {
     fontFamily: Fonts.jakartaBold,
     fontSize: 15,
     color: '#fff',
+  },
+  startBtnArrow: {
+    fontFamily: Fonts.jakartaBold,
+    fontSize: 17,
+    color: '#fff',
+    marginTop: -1,
   },
   inProgressBtn: {
     backgroundColor: '#1C1C1E',
@@ -736,19 +945,12 @@ const s = StyleSheet.create({
   altRow: {
     flexDirection: 'row',
     alignItems: 'stretch',
+    gap: 9,
     marginBottom: 4,
   },
-  altScrollWrap: {
-    flex: 1,
-    overflow: 'hidden',
-  },
-  altScroll: {
-    gap: 9,
-    paddingBottom: 2,
-  },
   altCard: {
-    width: 150,
-    backgroundColor: '#F2F2F2',
+    flex: 1,
+    backgroundColor: '#FFFFFF',
     borderRadius: 14,
     padding: 13,
     paddingHorizontal: 14,
@@ -779,28 +981,21 @@ const s = StyleSheet.create({
     fontSize: 9,
     color: '#C8C8C8',
   },
-  altFixed: {
-    marginLeft: 9,
-  },
   altCardComingUp: {
     opacity: 0.6,
   },
   allFocusBtn: {
-    width: 80,
-    flex: 1,
-    backgroundColor: '#F2F2F2',
+    width: 64,
+    backgroundColor: '#FFFFFF',
     borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
   },
   allFocusBtnText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 10,
-    color: '#888',
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-    textAlign: 'center',
-    lineHeight: 14,
+    fontFamily: Fonts.jakartaSemiBold,
+    fontSize: 13,
+    color: '#0D0D12',
+    letterSpacing: -0.2,
   },
 
   // Coming up modal
@@ -852,12 +1047,15 @@ const s = StyleSheet.create({
     color: '#fff',
   },
 
-  // Bottom dock
+  // Bottom dock — flows naturally right after the hero / alt row. The empty
+  // space below the stats cards is intentional (it preserves the layout that
+  // existed when the metric gauges occupied that area).
   bottomDock: {
     flexShrink: 0,
     paddingHorizontal: 20,
     paddingTop: 14,
-    backgroundColor: '#fff',
+    paddingBottom: 4,
+    backgroundColor: 'transparent',
   },
   dockSep: {
     width: 72,
@@ -872,40 +1070,54 @@ const s = StyleSheet.create({
   sectionLabelRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    justifyContent: 'space-between',
     marginBottom: 10,
   },
-  sectionLabelLine: { flex: 1, height: 1, backgroundColor: '#EFEFEF' },
   sectionLabel: {
     fontFamily: Fonts.jakartaBold,
     fontSize: 11,
-    color: '#888',
+    color: '#0D0D12',
     textTransform: 'uppercase',
     letterSpacing: 0.8,
   },
-
-  // Stats bar
-  statsBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F2F2F2',
-    borderRadius: 14,
-    paddingVertical: 11,
-    marginBottom: 11,
+  sectionDate: {
+    fontFamily: Fonts.jakartaSemiBold,
+    fontSize: 11,
+    color: 'rgba(13,13,18,0.5)',
+    letterSpacing: 0.4,
   },
-  statItem: { flex: 1, alignItems: 'center' },
-  statSep: { width: 1, height: 22, backgroundColor: '#E2E2E2' },
+
+  // Stats cards
+  statsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 14,
+  },
+
+  // Health gauges (stacked horizontal bars)
+  gaugeRow: {
+    flexDirection: 'column',
+    paddingHorizontal: 6,
+    marginBottom: 4,
+  },
+  statCard: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    paddingVertical: 16,
+    alignItems: 'center',
+  },
   statValue: {
     fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 17,
-    color: '#111',
-    letterSpacing: -0.4,
-    marginBottom: 2,
+    fontSize: 28,
+    color: '#0D0D12',
+    letterSpacing: -0.5,
+    marginBottom: 6,
   },
   statLabel: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.jakartaSemiBold,
     fontSize: 9,
-    color: '#C8C8C8',
+    color: '#888',
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },

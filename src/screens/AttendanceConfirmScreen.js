@@ -16,7 +16,7 @@ export default function AttendanceConfirmScreen({ navigation, route }) {
     setAnswer(response);
     try {
       await respondToAttendance(classInputId, response);
-      locallyRespondedAttendance.add(classInputId);
+      locallyRespondedAttendance.set(classInputId, response === 'yes');
       setDone(true);
       setTimeout(() => navigation.goBack(), 1200);
     } catch (e) {

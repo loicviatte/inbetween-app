@@ -4,16 +4,6 @@ import { BlurView } from 'expo-blur';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors, Fonts } from '../theme';
 
-const TAB_COLORS = {
-  PROFILE: Colors.activeHome,
-  TRAIN: Colors.activeFocus,
-  LOG: Colors.activeLog,
-  STUDENTS: Colors.activeHome,
-  SESSIONS: Colors.orange,
-  DASHBOARD: Colors.activeFocus,
-  NOTES: Colors.orange,
-};
-
 const HIDDEN_TABS = [];
 const PADDING = 5;
 const DRAG_THRESHOLD = 8;
@@ -233,7 +223,6 @@ export default function CustomTabBar({ state, navigation }) {
         {visibleRoutes.map((route, visIdx) => {
           const routeIdx = state.routes.findIndex((r) => r.key === route.key);
           const isFocused = dragIndex >= 0 ? dragIndex === visIdx : state.index === routeIdx;
-          const activeColor = TAB_COLORS[route.name] || Colors.activeHome;
 
           return (
             <Pressable
@@ -241,7 +230,7 @@ export default function CustomTabBar({ state, navigation }) {
               style={styles.tab}
               onPress={() => navigation.navigate(route.name)}
             >
-              <Text style={[styles.tabText, { color: isFocused ? activeColor : Colors.inactive }]}>
+              <Text style={[styles.tabText, { color: isFocused ? '#FFFFFF' : '#0D0D12' }]}>
                 {route.name}
               </Text>
             </Pressable>
@@ -259,11 +248,16 @@ const styles = StyleSheet.create({
   },
   container: {
     flexDirection: 'row',
-    backgroundColor: 'rgba(116,116,128,0.10)',
+    backgroundColor: '#FFFFFF',
     borderRadius: 36,
     padding: 5,
     height: 58,
     position: 'relative',
+    shadowColor: '#000',
+    shadowOpacity: 0.08,
+    shadowOffset: { width: 0, height: 4 },
+    shadowRadius: 14,
+    elevation: 4,
   },
   pillWrap: {
     position: 'absolute',
@@ -272,19 +266,19 @@ const styles = StyleSheet.create({
     borderRadius: 30,
     overflow: 'hidden',
     shadowColor: '#000',
-    shadowOpacity: 0.12,
+    shadowOpacity: 0.18,
     shadowOffset: { width: 0, height: 3 },
     shadowRadius: 10,
     elevation: 4,
   },
   pillSolid: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#0D0D12',
     borderRadius: 30,
   },
   pillGlass: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(255,255,255,0.55)',
+    backgroundColor: 'rgba(13,13,18,0.85)',
     borderRadius: 30,
     overflow: 'hidden',
   },

@@ -15,3 +15,9 @@ verify_jwt = false
 
 [functions.student-class-score]
 verify_jwt = false
+
+[functions.monitor-report]
+verify_jwt = true
+
+[functions.telegram-webhook]
+verify_jwt = false

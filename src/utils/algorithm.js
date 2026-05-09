@@ -1,4 +1,5 @@
 import { supabase } from '../services/supabase/client';
+import { focusMatchesCategory } from './danceCategory';
 
 async function getUserId() {
   const { data: { session } } = await supabase.auth.getSession();
@@ -86,8 +87,11 @@ function computePriority(focus, now) {
 }
 
 // ─── All focus points ranked by priority ──────────────────────────────────────
+// `category` is optional: 'latin' | 'ballroom' | null. When set, focus points
+// whose `dance` array doesn't match the category are excluded — but untagged
+// focuses (no dance) appear in both categories (see focusMatchesCategory).
 
-export async function getAllFocusPointsRanked() {
+export async function getAllFocusPointsRanked(category = null) {
   try {
     const userId = await getUserId();
     const now = new Date();
@@ -105,6 +109,7 @@ export async function getAllFocusPointsRanked() {
     if (!points || points.length === 0) return [];
 
     return points
+      .filter((p) => focusMatchesCategory(p, category))
       .map((p) => ({ ...p, _priority: computePriority(p, now) }))
       .sort((a, b) => b._priority - a._priority);
   } catch (e) {
@@ -115,7 +120,7 @@ export async function getAllFocusPointsRanked() {
 
 // ─── Top-3 slot selection ─────────────────────────────────────────────────────
 
-export async function getSlots() {
+export async function getSlots(category = null) {
   try {
     const userId = await getUserId();
     const now    = new Date();
@@ -132,9 +137,12 @@ export async function getSlots() {
       return { slot1: null, slot2: null, slot3: null };
     }
 
-    // Only consider active/cooling_down/past_candidate focuses
+    // Only consider active/cooling_down/past_candidate focuses, and within
+    // the selected dance category if one is provided.
     const visible = points.filter(
-      (p) => !p.status || p.status === 'active' || p.status === 'cooling_down' || p.status === 'past_candidate'
+      (p) =>
+        (!p.status || p.status === 'active' || p.status === 'cooling_down' || p.status === 'past_candidate') &&
+        focusMatchesCategory(p, category)
     );
 
     const scored = visible

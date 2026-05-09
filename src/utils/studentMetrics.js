@@ -22,6 +22,7 @@
 // case, which returns 100 so it reads as neutral-good).
 
 import { supabase } from '../services/supabase/client';
+import { focusMatchesCategory } from './danceCategory';
 
 const TIER_WEIGHT = {
   critical: 3,
@@ -165,13 +166,18 @@ export const getHealthScore = getGlobalScore;
 
 // Convenience: compute all three in a single pass (one DB round-trip per
 // source table) — use this from the UI to avoid duplicate queries.
-export async function getAllStudentMetrics(studentId) {
+//
+// `category` is optional: 'latin' | 'ballroom' | null. When set, focuses
+// outside the category are excluded; logs tied to those focuses are also
+// excluded. Logs with no focus_point_id and focuses with no `dance` array
+// stay in both categories (per focusMatchesCategory).
+export async function getAllStudentMetrics(studentId, category = null) {
   if (!studentId) return { progression: 0, retention: 100, global: 0 };
 
   const [focusesRes, allLogsRes] = await Promise.all([
     supabase
       .from('focus_points')
-      .select('id, status, tier, merge_action')
+      .select('id, status, tier, merge_action, dance')
       .eq('user_id', studentId)
       .eq('is_deleted', false)
       .eq('is_other', false),
@@ -182,8 +188,14 @@ export async function getAllStudentMetrics(studentId) {
       .order('created_at', { ascending: true }),
   ]);
 
-  const focuses = focusesRes?.data || [];
-  const logs = allLogsRes?.data || [];
+  let focuses = focusesRes?.data || [];
+  let logs = allLogsRes?.data || [];
+
+  if (category) {
+    focuses = focuses.filter((f) => focusMatchesCategory(f, category));
+    const keepIds = new Set(focuses.map((f) => f.id));
+    logs = logs.filter((l) => !l.focus_point_id || keepIds.has(l.focus_point_id));
+  }
 
   // ── Progression ──────────────────────────────────────────────────────
   let progression = 0;
@@ -235,7 +247,12 @@ export async function getAllStudentMetrics(studentId) {
 //   allLogs:    [{ student_id, focus_point_id, created_at }]
 //
 // Returns { [studentId]: { progression, retention, global } }
-export function computeAllStudentMetricsBatch(studentIds, allFocuses, allLogs) {
+//
+// `category` is optional: 'latin' | 'ballroom' | null. Same filtering rule as
+// getAllStudentMetrics — out-of-category focuses are dropped, and logs tied to
+// those focuses are dropped. The caller must include `dance` in allFocuses
+// when passing a category.
+export function computeAllStudentMetricsBatch(studentIds, allFocuses, allLogs, category = null) {
   const nowMs = Date.now();
 
   // Group focuses and logs by student
@@ -254,8 +271,14 @@ export function computeAllStudentMetricsBatch(studentIds, allFocuses, allLogs) {
 
   const result = {};
   for (const id of studentIds) {
-    const focuses = focusesByStudent[id];
-    const logs = logsByStudent[id];
+    let focuses = focusesByStudent[id];
+    let logs = logsByStudent[id];
+
+    if (category) {
+      focuses = focuses.filter((f) => focusMatchesCategory(f, category));
+      const keepIds = new Set(focuses.map((f) => f.id));
+      logs = logs.filter((l) => !l.focus_point_id || keepIds.has(l.focus_point_id));
+    }
 
     // ── Progression ──
     let progression = 0;

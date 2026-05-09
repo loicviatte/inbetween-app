@@ -1,7 +1,7 @@
 // Color palette from Figma
 export const Colors = {
   background: '#FFFFFF',
-  orange: '#FF9D00',
+  orange: '#F2B940',
   green: '#4CAF50',
   coachCard: 'rgba(215, 150, 255, 0.06)',
   tabBarBg: '#F8F9FE',
@@ -22,30 +22,36 @@ export const Colors = {
   card: '#F5F5F5',
 };
 
-// Font family names
-// NOTE: Monument Extended (logo/headings) — place font file at:
-//   assets/fonts/MonumentExtended-UltraBold.otf
-// then add to useFonts in App.js:
-//   'MonumentExtended-UltraBold': require('./assets/fonts/MonumentExtended-UltraBold.otf')
-// Until then, Montserrat_800ExtraBold is used as a visual stand-in.
+// Font family names — split between TT Travels Next (titles / display) and
+// Bricolage Grotesque (body / paragraph). The legacy alias map is kept so
+// the ~225 existing references compile unchanged; only the underlying value
+// changes when an alias is meant for body copy vs a title.
 export const Fonts = {
-  monument: 'Montserrat_800ExtraBold',        // swap to 'MonumentExtended-UltraBold' once file is added
-  jakartaLight: 'PlusJakartaSans_300Light',
-  jakartaRegular: 'PlusJakartaSans_400Regular',
-  jakartaMedium: 'PlusJakartaSans_500Medium',
-  jakartaSemiBold: 'PlusJakartaSans_600SemiBold',
-  jakartaBold: 'PlusJakartaSans_700Bold',
-  jakartaExtraBold: 'PlusJakartaSans_800ExtraBold',
-  montserratMedium: 'Montserrat_500Medium',
-  montserratSemiBold: 'Montserrat_600SemiBold',
+  // Canonical aliases (use these for new code)
+  ttLight: 'BricolageGrotesque-Light',
+  ttRegular: 'BricolageGrotesque-Regular',
+  ttMedium: 'BricolageGrotesque-Medium',
+  ttDemiBold: 'TTTravelsNext-DemiBold',
+  ttBold: 'TTTravelsNext-Bold',
+  ttExtraBold: 'TTTravelsNext-ExtraBold',
+  // Legacy aliases — body weights → Bricolage; title weights → TT Travels
+  monument: 'TTTravelsNext-ExtraBold',     // logo only — keep heaviest
+  jakartaLight: 'BricolageGrotesque-Light',
+  jakartaRegular: 'BricolageGrotesque-Regular', // body
+  jakartaMedium: 'BricolageGrotesque-Medium',
+  jakartaSemiBold: 'TTTravelsNext-DemiBold',
+  jakartaBold: 'TTTravelsNext-DemiBold',   // titles use DemiBold per design
+  jakartaExtraBold: 'TTTravelsNext-DemiBold',
+  montserratMedium: 'BricolageGrotesque-Medium',
+  montserratSemiBold: 'TTTravelsNext-DemiBold',
 };
 
 // Legacy Typography shim — used by FocusScreen, LogScreen, LogModal
 export const Typography = {
-  largeHeading: { fontFamily: 'PlusJakartaSans_800ExtraBold', fontSize: 24, color: '#0D0D12' },
-  sectionTitle: { fontFamily: 'PlusJakartaSans_800ExtraBold', fontSize: 18, color: 'rgba(0,0,0,0.75)' },
-  body: { fontFamily: 'PlusJakartaSans_400Regular', fontSize: 14, color: '#0D0D12' },
-  secondary: { fontFamily: 'PlusJakartaSans_400Regular', fontSize: 12, color: '#818898' },
+  largeHeading: { fontFamily: 'TTTravelsNext-DemiBold', fontSize: 24, color: '#0D0D12' },
+  sectionTitle: { fontFamily: 'TTTravelsNext-DemiBold', fontSize: 18, color: 'rgba(0,0,0,0.75)' },
+  body: { fontFamily: 'BricolageGrotesque-Regular', fontSize: 14, color: '#0D0D12' },
+  secondary: { fontFamily: 'BricolageGrotesque-Regular', fontSize: 12, color: '#818898' },
 };
 
 export const Spacing = {

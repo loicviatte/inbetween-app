@@ -1,6 +1,7 @@
 import { supabase } from '../services/supabase/client';
+import { categoryFromStyle, categoryFromDances } from '../utils/danceCategory';
 
-async function getUserId() {
+export async function getUserId() {
   const { data: { session } } = await supabase.auth.getSession();
   if (!session?.user) throw new Error('Not authenticated');
   return session.user.id;
@@ -31,15 +32,15 @@ export async function getUser() {
   const userId = await getUserId();
   const { data } = await supabase
     .from('users')
-    .select('*')
+    .select('*, studio:studios!users_studio_id_fkey(id, name)')
     .eq('id', userId)
     .single();
   return data;
 }
 
-export async function saveUserProfile({ name, main_studio, main_studio_place_id, dance_style }) {
+export async function saveUserProfile({ name, studio_id, dance_style }) {
   const userId = await getUserId();
-  await supabase.from('users').update({ name, main_studio, main_studio_place_id, dance_style }).eq('id', userId);
+  await supabase.from('users').update({ name, studio_id, dance_style }).eq('id', userId);
 }
 
 export async function updateUserSummary(summary) {
@@ -196,6 +197,27 @@ export async function getTrainingSessionsThisWeek() {
     .gte('started_at', weekAgo)
     .not('completed_at', 'is', null);
   return (data || []).length;
+}
+
+// Returns completed practice_logs for the current calendar month (used by
+// the LogScreen monthly heatmap).
+export async function getTrainingSessionsThisMonth() {
+  try {
+    const userId = await getUserId();
+    const now = new Date();
+    const firstOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const firstOfNextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    const { data } = await supabase
+      .from('practice_logs')
+      .select('id, started_at, completed_at, feeling, focus_point_id')
+      .eq('student_id', userId)
+      .gte('started_at', firstOfMonth.toISOString())
+      .lt('started_at', firstOfNextMonth.toISOString())
+      .not('completed_at', 'is', null);
+    return data || [];
+  } catch {
+    return [];
+  }
 }
 
 export async function getTrainingDaysThisWeek() {
@@ -384,6 +406,110 @@ export async function getTopFocusPointsWithCounts(n = 3) {
     .map(p => ({ ...p, count: counts[p.id] || 0 }));
 }
 
+// ─── Day streak (consecutive days with a completed practice_log) ─────────────
+function _dayKey(d) {
+  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+}
+
+export async function getDayStreak() {
+  const userId = await getUserId();
+  // Pull recent completions (90 days is more than enough for any reasonable streak)
+  const since = new Date(Date.now() - 90 * 86400000).toISOString();
+  const { data } = await supabase
+    .from('practice_logs')
+    .select('completed_at')
+    .eq('student_id', userId)
+    .not('completed_at', 'is', null)
+    .gte('completed_at', since);
+
+  const days = new Set();
+  for (const r of data || []) days.add(_dayKey(new Date(r.completed_at)));
+
+  // Walk back from today; if no log today, allow yesterday as the anchor
+  // so the streak doesn't reset until 24h after the last activity.
+  const today = new Date();
+  let cursor = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  if (!days.has(_dayKey(cursor))) cursor.setDate(cursor.getDate() - 1);
+
+  let streak = 0;
+  while (days.has(_dayKey(cursor))) {
+    streak++;
+    cursor.setDate(cursor.getDate() - 1);
+  }
+  return streak;
+}
+
+// ─── Lesson readiness ────────────────────────────────────────────────────────
+// "How ready you are for your next private" — measured against the focus
+// points extracted from your most recent private. Each focus has a small
+// session target (primary 2, secondary 1); a session = ~7 min of training.
+const READINESS_TARGET = { primary: 2, secondary: 1 };
+const SESSION_MINUTES = 7;
+
+export async function getLessonReadiness() {
+  const userId = await getUserId();
+
+  // Most recent private class (legacy rows with null lesson_type count as private)
+  const { data: classes } = await supabase
+    .from('class_inputs')
+    .select('id, created_at, ai_primary_focus, ai_secondary_focus, practice_point_1, practice_point_2, lesson_type')
+    .eq('user_id', userId)
+    .not('is_deleted', 'is', true)
+    .or('lesson_type.eq.private,lesson_type.is.null')
+    .order('created_at', { ascending: false })
+    .limit(1);
+  const lastClass = classes?.[0];
+  if (!lastClass) return null;
+
+  const primaryName = lastClass.ai_primary_focus || lastClass.practice_point_1 || null;
+  const secondaryName = lastClass.ai_secondary_focus || lastClass.practice_point_2 || null;
+  if (!primaryName && !secondaryName) return null;
+
+  // Resolve names → focus_points (so we can count sessions against them)
+  const names = [primaryName, secondaryName].filter(Boolean);
+  let fpByName = {};
+  if (names.length > 0) {
+    const { data: fps } = await supabase
+      .from('focus_points')
+      .select('id, name')
+      .eq('user_id', userId)
+      .in('name', names);
+    for (const f of fps || []) fpByName[f.name] = f;
+  }
+
+  // Sessions completed against those focus points since the class
+  const ids = names.map(n => fpByName[n]?.id).filter(Boolean);
+  const counts = {};
+  if (ids.length > 0) {
+    const { data: logs } = await supabase
+      .from('practice_logs')
+      .select('focus_point_id')
+      .eq('student_id', userId)
+      .in('focus_point_id', ids)
+      .gte('completed_at', lastClass.created_at)
+      .not('completed_at', 'is', null);
+    for (const l of logs || []) counts[l.focus_point_id] = (counts[l.focus_point_id] || 0) + 1;
+  }
+
+  function makeRow(name, kind) {
+    if (!name) return null;
+    const target = READINESS_TARGET[kind];
+    const id = fpByName[name]?.id || null;
+    const done = Math.min(target, counts[id] || 0);
+    return { name, kind, target, done, focusPointId: id };
+  }
+
+  const primary = makeRow(primaryName, 'primary');
+  const secondary = makeRow(secondaryName, 'secondary');
+
+  const totalTarget = (primary?.target || 0) + (secondary?.target || 0);
+  const totalDone = (primary?.done || 0) + (secondary?.done || 0);
+  const percent = totalTarget > 0 ? Math.round((totalDone / totalTarget) * 100) : 0;
+  const minutesRemaining = Math.max(0, totalTarget - totalDone) * SESSION_MINUTES;
+
+  return { lastClassDate: lastClass.created_at, primary, secondary, percent, minutesRemaining };
+}
+
 // ─── Notes ───────────────────────────────────────────────────────────────────
 
 async function _getNotes() {
@@ -458,22 +584,6 @@ export async function getNotesLinkedToClass(classInputId) {
 
 // ─── Coach Linking (student side) ─────────────────────────────────────────────
 
-const LATIN_DANCES = ['Cha Cha', 'Samba', 'Rumba', 'Paso Doble', 'Jive'];
-
-// Derive 'latin' | 'ballroom' from a dance_style string
-function categoryFromStyle(danceStyle) {
-  const ds = (danceStyle || '').toLowerCase();
-  if (ds === 'latin') return 'latin';
-  if (ds === 'ballroom' || ds === 'standard') return 'ballroom';
-  return null;
-}
-
-// Derive 'latin' | 'ballroom' from an array of dance names
-function categoryFromDances(dances) {
-  if (!dances || dances.length === 0) return null;
-  return LATIN_DANCES.some(d => dances.includes(d)) ? 'latin' : 'ballroom';
-}
-
 // Internal: link by invite code for a given category
 async function _linkToCoachByCategory(userId, inviteCode, category) {
   const code = inviteCode.trim().toUpperCase();
@@ -481,7 +591,7 @@ async function _linkToCoachByCategory(userId, inviteCode, category) {
 
   const { data: coach } = await supabase
     .from('users')
-    .select('id, name, role')
+    .select('id, name, role, dance_style, studio:studios!users_studio_id_fkey(id, name)')
     .eq('invite_code', code)
     .eq('role', 'coach')
     .maybeSingle();
@@ -499,9 +609,9 @@ async function _linkToCoachByCategory(userId, inviteCode, category) {
   if (existing) {
     if (existing.status === 'accepted') {
       await supabase.from('users').update({ [coachIdField]: coach.id }).eq('id', userId);
-      return { coach, alreadyLinked: true };
+      return { coach: { ...coach, pending: false }, alreadyLinked: true };
     }
-    if (existing.status === 'pending') return { coach, pending: true };
+    if (existing.status === 'pending') return { coach: { ...coach, pending: true }, pending: true };
   }
 
   await supabase.from('coach_requests').insert({
@@ -511,7 +621,7 @@ async function _linkToCoachByCategory(userId, inviteCode, category) {
     category,
   });
 
-  return { coach, pending: true };
+  return { coach: { ...coach, pending: true }, pending: true };
 }
 
 // For single-style students (Latin or Ballroom) — category derived from dance_style
@@ -536,6 +646,15 @@ export async function unlinkCoach() {
   const category = categoryFromStyle(me?.dance_style);
   if (!category) return;
   const field = category === 'latin' ? 'latin_coach_id' : 'ballroom_coach_id';
+  // Hard-delete the request row (any status) so the coach loses RLS access
+  // and stops seeing the student. Then null the column on users for
+  // belt-and-suspenders. Order matters: delete first so the coach's read
+  // policy via coach_requests fails immediately.
+  await supabase
+    .from('coach_requests')
+    .delete()
+    .eq('student_id', userId)
+    .eq('category', category);
   await supabase.from('users').update({ [field]: null }).eq('id', userId);
 }
 
@@ -543,7 +662,22 @@ export async function unlinkCoach() {
 export async function unlinkCoachForCategory(category) {
   const userId = await getUserId();
   const field = category === 'latin' ? 'latin_coach_id' : 'ballroom_coach_id';
+  await supabase
+    .from('coach_requests')
+    .delete()
+    .eq('student_id', userId)
+    .eq('category', category);
   await supabase.from('users').update({ [field]: null }).eq('id', userId);
+}
+
+// Lookup a coach by id and tag the pending state. Returns null if not found.
+async function _coachWithPending(coachId, pending) {
+  const { data: coach } = await supabase
+    .from('users')
+    .select('id, name, dance_style, studio:studios!users_studio_id_fkey(id, name)')
+    .eq('id', coachId)
+    .single();
+  return coach ? { ...coach, pending } : null;
 }
 
 // For single-style students
@@ -556,30 +690,30 @@ export async function getMyCoach() {
     .single();
 
   const category = categoryFromStyle(me?.dance_style);
-  let coachId = category === 'latin' ? me?.latin_coach_id : me?.ballroom_coach_id;
+  if (!category) return null;
+  const coachId = category === 'latin' ? me?.latin_coach_id : me?.ballroom_coach_id;
 
-  // Fallback: if columns not yet backfilled, check coach_requests directly
-  if (!coachId) {
-    const { data: req } = await supabase
-      .from('coach_requests')
-      .select('coach_id')
-      .eq('student_id', userId)
-      .eq('status', 'accepted')
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    coachId = req?.coach_id ?? null;
-  }
+  // Accepted link wins — the users column is the source of truth.
+  if (coachId) return _coachWithPending(coachId, false);
 
-  if (!coachId) return null;
+  // Otherwise surface the latest accepted-or-pending request so the UI can
+  // show "Waiting to accept…" until the coach responds (or "Add teacher"
+  // if there's no request at all). Prefer accepted over pending — alphabetical
+  // ascending puts 'accepted' before 'pending' so a stale accepted row isn't
+  // overshadowed by a newer pending one.
+  const { data: req } = await supabase
+    .from('coach_requests')
+    .select('coach_id, status')
+    .eq('student_id', userId)
+    .eq('category', category)
+    .in('status', ['accepted', 'pending'])
+    .order('status', { ascending: true })
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
 
-  const { data: coach } = await supabase
-    .from('users')
-    .select('id, name, main_studio, dance_style')
-    .eq('id', coachId)
-    .single();
-
-  return coach || null;
+  if (!req?.coach_id) return null;
+  return _coachWithPending(req.coach_id, req.status === 'pending');
 }
 
 // For 'Latin & Ballroom' students
@@ -593,41 +727,30 @@ export async function getMyCoachForCategory(category) {
     .eq('id', userId)
     .single();
 
-  let coachId = me?.[field];
+  if (me?.[field]) return _coachWithPending(me[field], false);
 
-  // Fallback: when the student was on a single-style profile, the category
-  // column on users may never have been populated. Look up accepted
-  // coach_requests for this category and adopt the most recent one, so
-  // switching to 'Latin & Ballroom' does not lose a pre-existing link.
-  if (!coachId) {
-    const { data: req } = await supabase
-      .from('coach_requests')
-      .select('coach_id, created_at')
-      .eq('student_id', userId)
-      .eq('status', 'accepted')
-      .eq('category', category)
-      .order('created_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    coachId = req?.coach_id ?? null;
-    // Self heal the users column so the next read is a single round trip.
-    if (coachId) {
-      await supabase
-        .from('users')
-        .update({ [field]: coachId })
-        .eq('id', userId);
-    }
+  // Fallback: surface accepted requests not yet backfilled into users, plus
+  // pending requests waiting on the coach. Accepted wins over pending.
+  const { data: req } = await supabase
+    .from('coach_requests')
+    .select('coach_id, status, created_at')
+    .eq('student_id', userId)
+    .eq('category', category)
+    .in('status', ['accepted', 'pending'])
+    .order('status', { ascending: true })  // 'accepted' < 'pending' alphabetically
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!req?.coach_id) return null;
+
+  // Self-heal the users column for accepted requests so the next read is
+  // one round trip (preserves the original behaviour).
+  if (req.status === 'accepted') {
+    await supabase.from('users').update({ [field]: req.coach_id }).eq('id', userId);
   }
 
-  if (!coachId) return null;
-
-  const { data: coach } = await supabase
-    .from('users')
-    .select('id, name, main_studio, dance_style')
-    .eq('id', coachId)
-    .single();
-
-  return coach || null;
+  return _coachWithPending(req.coach_id, req.status === 'pending');
 }
 
 // ─── Student → Coach Messages ─────────────────────────────────────────────────

@@ -42,3 +42,10 @@ yarn-error.*
 .env
 .claude/
 .claude/
+
+# Supabase CLI version cache (auto-updated, not source-of-truth)
+supabase/.temp/
+
+# Build artifacts
+build.ipa
+*.ipa
