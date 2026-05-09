@@ -21,20 +21,16 @@ export function isNewRecordingPipelineEnabled(user) {
   return !!user?.id;
 }
 
-// Coaches enrolled in the native iOS recorder (continuous-audio-recorder
-// module). When enabled, the audio CAPTURE backend switches from expo-audio's
-// stop+start chunk rotation (which trips expo/expo#21782 in background) to a
-// single AVAudioEngine that never restarts and rotates files natively.
-// Independent of the server-side pipeline above — chunks still feed
-// enqueueChunk → uploadWorker → finalize-class.
-const NATIVE_RECORDER_USER_IDS = new Set([
-  // viatteloic@gmail.com (test coach)
-  'b34fc050-3431-49e7-bf8f-0df0560dcbe3',
-]);
-
+// Native iOS recorder (continuous-audio-recorder module). When enabled, the
+// audio CAPTURE backend switches from expo-audio's stop+start chunk rotation
+// (which trips expo/expo#21782 in background and loses everything past chunk 0)
+// to a single AVAudioEngine that never restarts and rotates files natively.
+// Independent of the server-side pipeline — chunks still feed enqueueChunk →
+// uploadWorker → finalize-class.
+//
+// Currently enabled for every authenticated user — field-test rollout in 1.5.7.
+// Falls back to expo-audio automatically if the native start path throws (e.g.
+// non-iOS, missing native module).
 export function isNativeRecorderEnabled(user) {
-  if (!user) return false;
-  const id = typeof user === 'string' ? user : user?.id;
-  if (!id) return false;
-  return NATIVE_RECORDER_USER_IDS.has(id);
+  return !!(typeof user === 'string' ? user : user?.id);
 }
