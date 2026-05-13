@@ -719,7 +719,7 @@ export async function getTrainingSessionDetail(sessionId) {
 export async function getClassDetail(classId) {
   const { data } = await supabase
     .from('class_inputs')
-    .select('id, created_at, title, class_summary, practice_point_1, practice_point_2, ai_primary_focus, ai_secondary_focus')
+    .select('id, created_at, title, class_summary, practice_point_1, practice_point_2, ai_primary_focus, ai_secondary_focus, admin_approved_at')
     .eq('id', classId)
     .single();
   return data || null;
