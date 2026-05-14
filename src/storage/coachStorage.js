@@ -2,6 +2,7 @@ import { supabase } from '../services/supabase/client';
 import { computeAllStudentMetricsBatch } from '../utils/studentMetrics';
 import { categoryFromStyle } from '../utils/danceCategory';
 import { normalizeFocusName } from '../utils/normalizeFocusName';
+import { getLessonReadiness } from './storage';
 
 async function getCoachId() {
   const { data: { user } } = await supabase.auth.getUser();
@@ -1070,14 +1071,14 @@ export async function getCoachActivityFeed() {
 // ─── Coach Notes ─────────────────────────────────────────────────────────────
 //
 // Notes authored by the coach. Re-uses the existing `notes` table (created
-// for students) but adds the `linked_student_id` column so a note can be
-// attached to a student. Coach-side notes never have a `linked_class_input_id`.
+// for students) but adds the `linked_student_id` and `linked_class_input_id`
+// columns so a note can be attached to a student and/or a class.
 
 export async function getCoachNotes() {
   const coachId = await getCoachId();
   const { data: notes } = await supabase
     .from('notes')
-    .select('id, title, content, video_clips, linked_student_id, created_at, updated_at')
+    .select('id, title, content, video_clips, linked_student_id, linked_class_input_id, created_at, updated_at')
     .eq('user_id', coachId)
     .eq('is_deleted', false)
     .order('updated_at', { ascending: false });
@@ -1089,16 +1090,34 @@ export async function getCoachNotes() {
   if (studentIds.length > 0) {
     const { data: students } = await supabase
       .from('users')
-      .select('id, name')
+      .select('id, name, avatar_url')
       .in('id', studentIds);
     (students || []).forEach(s => {
       studentMap[s.id] = { id: s.id, name: s.name, photoUrl: s.avatar_url };
     });
   }
 
+  const classIds = [...new Set(notes.map(n => n.linked_class_input_id).filter(Boolean))];
+  let classMap = {};
+  if (classIds.length > 0) {
+    const { data: classes } = await supabase
+      .from('class_inputs')
+      .select('id, title, ai_primary_focus, lesson_type, created_at')
+      .in('id', classIds);
+    (classes || []).forEach(c => {
+      classMap[c.id] = {
+        id: c.id,
+        title: c.title || c.ai_primary_focus || 'Class',
+        lessonType: c.lesson_type || null,
+        createdAt: c.created_at,
+      };
+    });
+  }
+
   return notes.map(n => ({
     ...n,
     linkedStudent: n.linked_student_id ? studentMap[n.linked_student_id] || null : null,
+    linkedClass: n.linked_class_input_id ? classMap[n.linked_class_input_id] || null : null,
   }));
 }
 
@@ -1112,11 +1131,26 @@ export async function getCoachNoteById(id) {
   if (data.linked_student_id) {
     const { data: student } = await supabase
       .from('users')
-      .select('id, name')
+      .select('id, name, avatar_url')
       .eq('id', data.linked_student_id)
       .maybeSingle();
     if (student) {
       data.linkedStudent = { id: student.id, name: student.name, photoUrl: student.avatar_url };
+    }
+  }
+  if (data.linked_class_input_id) {
+    const { data: cls } = await supabase
+      .from('class_inputs')
+      .select('id, title, ai_primary_focus, lesson_type, created_at')
+      .eq('id', data.linked_class_input_id)
+      .maybeSingle();
+    if (cls) {
+      data.linkedClass = {
+        id: cls.id,
+        title: cls.title || cls.ai_primary_focus || 'Class',
+        lessonType: cls.lesson_type || null,
+        createdAt: cls.created_at,
+      };
     }
   }
   return data;
@@ -1124,10 +1158,14 @@ export async function getCoachNoteById(id) {
 
 export async function saveCoachNote(note) {
   const coachId = await getCoachId();
-  const { id, user_id, created_at, linkedStudent, ...rest } = note;
-
-  // Coach notes never link to a class
-  rest.linked_class_input_id = null;
+  const {
+    id,
+    user_id,
+    created_at,
+    linkedStudent,
+    linkedClass,
+    ...rest
+  } = note;
 
   if (id) {
     const { data: existing } = await supabase
@@ -1163,4 +1201,345 @@ export async function getCoachNotesForStudent(studentId) {
     .eq('is_deleted', false)
     .order('updated_at', { ascending: false });
   return data || [];
+}
+
+// ─── Coach Classes ───────────────────────────────────────────────────────────
+
+// Total minutes coached, summed across all class_recordings rows that
+// belong to this coach's class_inputs. Classes with no recording don't
+// contribute. Returns minutes (Number); the UI rounds to hours.
+export async function getTotalCoachedMinutes() {
+  const coachId = await getCoachId();
+  const { data: classes } = await supabase
+    .from('class_inputs')
+    .select('id')
+    .eq('user_id', coachId)
+    .eq('is_deleted', false);
+  const classIds = (classes || []).map(c => c.id);
+  if (classIds.length === 0) return 0;
+  const { data: recordings } = await supabase
+    .from('class_recordings')
+    .select('duration_ms')
+    .in('class_input_id', classIds);
+  const totalMs = (recordings || []).reduce(
+    (sum, r) => sum + (r?.duration_ms || 0),
+    0,
+  );
+  return Math.round(totalMs / 60000);
+}
+
+// Roster used by the StartClass landing screen — for each of the coach's
+// students, returns the readiness % since their last private and the
+// per-focus-point briefing (sessions practiced since that private, or
+// staleness in days). Sorted by readiness desc.
+//
+// "Sessions since" is counted from the student's `lastPrivateClassDate`,
+// which is already computed in `getMyStudents` (handles coach-created and
+// student-logged classes via teacher_name match). Single batched query
+// against `practice_logs`, no N+1.
+export async function getStartClassRoster() {
+  const students = await getMyStudents();
+  if (!students || students.length === 0) {
+    return { students: [], lastClassDuration: null };
+  }
+  const studentIds = students.map(s => s.id);
+
+  // Per-student readiness (same source of truth as the student's own
+  // profile/Train screen: focuses from the most recent private with usable
+  // focus_points, tier-based targets, capped done counts).
+  const readinessPerStudent = await Promise.all(
+    students.map(s => getLessonReadiness(s.id).catch(() => null)),
+  );
+
+  // Resolve each readiness `lastClassDate` to a class_input_id so we can
+  // fetch the duration of the class that actually produced the focuses.
+  // (Different from `s.lastPrivateClassDate` when the most recent private
+  // hasn't been processed yet — readiness walks back to the latest one
+  // that has focuses.)
+  const readinessClassDates = readinessPerStudent
+    .map(r => r?.lastClassDate)
+    .filter(Boolean);
+  const classIdByDate = {};
+  if (readinessClassDates.length > 0) {
+    const { data: classRows } = await supabase
+      .from('class_inputs')
+      .select('id, user_id, student_id, created_at, lesson_type')
+      .or(`student_id.in.(${studentIds.join(',')}),user_id.in.(${studentIds.join(',')})`)
+      .eq('is_deleted', false)
+      .in('created_at', readinessClassDates);
+    for (const c of classRows || []) {
+      classIdByDate[c.created_at] = c.id;
+    }
+  }
+  const durationByClass = {};
+  const classIds = Object.values(classIdByDate);
+  if (classIds.length > 0) {
+    const { data: recRows } = await supabase
+      .from('class_recordings')
+      .select('class_input_id, duration_ms')
+      .in('class_input_id', classIds);
+    for (const r of recRows || []) {
+      if (r?.duration_ms) {
+        durationByClass[r.class_input_id] = Math.max(1, Math.round(r.duration_ms / 60000));
+      }
+    }
+  }
+
+  const enriched = students.map((s, idx) => {
+    const r = readinessPerStudent[idx];
+    const focuses = r?.focuses || [];
+
+    // Days between the readiness class and now — used to flag stale focuses
+    // (no progress + a week or more since the class).
+    const daysSinceClass = r?.lastClassDate
+      ? Math.floor((Date.now() - new Date(r.lastClassDate).getTime()) / 86400000)
+      : null;
+
+    const briefings = focuses.map(f => {
+      const isStale = f.done === 0 && (daysSinceClass || 0) >= 7;
+      return {
+        id: f.focusPointId,
+        name: f.name,
+        tier: f.tier,
+        sessionsSince: f.done,
+        target: f.target,
+        daysSinceLast: null,
+        staleDays: isStale ? daysSinceClass : null,
+        isStale,
+      };
+    });
+
+    const classId = r?.lastClassDate ? classIdByDate[r.lastClassDate] : null;
+    return {
+      id: s.id,
+      name: s.name,
+      photoUrl: s.photoUrl,
+      lastPrivateClassDate: r?.lastClassDate || s.lastPrivateClassDate,
+      lastPrivateDurationMin: classId ? durationByClass[classId] || null : null,
+      readiness: r?.percent ?? 0,
+      briefings,
+      status: s.status,
+    };
+  }).sort((a, b) => b.readiness - a.readiness);
+
+  return { students: enriched };
+}
+
+// All classes the current coach has authored, newest first.
+export async function getMyClasses() {
+  const coachId = await getCoachId();
+  const { data } = await supabase
+    .from('class_inputs')
+    .select('id, created_at, title, dance, lesson_type, status, class_summary, ai_primary_focus, ai_secondary_focus, student_id')
+    .eq('user_id', coachId)
+    .eq('is_deleted', false)
+    .order('created_at', { ascending: false });
+
+  if (!data || data.length === 0) return [];
+
+  // For private lessons resolve the student name (best effort — RLS lets the
+  // coach read their own students).
+  const studentIds = [...new Set(data.map(c => c.student_id).filter(Boolean))];
+  let studentMap = {};
+  if (studentIds.length > 0) {
+    const { data: users } = await supabase
+      .from('users')
+      .select('id, name, avatar_url')
+      .in('id', studentIds);
+    (users || []).forEach(u => {
+      studentMap[u.id] = { id: u.id, name: u.name, photoUrl: u.avatar_url };
+    });
+  }
+
+  return data.map(c => ({
+    ...c,
+    student: c.student_id ? studentMap[c.student_id] || null : null,
+  }));
+}
+
+// Detailed view of a coach's class: summary, the recorded students with
+// coach-attested attendance, the student's own response, and any notes the
+// coach has linked to this class.
+export async function getCoachClassDetail(classId) {
+  const coachId = await getCoachId();
+
+  const { data: cls } = await supabase
+    .from('class_inputs')
+    .select('id, user_id, student_id, created_at, title, dance, lesson_type, status, class_summary, transcript, practice_point_1, practice_point_2, ai_primary_focus, ai_secondary_focus, focus_points!focus_points_class_input_id_fkey(id, name, is_other, status)')
+    .eq('id', classId)
+    .maybeSingle();
+  if (!cls) return null;
+
+  // Class recording (if any) — used for the duration stat in the UI header.
+  const { data: recordingRow } = await supabase
+    .from('class_recordings')
+    .select('duration_ms, started_at, ended_at')
+    .eq('class_input_id', classId)
+    .maybeSingle();
+
+  // Recorded students for this class (group classes only — private lessons
+  // store the single student in class_inputs.student_id).
+  const { data: cisRows } = await supabase
+    .from('class_input_students')
+    .select('id, student_id, attendance, responded_at, notified_at')
+    .eq('class_input_id', classId);
+
+  // Student's own self-reported response (yes/no).
+  const { data: respRows } = await supabase
+    .from('attendance_responses')
+    .select('student_id, attended, responded_at')
+    .eq('class_input_id', classId);
+
+  const responseByStudent = {};
+  (respRows || []).forEach(r => {
+    responseByStudent[r.student_id] = {
+      attended: r.attended,
+      respondedAt: r.responded_at,
+    };
+  });
+
+  // Resolve student profiles in a single batch.
+  const studentIds = [
+    ...new Set([
+      ...(cisRows || []).map(r => r.student_id),
+      cls.student_id,
+    ].filter(Boolean)),
+  ];
+  let userMap = {};
+  if (studentIds.length > 0) {
+    const { data: users } = await supabase
+      .from('users')
+      .select('id, name, avatar_url, dance_style')
+      .in('id', studentIds);
+    (users || []).forEach(u => {
+      userMap[u.id] = {
+        id: u.id,
+        name: u.name || 'Student',
+        photoUrl: u.avatar_url || null,
+        danceStyle: u.dance_style || null,
+      };
+    });
+  }
+
+  const attendees = (cisRows || [])
+    .map(r => {
+      const u = userMap[r.student_id] || { id: r.student_id, name: 'Student' };
+      return {
+        cisId: r.id,
+        ...u,
+        attendance: r.attendance || 'pending',
+        respondedAt: r.responded_at,
+        studentResponse: responseByStudent[r.student_id] || null,
+      };
+    })
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
+  // Linked notes — only those authored by the current coach, not deleted.
+  const { data: noteRows } = await supabase
+    .from('notes')
+    .select('id, title, content, video_clips, updated_at, created_at, linked_student_id')
+    .eq('linked_class_input_id', classId)
+    .eq('user_id', coachId)
+    .eq('is_deleted', false)
+    .order('updated_at', { ascending: false });
+
+  const linkedNotes = (noteRows || []).map(n => ({
+    ...n,
+    linkedStudent: n.linked_student_id ? userMap[n.linked_student_id] || null : null,
+  }));
+
+  // Counted focus points for this class (excluding "other" / placeholder).
+  const focusCount = (cls.focus_points || [])
+    .filter(fp => !fp.is_other && fp.status !== 'past')
+    .length;
+
+  // Duration: prefer the recorded duration; fall back to start/end diff.
+  let durationMin = null;
+  if (recordingRow?.duration_ms != null) {
+    durationMin = Math.max(1, Math.round(recordingRow.duration_ms / 60000));
+  } else if (recordingRow?.started_at && recordingRow?.ended_at) {
+    const diff = new Date(recordingRow.ended_at) - new Date(recordingRow.started_at);
+    if (diff > 0) durationMin = Math.max(1, Math.round(diff / 60000));
+  }
+
+  // Recorded = the class came in via the audio pipeline (transcript present
+  // OR a class_recordings row exists for it).
+  const recorded = !!cls.transcript || !!recordingRow;
+
+  return {
+    class: {
+      ...cls,
+      student: cls.student_id ? userMap[cls.student_id] || null : null,
+      durationMin,
+      recorded,
+    },
+    attendees,
+    linkedNotes,
+    focusCount,
+  };
+}
+
+// Coach updates the attendance flag on an existing class_input_students row,
+// or inserts a new row if the student wasn't recorded yet.
+//
+// When the new value is 'no' we mirror the student-side cleanup performed
+// by the attendance-response edge function: any focus points assigned to
+// this student from this class get soft-deleted. Idempotent — if there
+// were no FPs (or none assigned yet), the update is a no-op. The reverse
+// path ('no' → 'yes') doesn't try to recreate FPs; the coach is warned
+// about that in the UI before they confirm.
+export async function setStudentAttendance(classInputId, studentId, attendance) {
+  await supabase
+    .from('class_input_students')
+    .upsert(
+      { class_input_id: classInputId, student_id: studentId, attendance },
+      { onConflict: 'class_input_id,student_id' },
+    );
+
+  if (attendance === 'no') {
+    await supabase
+      .from('focus_points')
+      .update({ is_deleted: true, status: 'past' })
+      .eq('source_class_input_id', classInputId)
+      .eq('user_id', studentId)
+      .eq('is_deleted', false);
+  }
+}
+
+// Remove a student from the class entirely.
+export async function removeStudentFromClass(classInputId, studentId) {
+  await supabase
+    .from('class_input_students')
+    .delete()
+    .eq('class_input_id', classInputId)
+    .eq('student_id', studentId);
+}
+
+// Notes authored by the coach that aren't yet linked to any class — used
+// when the coach wants to attach an existing note to a class from the
+// class detail screen.
+export async function getCoachUnlinkedNotes() {
+  const coachId = await getCoachId();
+  const { data } = await supabase
+    .from('notes')
+    .select('id, title, content, updated_at, created_at, linked_student_id')
+    .eq('user_id', coachId)
+    .eq('is_deleted', false)
+    .is('linked_class_input_id', null)
+    .order('updated_at', { ascending: false });
+  return data || [];
+}
+
+export async function linkNoteToClass(noteId, classInputId) {
+  await supabase
+    .from('notes')
+    .update({ linked_class_input_id: classInputId })
+    .eq('id', noteId);
+}
+
+export async function unlinkNoteFromClass(noteId) {
+  await supabase
+    .from('notes')
+    .update({ linked_class_input_id: null })
+    .eq('id', noteId);
 }

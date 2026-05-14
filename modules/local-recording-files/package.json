@@ -1,0 +1,8 @@
+{
+  "name": "local-recording-files",
+  "version": "1.0.0",
+  "description": "Native iOS module for reading DJI mic files from a USB-attached drive via security-scoped folder bookmark",
+  "main": "index.ts",
+  "author": "loicviatte",
+  "license": "MIT"
+}

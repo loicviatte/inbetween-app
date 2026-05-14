@@ -92,10 +92,15 @@ function ReadinessMeter({ percent = 0, size = 84, stroke = 6 }) {
 }
 
 // ─── Focus row inside readiness card ─────────────────────────────────────────
+const TIER_LABEL = {
+  critical: 'Critical focus',
+  important: 'Important focus',
+  supporting: 'Supporting focus',
+};
 function FocusReadyRow({ row, isLast }) {
   if (!row) return null;
   const partial = row.done > 0;
-  const labelText = row.kind === 'primary' ? 'Primary focus · from last private' : 'Secondary focus · from last private';
+  const labelText = `${TIER_LABEL[row.tier] || 'Focus'} · from last private`;
   return (
     <View style={[ready.focusRow, !isLast && ready.focusRowBorder]}>
       <View style={[ready.check, partial && ready.checkPartial]}>
@@ -507,9 +512,9 @@ export default function ProfileScreen({ navigation }) {
   const readinessSubtitle = (() => {
     if (!readiness) return 'After a class log, your focus targets show up here.';
     if (readiness.minutesRemaining === 0) {
-      return `Both focus points trained — keep the streak going.`;
+      return `All focus points trained — keep the streak going.`;
     }
-    return `Train your two focus points from the last lesson — ~${readiness.minutesRemaining} min to go.`;
+    return `Train your focus points from the last lesson — ~${readiness.minutesRemaining} min to go.`;
   })();
 
   if (isLoading) {
@@ -618,7 +623,7 @@ export default function ProfileScreen({ navigation }) {
           >
             <View style={styles.section}>
               <View style={styles.sectionRow}>
-                <Text style={styles.sectionLabel}>LESSON READINESS</Text>
+                <Text style={[styles.sectionLabel, { textTransform: 'none', letterSpacing: 0 }]}>Get ready for next private lesson</Text>
                 <View style={styles.sectionRule} />
               </View>
 
@@ -633,10 +638,13 @@ export default function ProfileScreen({ navigation }) {
 
                 <View style={ready.divider} />
 
-                {readiness?.primary && <FocusReadyRow row={readiness.primary} />}
-                {readiness?.secondary && (
-                  <FocusReadyRow row={readiness.secondary} isLast />
-                )}
+                {(readiness?.focuses || []).map((focus, idx, arr) => (
+                  <FocusReadyRow
+                    key={focus.focusPointId}
+                    row={focus}
+                    isLast={idx === arr.length - 1}
+                  />
+                ))}
               </View>
             </View>
 

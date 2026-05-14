@@ -55,9 +55,11 @@ import DashboardScreen from './src/screens/coach/DashboardScreen';
 import CoachProfileScreen from './src/screens/coach/CoachProfileScreen';
 import CoachSessionDetailScreen from './src/screens/coach/CoachSessionDetailScreen';
 import NameMatchConfirmScreen from './src/screens/coach/NameMatchConfirmScreen';
-import CoachNotesScreen from './src/screens/coach/CoachNotesScreen';
 import CoachNoteDetailScreen from './src/screens/coach/CoachNoteDetailScreen';
+import CoachClassesScreen from './src/screens/coach/CoachClassesScreen';
+import CoachClassDetailScreen from './src/screens/coach/CoachClassDetailScreen';
 import StartClassScreen from './src/screens/coach/StartClassScreen';
+import LocalUploadScreen from './src/screens/coach/LocalUploadScreen';
 import ActionNeededScreen from './src/screens/coach/ActionNeededScreen';
 
 const Tab = createBottomTabNavigator();
@@ -168,23 +170,38 @@ function AppNavigator() {
 // ─── Coach Navigator ──────────────────────────────────────────────────────────
 
 function CoachMainTabs() {
+  // Track the active tab so the header strip can match the page background
+  // underneath it: cream `#F2F2EF` for DASHBOARD (top of its gradient) and
+  // pure white for STUDENTS / CLASS, both of which use a white surface.
+  const [activeRoute, setActiveRoute] = useState('DASHBOARD');
+  const headerBg = activeRoute === 'DASHBOARD' ? '#F2F2EF' : '#FFFFFF';
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: '#FFFFFF' }} edges={['top']}>
-      <CoachTabHeader />
-      <Tab.Navigator
-        initialRouteName="DASHBOARD"
-        tabBar={(props) => <CustomTabBar {...props} />}
-        screenOptions={{
-          headerShown: false,
-          lazy: false,
-          tabBarStyle: { backgroundColor: 'transparent', borderTopWidth: 0, elevation: 0 },
-        }}
-      >
-        <Tab.Screen name="STUDENTS" component={CoachHomeScreen} />
-        <Tab.Screen name="DASHBOARD" component={DashboardScreen} />
-        <Tab.Screen name="NOTES" component={CoachNotesScreen} />
-      </Tab.Navigator>
-    </SafeAreaView>
+    <View style={{ flex: 1, backgroundColor: '#FFFFFF' }}>
+      <SafeAreaView style={{ backgroundColor: headerBg }} edges={['top']}>
+        <CoachTabHeader />
+      </SafeAreaView>
+      <View style={{ flex: 1 }}>
+        <Tab.Navigator
+          initialRouteName="DASHBOARD"
+          tabBar={(props) => <CustomTabBar {...props} />}
+          screenListeners={{
+            state: (e) => {
+              const r = e.data?.state?.routes?.[e.data.state.index];
+              if (r?.name) setActiveRoute(r.name);
+            },
+          }}
+          screenOptions={{
+            headerShown: false,
+            lazy: false,
+            tabBarStyle: { backgroundColor: 'transparent', borderTopWidth: 0, elevation: 0 },
+          }}
+        >
+          <Tab.Screen name="STUDENTS" component={CoachHomeScreen} />
+          <Tab.Screen name="DASHBOARD" component={DashboardScreen} />
+          <Tab.Screen name="CLASS" component={CoachClassesScreen} />
+        </Tab.Navigator>
+      </View>
+    </View>
   );
 }
 
@@ -209,11 +226,13 @@ function CoachAppNavigator() {
         options={{ animation: 'slide_from_left' }}
       />
       <CoachStack.Screen name="StartClass" component={StartClassScreen} options={{ animation: 'slide_from_bottom' }} />
+      <CoachStack.Screen name="LocalUpload" component={LocalUploadScreen} options={{ animation: 'slide_from_right' }} />
       <CoachStack.Screen name="ActionNeeded" component={ActionNeededScreen} options={{ animation: 'slide_from_right' }} />
       <CoachStack.Screen name="FocusValidation" component={FocusValidationScreen} options={{ animation: 'slide_from_right' }} />
       <CoachStack.Screen name="NameMatchConfirm" component={NameMatchConfirmScreen} options={{ animation: 'slide_from_bottom', presentation: 'modal' }} />
       <CoachStack.Screen name="CoachProfile" component={CoachProfileScreen} options={{ animation: 'slide_from_right' }} />
       <CoachStack.Screen name="CoachNoteDetail" component={CoachNoteDetailScreen} options={{ animation: 'slide_from_right' }} />
+      <CoachStack.Screen name="CoachClassDetail" component={CoachClassDetailScreen} options={{ animation: 'slide_from_right' }} />
     </CoachStack.Navigator>
     </CoachDataProvider>
   );

@@ -1,0 +1,41 @@
+-- Schedule the publish-expired-fps edge function to run every 5 minutes.
+--
+-- Background: focus_points get created in `pending_coach` with an 18h
+-- `coach_review_deadline`. Two paths used to flush them once expired:
+--   1. Client-side autoPublishExpiredFPs() in coachStorage.js — never called
+--      anywhere → dead code.
+--   2. Server-side publishExpiredFocusPoints() inside yoda-score, piggy-
+--      backed onto processClassInput → only fires when a NEW class is
+--      scored. If no new class, FPs stay frozen forever.
+--
+-- The fix is a dedicated cron sweep, mirroring the transcribe-class-retry
+-- pattern. Same cadence (5 min), same pg_net + service-role bearer call.
+--
+-- Re-running this file is safe (unschedule guard).
+--
+-- IMPORTANT — like 20260429_class_recordings.sql, this migration is kept as
+-- a comment block because the SERVICE_ROLE_KEY must be inlined and we don't
+-- want it in source control. The job was scheduled out-of-band against the
+-- live database; this file documents the exact statement so future ops can
+-- recreate it.
+--
+-- DO $$ BEGIN
+--   IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'publish-expired-fps') THEN
+--     PERFORM cron.unschedule('publish-expired-fps');
+--   END IF;
+-- END $$;
+--
+-- SELECT cron.schedule(
+--   'publish-expired-fps',
+--   '*/5 * * * *',
+--   $cron$
+--   SELECT net.http_post(
+--     url := 'https://<PROJECT_REF>.supabase.co/functions/v1/publish-expired-fps',
+--     headers := jsonb_build_object(
+--       'Content-Type',  'application/json',
+--       'Authorization', 'Bearer <SERVICE_ROLE_KEY>'
+--     ),
+--     body := '{}'::jsonb
+--   );
+--   $cron$
+-- );

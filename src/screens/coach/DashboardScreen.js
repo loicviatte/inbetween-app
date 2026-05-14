@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
 import {
   View,
   Text,
@@ -6,32 +7,62 @@ import {
   ScrollView,
   TouchableOpacity,
   Image,
+  ActivityIndicator,
+  AppState,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Svg, { Circle } from 'react-native-svg';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Colors, Fonts, Spacing } from '../../theme';
 import DashboardSkeleton from '../../components/DashboardSkeleton';
-import RecordingProcessingIndicator from '../../components/RecordingProcessingIndicator';
 import { useCoachData } from '../../context/CoachDataContext';
-import { getGroupClassThemeCandidates } from '../../storage/coachStorage';
-import { suggestGroupClassTheme } from '../../services/ai/anthropic';
+import { getLessonReadiness } from '../../storage/storage';
 import {
   getActiveCoachClass,
   subscribeToActiveCoachClass,
 } from '../../storage/activeCoachClass';
+import { supabase } from '../../services/supabase/client';
+import { isLocalRecordingMode } from '../../services/featureFlags';
+import { useDjiAutoSync } from '../../services/useDjiAutoSync';
+import { fetchPendingUploads } from '../../services/localRecordingAutoSync';
+import * as DjiFiles from 'local-recording-files';
+import UploadFlowModal from '../../components/UploadFlowModal';
 
-// ── Palette tuned to the "Var 1b" design ────────────────────────────────────
-const HERO_BG = '#141414';
-const HERO_GLOW = 'rgba(232,168,56,0.55)';
-const GN = 'rgba(61,170,71,0.82)';
-const OR = 'rgba(232,168,56,0.82)';
-const RD = 'rgba(212,69,69,0.82)';
-const GN_SOLID = '#3DAA47';
-const OR_SOLID = '#E8A838';
-const RD_SOLID = '#D44545';
-const T1 = '#0A0A0A';
-const T2 = '#8A8A8A';
-const T3 = '#C8C8C8';
+// ── Palette ─────────────────────────────────────────────────────────────────
+// Gold scale + ink + paper, aligned with the May 2026 design refresh.
+const GOLD_500 = '#E8B530';
+const GOLD_400 = '#F0C24A';
+const GOLD_300 = '#F6D27A';
+const GOLD_200 = '#F9DF9B';
+const INK_950 = '#0A0A0A';
+const INK_50 = '#F7F6F3';
+
+// Hero (dark) — radial-gradient base ink with warm depth in the corner.
+// We can't do a real radial in RN without extra deps, so we layer a
+// solid base + a subtle warm overlay via the border + shadow.
+const HERO_BG = '#1A1410';
+// Slim golden hairline framing the dark card — more present than the
+// previous 22% so the trait reads as deliberate trim, not a soft glow.
+const HERO_BORDER = 'rgba(232,181,48,0.55)';
+
+// Status colors — reused in donut, legend indicators, student rings.
+const SUCCESS = '#7FB77E';
+const WARNING = '#D68A3C';
+const RED = '#D44545';
+
+// Status alpha versions (donut strokes, indicator track tints).
+const GN = SUCCESS;
+const OR = WARNING;
+const RD = RED;
+const GN_SOLID = SUCCESS;
+const OR_SOLID = WARNING;
+const RD_SOLID = RED;
+
+// Text scale on light surface.
+const T1 = INK_950;
+const T2 = 'rgba(10,10,10,0.45)';
+const T3 = 'rgba(10,10,10,0.30)';
+const LINE = 'rgba(10,10,10,0.09)';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 function initials(name) {
@@ -78,9 +109,9 @@ function ringForHealth(health) {
 // ── Donut (pie with hole) ───────────────────────────────────────────────────
 // Three segments with gaps, rendered via stroke-dashoffset rotations
 function OverviewDonut({ practiced, forgetting, silent, total }) {
-  const size = 116;
-  const r = 46;
-  const strokeWidth = 12;
+  const size = 88;
+  const r = 35;
+  const strokeWidth = 9;
   const C = 2 * Math.PI * r;
 
   const totalVal = Math.max(total, 1);
@@ -154,8 +185,11 @@ function OverviewDonut({ practiced, forgetting, silent, total }) {
       </Svg>
       <View style={StyleSheet.absoluteFillObject}>
         <View style={styles.donutCenter}>
-          <Text style={styles.donutNum}>{total}</Text>
-          <Text style={styles.donutLabel}>STUDENTS</Text>
+          <View style={styles.donutNumRow}>
+            <Text style={styles.donutNum}>{practiced}</Text>
+            <Text style={styles.donutNumOf}>/{total}</Text>
+          </View>
+          <Text style={styles.donutLabel}>ACTIVE</Text>
         </View>
       </View>
     </View>
@@ -223,45 +257,6 @@ function StudentRing({ student, actionCount = 0, onPress }) {
   );
 }
 
-// ── Small AVG ring inside hero bottom row ───────────────────────────────────
-function AvgRing({ value }) {
-  const size = 38;
-  const r = 16;
-  const strokeWidth = 3.5;
-  const C = 2 * Math.PI * r;
-  const progress = Math.max(0, Math.min(1, value / 100));
-  const offset = C * (1 - progress);
-  return (
-    <View style={{ width: size, height: size }}>
-      <Svg width={size} height={size}>
-        <Circle
-          cx={size / 2}
-          cy={size / 2}
-          r={r}
-          stroke="rgba(255,255,255,0.12)"
-          strokeWidth={strokeWidth}
-          fill="none"
-        />
-        <Circle
-          cx={size / 2}
-          cy={size / 2}
-          r={r}
-          stroke="rgba(255,255,255,0.75)"
-          strokeWidth={strokeWidth}
-          strokeLinecap="round"
-          strokeDasharray={`${C} ${C}`}
-          strokeDashoffset={offset}
-          fill="none"
-          transform={`rotate(-90 ${size / 2} ${size / 2})`}
-        />
-      </Svg>
-      <View style={[StyleSheet.absoluteFillObject, { alignItems: 'center', justifyContent: 'center' }]}>
-        <Text style={styles.avgRingLabel}>{value}</Text>
-      </View>
-    </View>
-  );
-}
-
 // ── Activity row (timeline) ─────────────────────────────────────────────────
 function ActivityRow({ item, isLast }) {
   let tone = 'gn';
@@ -317,6 +312,62 @@ function ActivityRow({ item, isLast }) {
   );
 }
 
+// ── DJI auto-sync status pill ──────────────────────────────────────────
+// Visually swaps into the START CLASS button slot while the foreground
+// poller (useDjiAutoSync) is running an import. Module-level helper so it
+// doesn't get re-created on every Dashboard render.
+function renderSyncPill(autoSync) {
+  const { phase, currentIdx, total, imported, pending, errorMessage } = autoSync;
+
+  let label;
+  let leftEl;
+  let bgStyle;
+  let textStyle;
+
+  if (phase === 'detecting') {
+    label = 'Detecting mic…';
+    leftEl = <ActivityIndicator size="small" color={INK_950} />;
+    bgStyle = styles.syncPillNeutral;
+    textStyle = styles.syncPillTextDark;
+  } else if (phase === 'syncing') {
+    label = total > 0
+      ? `Importing ${currentIdx} of ${total}…`
+      : 'Importing…';
+    leftEl = <ActivityIndicator size="small" color={INK_950} />;
+    bgStyle = styles.syncPillNeutral;
+    textStyle = styles.syncPillTextDark;
+  } else if (phase === 'done') {
+    // Surface admin-review count alongside the imported count so the
+    // coach knows some files still need a human pass on inbetween-admin.
+    const reviewSuffix = pending > 0 ? ` (${pending} for review)` : '';
+    label = imported === 1
+      ? `1 recording synced${reviewSuffix}`
+      : `${imported} recordings synced${reviewSuffix}`;
+    leftEl = <Ionicons name="checkmark-circle" size={16} color="#2D8A4A" />;
+    bgStyle = styles.syncPillSuccess;
+    textStyle = styles.syncPillTextSuccess;
+  } else if (phase === 'error') {
+    label = 'Sync error — tap UPLOAD to retry';
+    leftEl = <Ionicons name="alert-circle" size={16} color="#B33A3A" />;
+    bgStyle = styles.syncPillError;
+    textStyle = styles.syncPillTextError;
+    // errorMessage is logged but not surfaced in the pill itself —
+    // most error strings are too long for the CTA-sized slot.
+    void errorMessage;
+  } else {
+    return null;
+  }
+
+  return (
+    <View style={[styles.syncPill, bgStyle]}>
+      {leftEl}
+      <Text style={[styles.syncPillText, textStyle]} numberOfLines={1}>
+        {label}
+      </Text>
+    </View>
+  );
+}
+
 // ── Screen ──────────────────────────────────────────────────────────────────
 export default function DashboardScreen({ navigation }) {
   const { students, events, actionCounts, studentActionCounts, initialLoading: loading } = useCoachData();
@@ -325,6 +376,112 @@ export default function DashboardScreen({ navigation }) {
   // into a compact "Class in Progress" pill (same spirit as HomeScreen).
   const [activeClass, setActiveClass] = useState(getActiveCoachClass());
   const [chronoTick, setChronoTick] = useState(0);
+
+  // Local-recording-mode user check (gated to viatteloic@gmail.com). When
+  // true, we surface a "Upload pending recordings" entry point so the
+  // coach can attach DJI mic WAV files to completed classes.
+  const [authUser, setAuthUser] = useState(null);
+  useEffect(() => {
+    supabase.auth.getUser()
+      .then(({ data: { user } }) => setAuthUser(user))
+      .catch(() => setAuthUser(null));
+  }, []);
+  const isLocalMode = isLocalRecordingMode(authUser);
+
+  // Auto-detects DJI mic file additions while the coach has the app open
+  // and automatically imports them. Polls the bookmarked folder every 5s
+  // when the app is foregrounded; surfaces sync progress as state we
+  // project into the START CLASS button below.
+  const autoSync = useDjiAutoSync({
+    userId: authUser?.id ?? null,
+    enabled: isLocalMode,
+  });
+
+  // First-run gate: tracks whether the coach has already granted folder
+  // access to the DJI mic. iOS sandboxing requires an explicit user pick
+  // via UIDocumentPicker the first time — after that the bookmark is
+  // persisted in UserDefaults and the auto-sync resolves it silently on
+  // every subsequent plug-in. We surface this state to gate the
+  // onboarding card vs. the regular UPLOAD button.
+  const [hasFolderAccess, setHasFolderAccess] = useState(false);
+  useEffect(() => {
+    if (!isLocalMode) {
+      setHasFolderAccess(false);
+      return;
+    }
+    const check = () => {
+      try {
+        setHasFolderAccess(DjiFiles.hasFolder?.() ?? false);
+      } catch {
+        setHasFolderAccess(false);
+      }
+    };
+    check();
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') check();
+    });
+    return () => sub.remove();
+  }, [isLocalMode]);
+
+  // Upload-flow modal: opened when the coach taps the big UPLOAD button
+  // on the dashboard (Phase 2, after folder access is granted). Walks
+  // through plug-in detection → connected → syncing → done. Replaces
+  // the old "navigate to LocalUploadScreen" path for the primary flow.
+  const [uploadFlowModalOpen, setUploadFlowModalOpen] = useState(false);
+
+  // How many classes are waiting on audio. Drives whether the manual
+  // UPLOAD DJI RECORDING fallback button is shown — when there's nothing
+  // pending we hide it entirely so the dashboard stays clean. Refreshed
+  // on mount, on app foreground, and right after an auto-sync completes
+  // (since the count just changed).
+  const [pendingUploadCount, setPendingUploadCount] = useState(0);
+  useEffect(() => {
+    if (!isLocalMode || !authUser?.id) {
+      setPendingUploadCount(0);
+      return;
+    }
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const rows = await fetchPendingUploads(authUser.id);
+        if (!cancelled) setPendingUploadCount(rows.length);
+      } catch {
+        /* ignore — keep last value */
+      }
+    };
+    refresh();
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') refresh();
+    });
+    return () => {
+      cancelled = true;
+      sub.remove();
+    };
+  }, [isLocalMode, authUser?.id]);
+  // Re-fetch when an auto-sync run lands so the manual fallback button
+  // shows/hides without needing a manual refresh.
+  useEffect(() => {
+    if (!isLocalMode || !authUser?.id) return;
+    if (autoSync.phase !== 'done' && autoSync.phase !== 'error') return;
+    fetchPendingUploads(authUser.id)
+      .then((rows) => setPendingUploadCount(rows.length))
+      .catch(() => {});
+  }, [autoSync.phase, isLocalMode, authUser?.id]);
+
+  // Also refetch every time the dashboard regains focus (e.g. coach
+  // finishes a class on StartClassScreen and navigates back). React
+  // Navigation keeps the dashboard mounted in the stack, so AppState
+  // change + initial useEffect don't fire — we need useFocusEffect to
+  // catch this transition.
+  useFocusEffect(
+    useCallback(() => {
+      if (!isLocalMode || !authUser?.id) return;
+      fetchPendingUploads(authUser.id)
+        .then((rows) => setPendingUploadCount(rows.length))
+        .catch(() => {});
+    }, [isLocalMode, authUser?.id]),
+  );
+
   useEffect(() => subscribeToActiveCoachClass(setActiveClass), []);
   useEffect(() => {
     if (!activeClass) return;
@@ -343,59 +500,59 @@ export default function DashboardScreen({ navigation }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeClass, chronoTick]);
 
-  // ── Group class theme suggestion ────────────────────────────────────────
-  // Computes candidates from the coach's students' active focus points since
-  // the last group class (or last 30 days), then asks Claude for a unifying
-  // theme. Cached per studentIds signature to avoid re-calling on every
-  // render — but recomputed when the students list changes.
-  const [groupTheme, setGroupTheme] = useState(null);
-  const [groupThemeLoading, setGroupThemeLoading] = useState(false);
-  const [groupThemeStudents, setGroupThemeStudents] = useState([]);
-  const lastSignatureRef = useRef(null);
+  // ── Per-student readiness ────────────────────────────────────────────────
+  // Pulls readiness for every student in one batch and derives two signals:
+  //   - readiestStudent: the highest % (drives the "MOST READY" card)
+  //   - globalReadinessAvg: mean across all students (drives the "GLOBAL AVG
+  //     READINESS" gauge — now aligned with the same readiness metric shown
+  //     everywhere else in the app, instead of the older composite
+  //     progression/retention/regularity health score).
+  // Students with no readiness data count as 0% in the average so newly
+  // added students don't disappear from the denominator.
+  const [readiestStudent, setReadiestStudent] = useState(null);
+  const [readiestLoading, setReadiestLoading] = useState(false);
+  const [globalReadinessAvg, setGlobalReadinessAvg] = useState(0);
+  const lastReadiestSigRef = useRef(null);
 
   useEffect(() => {
     if (!students || students.length === 0) {
-      setGroupTheme(null);
-      setGroupThemeStudents([]);
+      setReadiestStudent(null);
+      setGlobalReadinessAvg(0);
       return;
     }
     const signature = students.map((s) => s.id).sort().join('|');
-    if (signature === lastSignatureRef.current) return;
-    lastSignatureRef.current = signature;
+    if (signature === lastReadiestSigRef.current) return;
+    lastReadiestSigRef.current = signature;
 
     let alive = true;
     async function run() {
-      setGroupThemeLoading(true);
+      setReadiestLoading(true);
       try {
-        const { candidates } = await getGroupClassThemeCandidates(
-          students.map((s) => s.id),
+        const readinesses = await Promise.all(
+          students.map((s) => getLessonReadiness(s.id).catch(() => null)),
         );
         if (!alive) return;
-        if (!candidates || candidates.length === 0) {
-          setGroupTheme(null);
-          setGroupThemeStudents([]);
-          return;
+        let best = null;
+        let bestPct = -1;
+        let sum = 0;
+        for (let i = 0; i < students.length; i++) {
+          const r = readinesses[i];
+          const pct = r?.percent ?? 0;
+          sum += pct;
+          if (r && pct > bestPct) {
+            bestPct = pct;
+            best = { student: students[i], readiness: r };
+          }
         }
-        // Students sharing the #1 candidate — used for the avatar stack.
-        const topIds = new Set(candidates[0].studentIds);
-        const matched = students.filter((s) => topIds.has(s.id));
-        const suggestion = await suggestGroupClassTheme(
-          candidates.map((c) => ({ name: c.name, count: c.count })),
-        );
-        if (!alive) return;
-        setGroupTheme(
-          suggestion || {
-            theme: candidates[0].name,
-            subtitle: `${candidates[0].count} student${candidates[0].count > 1 ? 's' : ''} working on it`,
-          },
-        );
-        setGroupThemeStudents(matched);
+        setReadiestStudent(best);
+        setGlobalReadinessAvg(Math.round(sum / students.length));
       } catch {
-        if (!alive) return;
-        setGroupTheme(null);
-        setGroupThemeStudents([]);
+        if (alive) {
+          setReadiestStudent(null);
+          setGlobalReadinessAvg(0);
+        }
       } finally {
-        if (alive) setGroupThemeLoading(false);
+        if (alive) setReadiestLoading(false);
       }
     }
     run();
@@ -405,28 +562,58 @@ export default function DashboardScreen({ navigation }) {
   }, [students]);
 
   const stats = useMemo(() => {
-    const practiced = students.filter((s) => s.status === 'on_track').length;
-    const inProgress = students.filter((s) => s.status === 'attention').length;
-    const silent = students.filter((s) => s.status === 'silent').length;
+    const practicedList = students.filter((s) => s.status === 'on_track');
+    const inProgressList = students.filter((s) => s.status === 'attention');
+    const silentList = students.filter((s) => s.status === 'silent');
+    const practiced = practicedList.length;
+    const inProgress = inProgressList.length;
+    const silent = silentList.length;
     const total = students.length;
-    // Average of the per-student Global score (same 0-100 metric shown on
-    // the student detail hero). Falls back to 0 when there are no students.
-    const globalAvg = total > 0
-      ? Math.round(
-          students.reduce((sum, s) => sum + (s.global || s.health || 0), 0) / total
-        )
-      : 0;
     const actions = inProgress + silent;
-    return { practiced, inProgress, silent, total, globalAvg, actions };
+    return {
+      practiced, inProgress, silent, total, actions,
+      practicedList, inProgressList, silentList,
+    };
   }, [students]);
+
+  // Hero "since last class" — relative time of the most recent class event,
+  // shown top-right of the hero card. Falls back to empty string if none.
+  const lastClassRelative = useMemo(() => {
+    const latest = students.reduce((acc, s) => {
+      const d = s.lastClassDate || s.lastPrivateClassDate;
+      if (!d) return acc;
+      const t = new Date(d).getTime();
+      return t > acc ? t : acc;
+    }, 0);
+    if (!latest) return '';
+    const diffMs = Date.now() - latest;
+    const days = Math.floor(diffMs / 86400000);
+    if (days < 1) {
+      const hours = Math.floor(diffMs / 3600000);
+      if (hours < 1) return 'JUST NOW';
+      return `${hours}H AGO`;
+    }
+    if (days === 1) return 'YESTERDAY';
+    if (days < 7) return `${days} DAYS AGO`;
+    if (days < 30) return `${Math.floor(days / 7)}W AGO`;
+    return `${Math.floor(days / 30)}MO AGO`;
+  }, [students]);
+
 
   if (loading) return <DashboardSkeleton />;
 
   return (
     <View style={styles.safe}>
+      {/* Exact same vertical paper gradient as the student TRAIN screen
+          (HomeScreen.js) — byte-for-byte identical for visual parity. */}
+      <LinearGradient
+        colors={['#F2F2EF', '#F8F2E2', '#F4EAD0', '#FFFFFF', '#FFFFFF']}
+        locations={[0, 0.4, 0.7, 0.85, 1]}
+        style={StyleSheet.absoluteFillObject}
+        pointerEvents="none"
+      />
       <View style={styles.fixed}>
         {/* ── Students horizontal scroll ── */}
-        <Text style={styles.sectionLabel}>STUDENTS</Text>
         {students.length > 0 ? (
           <ScrollView
             horizontal
@@ -456,10 +643,17 @@ export default function DashboardScreen({ navigation }) {
 
         {/* ── Hero overview card ── */}
         <View style={styles.hero}>
-          <View style={styles.weekBadge}>
-            <Text style={styles.weekBadgeText}>SINCE LAST CLASS</Text>
+          <View style={styles.heroHead}>
+            <View style={styles.heroHeadLabelRow}>
+              <View style={styles.heroHeadLine} />
+              <Text style={styles.heroHeadLabel}>SINCE LAST CLASS</Text>
+            </View>
+            {!!lastClassRelative && (
+              <Text style={styles.heroHeadTime}>{lastClassRelative}</Text>
+            )}
           </View>
-          <View style={styles.heroTop}>
+
+          <View style={styles.donutRow}>
             <OverviewDonut
               practiced={stats.practiced}
               forgetting={stats.inProgress}
@@ -467,34 +661,38 @@ export default function DashboardScreen({ navigation }) {
               total={stats.total}
             />
             <View style={styles.heroLegend}>
-              <LegendRow color={GN_SOLID} num={stats.practiced} label="Practiced" />
-              <LegendRow color={OR_SOLID} num={stats.inProgress} label="In progress" />
-              <LegendRow color={RD_SOLID} num={stats.silent} label="Silent" />
+              <LegendRow color={SUCCESS} num={stats.practiced} label="Practiced" />
+              <LegendRow color={WARNING} num={stats.inProgress} label="In progress" />
+              <LegendRow color={RED} num={stats.silent} label="Silent" />
             </View>
           </View>
 
           <TouchableOpacity
-            style={styles.retentionBar}
+            style={styles.avgBlock}
             activeOpacity={0.85}
             onPress={() => navigation.navigate('STUDENTS')}
           >
-            <View style={styles.retentionHeader}>
-              <Text style={styles.retentionLabel}>GLOBAL AVG</Text>
-              <Text style={styles.retentionPct}>{stats.globalAvg}%</Text>
+            <View style={styles.avgHead}>
+              <Text style={styles.avgLabel}>GLOBAL AVG READINESS</Text>
+              <View style={styles.avgValueRow}>
+                <Text style={styles.avgValue}>{globalReadinessAvg}</Text>
+                <Text style={styles.avgPercent}>%</Text>
+              </View>
             </View>
-            <View style={styles.retentionTrack}>
+            <View style={styles.avgTrack}>
               <View
                 style={[
-                  styles.retentionFill,
-                  { width: `${Math.max(2, Math.min(100, stats.globalAvg))}%` },
+                  styles.avgFill,
+                  { width: `${Math.max(2, Math.min(100, globalReadinessAvg))}%` },
                 ]}
               />
             </View>
           </TouchableOpacity>
 
-          <View style={styles.heroDivider} />
-
-          <View style={styles.heroMetrics}>
+          {/* CTA row — Start Class fills, Actions chip sits to the right
+              when the coach has pending alerts. Same layout pattern as
+              before the May 2026 refresh, restyled to the new palette. */}
+          <View style={styles.ctaRow}>
             {activeClass ? (
               <TouchableOpacity
                 style={styles.inProgressBtn}
@@ -503,21 +701,86 @@ export default function DashboardScreen({ navigation }) {
               >
                 <View style={styles.inProgressLeft}>
                   <View style={styles.inProgressDot} />
-                  <Text style={styles.inProgressLabel}>Class in progress</Text>
+                  <Text style={styles.inProgressLabel}>CLASS IN PROGRESS</Text>
                 </View>
                 <View style={styles.inProgressRight}>
                   <Text style={styles.inProgressTimer}>{chronoLabel}</Text>
                   <Text style={styles.inProgressArrow}>›</Text>
                 </View>
               </TouchableOpacity>
+            ) : autoSync.phase !== 'idle' ? (
+              // In place of START CLASS: live status of the auto-sync.
+              // The coach plugs the mic, the app picks it up via the
+              // foreground polling in useDjiAutoSync and surfaces progress
+              // here. No tap needed — fully automatic for high-confidence
+              // matches; lower-confidence imports still upload but flag
+              // for review on inbetween-admin.
+              renderSyncPill(autoSync)
+            ) : isLocalMode && hasFolderAccess && pendingUploadCount > 0 ? (
+              // ── Phase 2 CTA: priority on UPLOAD (ink, big) + START CLASS
+              // demoted to a small outlined chip next to it. The coach
+              // typically taps UPLOAD right after a class ends, which
+              // walks them through the plug-in + sync flow via the
+              // UploadFlow modal below.
+              <>
+                <TouchableOpacity
+                  style={styles.uploadPrimaryBtn}
+                  activeOpacity={0.88}
+                  onPress={() => setUploadFlowModalOpen(true)}
+                  // Hidden affordance: long-press opens the legacy
+                  // LocalUploadScreen with its "Reset folder access" /
+                  // "Pick a single file manually" controls. Lets a
+                  // power user re-pick the folder bookmark without
+                  // needing to interrupt the main upload modal flow.
+                  onLongPress={() => navigation.navigate('LocalUpload')}
+                  delayLongPress={550}
+                >
+                  <Ionicons name="cloud-upload-outline" size={16} color={INK_950} />
+                  {/* numberOfLines + adjustsFontSizeToFit keeps "UPLOAD
+                      99 RECORDINGS" on a single line: the text engine
+                      shrinks the font (down to minimumFontScale) when
+                      it doesn't fit, rather than wrapping or clipping. */}
+                  <Text
+                    style={styles.uploadPrimaryText}
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.65}
+                  >
+                    UPLOAD {pendingUploadCount === 1 ? '1 RECORDING' : `${pendingUploadCount} RECORDINGS`}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.startClassSmallBtn}
+                  activeOpacity={0.85}
+                  onPress={async () => {
+                    if (isLocalMode) {
+                      try { await DjiFiles.stopAudioRouteMonitor?.(); } catch {}
+                    }
+                    navigation.navigate('StartClass');
+                  }}
+                >
+                  <Ionicons name="play" size={12} color={INK_950} />
+                  <Text style={styles.startClassSmallText}>START</Text>
+                </TouchableOpacity>
+              </>
             ) : (
               <TouchableOpacity
                 style={styles.startClassBtn}
                 activeOpacity={0.88}
-                onPress={() => navigation.navigate('StartClass')}
+                onPress={async () => {
+                  // Local-recording-mode invariant: no audio session
+                  // active during the cours. If the route monitor is
+                  // running (first-run setup mode), stop it before
+                  // jumping to the class screen so the BT speaker stays
+                  // in A2DP throughout the cours.
+                  if (isLocalMode) {
+                    try { await DjiFiles.stopAudioRouteMonitor?.(); } catch {}
+                  }
+                  navigation.navigate('StartClass');
+                }}
               >
-                <Ionicons name="play" size={14} color="#fff" />
-                <Text style={styles.startClassText}>Start Class</Text>
+                <Ionicons name="play" size={13} color={INK_950} />
+                <Text style={styles.startClassText}>START CLASS</Text>
               </TouchableOpacity>
             )}
 
@@ -525,7 +788,7 @@ export default function DashboardScreen({ navigation }) {
               <TouchableOpacity
                 style={[
                   styles.actionsBtn,
-                  { backgroundColor: actionCounts.focus > 0 ? RD_SOLID : OR_SOLID },
+                  { backgroundColor: actionCounts.focus > 0 ? RED : WARNING },
                 ]}
                 activeOpacity={0.85}
                 onPress={() => navigation.navigate('ActionNeeded')}
@@ -534,46 +797,52 @@ export default function DashboardScreen({ navigation }) {
                 <Ionicons name="alert" size={14} color="#fff" />
               </TouchableOpacity>
             )}
-            <RecordingProcessingIndicator />
           </View>
         </View>
 
-        {/* ── Next group class focus ── */}
-        <Text style={styles.sectionLabelLow}>NEXT GROUP CLASS — FOCUS ON</Text>
-        <View style={styles.focusCard}>
+        {/* ── Most-ready student for next private ── */}
+        <Text style={styles.sectionLabelLow}>MOST READY FOR NEXT PRIVATE</Text>
+        <TouchableOpacity
+          style={styles.focusCard}
+          activeOpacity={readiestStudent ? 0.85 : 1}
+          disabled={!readiestStudent}
+          onPress={() => {
+            if (!readiestStudent) return;
+            navigation.navigate('StudentDetail', {
+              studentId: readiestStudent.student.id,
+              studentName: readiestStudent.student.name,
+            });
+          }}
+        >
           <View style={{ flex: 1 }}>
             <Text style={styles.focusTitle}>
-              {groupThemeLoading
-                ? 'Analyzing focus points…'
-                : groupTheme?.theme || 'No shared focus yet'}
+              {readiestLoading
+                ? 'Checking readiness…'
+                : readiestStudent?.student?.name || 'No student ready yet'}
             </Text>
             <Text style={styles.focusSub}>
-              {groupThemeLoading
-                ? 'Looking at what your students have been working on'
-                : groupTheme?.subtitle ||
-                  (students.length > 0 ? 'Not enough recent activity to suggest a theme' : '')}
+              {readiestLoading
+                ? 'Looking at what each student has trained'
+                : readiestStudent
+                  ? `${readiestStudent.readiness.percent}% ready · ${readiestStudent.readiness.focuses.length} focus point${readiestStudent.readiness.focuses.length > 1 ? 's' : ''} from last private`
+                  : (students.length > 0 ? 'Log a private with one of your students to start tracking' : '')}
             </Text>
           </View>
-          <View style={styles.focusAvatars}>
-            {(groupThemeStudents.length > 0 ? groupThemeStudents : students)
-              .slice(0, 4)
-              .map((s, idx) => (
-                <View
-                  key={s.id}
-                  style={[
-                    styles.focusAvatar,
-                    { marginLeft: idx === 0 ? 0 : -8, zIndex: 4 - idx },
-                  ]}
-                >
-                  {(s.photoUrl || s.photo_url) ? (
-                    <Image source={{ uri: s.photoUrl || s.photo_url }} style={styles.focusAvatarImg} />
-                  ) : (
-                    <Text style={styles.focusAvatarText}>{initials(s.name)}</Text>
-                  )}
-                </View>
-              ))}
-          </View>
-        </View>
+          {readiestStudent && (
+            <View style={styles.focusAvatars}>
+              <View style={[styles.focusAvatar, { marginLeft: 0 }]}>
+                {(readiestStudent.student.photoUrl || readiestStudent.student.photo_url) ? (
+                  <Image
+                    source={{ uri: readiestStudent.student.photoUrl || readiestStudent.student.photo_url }}
+                    style={styles.focusAvatarImg}
+                  />
+                ) : (
+                  <Text style={styles.focusAvatarText}>{initials(readiestStudent.student.name)}</Text>
+                )}
+              </View>
+            </View>
+          )}
+        </TouchableOpacity>
 
         {/* ── Recent activity label (fixed) ── */}
         <Text style={styles.sectionLabelLow}>RECENT ACTIVITY</Text>
@@ -603,23 +872,64 @@ export default function DashboardScreen({ navigation }) {
 
         </ScrollView>
       </View>
+
+      {/* Phase-2 upload flow — opens when the coach taps the big UPLOAD
+          button. Internally handles plug-in detection, sync execution,
+          and success/error states. */}
+      <UploadFlowModal
+        visible={uploadFlowModalOpen}
+        userId={authUser?.id ?? null}
+        onClose={() => setUploadFlowModalOpen(false)}
+        onDone={() => {
+          setUploadFlowModalOpen(false);
+          if (authUser?.id) {
+            fetchPendingUploads(authUser.id)
+              .then((rows) => setPendingUploadCount(rows.length))
+              .catch(() => {});
+          }
+        }}
+      />
     </View>
   );
 }
 
-function LegendRow({ color, num, label }) {
+// Hero legend row — vertical indicator + label + optional meta + number.
+// `meta` shape: { name: string (bolded), tail: string } or { tail: string }
+// for empty rows. When num=0 we render the row in a dimmed "empty" style.
+function LegendRow({ color, num, label, meta }) {
+  const isEmpty = !num;
   return (
     <View style={styles.legendRow}>
-      <View style={[styles.legendDot, { backgroundColor: color }]} />
-      <Text style={styles.legendNum}>{num}</Text>
-      <Text style={styles.legendLabel}>{label}</Text>
+      <View
+        style={[
+          styles.legendIndicator,
+          { backgroundColor: isEmpty ? 'rgba(255,255,255,0.14)' : color },
+        ]}
+      />
+      <View style={styles.legendBody}>
+        <Text style={[styles.legendLabel, isEmpty && styles.legendLabelEmpty]}>
+          {label}
+        </Text>
+        {meta && (
+          <Text style={styles.legendMeta} numberOfLines={1}>
+            {meta.name && <Text style={styles.legendMetaName}>{meta.name}</Text>}
+            {meta.name && meta.tail ? ' · ' : ''}
+            {meta.tail || ''}
+          </Text>
+        )}
+      </View>
+      <Text style={[styles.legendNum, isEmpty && styles.legendNumEmpty]}>
+        {num}
+      </Text>
     </View>
   );
 }
 
 // ── Styles ──────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: Colors.background },
+  // Transparent — the paper gradient is rendered by CoachMainTabs in
+  // App.js, behind both the header and the tab content.
+  safe: { flex: 1, backgroundColor: 'transparent' },
   fixed: {
     flex: 1,
   },
@@ -712,137 +1022,279 @@ const styles = StyleSheet.create({
     color: T2,
   },
 
-  // Hero card
+  // ── Hero card ─────────────────────────────────────────────────────────
+  // Dark warm-ink ground with a faint gold border. The mockup's CSS
+  // radial-gradient corner glow is approximated via the shadow + border.
   hero: {
-    marginHorizontal: Spacing.side,
+    marginHorizontal: 18,
     backgroundColor: HERO_BG,
-    borderRadius: 22,
-    paddingTop: 18,
-    paddingHorizontal: 18,
-    paddingBottom: 16,
-    borderWidth: 2.5,
-    borderColor: HERO_GLOW,
+    borderRadius: 20,
+    paddingTop: 14,
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+    borderWidth: 1,
+    borderColor: HERO_BORDER,
     shadowColor: '#000',
-    shadowOpacity: 0.25,
-    shadowRadius: 22,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 6,
+    shadowOpacity: 0.30,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 12 },
+    elevation: 8,
   },
-  heroTop: {
+
+  // Hero header — small leading line + uppercase gold label, mono "X ago"
+  // pinned to the right.
+  heroHead: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  heroHeadLabelRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 18,
+    gap: 8,
+  },
+  heroHeadLine: {
+    width: 14,
+    height: 1,
+    backgroundColor: GOLD_300,
+  },
+  heroHeadLabel: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 9.5,
+    color: GOLD_300,
+    letterSpacing: 1.6,
+  },
+  heroHeadTime: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 9.5,
+    color: 'rgba(255,255,255,0.45)',
+    letterSpacing: 0.9,
+  },
+
+  // Donut row — donut on left, legend on right, divider rule below.
+  donutRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    paddingBottom: 10,
+    marginBottom: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(255,255,255,0.10)',
   },
   heroLegend: {
     flex: 1,
-    gap: 8,
+    gap: 6,
   },
-  weekBadge: {
-    position: 'absolute',
-    top: 14,
-    right: 16,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 6,
-    backgroundColor: 'rgba(232,168,56,0.14)',
-    zIndex: 2,
-  },
-  weekBadgeText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 9,
-    letterSpacing: 0.8,
-    color: OR_SOLID,
-  },
+
+  // Legend row — vertical 3px indicator + label/meta + monospace number.
   legendRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 9,
+    gap: 11,
   },
-  legendDot: {
-    width: 9,
-    height: 9,
-    borderRadius: 3,
+  legendIndicator: {
+    width: 3,
+    height: 18,
+    borderRadius: 2,
+  },
+  legendBody: {
+    flex: 1,
+    minWidth: 0,
+  },
+  legendLabel: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 13,
+    color: '#fff',
+    letterSpacing: -0.1,
+    lineHeight: 15,
+  },
+  legendLabelEmpty: {
+    color: 'rgba(255,255,255,0.40)',
+  },
+  legendMeta: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 10.5,
+    color: 'rgba(255,255,255,0.45)',
+    marginTop: 2,
+    lineHeight: 13,
+  },
+  legendMetaName: {
+    color: 'rgba(255,255,255,0.85)',
+    fontFamily: Fonts.jakartaSemiBold,
   },
   legendNum: {
     fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 15,
+    fontSize: 18,
     color: '#fff',
-    width: 16,
+    letterSpacing: -0.4,
+    minWidth: 18,
+    textAlign: 'right',
+    lineHeight: 22,
+    includeFontPadding: false,
   },
-  legendLabel: {
-    fontFamily: Fonts.jakartaSemiBold,
-    fontSize: 12,
-    color: 'rgba(255,255,255,0.65)',
+  legendNumEmpty: {
+    color: 'rgba(255,255,255,0.25)',
   },
+
+  // Donut center — "{practiced}/{total}" big, "ACTIVE" small gold caption.
   donutCenter: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
+  donutNumRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+  },
   donutNum: {
     fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 30,
+    fontSize: 22,
     color: '#fff',
-    letterSpacing: -1,
+    letterSpacing: -0.6,
+    // Generous lineHeight (~1.5×) so TT Travels Next ExtraBold's tall
+    // cap-height doesn't get clipped by the parent flex container.
     lineHeight: 32,
+    includeFontPadding: false,
+  },
+  donutNumOf: {
+    fontFamily: Fonts.jakartaSemiBold,
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.40)',
+    letterSpacing: -0.2,
+    marginLeft: 1,
+    lineHeight: 18,
+    includeFontPadding: false,
   },
   donutLabel: {
-    fontFamily: Fonts.jakartaSemiBold,
-    fontSize: 9,
-    color: 'rgba(255,255,255,0.5)',
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 6.5,
+    color: GOLD_300,
     letterSpacing: 1.2,
-    marginTop: 4,
+    // Pull tight against the bottom of the lineHeight box of the
+    // donutNum row above (which has 32px lineHeight on a 22px font →
+    // ~5px of trailing whitespace). Negative margin closes the gap.
+    marginTop: -4,
+    lineHeight: 9,
+    includeFontPadding: false,
   },
 
-  heroDivider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: 'rgba(255,255,255,0.10)',
-    marginTop: 16,
-    marginBottom: 14,
+  // Global avg readiness — discrete progress block, tappable to STUDENTS.
+  avgBlock: {
+    marginBottom: 10,
   },
-  heroMetrics: {
+  avgHead: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'baseline',
+    marginBottom: 5,
+  },
+  avgLabel: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 9.5,
+    color: 'rgba(255,255,255,0.50)',
+    letterSpacing: 1.6,
+  },
+  avgValueRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+  },
+  avgValue: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 20,
+    color: '#fff',
+    letterSpacing: -0.5,
+    lineHeight: 24,
+    includeFontPadding: false,
+  },
+  avgPercent: {
+    fontFamily: Fonts.jakartaSemiBold,
+    fontSize: 11,
+    color: 'rgba(255,255,255,0.45)',
+    marginLeft: 1,
+    lineHeight: 15,
+    includeFontPadding: false,
+  },
+  avgTrack: {
+    height: 5,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    overflow: 'hidden',
+  },
+  avgFill: {
+    height: 5,
+    borderRadius: 999,
+    backgroundColor: GOLD_500,
+  },
+
+  // CTAs — full-width at the bottom of the hero. Gold for primary,
+  // muted gray-on-ink for the in-progress variant (the gold band is
+  // reserved for the start action).
+  startClassBtn: {
+    flex: 8,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    backgroundColor: GOLD_500,
+    borderRadius: 10,
   },
-  metricTile: {
+  // Beta-only entry for the local-recording workflow (DJI mic on-device
+  // storage). Sits above the START CLASS button when isLocalMode.
+  localUploadBtn: {
+    flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    flex: 1,
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    backgroundColor: '#EAE4D7',
+    borderRadius: 10,
+    marginBottom: 8,
+    marginHorizontal: Spacing.side,
   },
-  actionsTile: {
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 6,
+  localUploadText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 13,
+    color: INK_950,
+    letterSpacing: 1.1,
+  },
+  startClassText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 13.5,
+    color: INK_950,
+    letterSpacing: 1.2,
   },
   inProgressBtn: {
-    flex: 1,
+    flex: 8,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    paddingVertical: 9,
+    paddingHorizontal: 14,
     backgroundColor: 'rgba(255,255,255,0.08)',
-    borderRadius: 14,
-    paddingVertical: 13,
-    paddingHorizontal: 16,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.14)',
+    borderRadius: 10,
   },
   inProgressLeft: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 10,
   },
   inProgressDot: {
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: '#D44545',
+    backgroundColor: RED,
   },
   inProgressLabel: {
     fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 13,
+    fontSize: 12,
     color: '#fff',
-    letterSpacing: 0.2,
+    letterSpacing: 1.0,
   },
   inProgressRight: {
     flexDirection: 'row',
@@ -862,20 +1314,18 @@ const styles = StyleSheet.create({
     color: 'rgba(255,255,255,0.55)',
     lineHeight: 20,
   },
-  startClassBtn: {
-    flex: 8,
-    backgroundColor: OR_SOLID,
-    borderRadius: 14,
-    paddingVertical: 14,
+
+  // CTA row — Start Class flexes to fill, Actions sits as a 2-flex chip
+  // on the right (only visible when actions > 0). Mirrors the layout
+  // shipped before the May 2026 refresh.
+  ctaRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
+    alignItems: 'stretch',
+    gap: 10,
   },
   actionsBtn: {
     flex: 2,
-    borderRadius: 14,
-    paddingVertical: 14,
+    borderRadius: 12,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -886,67 +1336,8 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: '#fff',
     letterSpacing: -0.3,
-  },
-  startClassText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 14,
-    color: '#fff',
-    letterSpacing: 0.2,
-  },
-  retentionBar: {
-    marginTop: 16,
-  },
-  retentionHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-end',
-    marginBottom: 6,
-  },
-  retentionLabel: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 10,
-    letterSpacing: 1.1,
-    color: 'rgba(255,255,255,0.55)',
-  },
-  retentionPct: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 16,
-    color: '#fff',
-    letterSpacing: -0.3,
-  },
-  retentionTrack: {
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    overflow: 'hidden',
-  },
-  retentionFill: {
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: OR_SOLID,
-  },
-  metricBadge: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  metricBadgeNum: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 16,
-  },
-  metricTileLabel: {
-    fontFamily: Fonts.jakartaSemiBold,
-    fontSize: 10,
-    color: 'rgba(255,255,255,0.50)',
-    letterSpacing: 0.3,
-  },
-  avgRingLabel: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 10,
-    color: '#fff',
+    lineHeight: 18,
+    includeFontPadding: false,
   },
 
   // Focus card
@@ -1030,6 +1421,85 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: T2,
     paddingVertical: 4,
+  },
+
+  // ─── DJI auto-sync status pill (sits in the START CLASS slot) ─────────
+  // Matches startClassBtn dimensions (flex 8, same padding + radius) so
+  // the swap is layout-neutral. Three visual variants: neutral (in-flight),
+  // success (done), error.
+  syncPill: {
+    flex: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    minHeight: 40,
+  },
+  syncPillNeutral: {
+    backgroundColor: '#EAE4D7',
+  },
+  syncPillSuccess: {
+    backgroundColor: 'rgba(45, 138, 74, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(45, 138, 74, 0.25)',
+  },
+  syncPillError: {
+    backgroundColor: 'rgba(179, 58, 58, 0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(179, 58, 58, 0.22)',
+  },
+  syncPillText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 13,
+    letterSpacing: 0.4,
+    flexShrink: 1,
+  },
+  syncPillTextDark: { color: INK_950 },
+  syncPillTextSuccess: { color: '#1F6B36' },
+  syncPillTextError: { color: '#8B2A2A' },
+
+  // ─── Phase-2 CTA buttons ─────────────────────────────────────────────
+  // After folder bookmark is granted, when there's a pending upload, the
+  // CTA flips: UPLOAD (white, primary) takes the spotlight on the dark
+  // hero card; START CLASS demotes to a compact outlined chip next to
+  // it. White-on-dark is what gives the right pop here — ink would
+  // blend into the hero card background.
+  uploadPrimaryBtn: {
+    flex: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 10,
+  },
+  uploadPrimaryText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 13.5,
+    color: INK_950,
+    letterSpacing: 1.1,
+  },
+  startClassSmallBtn: {
+    flex: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+    backgroundColor: GOLD_500,
+    borderRadius: 10,
+  },
+  startClassSmallText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 11.5,
+    color: INK_950,
+    letterSpacing: 1.0,
   },
 
 });

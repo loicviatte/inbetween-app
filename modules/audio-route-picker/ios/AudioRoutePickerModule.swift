@@ -84,12 +84,19 @@ public class AudioRoutePickerModule: Module {
 
     AsyncFunction("listAvailableInputs") { (promise: Promise) in
       let session = AVAudioSession.sharedInstance()
+      // Do NOT call setActive(true) here. Activating .playAndRecord ejects
+      // any A2DP output route (e.g. Spotify on a Bluetooth speaker), even
+      // with .mixWithOthers — that flag controls session mixing, not
+      // hardware route arbitration. setCategory alone has no effect on
+      // routing per Apple docs; routing only changes on activation.
+      // setCategory is still required so availableInputs returns mic
+      // candidates (BT HFP, USB audio, headset, builtin).
       do {
-        try session.setCategory(.playAndRecord, mode: .default, options: [.allowBluetooth, .allowBluetoothA2DP, .defaultToSpeaker])
-        try session.setActive(true)
+        try session.setCategory(.playAndRecord, mode: .default, options: [.allowBluetooth, .allowBluetoothA2DP, .mixWithOthers])
       } catch {
-        NSLog("[AudioRoutePicker] listAvailableInputs session error: \(error)")
+        NSLog("[AudioRoutePicker] listAvailableInputs setCategory error: \(error)")
       }
+      NSLog("[AudioRoutePicker] listAvailableInputs called, currentRoute=\(session.currentRoute)")
       let currentUid = session.currentRoute.inputs.first?.uid
       let inputs = session.availableInputs ?? []
       let result: [[String: Any?]] = inputs.map { input in
@@ -128,7 +135,11 @@ public class AudioRoutePickerModule: Module {
         // Ensure an active audio session so AVRoutePickerView has routes to show
         do {
           let session = AVAudioSession.sharedInstance()
-          try session.setCategory(.playAndRecord, mode: .default, options: [.allowBluetooth, .allowBluetoothA2DP, .defaultToSpeaker])
+          // .mixWithOthers ensures opening the picker / listing inputs does
+          // not eject another app's audio session (e.g. Spotify playing on a
+          // Bluetooth speaker). Without it, activating .playAndRecord here
+          // takes exclusive audio focus and kills the music.
+          try session.setCategory(.playAndRecord, mode: .default, options: [.allowBluetooth, .allowBluetoothA2DP, .defaultToSpeaker, .mixWithOthers])
           try session.setActive(true)
         } catch {
           NSLog("[AudioRoutePicker] audio session error: \(error)")
