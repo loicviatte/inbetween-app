@@ -12,8 +12,10 @@ import {
   Pressable,
   Alert,
   AppState,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import Svg, { Circle } from 'react-native-svg';
 import {
@@ -26,7 +28,8 @@ import * as Notifications from 'expo-notifications';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Colors, Fonts, Spacing } from '../../theme';
 import { useCoachData } from '../../context/CoachDataContext';
-import { getStudentFocusPoints, getStudentQuestions, getStudentRecentActivity } from '../../storage/coachStorage';
+import { getStudentFocusPoints, getStudentQuestions, getStudentRecentActivity, getStartClassRoster } from '../../storage/coachStorage';
+import { getLessonReadiness } from '../../storage/storage';
 import {
   getActiveCoachClass,
   setActiveCoachClass,
@@ -46,7 +49,7 @@ import {
   updateCoachRecording as laUpdateCoachRecording,
   endCoachRecording as laEndCoachRecording,
 } from 'live-activities';
-import { isNewRecordingPipelineEnabled, isNativeRecorderEnabled } from '../../services/featureFlags';
+import { isNewRecordingPipelineEnabled, isNativeRecorderEnabled, isLocalRecordingMode } from '../../services/featureFlags';
 import { enqueueChunk } from '../../storage/recordingQueue';
 import { pokeUploadWorker } from '../../services/uploadWorker';
 import ContinuousAudioRecorder from 'continuous-audio-recorder';
@@ -124,6 +127,24 @@ async function stopAndUnloadRecording(recorder) {
   } catch {}
   try { recorder.release?.(); } catch {}
   return uri;
+}
+
+// Best-effort error serializer for recording-event logs. Native errors
+// (AVAudioRecorder, expo-audio) often surface non-Error objects with .code,
+// .domain, .userInfo — we capture whichever exist so post-mortem analysis
+// has the full picture.
+function serializeRecordingError(err) {
+  if (!err) return { message: 'unknown' };
+  if (typeof err === 'string') return { message: err };
+  const out = {
+    message: err.message ?? String(err),
+  };
+  if (err.name) out.name = err.name;
+  if (err.code != null) out.code = err.code;
+  if (err.domain) out.domain = err.domain;
+  if (err.userInfo) out.userInfo = err.userInfo;
+  if (err.stack) out.stack = String(err.stack).slice(0, 2000);
+  return out;
 }
 
 function fmtTs(sec) {
@@ -305,12 +326,90 @@ function MiniGauge({ value, label }) {
 // ════════════════════════════════════════════════════════════════════════════
 // ── Main Component ─────────────────────────────────────────────────────────
 // ════════════════════════════════════════════════════════════════════════════
+// ─── StartClass landing — private student card ──────────────────────────────
+//
+// `st` is a roster entry from getStartClassRoster() with: id, name, photoUrl,
+// lastPrivateClassDate, lastPrivateDurationMin, readiness (0-100), briefings
+// (focus point summaries), status.
+function PrivateCard({ st, onPress }) {
+  const isSilent = st.status === 'silent';
+  const ringColor = isSilent ? '#E84545' : '#E8B530';
+  const avBg = isSilent ? '#F7D8D8' : '#4E6A5C';
+  const avTextColor = isSilent ? '#E84545' : '#FFFFFF';
+  const initial = (st.name || 'S')[0]?.toUpperCase() || 'S';
+
+  // "Last private · Apr 19 · 50 min" or "Last private · Apr 19", or fallback.
+  const lastPrivate = st.lastPrivateClassDate ? new Date(st.lastPrivateClassDate) : null;
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  let metaLine;
+  if (lastPrivate) {
+    const datePart = `${months[lastPrivate.getMonth()]} ${lastPrivate.getDate()}`;
+    metaLine = `Last private · ${datePart}`;
+    if (st.lastPrivateDurationMin) metaLine += ` · ${st.lastPrivateDurationMin} min`;
+  } else {
+    metaLine = 'No private together yet';
+  }
+
+  return (
+    <TouchableOpacity style={sc.card} onPress={onPress} activeOpacity={0.85}>
+      <View style={sc.cardHead}>
+        <View style={[sc.avRing, { borderColor: ringColor }]}>
+          {st.photoUrl ? (
+            <Image source={{ uri: st.photoUrl }} style={sc.avPhoto} />
+          ) : (
+            <View style={[sc.avFallback, { backgroundColor: avBg }]}>
+              <Text style={[sc.avText, { color: avTextColor }]}>{initial}</Text>
+            </View>
+          )}
+        </View>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={sc.cardName} numberOfLines={1}>{st.name}</Text>
+          <Text style={sc.cardMeta} numberOfLines={1}>{metaLine}</Text>
+        </View>
+        <View style={sc.readyWrap}>
+          <Text style={sc.readyN}>
+            {st.readiness}<Text style={sc.readyPct}>%</Text>
+          </Text>
+          <Text style={sc.readyLbl}>READY</Text>
+        </View>
+      </View>
+
+      {st.briefings.length > 0 ? (
+        <>
+          <View style={sc.cardDivider} />
+          {st.briefings.slice(0, 3).map((b) => {
+            const isStale = b.isStale;
+            return (
+              <View key={b.id} style={sc.fpRow}>
+                <View style={sc.fpBullet}>
+                  <View style={sc.fpBulletInner} />
+                </View>
+                <Text style={sc.fpName} numberOfLines={1}>{b.name}</Text>
+                {isStale ? (
+                  <Text style={sc.fpStale}>stale {b.staleDays || 0}d</Text>
+                ) : (
+                  <Text style={sc.fpSince}>
+                    {b.sessionsSince}<Text style={sc.fpSinceTarget}>/{b.target}</Text>
+                  </Text>
+                )}
+              </View>
+            );
+          })}
+        </>
+      ) : null}
+    </TouchableOpacity>
+  );
+}
+
 export default function StartClassScreen({ navigation }) {
   const { students } = useCoachData();
 
   const [view, setView] = useState('select');
   const [selectedStudent, setSelectedStudent] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
+  // Per-student readiness + focus briefings, loaded for the select view.
+  const [roster, setRoster] = useState([]);
+  const [rosterLoading, setRosterLoading] = useState(false);
 
   // Audio device picker modal + running class state
   const [audioModalOpen, setAudioModalOpen] = useState(false);
@@ -347,6 +446,38 @@ export default function StartClassScreen({ navigation }) {
   const [noMicPromptOpen, setNoMicPromptOpen] = useState(false);
   const phoneMicRef = useRef(null);
 
+  // Local-recording mode: confirmation gates around the DJI mic's physical
+  // REC / STOP buttons. The phone has no idea whether the coach actually
+  // pressed REC on the mic (the mic records on its own storage, fully
+  // independent), so without these prompts the coach can silently start
+  // the class with the mic off and only discover the missing audio when
+  // they plug in to sync. Forcing an explicit acknowledgement at start
+  // AND stop cuts that class of mistake — the dismissal is non-cancellable
+  // (no tap-out), so the coach can't accidentally skip past it.
+  const [recStartConfirmOpen, setRecStartConfirmOpen] = useState(false);
+  const [recStopConfirmOpen, setRecStopConfirmOpen] = useState(false);
+
+  // Local-recording-mode gating (DJI mic on-device storage workflow).
+  // When isLocalMode is true:
+  //   - The phone NEVER captures audio during class (no setAudioModeAsync,
+  //     no AudioRecorder, no chunk rotation). The coach starts/stops the
+  //     DJI mic itself, which records to its own internal 8 GB storage.
+  //   - The class_recordings row is marked local_recording_mode = true and
+  //     starts with admin_review_status = 'pending'.
+  //   - After the class, the coach plugs the mic via USB-C and uploads
+  //     the WAV file through a separate flow (LocalUpload section, below).
+  //   - Phone audio session stays untouched → Spotify on a BT speaker
+  //     plays uninterrupted throughout the class.
+  // Gated by email — only viatteloic@gmail.com for the beta. See
+  // src/services/featureFlags.js.
+  const [authUser, setAuthUser] = useState(null);
+  useEffect(() => {
+    supabase.auth.getUser()
+      .then(({ data: { user } }) => setAuthUser(user))
+      .catch(() => setAuthUser(null));
+  }, []);
+  const isLocalMode = isLocalRecordingMode(authUser);
+
   // Microphone recording
   const recordingRef = useRef(null);
   // Chunked audio: every CHUNK_MS we stop the current AudioRecorder, push
@@ -371,6 +502,13 @@ export default function StartClassScreen({ navigation }) {
   const newPipelineRef = useRef(false);     // captured at startClassNow
   const recordingIdRef = useRef(null);      // class_recordings.id when on new pipeline
   const userIdRef = useRef(null);           // captured at startClassNow
+  // Append-only journal of session events (AppState transitions, rotation
+  // failures, audio route changes) flushed into class_recordings.meta.events.
+  // Lets us tell after the fact what really happened during a class that
+  // dropped audio: the exact rotation that failed, with what error, while
+  // the app was in what state and on what audio route.
+  const recordingEventsRef = useRef([]);
+  const lastAudioRouteNameRef = useRef(null);
   // Native iOS recorder (continuous-audio-recorder). When the per-user flag
   // is on, audio CAPTURE goes through a single AVAudioEngine that never
   // restarts — chunks are rotated natively (file-only swap) instead of by
@@ -397,6 +535,53 @@ export default function StartClassScreen({ navigation }) {
   const BT_CUMUL_KEY = 'coach.btMic.cumulativeMs';
   const BT_THRESHOLD_KEY = 'coach.btMic.reminderThresholdMs';
 
+  // Append a structured event to the local journal AND best-effort flush
+  // the journal to class_recordings.meta.events. Fire-and-forget DB write —
+  // we never await this from the caller because we don't want logging to
+  // block audio-pipeline code paths. Events logged before recordingId is
+  // set are buffered locally and flushed on the next event after the id
+  // becomes available (we always send the FULL events array, not deltas).
+  const logRecordingEvent = useCallback((event) => {
+    const fullEvent = { ...event, at: new Date().toISOString() };
+    recordingEventsRef.current = [...recordingEventsRef.current, fullEvent];
+    try { console.log('[StartClass:event]', JSON.stringify(fullEvent)); } catch {}
+    const recordingId = recordingIdRef.current;
+    if (!recordingId) return;
+    const eventsSnapshot = recordingEventsRef.current;
+    supabase
+      .from('class_recordings')
+      .update({ meta: { events: eventsSnapshot } })
+      .eq('id', recordingId)
+      .then(
+        ({ error }) => {
+          if (error) console.warn('[StartClass:event] DB write error:', error.message);
+        },
+        (err) => {
+          console.warn('[StartClass:event] DB write threw:', err?.message);
+        },
+      );
+  }, []);
+
+  // Load the readiness roster (per-student focus briefings) every time the
+  // select view is shown. Cheap enough to refresh — single batched query.
+  useEffect(() => {
+    if (view !== 'select') return;
+    let active = true;
+    setRosterLoading(true);
+    (async () => {
+      try {
+        const { students: list } = await getStartClassRoster();
+        if (active) setRoster(list || []);
+      } catch (err) {
+        console.warn('[StartClass] roster load failed:', err);
+        if (active) setRoster([]);
+      } finally {
+        if (active) setRosterLoading(false);
+      }
+    })();
+    return () => { active = false; };
+  }, [view]);
+
   // While a class is being recorded, listen for audio route changes. If the
   // selected mic disconnects mid-class, iOS silently falls back to the
   // built-in mic — the coach must be told so they can decide to keep going
@@ -405,6 +590,12 @@ export default function StartClassScreen({ navigation }) {
     if (!classStartedAt) return;
     routeChangeAlertShownRef.current = false;
     const sub = addRouteChangeListener((e) => {
+      logRecordingEvent({
+        type: 'audio_route_event',
+        reason: e?.reason,
+        name: e?.name ?? null,
+        appState: AppState.currentState,
+      });
       if (e.reason !== 'oldDeviceUnavailable') return;
       if (routeChangeAlertShownRef.current) return;
       routeChangeAlertShownRef.current = true;
@@ -439,7 +630,7 @@ export default function StartClassScreen({ navigation }) {
       );
     });
     return () => { sub.remove(); };
-  }, [classStartedAt]);
+  }, [classStartedAt, logRecordingEvent]);
 
   // Heartbeat: refreshes the Live Activity stale-date and persists
   // lastHeartbeatAt to AsyncStorage every few seconds while a class is
@@ -487,19 +678,37 @@ export default function StartClassScreen({ navigation }) {
 
   // Poll the current audio input route while a class is running so the
   // coach sees which mic actually captures the audio (Bluetooth headset,
-  // built-in mic, etc.). Updates every 2s.
+  // built-in mic, etc.). Updates every 2s. Also logs route changes to the
+  // recording event journal so we can correlate audio dropouts with mic
+  // disconnect/reconnect events post-mortem.
   useEffect(() => {
     if (!classStartedAt) {
       setAudioRoute(null);
+      lastAudioRouteNameRef.current = null;
       return;
     }
     const tick = () => {
-      try { setAudioRoute(getCurrentInputRoute()); } catch {}
+      try {
+        const route = getCurrentInputRoute();
+        setAudioRoute(route);
+        const name = route?.name ?? null;
+        if (name !== lastAudioRouteNameRef.current) {
+          logRecordingEvent({
+            type: 'audio_route_change',
+            from: lastAudioRouteNameRef.current,
+            to: name,
+            isBluetooth: !!route?.isBluetooth,
+          });
+          lastAudioRouteNameRef.current = name;
+        }
+      } catch (err) {
+        logRecordingEvent({ type: 'audio_route_query_failed', error: serializeRecordingError(err) });
+      }
     };
     tick();
     const id = setInterval(tick, 2000);
     return () => clearInterval(id);
-  }, [classStartedAt]);
+  }, [classStartedAt, logRecordingEvent]);
 
   // Watch the recording status. If iOS killed the audio session while the app
   // was suspended (or if anything else interrupted it), freeze the chrono at
@@ -508,9 +717,14 @@ export default function StartClassScreen({ navigation }) {
     if (!classStartedAt) return;
     let cancelled = false;
 
-    const markInterrupted = () => {
+    const markInterrupted = (reason) => {
       if (interruptedAtMsRef.current != null) return;
       interruptedAtMsRef.current = Date.now() - classStartedAt;
+      logRecordingEvent({
+        type: 'interruption_detected',
+        reason: reason ?? 'unknown',
+        elapsedMs: interruptedAtMsRef.current,
+      });
       if (liveActivityIdRef.current) {
         laUpdateCoachRecording(liveActivityIdRef.current, { isInterrupted: true }).catch(() => {});
       }
@@ -534,15 +748,16 @@ export default function StartClassScreen({ navigation }) {
         const status = rec.getStatus();
         if (cancelled) return;
         if (status.canRecord === false || status.isRecording === false) {
-          markInterrupted();
+          markInterrupted(`status canRecord=${status.canRecord} isRecording=${status.isRecording}`);
         }
-      } catch {
-        markInterrupted();
+      } catch (err) {
+        markInterrupted(`getStatus threw: ${err?.message ?? String(err)}`);
       }
     };
 
     const id = setInterval(check, 5000);
     const sub = AppState.addEventListener('change', (state) => {
+      logRecordingEvent({ type: 'appstate_change', state });
       if (state === 'active') check();
     });
     return () => {
@@ -550,7 +765,7 @@ export default function StartClassScreen({ navigation }) {
       clearInterval(id);
       sub.remove();
     };
-  }, [classStartedAt]);
+  }, [classStartedAt, logRecordingEvent]);
 
   // On first mount, restore a class that was started before the coach
   // navigated away. We need to land on the right briefing view and, for
@@ -647,18 +862,25 @@ export default function StartClassScreen({ navigation }) {
     resumeStartedRef.current = true;
     (async () => {
       try {
-        const { granted } = await AudioModule.requestRecordingPermissionsAsync();
-        if (!granted) {
-          patchActiveCoachClass({ pendingResume: false });
-          return;
+        // In local-recording mode the phone never captured audio in the
+        // first place — the DJI mic kept recording to its internal storage
+        // through the crash. Restore class state without touching the
+        // audio session.
+        if (!isLocalMode) {
+          const { granted } = await AudioModule.requestRecordingPermissionsAsync();
+          if (!granted) {
+            patchActiveCoachClass({ pendingResume: false });
+            return;
+          }
+          await setAudioModeAsync({
+            allowsRecording: true,
+            playsInSilentMode: true,
+            allowsBackgroundRecording: true,
+            shouldPlayInBackground: true,
+            interruptionMode: 'mixWithOthers',
+          });
+          recordingRef.current = await createAndStartRecording(getCoachRecordingOptions());
         }
-        await setAudioModeAsync({
-          allowsRecording: true,
-          playsInSilentMode: true,
-          allowsBackgroundRecording: true,
-          shouldPlayInBackground: true,
-        });
-        recordingRef.current = await createAndStartRecording(getCoachRecordingOptions());
 
         interruptedAtMsRef.current = null;
         interruptAlertShownRef.current = false;
@@ -713,6 +935,7 @@ export default function StartClassScreen({ navigation }) {
       await setAudioModeAsync({
         allowsRecording: true,
         playsInSilentMode: true,
+        interruptionMode: 'mixWithOthers',
       });
       const previewOptions = { ...RecordingPresets.LOW_QUALITY, isMeteringEnabled: true };
       const recorder = await createAndStartRecording(previewOptions);
@@ -790,6 +1013,17 @@ export default function StartClassScreen({ navigation }) {
   }
 
   async function openAudioModal() {
+    // Local-recording mode: phone captures no audio, so the "Choose your
+    // mic" modal is meaningless. Short-circuit through a "press REC on
+    // your DJI mic" confirmation — we just need a timestamp + a
+    // class_recordings row; the DJI mic file is imported later via USB-C.
+    // The confirmation prevents the silent-failure case where the coach
+    // starts the class in the app but never presses REC on the mic.
+    if (isLocalMode) {
+      setMicPermGranted(false);
+      setRecStartConfirmOpen(true);
+      return;
+    }
     const { granted } = await AudioModule.requestRecordingPermissionsAsync();
     setMicPermGranted(granted);
     setSelectedInputUid(null);
@@ -876,26 +1110,77 @@ export default function StartClassScreen({ navigation }) {
         .eq('id', recordingId)
         .then(() => {}, () => {});
     } catch (err) {
+      logRecordingEvent({
+        type: 'chunk_enqueue_failed',
+        idx,
+        error: serializeRecordingError(err),
+      });
       console.warn('[StartClass] chunk enqueue failed:', err);
     }
   }
 
   async function rotateChunk() {
-    if (rotatingChunkRef.current) return;
-    if (!recordingRef.current) return;
+    if (rotatingChunkRef.current) {
+      logRecordingEvent({ type: 'rotation_skipped_concurrent' });
+      return;
+    }
+    if (!recordingRef.current) {
+      logRecordingEvent({ type: 'rotation_skipped_no_recorder' });
+      return;
+    }
     rotatingChunkRef.current = true;
+    const idxAtStart = audioUrisRef.current.length;
+    let routeAtStart = null;
+    try { routeAtStart = getCurrentInputRoute(); } catch {}
+    let recorderStatusAtStart = null;
+    try {
+      recorderStatusAtStart = recordingRef.current?.getStatus?.() ?? null;
+    } catch (err) {
+      recorderStatusAtStart = { _error: serializeRecordingError(err) };
+    }
+    logRecordingEvent({
+      type: 'rotation_start',
+      idx: idxAtStart,
+      appState: AppState.currentState,
+      route: routeAtStart ? { name: routeAtStart.name, isBluetooth: !!routeAtStart.isBluetooth } : null,
+      recorderStatus: recorderStatusAtStart,
+    });
     try {
       let chunkUri = null;
       try {
         chunkUri = await stopAndUnloadRecording(recordingRef.current);
+        logRecordingEvent({ type: 'rotation_stop_ok', idx: idxAtStart, hasUri: !!chunkUri });
       } catch (err) {
+        logRecordingEvent({
+          type: 'rotation_stop_failed',
+          idx: idxAtStart,
+          error: serializeRecordingError(err),
+        });
         console.warn('[StartClass] chunk rotation: stop failed:', err);
       }
-      recordingRef.current = null;
       await recordChunkUri(chunkUri);
       try {
         recordingRef.current = await createAndStartRecording(getCoachRecordingOptions());
+        let restartStatus = null;
+        try {
+          restartStatus = recordingRef.current?.getStatus?.() ?? null;
+        } catch {}
+        let routeAfter = null;
+        try { routeAfter = getCurrentInputRoute(); } catch {}
+        logRecordingEvent({
+          type: 'rotation_restart_ok',
+          idx: idxAtStart + 1,
+          appState: AppState.currentState,
+          recorderStatus: restartStatus,
+          route: routeAfter ? { name: routeAfter.name, isBluetooth: !!routeAfter.isBluetooth } : null,
+        });
       } catch (err) {
+        logRecordingEvent({
+          type: 'rotation_restart_failed',
+          idx: idxAtStart + 1,
+          appState: AppState.currentState,
+          error: serializeRecordingError(err),
+        });
         console.warn('[StartClass] chunk rotation: restart failed:', err);
       }
     } finally {
@@ -1020,8 +1305,14 @@ export default function StartClassScreen({ navigation }) {
     newPipelineRef.current = false;
     recordingIdRef.current = null;
     userIdRef.current = null;
+    // Hoisted so the audio-recording block below can see it. Defaults to
+    // false (legacy real-time recording path) if the user fetch fails.
+    let localMode = false;
     try {
       const { data: { user } } = await supabase.auth.getUser();
+      // Resolve local mode from the freshly-fetched user so we don't race
+      // with the component-mount auth fetch.
+      localMode = isLocalRecordingMode(user);
       if (user && isNewRecordingPipelineEnabled(user)) {
         const isPrivate = view === 'private-briefing';
         const { data: rec, error: insertErr } = await supabase
@@ -1032,6 +1323,11 @@ export default function StartClassScreen({ navigation }) {
             student_id: isPrivate ? (selectedStudent?.id ?? null) : null,
             status: 'recording',
             audio_folder: null, // filled in below once we have the row id
+            // Local-recording-mode metadata: phone records nothing during
+            // the class; coach uploads the DJI mic file afterwards. Admin
+            // must approve before focus points propagate to the student.
+            local_recording_mode: localMode,
+            admin_review_status: localMode ? 'pending' : null,
           })
           .select('id')
           .single();
@@ -1058,15 +1354,22 @@ export default function StartClassScreen({ navigation }) {
       userIdRef.current = null;
     }
 
-    // Start recording if permission was granted
-    if (micPermGranted) {
+    // Start recording if permission was granted.
+    // In local-recording mode (DJI on-device storage), we skip the phone
+    // capture entirely — the mic records to its own internal storage, and
+    // the file is imported via USB-C after the class. The phone audio
+    // session stays untouched so Spotify can keep playing through a BT
+    // speaker without any iOS audio-session arbitration killing it.
+    if (micPermGranted && !localMode) {
       try {
         await setAudioModeAsync({
           allowsRecording: true,
           playsInSilentMode: true,
           allowsBackgroundRecording: true,
           shouldPlayInBackground: true,
+          interruptionMode: 'mixWithOthers',
         });
+        logRecordingEvent({ type: 'audio_mode_set', appState: AppState.currentState });
 
         // Native iOS recorder path (per-user flag). Captures via a single
         // AVAudioEngine that never restarts; chunk rotation is handled
@@ -1077,13 +1380,33 @@ export default function StartClassScreen({ navigation }) {
           if (isNativeRecorderEnabled(authUser)) {
             await tryStartNativeRecorder();
             nativeStarted = true;
+            logRecordingEvent({
+              type: 'session_started',
+              appState: AppState.currentState,
+              recorder: 'native',
+            });
           }
         } catch (err) {
+          logRecordingEvent({
+            type: 'native_recorder_start_failed',
+            error: serializeRecordingError(err),
+          });
           console.warn('[StartClass] Native recorder start failed, falling back to expo-audio:', err);
         }
 
         if (!nativeStarted) {
           recordingRef.current = await createAndStartRecording(getCoachRecordingOptions());
+          let initialRoute = null;
+          try { initialRoute = getCurrentInputRoute(); } catch {}
+          let initialStatus = null;
+          try { initialStatus = recordingRef.current?.getStatus?.() ?? null; } catch {}
+          logRecordingEvent({
+            type: 'session_started',
+            appState: AppState.currentState,
+            route: initialRoute ? { name: initialRoute.name, isBluetooth: !!initialRoute.isBluetooth } : null,
+            recorderStatus: initialStatus,
+            recorder: 'expo-audio',
+          });
           startChunkRotation();
         }
         try {
@@ -1092,6 +1415,11 @@ export default function StartClassScreen({ navigation }) {
           usedBtMicRef.current = !!route?.isBluetooth || /\bdji\b/.test(name);
         } catch { usedBtMicRef.current = false; }
       } catch (err) {
+        logRecordingEvent({
+          type: 'session_start_failed',
+          appState: AppState.currentState,
+          error: serializeRecordingError(err),
+        });
         console.warn('[StartClass] Could not start recording:', err);
         // We just inserted a class_recordings row in the new-pipeline init
         // above, but we can't actually record any chunks. Mark it
@@ -1166,6 +1494,12 @@ export default function StartClassScreen({ navigation }) {
     // disabling it during the async work below.
     if (stoppingRef.current) return;
     stoppingRef.current = true;
+    logRecordingEvent({
+      type: 'session_stopping',
+      appState: AppState.currentState,
+      chunkCount: audioUrisRef.current.length,
+      wasInterrupted: interruptedAtMsRef.current != null,
+    });
 
     if (usingNativeRecorderRef.current) {
       // Native path: no JS rotation interval to cancel and no busy-wait
@@ -1191,8 +1525,13 @@ export default function StartClassScreen({ navigation }) {
       if (recordingRef.current) {
         try {
           const uri = await stopAndUnloadRecording(recordingRef.current);
+          logRecordingEvent({ type: 'final_chunk_stop_ok', hasUri: !!uri });
           await recordChunkUri(uri);
         } catch (err) {
+          logRecordingEvent({
+            type: 'final_chunk_stop_failed',
+            error: serializeRecordingError(err),
+          });
           console.warn('[StartClass] Could not stop recording:', err);
         }
         recordingRef.current = null;
@@ -1322,6 +1661,26 @@ export default function StartClassScreen({ navigation }) {
     const isPrivate = view === 'private-briefing';
     const isNewPipeline = newPipelineRef.current;
     const recordingId = recordingIdRef.current;
+    // Capture isLocalMode for the closure — state may shift between now
+    // and the navigation callback below.
+    const localMode = isLocalMode;
+
+    // Persist coach verdicts on the readiness focuses (fire-and-forget).
+    // "good" → archive the focus (status = past); "not yet" stays as-is so
+    // it carries over into the next readiness pass.
+    const goodIds = Object.entries(readinessVerdicts)
+      .filter(([, verdict]) => verdict === 'good')
+      .map(([id]) => id);
+    if (goodIds.length > 0) {
+      supabase
+        .from('focus_points')
+        .update({ status: 'past' })
+        .in('id', goodIds)
+        .then(() => {}, (err) => {
+          console.warn('[StartClass] readiness verdict persist failed:', err);
+        });
+    }
+    setReadinessVerdicts({});
 
     setDebriefOpen(false);
     setAudioUris([]);
@@ -1335,6 +1694,29 @@ export default function StartClassScreen({ navigation }) {
     newPipelineRef.current = false;
     recordingIdRef.current = null;
     userIdRef.current = null;
+
+    if (localMode && recordingId) {
+      // Local-recording mode: phone captured no audio. Just stamp the
+      // ended_at so the upload UI can find this row as "awaiting audio
+      // upload" (local_recording_mode=true AND ended_at IS NOT NULL AND
+      // mic_file_name IS NULL). The coach will plug their DJI mic later
+      // and pick the WAV file through the upload screen.
+      supabase
+        .from('class_recordings')
+        .update({ ended_at: new Date().toISOString() })
+        .eq('id', recordingId)
+        .then(() => {}, (err) => {
+          console.warn('[StartClass] local mode ended_at update failed:', err);
+        });
+      setClassRecorded(true);
+      if (popToTopTimerRef.current) clearTimeout(popToTopTimerRef.current);
+      popToTopTimerRef.current = setTimeout(() => {
+        popToTopTimerRef.current = null;
+        setClassRecorded(false);
+        try { navigation.popToTop(); } catch {}
+      }, 2500);
+      return;
+    }
 
     if (uris.length > 0) {
       if (isNewPipeline && recordingId) {
@@ -1403,6 +1785,11 @@ export default function StartClassScreen({ navigation }) {
   const [questions, setQuestions] = useState([]);
   const [lastClass, setLastClass] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  // Readiness pulled from the student's previous private (focuses + tiers).
+  // Coach uses this as a "check during the lesson" list and a post-lesson
+  // verdict capture (good / not yet).
+  const [studentReadiness, setStudentReadiness] = useState(null);
+  const [readinessVerdicts, setReadinessVerdicts] = useState({}); // { [fpId]: 'good' | 'not_yet' }
 
   // Group data
   const [groupFPs, setGroupFPs] = useState([]);
@@ -1416,13 +1803,16 @@ export default function StartClassScreen({ navigation }) {
     setDetailLoading(true);
     setView('private-briefing');
     try {
-      const [fps, qs, activity] = await Promise.all([
+      const [fps, qs, activity, readiness] = await Promise.all([
         getStudentFocusPoints(student.id).catch(() => []),
         getStudentQuestions(student.id).catch(() => []),
         getStudentRecentActivity(student.id, 40).catch(() => []),
+        getLessonReadiness(student.id).catch(() => null),
       ]);
       setFocusPoints(fps || []);
       setQuestions(qs || []);
+      setStudentReadiness(readiness);
+      setReadinessVerdicts({});
 
       // Find most recent class logged with THIS coach (has a summary)
       const lastCls = (activity || []).find(
@@ -1571,14 +1961,31 @@ export default function StartClassScreen({ navigation }) {
           <View style={s.runningRow}>
             <View style={s.runningDot} />
             <Text style={s.runningTime}>{formatChrono(chronoMs)}</Text>
-            <View style={s.audioBadge}>
-              <View style={[s.audioBadgeDot, { backgroundColor: isBT ? '#4AAF52' : '#D44545' }]} />
-              <Text style={s.audioBadgeText} numberOfLines={1}>{routeName}</Text>
-            </View>
+            {/* Audio-route badge is meaningless in local-recording mode —
+                the phone holds no audio session so audioRoute would always
+                be null and the fallback "iPhone mic" label would mislead
+                the coach into thinking the phone is capturing audio. The
+                DJI mic state is fully independent and surfaced via the
+                separate REC/STOP confirmation modals. */}
+            {!isLocalMode && (
+              <View style={s.audioBadge}>
+                <View style={[s.audioBadgeDot, { backgroundColor: isBT ? '#4AAF52' : '#D44545' }]} />
+                <Text style={s.audioBadgeText} numberOfLines={1}>{routeName}</Text>
+              </View>
+            )}
             <TouchableOpacity
               style={s.stopBtn}
               activeOpacity={0.88}
-              onPress={stopClass}
+              onPress={() => {
+                // Local-recording mode: gate stopClass behind a "press STOP
+                // on your DJI mic" confirmation. Pressing STOP on the mic
+                // closes the WAV file's header (so its duration metadata is
+                // valid for matching). Without the prompt the coach can end
+                // the class in the app while the mic is still recording,
+                // leaving an open file on the device until the next press.
+                if (isLocalMode) setRecStopConfirmOpen(true);
+                else stopClass();
+              }}
             >
               <Ionicons name="stop" size={14} color="#fff" />
               <Text style={s.stopBtnText}>Stop</Text>
@@ -1671,6 +2078,72 @@ export default function StartClassScreen({ navigation }) {
               />
               <Text style={db.noteHint}>Optional — visible to the student after the class.</Text>
             </View>
+
+            {/* Readiness verdicts: only on private lessons, only if the
+                 student had carryover focuses to validate. */}
+            {view === 'private-briefing'
+              && !!studentReadiness
+              && (studentReadiness.focuses || []).length > 0 && (
+              <>
+                <Text style={db.secLabel}>How did it go?</Text>
+                <View style={db.verdictList}>
+                  {studentReadiness.focuses.map((f) => {
+                    const verdict = readinessVerdicts[f.focusPointId];
+                    return (
+                      <View key={f.focusPointId} style={db.verdictRow}>
+                        <Text style={db.verdictName} numberOfLines={1}>{f.name}</Text>
+                        <View style={db.verdictBtns}>
+                          <TouchableOpacity
+                            style={[db.verdictBtn, verdict === 'good' && db.verdictBtnGood]}
+                            activeOpacity={0.75}
+                            onPress={() =>
+                              setReadinessVerdicts((prev) => ({
+                                ...prev,
+                                [f.focusPointId]: prev[f.focusPointId] === 'good' ? null : 'good',
+                              }))
+                            }
+                          >
+                            <Ionicons
+                              name="checkmark"
+                              size={13}
+                              color={verdict === 'good' ? '#fff' : C.green}
+                            />
+                            <Text
+                              style={[
+                                db.verdictBtnText,
+                                { color: verdict === 'good' ? '#fff' : C.green },
+                              ]}
+                            >
+                              Good
+                            </Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={[db.verdictBtn, verdict === 'not_yet' && db.verdictBtnNotYet]}
+                            activeOpacity={0.75}
+                            onPress={() =>
+                              setReadinessVerdicts((prev) => ({
+                                ...prev,
+                                [f.focusPointId]:
+                                  prev[f.focusPointId] === 'not_yet' ? null : 'not_yet',
+                              }))
+                            }
+                          >
+                            <Text
+                              style={[
+                                db.verdictBtnText,
+                                { color: verdict === 'not_yet' ? '#fff' : C.orange },
+                              ]}
+                            >
+                              Not yet
+                            </Text>
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    );
+                  })}
+                </View>
+              </>
+            )}
 
             {list.length > 0 && (
               <>
@@ -1943,6 +2416,87 @@ export default function StartClassScreen({ navigation }) {
     );
   }
 
+  // Local-recording confirmations. Dedicated visual treatment (ad.recModal*)
+  // because these are high-stakes gates — getting the coach to physically
+  // press REC / STOP on the DJI mic before the in-app action proceeds. The
+  // hero icons are custom shapes (red dot for REC, ink square for STOP)
+  // rather than Ionicons, which look thin at these sizes. Overlay is non-
+  // dismissible — the coach must explicitly Cancel or confirm.
+
+  function renderRecStartConfirmPrompt() {
+    if (!recStartConfirmOpen) return null;
+    return (
+      <Pressable style={ad.recModalOverlay}>
+        <Pressable style={ad.recModalCard} onPress={(e) => e.stopPropagation()}>
+          <View style={[ad.recModalIconRing, ad.recModalIconRingRec]}>
+            <View style={ad.recModalIconDot} />
+          </View>
+          <Text style={ad.recModalTitle}>Press REC on your mic</Text>
+          <Text style={ad.recModalBody}>
+            Your DJI mic records on its own storage. Make sure it's on and
+            recording before you start the class.
+          </Text>
+          <View style={ad.recModalActions}>
+            <TouchableOpacity
+              style={ad.recModalBtnGhost}
+              activeOpacity={0.85}
+              onPress={() => setRecStartConfirmOpen(false)}
+            >
+              <Text style={ad.recModalBtnGhostText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={ad.recModalBtnPrimary}
+              activeOpacity={0.88}
+              onPress={() => {
+                setRecStartConfirmOpen(false);
+                startClassNow();
+              }}
+            >
+              <Text style={ad.recModalBtnPrimaryText}>Start class</Text>
+            </TouchableOpacity>
+          </View>
+        </Pressable>
+      </Pressable>
+    );
+  }
+
+  function renderRecStopConfirmPrompt() {
+    if (!recStopConfirmOpen) return null;
+    return (
+      <Pressable style={ad.recModalOverlay}>
+        <Pressable style={ad.recModalCard} onPress={(e) => e.stopPropagation()}>
+          <View style={[ad.recModalIconRing, ad.recModalIconRingStop]}>
+            <View style={ad.recModalIconSquare} />
+          </View>
+          <Text style={ad.recModalTitle}>Press STOP on your mic</Text>
+          <Text style={ad.recModalBody}>
+            Stop the recording on your DJI mic first. That finalizes the WAV
+            file so we can match it when you sync later.
+          </Text>
+          <View style={ad.recModalActions}>
+            <TouchableOpacity
+              style={ad.recModalBtnGhost}
+              activeOpacity={0.85}
+              onPress={() => setRecStopConfirmOpen(false)}
+            >
+              <Text style={ad.recModalBtnGhostText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={ad.recModalBtnPrimary}
+              activeOpacity={0.88}
+              onPress={() => {
+                setRecStopConfirmOpen(false);
+                stopClass();
+              }}
+            >
+              <Text style={ad.recModalBtnPrimaryText}>End class</Text>
+            </TouchableOpacity>
+          </View>
+        </Pressable>
+      </Pressable>
+    );
+  }
+
   const filteredStudents = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     if (!q) return students;
@@ -1967,85 +2521,122 @@ export default function StartClassScreen({ navigation }) {
     );
   }
 
-  // ── VIEW 1: Select class type ──────────────────────────────────────────
+  // ── VIEW 1: Start class landing — readiness roster + group card ────────
   if (view === 'select') {
-    const needAttention = students.filter((st) => st.status !== 'on_track').length;
-    const onTrack = students.filter((st) => st.status === 'on_track').length;
     const totalStudents = students.length;
-
     return (
-      <SafeAreaView style={s.safe} edges={['top']}>
-        <ScrollView contentContainerStyle={s.selectScroll} showsVerticalScrollIndicator={false}>
-          <TouchableOpacity onPress={() => navigation.goBack()} style={s.selectBack} activeOpacity={0.7}>
-            <Ionicons name="chevron-back" size={20} color={C.text} />
-          </TouchableOpacity>
+      <View style={{ flex: 1 }}>
+        <LinearGradient
+          colors={['#F7F6F3', '#F4EFDC', '#F9DF9B']}
+          locations={[0, 0.55, 1]}
+          start={{ x: 0.1, y: 0 }}
+          end={{ x: 0.95, y: 1 }}
+          style={StyleSheet.absoluteFillObject}
+        />
+        <SafeAreaView style={{ flex: 1 }} edges={['top']}>
+          <View style={sc.topBar}>
+            <TouchableOpacity
+              style={sc.iconBtn}
+              onPress={() => navigation.goBack()}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="close" size={18} color="#0A0A0A" />
+            </TouchableOpacity>
+            <View style={{ flex: 1, alignItems: 'center' }}>
+              <Text style={sc.topLabel}>NEW CLASS</Text>
+            </View>
+            <View style={{ width: 40 }} />
+          </View>
 
-          <Text style={s.selectLabel}>PRIVATE OR GROUP</Text>
-          <Text style={s.selectHeading}>Start a class</Text>
-
-          {/* Private lesson card */}
-          <TouchableOpacity
-            style={s.selectPrivate}
-            activeOpacity={0.9}
-            onPress={() => setView('student-pick')}
+          <ScrollView
+            contentContainerStyle={sc.scroll}
+            showsVerticalScrollIndicator={false}
           >
-            <View style={s.selectIconRow}>
-              <View style={s.selectIconDark}>
-                <Ionicons name="person" size={22} color="#fff" />
-              </View>
-              <View style={s.selectArrowDark}>
-                <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.55)" />
-              </View>
-            </View>
-            <Text style={s.selectPrivateTitle}>Private lesson</Text>
-            <Text style={s.selectPrivateSub}>One-on-one with personalized briefing</Text>
-            <View style={s.selectContextBar}>
-              <View style={s.selectTagDark}>
-                <View style={[s.selectDot, { backgroundColor: C.red }]} />
-                <Text style={s.selectTagDarkText}>
-                  <Text style={s.selectTagStrongDark}>{needAttention}</Text> need attention
-                </Text>
-              </View>
-              <View style={s.selectTagDark}>
-                <View style={[s.selectDot, { backgroundColor: C.green }]} />
-                <Text style={s.selectTagDarkText}>
-                  <Text style={s.selectTagStrongDark}>{onTrack}</Text> on track
-                </Text>
-              </View>
-            </View>
-          </TouchableOpacity>
+            <Text style={sc.heading}>Start a class</Text>
+            <Text style={sc.subtitle}>
+              Pick a student to see what they've worked on lately.
+            </Text>
 
-          {/* Group class card */}
-          <TouchableOpacity
-            style={s.selectGroup}
-            activeOpacity={0.9}
-            onPress={loadGroupData}
-          >
-            <View style={s.selectIconRow}>
-              <View style={s.selectIconLight}>
-                <Ionicons name="people" size={22} color={C.text} />
-              </View>
-              <View style={s.selectArrowLight}>
-                <Ionicons name="chevron-forward" size={18} color={C.gray} />
-              </View>
+            <View style={sc.eyebrowRow}>
+              <View style={sc.eyebrowAccent} />
+              <Text style={sc.eyebrowText}>PRIVATE WITH...</Text>
+              <View style={sc.eyebrowRule} />
+              <Text style={sc.eyebrowRight}>Sorted by readiness</Text>
             </View>
-            <Text style={s.selectGroupTitle}>Group class</Text>
-            <Text style={s.selectGroupSub}>Shared focus points across your squad</Text>
-            <View style={s.selectContextBar}>
-              <View style={s.selectTagLight}>
-                <Ionicons name="people" size={11} color={C.gray} />
-                <Text style={s.selectTagLightText}>
-                  <Text style={s.selectTagStrongLight}>{totalStudents}</Text> students
+
+            {rosterLoading && roster.length === 0 ? (
+              <View style={sc.loadingWrap}>
+                <ActivityIndicator color="#E8B530" />
+              </View>
+            ) : roster.length === 0 ? (
+              <Text style={sc.emptyText}>
+                No students yet — share your invite code to connect students.
+              </Text>
+            ) : (
+              roster.map((st) => (
+                <PrivateCard
+                  key={st.id}
+                  st={st}
+                  onPress={() => loadStudentDetail(students.find(x => x.id === st.id) || st)}
+                />
+              ))
+            )}
+
+            <View style={sc.orRow}>
+              <View style={sc.eyebrowAccent} />
+              <Text style={sc.eyebrowText}>OR</Text>
+              <View style={sc.eyebrowRule} />
+            </View>
+
+            <TouchableOpacity
+              style={sc.groupCard}
+              activeOpacity={0.88}
+              onPress={loadGroupData}
+            >
+              <View style={sc.groupIconBtn}>
+                <Ionicons name="people" size={20} color="#E8B530" />
+              </View>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={sc.groupTitle}>Group class</Text>
+                <Text style={sc.groupSub}>
+                  {totalStudents} student{totalStudents === 1 ? '' : 's'} · auto-included
                 </Text>
               </View>
-              <View style={s.selectTagLight}>
-                <View style={[s.selectDot, { backgroundColor: C.orange }]} />
-                <Text style={s.selectTagLightText}>Shared focuses</Text>
+              <View style={sc.groupAvatars}>
+                {students.slice(0, 2).map((st, i) => {
+                  const isSilent = st.status === 'silent';
+                  const initial = (st.name || 'S')[0]?.toUpperCase() || 'S';
+                  return (
+                    <View
+                      key={st.id}
+                      style={[
+                        sc.groupAv,
+                        i === 0 && { marginLeft: 0 },
+                        isSilent
+                          ? { backgroundColor: '#F7D8D8' }
+                          : { backgroundColor: '#4E6A5C' },
+                      ]}
+                    >
+                      {st.photoUrl ? (
+                        <Image source={{ uri: st.photoUrl }} style={sc.groupAvPhoto} />
+                      ) : (
+                        <Text
+                          style={[
+                            sc.groupAvText,
+                            isSilent && { color: '#E84545' },
+                          ]}
+                        >
+                          {initial}
+                        </Text>
+                      )}
+                    </View>
+                  );
+                })}
               </View>
-            </View>
-          </TouchableOpacity>
-        </ScrollView>
-      </SafeAreaView>
+            </TouchableOpacity>
+          </ScrollView>
+        </SafeAreaView>
+      </View>
     );
   }
 
@@ -2179,6 +2770,39 @@ export default function StartClassScreen({ navigation }) {
             </View>
           )}
 
+          {/* Carryover from last private — what to check during this lesson */}
+          {!!studentReadiness && (studentReadiness.focuses || []).length > 0 && (
+            <View style={pb.checkCard}>
+              <View style={pb.checkHeader}>
+                <View style={pb.checkBadge}>
+                  <Text style={pb.checkBadgeText}>CHECK DURING THIS LESSON</Text>
+                </View>
+                <Text style={pb.checkPct}>{studentReadiness.percent}%</Text>
+              </View>
+              <Text style={pb.checkHint}>
+                Carryover from {st.name.split(' ')[0]}'s last private. Validate each at the end.
+              </Text>
+              <View style={pb.checkRows}>
+                {studentReadiness.focuses.map((f) => {
+                  const tierColor =
+                    f.tier === 'critical' ? C.red : f.tier === 'important' ? C.orange : C.gray;
+                  return (
+                    <View key={f.focusPointId} style={pb.checkRow}>
+                      <View style={[pb.checkDot, { backgroundColor: tierColor }]} />
+                      <Text style={pb.checkName} numberOfLines={1}>{f.name}</Text>
+                      <Text style={[pb.checkTier, { color: tierColor }]}>{f.tier}</Text>
+                      <View style={pb.checkProgress}>
+                        <Text style={pb.checkProgressText}>
+                          {f.done}<Text style={pb.checkProgressOf}>/{f.target}</Text>
+                        </Text>
+                      </View>
+                    </View>
+                  );
+                })}
+              </View>
+            </View>
+          )}
+
           {/* Last class with you */}
           {lastClass && (
             <View style={pb.recapCard}>
@@ -2281,28 +2905,6 @@ export default function StartClassScreen({ navigation }) {
             </>
           )}
 
-          {/* Stuck focus points */}
-          {stuckPoints.length > 0 && (
-            <>
-              <Text style={pb.secLabel}>Not practiced</Text>
-              <View style={pb.focusWrap}>
-                {stuckPoints.map((fp) => (
-                  <View key={fp.id} style={pb.fpRow}>
-                    <View style={[pb.fpStatus, { backgroundColor: 'rgba(212,69,69,0.08)' }]}>
-                      <Ionicons name="alert" size={14} color={C.red} />
-                    </View>
-                    <View style={{ flex: 1, minWidth: 0 }}>
-                      <Text style={pb.fpName} numberOfLines={1}>{fp.name}</Text>
-                      <Text style={pb.fpMeta}>No practice this week</Text>
-                    </View>
-                    <View style={[pb.fpBadge, { backgroundColor: 'rgba(212,69,69,0.08)' }]}>
-                      <Text style={[pb.fpBadgeText, { color: C.red }]}>0x</Text>
-                    </View>
-                  </View>
-                ))}
-              </View>
-            </>
-          )}
         </Animated.ScrollView>
 
         {/* Backdrop masking content as it scrolls up behind the hero */}
@@ -2316,7 +2918,7 @@ export default function StartClassScreen({ navigation }) {
 
         {/* Floating back arrow */}
         <TouchableOpacity
-          onPress={() => { setView('student-pick'); setSearchQuery(''); }}
+          onPress={() => { setView('select'); setSearchQuery(''); }}
           style={pb.floatingBack}
           activeOpacity={0.7}
           hitSlop={12}
@@ -2380,6 +2982,8 @@ export default function StartClassScreen({ navigation }) {
         {renderBottomBar()}
         {renderAudioModal()}
         {renderDebriefModal()}
+        {renderRecStartConfirmPrompt()}
+        {renderRecStopConfirmPrompt()}
       </SafeAreaView>
     );
   }
@@ -2612,6 +3216,8 @@ export default function StartClassScreen({ navigation }) {
         {renderBottomBar()}
         {renderAudioModal()}
         {renderDebriefModal()}
+        {renderRecStartConfirmPrompt()}
+        {renderRecStopConfirmPrompt()}
       </SafeAreaView>
     );
   }
@@ -3012,6 +3618,96 @@ const pb = StyleSheet.create({
   recapFPCountText: {
     fontFamily: Fonts.jakartaExtraBold,
     fontSize: 11,
+  },
+
+  // Check-during-lesson card (readiness carryover)
+  checkCard: {
+    marginHorizontal: Spacing.side,
+    marginBottom: 22,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(232,181,48,0.4)',
+    shadowColor: '#E8B530',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 1,
+  },
+  checkHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  checkBadge: {
+    backgroundColor: 'rgba(232,181,48,0.16)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  checkBadgeText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 9,
+    letterSpacing: 0.8,
+    color: '#B07C12',
+  },
+  checkPct: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 16,
+    color: '#0E0E0E',
+    letterSpacing: -0.3,
+  },
+  checkHint: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 12,
+    color: '#666',
+    lineHeight: 17,
+    marginBottom: 12,
+  },
+  checkRows: {
+    gap: 6,
+  },
+  checkRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: 'rgba(13,13,18,0.03)',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  checkDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+  },
+  checkName: {
+    flex: 1,
+    fontFamily: Fonts.jakartaSemiBold,
+    fontSize: 13,
+    color: '#0E0E0E',
+  },
+  checkTier: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 9.5,
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+  },
+  checkProgress: {
+    minWidth: 36,
+    alignItems: 'flex-end',
+  },
+  checkProgressText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 13,
+    color: '#0E0E0E',
+  },
+  checkProgressOf: {
+    fontFamily: Fonts.jakartaSemiBold,
+    fontSize: 11,
+    color: 'rgba(13,13,18,0.4)',
   },
 });
 
@@ -4100,6 +4796,111 @@ const ad = StyleSheet.create({
     letterSpacing: 1,
     textTransform: 'uppercase',
   },
+
+  // ─── Local-recording REC / STOP confirmation modals ────────────────────
+  // Visually distinct from the existing popup* styles (used for "no mic
+  // selected"). Higher-stakes gate, so generous breathing room, a hero
+  // icon ring, ink-dark primary CTA, and a non-dismissible overlay.
+  recModalOverlay: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: 'rgba(13, 13, 18, 0.62)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+    zIndex: 1000,
+  },
+  recModalCard: {
+    width: '100%',
+    maxWidth: 340,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 26,
+    paddingTop: 28,
+    paddingHorizontal: 24,
+    paddingBottom: 20,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.22,
+    shadowRadius: 28,
+    shadowOffset: { width: 0, height: 14 },
+    elevation: 14,
+  },
+  recModalIconRing: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 18,
+  },
+  recModalIconRingRec: {
+    backgroundColor: 'rgba(212, 69, 69, 0.12)',
+  },
+  recModalIconRingStop: {
+    backgroundColor: 'rgba(13, 13, 18, 0.06)',
+  },
+  recModalIconDot: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#D44545',
+  },
+  recModalIconSquare: {
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+    backgroundColor: '#0D0D12',
+  },
+  recModalTitle: {
+    fontFamily: Fonts.ttDemiBold,
+    fontSize: 20,
+    color: '#0D0D12',
+    textAlign: 'center',
+    letterSpacing: -0.3,
+    marginBottom: 8,
+  },
+  recModalBody: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 13.5,
+    color: '#818898',
+    textAlign: 'center',
+    lineHeight: 19,
+    marginBottom: 22,
+    paddingHorizontal: 6,
+  },
+  recModalActions: {
+    flexDirection: 'row',
+    gap: 10,
+    width: '100%',
+  },
+  recModalBtnGhost: {
+    flex: 1,
+    backgroundColor: '#F2F2F4',
+    borderRadius: 14,
+    paddingVertical: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  recModalBtnGhostText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 13.5,
+    color: '#818898',
+    letterSpacing: 0.2,
+  },
+  recModalBtnPrimary: {
+    flex: 1.4,
+    backgroundColor: '#0D0D12',
+    borderRadius: 14,
+    paddingVertical: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  recModalBtnPrimaryText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 13.5,
+    color: '#FFFFFF',
+    letterSpacing: 0.3,
+  },
 });
 
 // ── End-of-class debrief sheet styles ──────────────────────────────────────
@@ -4244,6 +5045,57 @@ const db = StyleSheet.create({
     color: '#999',
     marginTop: 2,
   },
+
+  // Readiness verdicts (Good / Not yet)
+  verdictList: {
+    gap: 8,
+    marginHorizontal: 24,
+    marginBottom: 6,
+  },
+  verdictRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F8F8F8',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    gap: 10,
+  },
+  verdictName: {
+    flex: 1,
+    fontFamily: Fonts.jakartaSemiBold,
+    fontSize: 13,
+    color: '#0E0E0E',
+  },
+  verdictBtns: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  verdictBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 10,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: 'rgba(13,13,18,0.08)',
+  },
+  verdictBtnGood: {
+    backgroundColor: '#4AAF52',
+    borderColor: '#4AAF52',
+  },
+  verdictBtnNotYet: {
+    backgroundColor: '#E8A838',
+    borderColor: '#E8A838',
+  },
+  verdictBtnText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 11.5,
+    letterSpacing: 0.2,
+  },
+
   actions: {
     marginHorizontal: 24,
     marginTop: 24,
@@ -4320,5 +5172,293 @@ const cr = StyleSheet.create({
     color: '#999',
     textAlign: 'center',
     lineHeight: 22,
+  },
+});
+
+// ─── StartClass landing styles (the redesign) ───────────────────────────────
+const sc = StyleSheet.create({
+  topBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 18,
+    paddingTop: 6,
+    paddingBottom: 4,
+    height: 52,
+  },
+  iconBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowOffset: { width: 0, height: 1 },
+    shadowRadius: 4,
+    elevation: 1,
+  },
+  topLabel: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 11,
+    color: 'rgba(10,10,10,0.55)',
+    letterSpacing: 1.6,
+  },
+
+  scroll: {
+    paddingHorizontal: 22,
+    paddingBottom: 60,
+  },
+
+  heading: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 36,
+    color: '#0A0A0A',
+    letterSpacing: -1,
+    lineHeight: 40,
+    marginTop: 16,
+  },
+  subtitle: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 14,
+    color: 'rgba(10,10,10,0.55)',
+    lineHeight: 20,
+    marginTop: 8,
+    marginBottom: 26,
+  },
+
+  // Section eyebrow row: "PRIVATE WITH..." + "Sorted by readiness"
+  eyebrowRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
+  },
+  eyebrowAccent: {
+    width: 16,
+    height: 1.5,
+    backgroundColor: '#E8B530',
+    borderRadius: 1,
+  },
+  eyebrowText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 11,
+    color: '#E8B530',
+    letterSpacing: 1.6,
+  },
+  eyebrowRule: {
+    flex: 1,
+    height: 1,
+    backgroundColor: 'rgba(10,10,10,0.09)',
+  },
+  eyebrowRight: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 11.5,
+    color: 'rgba(10,10,10,0.55)',
+    letterSpacing: 0.1,
+  },
+
+  // Per-student card
+  card: {
+    backgroundColor: 'rgba(255,255,255,0.85)',
+    borderRadius: 18,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(232,181,48,0.30)',
+    marginBottom: 14,
+  },
+  cardHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  avRing: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    borderWidth: 2.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+  },
+  avPhoto: { width: 42, height: 42, borderRadius: 21 },
+  avFallback: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 16,
+  },
+  cardName: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 19,
+    color: '#0A0A0A',
+    letterSpacing: -0.4,
+  },
+  cardMeta: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 12.5,
+    color: 'rgba(10,10,10,0.55)',
+    marginTop: 2,
+  },
+  readyWrap: {
+    alignItems: 'flex-end',
+    flexShrink: 0,
+  },
+  readyN: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 26,
+    color: '#0A0A0A',
+    letterSpacing: -0.6,
+    lineHeight: 28,
+  },
+  readyPct: {
+    fontFamily: Fonts.jakartaSemiBold,
+    fontSize: 13,
+    color: 'rgba(10,10,10,0.55)',
+  },
+  readyLbl: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 9.5,
+    color: 'rgba(10,10,10,0.55)',
+    letterSpacing: 1.4,
+    marginTop: 1,
+  },
+
+  cardDivider: {
+    height: 1,
+    backgroundColor: 'rgba(10,10,10,0.08)',
+    marginTop: 12,
+    marginBottom: 8,
+  },
+
+  // Focus-point row inside the card
+  fpRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 6,
+  },
+  fpBullet: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    borderWidth: 1.5,
+    borderColor: '#E8B530',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fpBulletInner: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#E8B530',
+  },
+  fpName: {
+    flex: 1,
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 14.5,
+    color: '#0A0A0A',
+    letterSpacing: -0.2,
+  },
+  fpSince: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 13,
+    color: '#3D9F4E',
+    letterSpacing: -0.1,
+  },
+  fpSinceTarget: {
+    fontFamily: Fonts.jakartaSemiBold,
+    fontSize: 11,
+    color: 'rgba(61,159,78,0.5)',
+  },
+  fpStale: {
+    fontFamily: Fonts.jakartaSemiBold,
+    fontSize: 12.5,
+    color: '#E84545',
+    letterSpacing: 0.1,
+  },
+
+  loadingWrap: {
+    paddingVertical: 30,
+    alignItems: 'center',
+  },
+  emptyText: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 13,
+    color: 'rgba(10,10,10,0.55)',
+    textAlign: 'center',
+    paddingVertical: 22,
+  },
+
+  // OR divider
+  orRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 12,
+    marginBottom: 12,
+  },
+
+  // Group class card (dark)
+  groupCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    backgroundColor: '#0F0C0A',
+    borderRadius: 18,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(232,181,48,0.40)',
+  },
+  groupIconBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: 'rgba(232,181,48,0.16)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  groupTitle: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 17,
+    color: '#FFFFFF',
+    letterSpacing: -0.3,
+  },
+  groupSub: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 12.5,
+    color: 'rgba(255,255,255,0.55)',
+    marginTop: 2,
+  },
+  groupAvatars: {
+    flexDirection: 'row',
+    paddingLeft: 10,
+  },
+  groupAv: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: '#0F0C0A',
+    marginLeft: -8,
+  },
+  groupAvPhoto: {
+    width: 25,
+    height: 25,
+    borderRadius: 12.5,
+  },
+  groupAvText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 11,
+    color: '#FFFFFF',
   },
 });

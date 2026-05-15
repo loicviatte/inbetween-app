@@ -28,6 +28,7 @@ import {
   getWeekActivity,
   getRecentClassInputs,
   getTopFocusPointsWithCounts,
+  getLessonReadiness,
 } from '../storage/storage';
 import { getSlots, getSessionCountForFocus, startTrainingSession } from '../utils/algorithm';
 import {
@@ -135,6 +136,49 @@ function CategoryPicker({ visible, current, onSelect, onClose }) {
   );
 }
 
+// ─── Condensed "next class readiness" strip ──────────────────────────────────
+// Mini version of the Profile readiness card — one glanceable line so the
+// student sees their progress without leaving the Train tab. Taps through to
+// the full breakdown on Profile.
+function NextClassReadinessCard({ readiness, onPress }) {
+  const hasData = !!readiness;
+  const percent = hasData ? Math.max(0, Math.min(100, readiness.percent || 0)) : 0;
+  const focusCount = hasData ? (readiness.focuses?.length || 0) : 0;
+  const minutesRemaining = hasData ? readiness.minutesRemaining ?? 0 : 0;
+  const focusLabel = focusCount === 1 ? 'focus point' : 'focus points';
+  return (
+    <TouchableOpacity
+      style={s.readyCard}
+      onPress={onPress}
+      activeOpacity={0.85}
+    >
+      <View style={s.readyHeaderRow}>
+        <Text style={s.readyLabel} numberOfLines={1}>Get ready for next private lesson</Text>
+        <Ionicons name="chevron-forward" size={16} color="rgba(13,13,18,0.35)" />
+      </View>
+      {hasData ? (
+        <View style={s.readyBodyRow}>
+          <Text style={s.readyPct} allowFontScaling={false}>
+            {percent}<Text style={s.readyPctSm}>%</Text>
+          </Text>
+          <View style={s.readyRightCol}>
+            <View style={s.readyTrack}>
+              <View style={[s.readyFill, { width: `${percent}%` }]} />
+            </View>
+            <Text style={s.readyMetaLine} numberOfLines={1}>
+              {percent >= 100
+                ? `All ${focusCount} ${focusLabel} trained`
+                : `${focusCount} ${focusLabel} · ~${minutesRemaining} min to go`}
+            </Text>
+          </View>
+        </View>
+      ) : (
+        <Text style={s.readyEmpty}>Log your last private to start tracking.</Text>
+      )}
+    </TouchableOpacity>
+  );
+}
+
 function WeekHeatmap({ activity, onDayPress }) {
   const todayIdx = (new Date().getDay() + 6) % 7;
   const labels = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
@@ -181,6 +225,7 @@ export default function HomeScreen({ navigation }) {
   const [classesThisWeek, setClassesThisWeek] = useState(0);
   const [focusTrainedThisWeek, setFocusTrainedThisWeek] = useState(0);
   const [weekActivity, setWeekActivity] = useState({});
+  const [readiness, setReadiness] = useState(null);
   const [metrics, setMetrics] = useState({ progression: 0, retention: 100, global: 0 });
   const [showFilter, setShowFilter] = useState(false);
   const [category, setCategory] = useState(null); // 'latin' | 'ballroom' | null
@@ -212,13 +257,14 @@ export default function HomeScreen({ navigation }) {
     setShowFilter(isBoth);
     setCategory(cat);
 
-    const [slots, sessions, classes, focusTrained, wa, savedPhoto] = await Promise.all([
+    const [slots, sessions, classes, focusTrained, wa, savedPhoto, readinessValue] = await Promise.all([
       getSlots(cat),
       getTrainingSessionsThisWeek(),
       getSessionsThisWeek(),
       getFocusTrainedThisWeek(),
       getWeekActivity(),
       AsyncStorage.getItem('@profile_photo'),
+      getLessonReadiness().catch(() => null),
     ]);
     setUser(u);
     setSlot1(slots.slot1);
@@ -228,6 +274,7 @@ export default function HomeScreen({ navigation }) {
     setClassesThisWeek(classes);
     setFocusTrainedThisWeek(focusTrained);
     setWeekActivity(wa || {});
+    setReadiness(readinessValue);
     setPhotoUri(savedPhoto || null);
     const [c1, c2] = await Promise.all([
       slots.slot1?.id ? getSessionCountForFocus(slots.slot1.id) : Promise.resolve(0),
@@ -245,6 +292,7 @@ export default function HomeScreen({ navigation }) {
       sessionCount: c1, slot2Count: c2,
       sessionsThisWeek: sessions, classesThisWeek: classes,
       focusTrainedThisWeek: focusTrained, weekActivity: wa || {}, metrics: m,
+      readiness: readinessValue,
       category: cat,
     })).catch(() => {});
   }
@@ -280,6 +328,7 @@ export default function HomeScreen({ navigation }) {
             setClassesThisWeek(c.classesThisWeek || 0);
             setFocusTrainedThisWeek(c.focusTrainedThisWeek || 0);
             setWeekActivity(c.weekActivity || {});
+            setReadiness(c.readiness || null);
             if (c.metrics) setMetrics(c.metrics);
             setIsLoading(false);
           }
@@ -517,6 +566,12 @@ export default function HomeScreen({ navigation }) {
 
       {/* ── Bottom dock ── */}
       <View style={s.bottomDock}>
+        {/* Next class readiness — condensed glance, taps through to Profile */}
+        <NextClassReadinessCard
+          readiness={readiness}
+          onPress={() => navigation.navigate('PROFILE')}
+        />
+
         {/* This Week heatmap */}
         <View style={s.weekSection}>
           <View style={s.sectionLabelRow}>
@@ -528,18 +583,33 @@ export default function HomeScreen({ navigation }) {
 
         {/* Stats cards */}
         <View style={s.statsRow}>
-          <View style={s.statCard}>
+          <LinearGradient
+            colors={['#FFFFFF', '#FBF3DC']}
+            start={{ x: 0.5, y: 0 }}
+            end={{ x: 0.5, y: 1 }}
+            style={s.statCard}
+          >
             <Text style={s.statValue}>{sessionsThisWeek}</Text>
             <Text style={s.statLabel}>Training</Text>
-          </View>
-          <View style={s.statCard}>
+          </LinearGradient>
+          <LinearGradient
+            colors={['#FFFFFF', '#FBF3DC']}
+            start={{ x: 0.5, y: 0 }}
+            end={{ x: 0.5, y: 1 }}
+            style={s.statCard}
+          >
             <Text style={s.statValue}>{classesThisWeek}</Text>
             <Text style={s.statLabel}>Class</Text>
-          </View>
-          <View style={s.statCard}>
+          </LinearGradient>
+          <LinearGradient
+            colors={['#FFFFFF', '#FBF3DC']}
+            start={{ x: 0.5, y: 0 }}
+            end={{ x: 0.5, y: 1 }}
+            style={s.statCard}
+          >
             <Text style={s.statValue}>{focusTrainedThisWeek}</Text>
             <Text style={s.statLabel}>Focus Trained</Text>
-          </View>
+          </LinearGradient>
         </View>
 
       </View>
@@ -1063,6 +1133,86 @@ const s = StyleSheet.create({
     backgroundColor: '#D8D8D8',
     alignSelf: 'center',
     marginBottom: 14,
+  },
+
+  // Next class readiness (condensed)
+  readyCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    marginBottom: 14,
+    // Soft gold outline — ties the card to the yellow progress bar inside
+    borderWidth: 1,
+    borderColor: 'rgba(232,181,48,0.32)',
+    // Subtle elevation — sits one layer above the page gradient
+    shadowColor: '#E8B530',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 1,
+  },
+  readyHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 14,
+  },
+  readyLabel: {
+    flex: 1,
+    fontFamily: Fonts.jakartaBold,
+    fontSize: 13,
+    color: '#0D0D12',
+    letterSpacing: -0.1,
+    marginRight: 8,
+  },
+  readyBodyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  readyPct: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 34,
+    color: '#0D0D12',
+    letterSpacing: -1.4,
+    lineHeight: 34,
+    // Align baseline with the bar's vertical center
+    includeFontPadding: false,
+  },
+  readyPctSm: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 15,
+    color: 'rgba(13,13,18,0.4)',
+    letterSpacing: -0.3,
+  },
+  readyRightCol: {
+    flex: 1,
+    marginLeft: 16,
+    justifyContent: 'center',
+  },
+  readyTrack: {
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: 'rgba(13,13,18,0.06)',
+    overflow: 'hidden',
+    marginBottom: 8,
+  },
+  readyFill: {
+    height: '100%',
+    backgroundColor: '#E8B530',
+    borderRadius: 3,
+  },
+  readyMetaLine: {
+    fontFamily: Fonts.jakartaSemiBold,
+    fontSize: 11.5,
+    color: 'rgba(13,13,18,0.55)',
+    letterSpacing: 0.1,
+  },
+  readyEmpty: {
+    fontFamily: Fonts.jakartaSemiBold,
+    fontSize: 12,
+    color: 'rgba(13,13,18,0.55)',
+    paddingVertical: 4,
   },
 
   // This Week

@@ -441,73 +441,87 @@ export async function getDayStreak() {
 
 // ─── Lesson readiness ────────────────────────────────────────────────────────
 // "How ready you are for your next private" — measured against the focus
-// points extracted from your most recent private. Each focus has a small
-// session target (primary 2, secondary 1); a session = ~7 min of training.
-const READINESS_TARGET = { primary: 2, secondary: 1 };
+// points extracted from your most recent private. Critical focuses need 3
+// sessions, everything else needs 2. A session = ~7 min of training.
 const SESSION_MINUTES = 7;
+const TIER_ORDER = { critical: 0, important: 1, supporting: 2 };
+function targetForTier(tier) {
+  return tier === 'critical' ? 3 : 2;
+}
 
-export async function getLessonReadiness() {
-  const userId = await getUserId();
+// Pass `targetUserId` to inspect another student's readiness (coach view).
+// Omit it to read the readiness of the currently authenticated user.
+export async function getLessonReadiness(targetUserId = null) {
+  const userId = targetUserId || (await getUserId());
 
-  // Most recent private class (legacy rows with null lesson_type count as private)
+  // Source of truth = the focus_points the AI extracted for this student,
+  // tagged with their originating class. We start there (rather than from
+  // class_inputs) so a freshly logged class that hasn't been processed yet
+  // doesn't blank out the dashboard — we fall back to the most recent
+  // private that actually has focus_points.
+  const { data: fpClassRefs } = await supabase
+    .from('focus_points')
+    .select('class_input_id')
+    .eq('user_id', userId)
+    .eq('is_other', false)
+    .not('is_deleted', 'is', true)
+    .neq('status', 'past')
+    .not('class_input_id', 'is', null);
+  const distinctClassIds = Array.from(
+    new Set((fpClassRefs ?? []).map(r => r.class_input_id))
+  );
+  if (distinctClassIds.length === 0) return null;
+
+  // Most recent private among those classes (legacy rows with null
+  // lesson_type still count as private).
   const { data: classes } = await supabase
     .from('class_inputs')
-    .select('id, created_at, ai_primary_focus, ai_secondary_focus, practice_point_1, practice_point_2, lesson_type')
-    .eq('user_id', userId)
-    .not('is_deleted', 'is', true)
+    .select('id, created_at')
+    .in('id', distinctClassIds)
     .or('lesson_type.eq.private,lesson_type.is.null')
+    .not('is_deleted', 'is', true)
     .order('created_at', { ascending: false })
     .limit(1);
   const lastClass = classes?.[0];
   if (!lastClass) return null;
 
-  const primaryName = lastClass.ai_primary_focus || lastClass.practice_point_1 || null;
-  const secondaryName = lastClass.ai_secondary_focus || lastClass.practice_point_2 || null;
-  if (!primaryName && !secondaryName) return null;
-
-  // Resolve names → focus_points (so we can count sessions against them)
-  const names = [primaryName, secondaryName].filter(Boolean);
-  let fpByName = {};
-  if (names.length > 0) {
-    const { data: fps } = await supabase
-      .from('focus_points')
-      .select('id, name')
-      .eq('user_id', userId)
-      .in('name', names);
-    for (const f of fps || []) fpByName[f.name] = f;
-  }
+  // Focus points produced for this student by that class.
+  const { data: fps } = await supabase
+    .from('focus_points')
+    .select('id, name, tier')
+    .eq('user_id', userId)
+    .eq('class_input_id', lastClass.id)
+    .eq('is_other', false)
+    .not('is_deleted', 'is', true)
+    .neq('status', 'past');
+  if (!fps || fps.length === 0) return null;
 
   // Sessions completed against those focus points since the class
-  const ids = names.map(n => fpByName[n]?.id).filter(Boolean);
+  const ids = fps.map(f => f.id);
   const counts = {};
-  if (ids.length > 0) {
-    const { data: logs } = await supabase
-      .from('practice_logs')
-      .select('focus_point_id')
-      .eq('student_id', userId)
-      .in('focus_point_id', ids)
-      .gte('completed_at', lastClass.created_at)
-      .not('completed_at', 'is', null);
-    for (const l of logs || []) counts[l.focus_point_id] = (counts[l.focus_point_id] || 0) + 1;
-  }
+  const { data: logs } = await supabase
+    .from('practice_logs')
+    .select('focus_point_id')
+    .eq('student_id', userId)
+    .in('focus_point_id', ids)
+    .gte('completed_at', lastClass.created_at)
+    .not('completed_at', 'is', null);
+  for (const l of logs || []) counts[l.focus_point_id] = (counts[l.focus_point_id] || 0) + 1;
 
-  function makeRow(name, kind) {
-    if (!name) return null;
-    const target = READINESS_TARGET[kind];
-    const id = fpByName[name]?.id || null;
-    const done = Math.min(target, counts[id] || 0);
-    return { name, kind, target, done, focusPointId: id };
-  }
+  const focuses = fps
+    .map(fp => {
+      const target = targetForTier(fp.tier);
+      const done = Math.min(target, counts[fp.id] || 0);
+      return { focusPointId: fp.id, name: fp.name, tier: fp.tier, target, done };
+    })
+    .sort((a, b) => (TIER_ORDER[a.tier] ?? 99) - (TIER_ORDER[b.tier] ?? 99));
 
-  const primary = makeRow(primaryName, 'primary');
-  const secondary = makeRow(secondaryName, 'secondary');
-
-  const totalTarget = (primary?.target || 0) + (secondary?.target || 0);
-  const totalDone = (primary?.done || 0) + (secondary?.done || 0);
+  const totalTarget = focuses.reduce((sum, f) => sum + f.target, 0);
+  const totalDone = focuses.reduce((sum, f) => sum + f.done, 0);
   const percent = totalTarget > 0 ? Math.round((totalDone / totalTarget) * 100) : 0;
   const minutesRemaining = Math.max(0, totalTarget - totalDone) * SESSION_MINUTES;
 
-  return { lastClassDate: lastClass.created_at, primary, secondary, percent, minutesRemaining };
+  return { lastClassDate: lastClass.created_at, focuses, percent, minutesRemaining };
 }
 
 // ─── Notes ───────────────────────────────────────────────────────────────────

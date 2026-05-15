@@ -21,20 +21,52 @@ export function isNewRecordingPipelineEnabled(user) {
   return !!user?.id;
 }
 
-// Coaches enrolled in the native iOS recorder (continuous-audio-recorder
-// module). When enabled, the audio CAPTURE backend switches from expo-audio's
-// stop+start chunk rotation (which trips expo/expo#21782 in background) to a
-// single AVAudioEngine that never restarts and rotates files natively.
-// Independent of the server-side pipeline above — chunks still feed
-// enqueueChunk → uploadWorker → finalize-class.
-const NATIVE_RECORDER_USER_IDS = new Set([
-  // viatteloic@gmail.com (test coach)
-  'b34fc050-3431-49e7-bf8f-0df0560dcbe3',
+// Native iOS recorder (continuous-audio-recorder module). When enabled, the
+// audio CAPTURE backend switches from expo-audio's stop+start chunk rotation
+// (which trips expo/expo#21782 in background and loses everything past chunk 0)
+// to a single AVAudioEngine that never restarts and rotates files natively.
+// Independent of the server-side pipeline — chunks still feed enqueueChunk →
+// uploadWorker → finalize-class.
+//
+// Currently enabled for every authenticated user — field-test rollout in 1.5.7.
+// Falls back to expo-audio automatically if the native start path throws (e.g.
+// non-iOS, missing native module).
+export function isNativeRecorderEnabled(user) {
+  return !!(typeof user === 'string' ? user : user?.id);
+}
+
+// ─── Local recording mode (DJI mic on-device storage) ────────────────────
+// New architecture being beta-tested with a single coach: the mic records
+// to its own internal storage during class, then the coach plugs the mic
+// via USB-C and InBetween imports + matches files to pending classes by
+// chronological order + duration. Phone never captures audio during class,
+// so the coach can use Spotify/Apple Music freely on a Bluetooth speaker
+// without iOS audio-session conflicts.
+//
+// Gated by email because:
+//   - We need to validate end-to-end before flipping for other coaches
+//   - The flow changes UX significantly (no live waveform, manual import
+//     of audio files) — needs onboarding before rolling out broadly
+//   - Admin review (isAdminReviewer) is the safety net for early matching
+//     errors — at 5-20 classes/day, Loic can hand-verify each one
+
+const LOCAL_RECORDING_BETA_EMAILS = new Set([
+  'viatteloic@gmail.com',
 ]);
 
-export function isNativeRecorderEnabled(user) {
-  if (!user) return false;
-  const id = typeof user === 'string' ? user : user?.id;
-  if (!id) return false;
-  return NATIVE_RECORDER_USER_IDS.has(id);
+export function isLocalRecordingMode(user) {
+  if (!user?.email) return false;
+  return LOCAL_RECORDING_BETA_EMAILS.has(user.email.toLowerCase());
+}
+
+// ─── Admin reviewer ──────────────────────────────────────────────────────
+// Loic personally reviews each local-recording class before its focus
+// points propagate to the student. This is the human-in-the-loop safety
+// net for the MVP — if the matcher ever attaches the wrong audio file to
+// a class, Loic sees the mismatch in the review screen and rejects/
+// re-assigns before the student is notified.
+
+export function isAdminReviewer(user) {
+  if (!user?.email) return false;
+  return user.email.toLowerCase() === 'loic@danceuniteduk.com';
 }

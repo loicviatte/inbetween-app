@@ -1,5 +1,6 @@
 import { supabase } from '../services/supabase/client';
 import { focusMatchesCategory } from './danceCategory';
+import { getLessonReadiness } from '../storage/storage';
 
 async function getUserId() {
   const { data: { session } } = await supabase.auth.getSession();
@@ -125,13 +126,21 @@ export async function getSlots(category = null) {
     const userId = await getUserId();
     const now    = new Date();
 
-    const { data: points } = await supabase
-      .from('focus_points')
-      .select('*')
-      .eq('user_id', userId)
-      .eq('is_deleted', false)
-      .eq('is_other', false)
-      .is('alias_of', null);
+    // Fetch the user's focus_points and the lesson readiness in parallel.
+    // Readiness tells us which focuses come from the last private and still
+    // need training — we pin those to the top of the slots until the student
+    // hits 100%. Once ready, normal priority-based selection resumes.
+    const [pointsRes, readiness] = await Promise.all([
+      supabase
+        .from('focus_points')
+        .select('*')
+        .eq('user_id', userId)
+        .eq('is_deleted', false)
+        .eq('is_other', false)
+        .is('alias_of', null),
+      getLessonReadiness().catch(() => null),
+    ]);
+    const points = pointsRes.data;
 
     if (!points || points.length === 0) {
       return { slot1: null, slot2: null, slot3: null };
@@ -149,10 +158,30 @@ export async function getSlots(category = null) {
       .map((p) => ({ ...p, _priority: computePriority(p, now) }))
       .sort((a, b) => b._priority - a._priority);
 
+    // Pin readiness focuses (in tier order) while readiness < 100%. We pull
+    // from the full points set so a focus pinned by readiness shows up even
+    // if its status (e.g. pending_coach) would normally exclude it from
+    // the regular slot pool. Category filter still applies.
+    const pinned = [];
+    if (readiness && readiness.percent < 100) {
+      const pointById = new Map(points.map((p) => [p.id, p]));
+      for (const f of readiness.focuses || []) {
+        if (f.done >= f.target) continue;
+        const fp = pointById.get(f.focusPointId);
+        if (!fp) continue;
+        if (!focusMatchesCategory(fp, category)) continue;
+        pinned.push({ ...fp, _priority: computePriority(fp, now), _pinned: true });
+      }
+    }
+
+    const pinnedIds = new Set(pinned.map((p) => p.id));
+    const rest = scored.filter((p) => !pinnedIds.has(p.id));
+    const finalList = [...pinned, ...rest];
+
     return {
-      slot1: scored[0] || null,
-      slot2: scored[1] || null,
-      slot3: scored[2] || null,
+      slot1: finalList[0] || null,
+      slot2: finalList[1] || null,
+      slot3: finalList[2] || null,
     };
   } catch (e) {
     console.error('getSlots error:', e);
