@@ -21,6 +21,20 @@ export function isNewRecordingPipelineEnabled(user) {
   return !!user?.id;
 }
 
+// Native iOS recorder (continuous-audio-recorder module). When enabled, the
+// audio CAPTURE backend switches from expo-audio's stop+start chunk rotation
+// (which trips expo/expo#21782 in background and loses everything past chunk 0)
+// to a single AVAudioEngine that never restarts and rotates files natively.
+// Independent of the server-side pipeline — chunks still feed enqueueChunk →
+// uploadWorker → finalize-class.
+//
+// Currently enabled for every authenticated user — field-test rollout in 1.5.7.
+// Falls back to expo-audio automatically if the native start path throws (e.g.
+// non-iOS, missing native module).
+export function isNativeRecorderEnabled(user) {
+  return !!(typeof user === 'string' ? user : user?.id);
+}
+
 // ─── Local recording mode (DJI mic on-device storage) ────────────────────
 // New architecture being beta-tested with a single coach: the mic records
 // to its own internal storage during class, then the coach plugs the mic

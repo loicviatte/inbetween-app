@@ -21,3 +21,9 @@ verify_jwt = true
 
 [functions.telegram-webhook]
 verify_jwt = false
+
+# AssemblyAI calls this with a custom X-Webhook-Secret header (validated
+# inside the function), not a Supabase JWT. Must disable JWT check or the
+# API gateway returns 401 before the function code runs.
+[functions.assemblyai-webhook]
+verify_jwt = false
