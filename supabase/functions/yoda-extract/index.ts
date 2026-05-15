@@ -922,6 +922,7 @@ async function processRecord(record: ClassInputRecord): Promise<void> {
 
     const anthropicData = await anthropicRes.json()
     const rawText: string = anthropicData.content?.[0]?.text ?? ''
+    const stopReason: string | undefined = anthropicData.stop_reason
 
     // Strip markdown code fences if Claude wrapped the JSON
     const jsonText = rawText
@@ -933,7 +934,9 @@ async function processRecord(record: ClassInputRecord): Promise<void> {
     try {
       parsed = JSON.parse(jsonText)
     } catch {
-      throw new Error(`JSON parse failed. Raw output:\n${rawText.slice(0, 500)}`)
+      throw new Error(
+        `JSON parse failed (stop_reason=${stopReason}). Raw output:\n${rawText.slice(0, 500)}`,
+      )
     }
     // Belt-and-suspenders: the prompt forbids hyphens, but strip any that
     // slipped through from every string field before we write anything.
