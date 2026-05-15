@@ -96,12 +96,14 @@ function formatRelative(date) {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
-// Health score → (color, progress) for mini student rings.
-// Uses the same 0-100 health metric as the student detail hero ring so the
-// same number drives the ring everywhere in the app.
-function ringForHealth(health) {
-  const v = Math.max(0, Math.min(100, health || 0));
-  const progress = v / 100;
+// Lesson readiness % → (color, progress) for mini student rings.
+// Same 0-100 readiness metric as the student detail hero ring, so the same
+// number drives the ring everywhere in the app.
+function ringForReadiness(percent) {
+  const v = Math.max(0, Math.min(100, percent || 0));
+  // Floor progress at 1% so a 0%-ready student still shows a tiny red dot
+  // (otherwise the ring vanishes and "0%" looks the same as "no data").
+  const progress = Math.max(0.01, v / 100);
   const color = v >= 70 ? GN_SOLID : v >= 40 ? OR_SOLID : RD_SOLID;
   return { color, progress };
 }
@@ -197,8 +199,8 @@ function OverviewDonut({ practiced, forgetting, silent, total }) {
 }
 
 // ── Mini ring for a single student ──────────────────────────────────────────
-function StudentRing({ student, actionCount = 0, onPress }) {
-  const { color, progress } = ringForHealth(student.health);
+function StudentRing({ student, readinessPercent = 0, actionCount = 0, onPress }) {
+  const { color, progress } = ringForReadiness(readinessPercent);
   const photoUri = student.photoUrl || student.photo_url || student.avatar_url;
   const size = 50;
   const r = 22;
@@ -512,12 +514,14 @@ export default function DashboardScreen({ navigation }) {
   const [readiestStudent, setReadiestStudent] = useState(null);
   const [readiestLoading, setReadiestLoading] = useState(false);
   const [globalReadinessAvg, setGlobalReadinessAvg] = useState(0);
+  const [readinessByStudent, setReadinessByStudent] = useState({});
   const lastReadiestSigRef = useRef(null);
 
   useEffect(() => {
     if (!students || students.length === 0) {
       setReadiestStudent(null);
       setGlobalReadinessAvg(0);
+      setReadinessByStudent({});
       return;
     }
     const signature = students.map((s) => s.id).sort().join('|');
@@ -535,9 +539,11 @@ export default function DashboardScreen({ navigation }) {
         let best = null;
         let bestPct = -1;
         let sum = 0;
+        const byStudent = {};
         for (let i = 0; i < students.length; i++) {
           const r = readinesses[i];
           const pct = r?.percent ?? 0;
+          byStudent[students[i].id] = pct;
           sum += pct;
           if (r && pct > bestPct) {
             bestPct = pct;
@@ -546,10 +552,12 @@ export default function DashboardScreen({ navigation }) {
         }
         setReadiestStudent(best);
         setGlobalReadinessAvg(Math.round(sum / students.length));
+        setReadinessByStudent(byStudent);
       } catch {
         if (alive) {
           setReadiestStudent(null);
           setGlobalReadinessAvg(0);
+          setReadinessByStudent({});
         }
       } finally {
         if (alive) setReadiestLoading(false);
@@ -625,6 +633,7 @@ export default function DashboardScreen({ navigation }) {
               <StudentRing
                 key={s.id}
                 student={s}
+                readinessPercent={readinessByStudent[s.id] || 0}
                 actionCount={studentActionCounts?.[s.id] || 0}
                 onPress={() =>
                   navigation.navigate('StudentDetail', {

@@ -578,7 +578,7 @@ export async function getStudentRecentActivity(studentId, limit = 20) {
       .limit(limit),
     supabase
       .from('class_inputs')
-      .select('id, user_id, student_id, created_at, title, dance, teacher_name, class_summary, lesson_type, focus_points!focus_points_class_input_id_fkey(id, name, is_other)')
+      .select('id, user_id, student_id, created_at, title, dance, teacher_name, class_summary, lesson_type, focus_points!focus_points_class_input_id_fkey(id, name, is_other, is_deleted, status)')
       .or(`user_id.eq.${studentId},student_id.eq.${studentId}`)
       .eq('is_deleted', false)
       .order('created_at', { ascending: false })
@@ -629,7 +629,7 @@ export async function getStudentRecentActivity(studentId, limit = 20) {
         classSummary: c.class_summary || null,
         lessonType: c.lesson_type || null,
         focusPoints: (c.focus_points || [])
-          .filter(fp => !fp.is_other)
+          .filter(fp => !fp.is_other && !fp.is_deleted && fp.status !== 'past')
           .map(fp => ({ id: fp.id, name: fp.name })),
       };
     }),

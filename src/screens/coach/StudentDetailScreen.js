@@ -518,7 +518,11 @@ export default function StudentDetailScreen({ route, navigation }) {
             setActivity(act);
             setQuestions(qs);
             setPendingFPs(pfp);
-            setLastClassDate(lcd);
+            // Prefer the readiness reference (most recent private with active
+            // focus points) so the activity timeline filter matches the
+            // "LAST CLASS WITH YOU" recap card. Falls back to the raw
+            // last-private date if readiness has no reference yet.
+            setLastClassDate(rd?.lastClassDate ?? lcd);
             setReadiness(rd);
             setMetrics(m);
             setNameMatches(
@@ -581,14 +585,16 @@ export default function StudentDetailScreen({ route, navigation }) {
             { event: '*', schema: 'public', table: 'practice_logs', filter: `student_id=eq.${studentId}` },
             async () => {
               if (!active) return;
-              const [act, lcd, m] = await Promise.all([
+              const [act, lcd, m, rd] = await Promise.all([
                 getStudentRecentActivity(studentId, 30),
                 getStudentLastClassDate(studentId),
                 getAllStudentMetrics(studentId, coachCategoryRef.current),
+                getLessonReadiness(studentId).catch(() => null),
               ]);
               if (active) {
                 setActivity(act);
-                setLastClassDate(lcd);
+                setLastClassDate(rd?.lastClassDate ?? lcd);
+                setReadiness(rd);
                 setMetrics(m);
               }
             }
@@ -742,10 +748,19 @@ export default function StudentDetailScreen({ route, navigation }) {
       .slice(0, 20);
   }, [activity, questions, sinceMs]);
 
-  // ── Last class with this coach (for recap card in Activity tab) ──────────
+  // ── Last private with this coach (for recap card in Activity tab) ───────
+  // Matches the readiness reference: most recent PRIVATE class with at least
+  // one active focus point (excluding deleted / past / is_other). Falls back
+  // to the older private when the most recent one has no usable focus points
+  // (e.g. transcript failed and all focus points were marked past/deleted).
   const lastCoachClass = useMemo(() => {
     const cls = activity.find(
-      (ev) => ev.type === 'class' && ev.withCurrentCoach && ev.classSummary
+      (ev) =>
+        ev.type === 'class' &&
+        ev.withCurrentCoach &&
+        ev.classSummary &&
+        ev.lessonType !== 'group' &&
+        (ev.focusPoints?.length ?? 0) > 0,
     );
     if (!cls) return null;
 
@@ -1170,29 +1185,6 @@ export default function StudentDetailScreen({ route, navigation }) {
                 Since last private lesson{lastClassDate ? ` · ${relativeDateShort(lastClassDate)}` : ''}
               </Text>
             </View>
-            {stats.trend !== 0 && (
-              <View
-                style={[
-                  styles.trendPill,
-                  { backgroundColor: stats.trend > 0 ? 'rgba(74,175,82,0.08)' : 'rgba(212,69,69,0.08)' },
-                ]}
-              >
-                <Ionicons
-                  name={stats.trend > 0 ? 'trending-up' : 'trending-down'}
-                  size={11}
-                  color={stats.trend > 0 ? C.green : C.red}
-                />
-                <Text
-                  style={[
-                    styles.trendText,
-                    { color: stats.trend > 0 ? C.green : C.red },
-                  ]}
-                >
-                  {stats.trend > 0 ? '+' : ''}
-                  {stats.trend}%
-                </Text>
-              </View>
-            )}
           </View>
           <View style={styles.tabContent}>
             <View style={styles.tlContainer}>
