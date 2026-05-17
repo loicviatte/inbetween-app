@@ -42,6 +42,10 @@ import {
   rejectPendingFocusPoint,
 } from '../../storage/coachStorage';
 import FocusPointEditSheet from '../../components/FocusPointEditSheet';
+import ClassContextSheet from '../../components/coach/ClassContextSheet';
+import ApproveConfirmSheet from '../../components/coach/ApproveConfirmSheet';
+import MergeCompareCard from '../../components/coach/MergeCompareCard';
+import NameMatchCard from '../../components/coach/NameMatchCard';
 import PendingFocusCard from '../../components/coach/PendingFocusCard';
 import RejectFocusSheet from '../../components/coach/RejectFocusSheet';
 import { SkeletonBox } from '../../components/Skeleton';
@@ -78,6 +82,8 @@ export default function ActionNeededScreen({ navigation }) {
   const [fpLoading, setFpLoading] = useState(true);
   const [editingFp, setEditingFp] = useState(null);
   const [rejectingFp, setRejectingFp] = useState(null);
+  const [contextFp, setContextFp] = useState(null);
+  const [approvingFp, setApprovingFp] = useState(null);
 
   // Merge requests
   const [mergeRequests, setMergeRequests] = useState([]);
@@ -131,7 +137,22 @@ export default function ActionNeededScreen({ navigation }) {
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  // Actions
+  // Auto-select the right tab on first landing based on priority:
+  // Names > Merge > Focus. Once the coach manually changes tab, we never
+  // override their choice — the ref locks us in.
+  const didAutoSelectTab = useRef(false);
+  useEffect(() => {
+    if (didAutoSelectTab.current) return;
+    if (fpLoading) return; // wait for the initial load to complete
+    if (nameMatches.length > 0) setActiveTab('name');
+    else if (mergeRequests.length > 0) setActiveTab('merge');
+    else setActiveTab('focus');
+    didAutoSelectTab.current = true;
+  }, [fpLoading, nameMatches.length, mergeRequests.length]);
+
+  // Actions. Group focus points are aggregated in the UI (1 card per
+  // shared_group_id), so handlers must operate on all underlying rows when
+  // an aggregate is passed via `_rows`.
   const handleApprove = async (fpId) => {
     try {
       await approveFocusPoint(fpId);
@@ -140,29 +161,64 @@ export default function ActionNeededScreen({ navigation }) {
     } catch {}
   };
 
+  const handleApproveGroup = async (rowIds) => {
+    try {
+      await Promise.all(rowIds.map(id => approveFocusPoint(id)));
+      const set = new Set(rowIds);
+      setPendingFPs(prev => prev.filter(fp => !set.has(fp.id)));
+      refresh();
+    } catch {}
+  };
+
+  // Approve flow goes through a confirmation modal: tapping "Approve" on a
+  // card opens the sheet via openApprove*, and the sheet's "Yes, send"
+  // button calls handleConfirmApprove below.
+  const openApproveForSolo = (fp) => {
+    const student = studentMap[fp.user_id];
+    setApprovingFp({ ...fp, _studentNames: student ? [student.name] : [] });
+  };
+
+  const openApproveForGroup = (agg) => {
+    setApprovingFp({ ...agg, _isGroup: true });
+  };
+
+  const handleConfirmApprove = async () => {
+    if (!approvingFp) return;
+    if (approvingFp._rows) {
+      await handleApproveGroup(approvingFp._rows.map(r => r.id));
+    } else {
+      await handleApprove(approvingFp.id);
+    }
+    setApprovingFp(null);
+  };
+
   const handleReject = (fp) => {
     setRejectingFp(fp);
   };
 
   const handleConfirmReject = async (reason) => {
     if (!rejectingFp) return;
+    const rows = rejectingFp._rows || [{ id: rejectingFp.id, user_id: rejectingFp.user_id }];
     try {
-      await rejectPendingFocusPoint({
-        fpId: rejectingFp.id,
-        studentId: rejectingFp.user_id,
+      await Promise.all(rows.map(r => rejectPendingFocusPoint({
+        fpId: r.id,
+        studentId: r.user_id,
         fpName: rejectingFp.name,
         reason,
-      });
-      setPendingFPs(prev => prev.filter(fp => fp.id !== rejectingFp.id));
+      })));
+      const set = new Set(rows.map(r => r.id));
+      setPendingFPs(prev => prev.filter(fp => !set.has(fp.id)));
       setRejectingFp(null);
       refresh();
     } catch {}
   };
 
   const handleSaveEdit = async (fpId, updates) => {
+    const rowIds = editingFp?._rows ? editingFp._rows.map(r => r.id) : [fpId];
     try {
-      await editAndApproveFocusPoint(fpId, updates);
-      setPendingFPs(prev => prev.filter(fp => fp.id !== fpId));
+      await Promise.all(rowIds.map(id => editAndApproveFocusPoint(id, updates)));
+      const set = new Set(rowIds);
+      setPendingFPs(prev => prev.filter(fp => !set.has(fp.id)));
       setEditingFp(null);
       refresh();
     } catch {}
@@ -218,18 +274,52 @@ export default function ActionNeededScreen({ navigation }) {
 
   const handleRejectMerge = async (mr) => {
     try {
-      await supabase.from('merge_requests').update({ status: 'rejected', resolved_at: new Date().toISOString(), resolved_by: 'coach' }).eq('id', mr.id);
+      // "Keep both" means the new (incoming) focus point is NOT a duplicate
+      // after all, so send it through the normal coach review flow: bump it
+      // to pending_coach with a fresh deadline. The older (existing) one is
+      // left alone — it's already published.
+      const a = mr.focusA;
+      const b = mr.focusB;
+      const olderFirst = a && b && new Date(a.created_at) <= new Date(b.created_at);
+      const incoming = olderFirst ? b : a;
+
+      if (incoming) {
+        const deadline = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
+        await supabase
+          .from('focus_points')
+          .update({ status: 'pending_coach', coach_review_deadline: deadline })
+          .eq('id', incoming.id);
+      }
+
+      await supabase.from('merge_requests')
+        .update({ status: 'rejected', resolved_at: new Date().toISOString(), resolved_by: 'coach' })
+        .eq('id', mr.id);
       setMergeRequests(prev => prev.filter(m => m.id !== mr.id));
+      loadData();
+      refresh();
     } catch {}
   };
 
+  // Count of cards the coach will see — group FPs sharing a shared_group_id
+  // collapse into one card, so the visible "review count" is less than the
+  // underlying row count when group focuses exist.
+  const reviewCount = (() => {
+    const sharedIds = new Set();
+    let solo = 0;
+    for (const fp of pendingFPs) {
+      if (fp.group_fp) sharedIds.add(fp.shared_group_id || `single-${fp.id}`);
+      else solo++;
+    }
+    return sharedIds.size + solo;
+  })();
+
   const tabs = [
-    { key: 'focus', label: 'Focus points', count: pendingFPs.length },
+    { key: 'focus', label: 'Focus points', count: reviewCount },
     { key: 'merge', label: 'Merge', count: mergeRequests.length },
     { key: 'name', label: 'Names', count: nameMatches.length },
   ];
 
-  const totalCount = pendingFPs.length + mergeRequests.length + nameMatches.length;
+  const totalCount = reviewCount + mergeRequests.length + nameMatches.length;
 
   // Horizontal pager: sync tab selection <-> swipe gesture, drive a moving underline.
   const screenWidth = Dimensions.get('window').width;
@@ -291,11 +381,22 @@ export default function ActionNeededScreen({ navigation }) {
           style={[
             s.tabUnderline,
             {
-              left: horizontalScrollX.interpolate({
-                inputRange: [0, Math.max(1, screenWidth), Math.max(2, 2 * screenWidth)],
-                outputRange: ['5%', '38.333%', '71.667%'],
-                extrapolate: 'clamp',
-              }),
+              // Underline position via transform (native driver) instead of
+              // animating `left` (layout, JS-thread). Same visual result, but
+              // the swipe-driven slide no longer chokes when cards are
+              // expanding behind the pager.
+              left: 0,
+              transform: [{
+                translateX: horizontalScrollX.interpolate({
+                  inputRange: [0, Math.max(1, screenWidth), Math.max(2, 2 * screenWidth)],
+                  outputRange: [
+                    screenWidth * 0.05,
+                    screenWidth * 0.38333,
+                    screenWidth * 0.71667,
+                  ],
+                  extrapolate: 'clamp',
+                }),
+              }],
             },
           ]}
         />
@@ -311,7 +412,7 @@ export default function ActionNeededScreen({ navigation }) {
         scrollEventThrottle={16}
         onScroll={Animated.event(
           [{ nativeEvent: { contentOffset: { x: horizontalScrollX } } }],
-          { useNativeDriver: false }
+          { useNativeDriver: true }
         )}
         onMomentumScrollEnd={(e) => {
           const page = Math.round(e.nativeEvent.contentOffset.x / Math.max(1, screenWidth));
@@ -352,32 +453,93 @@ export default function ActionNeededScreen({ navigation }) {
             {/* Bulk actions */}
             {pendingFPs.length > 0 && (
               <View style={s.bulkRow}>
-                <Text style={s.bulkLabel}>{pendingFPs.length} to review</Text>
+                <Text style={s.bulkLabel}>{reviewCount} to review</Text>
                 <TouchableOpacity style={s.bulkBtn} onPress={handleApproveAll} activeOpacity={0.8}>
                   <Text style={s.bulkBtnText}>Approve all</Text>
                 </TouchableOpacity>
               </View>
             )}
 
-            {pendingFPs.map(fp => {
-              const isExpanded = expandedId === `fp-${fp.id}`;
-              const student = studentMap[fp.user_id];
+            {(() => {
+              // Aggregate group FPs by shared_group_id so each group focus
+              // shows as one card listing all affected students (instead of
+              // N duplicate cards, one per student row in the DB).
+              const groupAggMap = new Map();
+              for (const fp of pendingFPs) {
+                if (!fp.group_fp) continue;
+                const key = fp.shared_group_id || `single-${fp.id}`;
+                if (!groupAggMap.has(key)) {
+                  groupAggMap.set(key, { ...fp, _rows: [], _students: [] });
+                }
+                const agg = groupAggMap.get(key);
+                agg._rows.push({ id: fp.id, user_id: fp.user_id });
+                const student = studentMap[fp.user_id];
+                if (student) agg._students.push(student);
+              }
+              const groupAggregates = Array.from(groupAggMap.values());
+              const soloFPs = pendingFPs.filter(fp => !fp.group_fp);
+
+              const renderSoloCard = (fp) => {
+                const isExpanded = expandedId === `fp-${fp.id}`;
+                const student = studentMap[fp.user_id];
+                return (
+                  <PendingFocusCard
+                    key={fp.id}
+                    fp={fp}
+                    isExpanded={isExpanded}
+                    onToggle={() => {
+                      LayoutAnimation.configureNext(EXPAND_ANIMATION);
+                      setExpandedId(isExpanded ? null : `fp-${fp.id}`);
+                    }}
+                    studentName={student?.name || 'Student'}
+                    onApprove={() => openApproveForSolo(fp)}
+                    onEdit={setEditingFp}
+                    onDelete={handleReject}
+                    onShowContext={setContextFp}
+                  />
+                );
+              };
+
+              const renderGroupCard = (agg) => {
+                const cardKey = agg.shared_group_id || agg.id;
+                const isExpanded = expandedId === `group-${cardKey}`;
+                const rowIds = agg._rows.map(r => r.id);
+                return (
+                  <PendingFocusCard
+                    key={cardKey}
+                    fp={agg}
+                    isExpanded={isExpanded}
+                    onToggle={() => {
+                      LayoutAnimation.configureNext(EXPAND_ANIMATION);
+                      setExpandedId(isExpanded ? null : `group-${cardKey}`);
+                    }}
+                    onApprove={() => openApproveForGroup(agg)}
+                    onEdit={() => setEditingFp(agg)}
+                    onDelete={() => handleReject(agg)}
+                    onShowContext={setContextFp}
+                  />
+                );
+              };
+
               return (
-                <PendingFocusCard
-                  key={fp.id}
-                  fp={fp}
-                  isExpanded={isExpanded}
-                  onToggle={() => {
-                    LayoutAnimation.configureNext(EXPAND_ANIMATION);
-                    setExpandedId(isExpanded ? null : `fp-${fp.id}`);
-                  }}
-                  studentName={student?.name || 'Student'}
-                  onApprove={handleApprove}
-                  onEdit={setEditingFp}
-                  onDelete={handleReject}
-                />
+                <>
+                  {groupAggregates.length > 0 && (
+                    <>
+                      <Text style={s.sectionHeader}>Group focus points · {groupAggregates.length}</Text>
+                      {groupAggregates.map(renderGroupCard)}
+                    </>
+                  )}
+                  {soloFPs.length > 0 && (
+                    <>
+                      <Text style={[s.sectionHeader, groupAggregates.length > 0 && s.sectionHeaderSpaced]}>
+                        Solo focus points · {soloFPs.length}
+                      </Text>
+                      {soloFPs.map(renderSoloCard)}
+                    </>
+                  )}
+                </>
               );
-            })}
+            })()}
 
             {pendingFPs.length === 0 && !fpLoading && (
               <View style={s.emptyState}>
@@ -398,71 +560,14 @@ export default function ActionNeededScreen({ navigation }) {
 
             {mergeRequests.map(mr => {
               const student = studentMap[mr.student_id];
-              const a = mr.focusA;
-              const b = mr.focusB;
-              const olderFirst = a && b && new Date(a.created_at) <= new Date(b.created_at);
-              const existing = olderFirst ? a : b;
-              const incoming = olderFirst ? b : a;
               return (
-                <View key={mr.id} style={s.mergeCard}>
-                  <View style={s.mergeHeader}>
-                    <View style={s.mergeIcon}>
-                      <Ionicons name="git-merge-outline" size={14} color={C.orange} />
-                    </View>
-                    <Text style={s.mergeTitleText} numberOfLines={1}>
-                      Possible duplicate
-                    </Text>
-                  </View>
-
-                  {student && (
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8 }}>
-                      <Ionicons name="person-outline" size={14} color={C.gray} />
-                      <Text style={s.mergeMeta}>{student.name}</Text>
-                    </View>
-                  )}
-
-                  {[{ fp: existing, label: 'Existing' }, { fp: incoming, label: 'New from this class' }].map(
-                    ({ fp, label }, i) =>
-                      fp ? (
-                        <View
-                          key={fp.id}
-                          style={{
-                            marginTop: 12,
-                            paddingTop: 10,
-                            borderTopWidth: i === 0 ? 0 : 1,
-                            borderTopColor: '#EEE',
-                          }}
-                        >
-                          <Text style={{ fontSize: 11, color: C.gray, letterSpacing: 0.5, marginBottom: 4 }}>
-                            {label.toUpperCase()}
-                          </Text>
-                          <Text style={{ fontSize: 15, fontWeight: '700', color: C.text }}>{fp.name}</Text>
-                          {!!fp.subtitle && (
-                            <Text style={{ fontSize: 13, color: C.text, marginTop: 2 }}>{fp.subtitle}</Text>
-                          )}
-                          {!!fp.context && (
-                            <Text style={{ fontSize: 12, color: C.gray, marginTop: 6, lineHeight: 17 }}>
-                              {fp.context}
-                            </Text>
-                          )}
-                          {!!fp.drill && (
-                            <Text style={{ fontSize: 12, color: C.orange, marginTop: 6, fontStyle: 'italic' }}>
-                              Drill: {fp.drill}
-                            </Text>
-                          )}
-                        </View>
-                      ) : null,
-                  )}
-
-                  <View style={s.nameActions}>
-                    <TouchableOpacity style={s.confirmBtn} onPress={() => handleMerge(mr)} activeOpacity={0.8}>
-                      <Text style={s.confirmBtnText}>Merge</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity style={s.denyBtn} onPress={() => handleRejectMerge(mr)} activeOpacity={0.8}>
-                      <Text style={s.denyBtnText}>Keep both</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
+                <MergeCompareCard
+                  key={mr.id}
+                  mr={mr}
+                  studentName={student?.name}
+                  onMerge={() => handleMerge(mr)}
+                  onKeepBoth={() => handleRejectMerge(mr)}
+                />
               );
             })}
 
@@ -480,51 +585,17 @@ export default function ActionNeededScreen({ navigation }) {
       <ScrollView style={{ width: screenWidth }} contentContainerStyle={{ padding: Spacing.side, paddingBottom: 100 }}>
         <>
             <Text style={s.tabIntro}>
-              We found names from class attendance that might match your students. Confirm the right ones so focus points land in the right place.
+              While transcribing your class audio, our AI picked up names it couldn't confidently match to your roster. Confirm each one so the focus points from that lesson land on the right student.
             </Text>
 
-            {nameMatches.map(notif => {
-              const d = notif.data || {};
-              return (
-                <View key={notif.id} style={s.nameCard}>
-                  <View style={s.nameHeader}>
-                    <View style={s.nameAvatar}>
-                      <Text style={s.nameAvatarText}>{initials(d.student_name)}</Text>
-                    </View>
-                    <View style={{ flex: 1, minWidth: 0 }}>
-                      <Text style={s.nameName}>{d.student_name || 'Unknown'}</Text>
-                      <Text style={s.nameSource}>Attendance</Text>
-                    </View>
-                    <View style={s.pendingBadge}>
-                      <Text style={s.pendingBadgeText}>Pending</Text>
-                    </View>
-                  </View>
-
-                  <View style={s.matchRow}>
-                    <Text style={s.matchLabel}>Matches</Text>
-                    <Text style={s.matchValue}>{d.extracted_name || '—'}</Text>
-                    <Ionicons name="chevron-forward" size={14} color="#CCC" />
-                  </View>
-
-                  <View style={s.nameActions}>
-                    <TouchableOpacity
-                      style={s.confirmBtn}
-                      onPress={() => handleConfirmName(notif)}
-                      activeOpacity={0.8}
-                    >
-                      <Text style={s.confirmBtnText}>Confirm</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={s.denyBtn}
-                      onPress={() => handleRejectName(notif)}
-                      activeOpacity={0.8}
-                    >
-                      <Text style={s.denyBtnText}>Not a match</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              );
-            })}
+            {nameMatches.map(notif => (
+              <NameMatchCard
+                key={notif.id}
+                notif={notif}
+                onConfirm={() => handleConfirmName(notif)}
+                onReject={() => handleRejectName(notif)}
+              />
+            ))}
 
             {nameMatches.length === 0 && (
               <View style={s.emptyState}>
@@ -554,6 +625,25 @@ export default function ActionNeededScreen({ navigation }) {
             fp={rejectingFp}
             onConfirm={handleConfirmReject}
             onClose={() => setRejectingFp(null)}
+          />
+        )}
+      </Modal>
+
+      <Modal visible={!!contextFp} transparent animationType="slide" onRequestClose={() => setContextFp(null)}>
+        {contextFp && (
+          <ClassContextSheet
+            fp={contextFp}
+            onClose={() => setContextFp(null)}
+          />
+        )}
+      </Modal>
+
+      <Modal visible={!!approvingFp} transparent animationType="fade" onRequestClose={() => setApprovingFp(null)}>
+        {approvingFp && (
+          <ApproveConfirmSheet
+            fp={approvingFp}
+            onConfirm={handleConfirmApprove}
+            onCancel={() => setApprovingFp(null)}
           />
         )}
       </Modal>
@@ -704,6 +794,17 @@ const s = StyleSheet.create({
     fontFamily: Fonts.jakartaBold,
     fontSize: 11,
     color: '#fff',
+  },
+  sectionHeader: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 11,
+    color: C.gray,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 10,
+  },
+  sectionHeaderSpaced: {
+    marginTop: 14,
   },
 
   // Focus point card — editorial, minimal

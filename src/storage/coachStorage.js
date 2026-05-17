@@ -189,7 +189,7 @@ export async function getMyStudents() {
       .in('user_id', studentIds),
     supabase
       .from('focus_points')
-      .select('id, name, user_id, status, tier, merge_action, dance')
+      .select('id, name, user_id, status, tier, merge_action, dance, class_input_id')
       .in('user_id', studentIds)
       .eq('is_deleted', false)
       .eq('is_other', false),
@@ -201,7 +201,7 @@ export async function getMyStudents() {
       .gte('started_at', sevenDaysAgo),
     supabase
       .from('class_inputs')
-      .select('user_id, student_id, created_at, lesson_type')
+      .select('id, user_id, student_id, created_at, lesson_type')
       .or(`user_id.in.(${studentIds.join(',')}),student_id.in.(${studentIds.join(',')})`)
       .eq('is_deleted', false)
       .order('created_at', { ascending: false }),
@@ -240,9 +240,26 @@ export async function getMyStudents() {
     }
   }
 
+  // Build the set of class_input_ids that have non-past FPs per student.
+  // This matches getLessonReadiness's anchor logic: a class only "counts" as
+  // the cutoff if the AI has already extracted focus points for it. A class
+  // that's still processing (no FPs yet) is skipped, otherwise the two
+  // sources disagree and the UI shows contradictions like 100% carryover
+  // alongside "no practice since last class".
+  const classIdsWithFPsByStudent = {};
+  for (const fp of allFocuses || []) {
+    if (!fp.class_input_id) continue;
+    if (fp.status === 'past') continue;
+    if (!classIdsWithFPsByStudent[fp.user_id]) {
+      classIdsWithFPsByStudent[fp.user_id] = new Set();
+    }
+    classIdsWithFPsByStudent[fp.user_id].add(fp.class_input_id);
+  }
+
   // Most recent class (any type) and most recent PRIVATE class per student.
   // A class can reference a student via user_id (student-logged) or
-  // student_id (coach-logged / attendance-confirmed).
+  // student_id (coach-logged / attendance-confirmed). The private cutoff
+  // only counts classes that have FPs extracted (see comment above).
   const studentIdSet = new Set(studentIds);
   const lastClassByStudent = {};
   const lastPrivateClassByStudent = {};
@@ -256,6 +273,8 @@ export async function getMyStudents() {
       (c.lesson_type === 'private' || !c.lesson_type) &&
       !lastPrivateClassByStudent[sid]
     ) {
+      const fpClassIds = classIdsWithFPsByStudent[sid];
+      if (!fpClassIds || !fpClassIds.has(c.id)) continue;
       lastPrivateClassByStudent[sid] = c.created_at;
     }
   }
@@ -265,14 +284,16 @@ export async function getMyStudents() {
     return Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
   }
 
-  // Distinct focus points practiced since last private class, per student.
+  // Distinct focus points practiced since last private class (with FPs),
+  // per student. Filters on `completed_at` to match getLessonReadiness —
+  // a session counts the moment it finishes, regardless of when it started.
   const distinctFPSincePrivate = {};
   for (const id of studentIds) {
     const cutoff = lastPrivateClassByStudent[id] || null;
     const focusSet = new Set();
     for (const l of allLogs || []) {
       if (l.student_id !== id || !l.completed_at || !l.focus_point_id) continue;
-      if (cutoff && l.started_at < cutoff) continue;
+      if (cutoff && l.completed_at < cutoff) continue;
       focusSet.add(l.focus_point_id);
     }
     distinctFPSincePrivate[id] = focusSet.size;
@@ -578,13 +599,37 @@ export async function getStudentRecentActivity(studentId, limit = 20) {
       .limit(limit),
     supabase
       .from('class_inputs')
-      .select('id, user_id, student_id, created_at, title, dance, teacher_name, class_summary, lesson_type, focus_points!focus_points_class_input_id_fkey(id, name, is_other, is_deleted, status)')
+      .select('id, user_id, student_id, created_at, title, dance, teacher_name, class_summary, lesson_type')
       .or(`user_id.eq.${studentId},student_id.eq.${studentId}`)
       .eq('is_deleted', false)
       .order('created_at', { ascending: false })
       .limit(limit),
     getCoachName(),
   ]);
+
+  // Fetch the focus points linked to those classes in a SEPARATE query
+  // (rather than as a PostgREST embed). The embed shape goes through
+  // the focus_points RLS policy as a nested EXISTS, and we've seen rows
+  // silently disappear from the embed even when a direct SELECT on the
+  // same row succeeds under the same auth — likely a PostgREST/RLS
+  // interaction. Two flat queries are slower by a millisecond but always
+  // consistent: anything the coach can SELECT directly shows up here.
+  const classIds = (classes || []).map(c => c.id);
+  const focusByClass = {};
+  if (classIds.length > 0) {
+    const { data: classFPs } = await supabase
+      .from('focus_points')
+      .select('id, name, class_input_id, is_other, is_deleted, status')
+      .in('class_input_id', classIds)
+      .eq('user_id', studentId)
+      .eq('is_other', false)
+      .eq('is_deleted', false)
+      .neq('status', 'past');
+    for (const fp of classFPs || []) {
+      if (!focusByClass[fp.class_input_id]) focusByClass[fp.class_input_id] = [];
+      focusByClass[fp.class_input_id].push({ id: fp.id, name: fp.name });
+    }
+  }
 
   // Fetch focus point names in a single batch
   const focusIds = [...new Set((sessions || []).map(s => s.focus_point_id).filter(Boolean))];
@@ -628,9 +673,7 @@ export async function getStudentRecentActivity(studentId, limit = 20) {
         withCurrentCoach,
         classSummary: c.class_summary || null,
         lessonType: c.lesson_type || null,
-        focusPoints: (c.focus_points || [])
-          .filter(fp => !fp.is_other && !fp.is_deleted && fp.status !== 'past')
-          .map(fp => ({ id: fp.id, name: fp.name })),
+        focusPoints: focusByClass[c.id] || [],
       };
     }),
   ];
@@ -648,6 +691,22 @@ export async function getStudentQuestions(studentId) {
     .eq('student_id', studentId)
     .eq('coach_id', coachId)
     .eq('status', 'pending')
+    .order('created_at', { ascending: false });
+  return data || [];
+}
+
+// Questions still "open" from the coach's standpoint: unanswered ones
+// (pending) plus ones the coach committed to addressing in the next class
+// (dismissed). Used by the briefing card before starting a class so the
+// coach has a single checklist of everything to bring up.
+export async function getStudentOpenQuestions(studentId) {
+  const coachId = await getCoachId();
+  const { data } = await supabase
+    .from('coach_messages')
+    .select('id, message, status, created_at')
+    .eq('student_id', studentId)
+    .eq('coach_id', coachId)
+    .in('status', ['pending', 'dismissed'])
     .order('created_at', { ascending: false });
   return data || [];
 }
@@ -682,6 +741,17 @@ export async function dismissQuestion(messageId) {
   await supabase
     .from('coach_messages')
     .update({ status: 'dismissed' })
+    .eq('id', messageId);
+}
+
+// Mark a question as addressed verbally during the class — sets status to
+// 'replied' with an auto-generated reply so the student sees a positive
+// closure ("Covered in your last class.") instead of the question lingering
+// forever in their open-questions list.
+export async function markQuestionCovered(messageId) {
+  await supabase
+    .from('coach_messages')
+    .update({ status: 'replied', reply: 'Covered in your last class.' })
     .eq('id', messageId);
 }
 
@@ -730,8 +800,8 @@ export async function getClassDetail(classId) {
 
 export async function getPendingFocusPoints(studentId) {
   const selectStr =
-    'id, name, subtitle, context, drill, tier, coach_review_deadline, group_fp, source_class_input_id, created_at, user_id, ' +
-    'source_class_input:source_class_input_id(class_summary, practice_point_1, practice_point_2, ai_primary_focus, ai_secondary_focus)';
+    'id, name, subtitle, context, drill, tier, coach_review_deadline, group_fp, shared_group_id, source_class_input_id, created_at, user_id, dance, mention_count, ' +
+    'source_class_input:source_class_input_id(title, created_at, class_summary, practice_point_1, practice_point_2, ai_primary_focus, ai_secondary_focus, lesson_type, teacher_name, dance)';
 
   if (studentId) {
     const { data, error } = await supabase

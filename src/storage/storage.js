@@ -822,6 +822,22 @@ export async function askCoach(message, question_type = 'clarification', focusPo
   }
 }
 
+// Returns the student's own questions to their coach with current status.
+// Filters to "active" statuses — pending (still in the coach's queue),
+// dismissed (coach will cover it in the next class), and replied (coach
+// answered). Past/rejected are excluded.
+export async function getMyCoachQuestions() {
+  const userId = await getUserId();
+  const { data } = await supabase
+    .from('coach_messages')
+    .select('id, message, reply, status, created_at')
+    .eq('student_id', userId)
+    .in('status', ['pending', 'dismissed', 'replied'])
+    .order('created_at', { ascending: false })
+    .limit(20);
+  return data || [];
+}
+
 export async function getCoachReplies() {
   const userId = await getUserId();
   const { data } = await supabase

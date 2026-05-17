@@ -6,11 +6,11 @@ import {
   ScrollView,
   TouchableOpacity,
   TextInput,
-  Image,
   Pressable,
   Animated,
   Dimensions,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import Svg, { Circle } from 'react-native-svg';
 import { Fonts, Spacing } from '../../theme';
@@ -452,11 +452,15 @@ export default function CoachHomeScreen({ navigation }) {
             style={[
               styles.filterUnderline,
               {
-                left: horizontalScrollX.interpolate({
-                  inputRange: [0, Math.max(1, screenWidth)],
-                  outputRange: ['0%', '50%'],
-                  extrapolate: 'clamp',
-                }),
+                // Native-driver friendly: animate transform instead of `left`.
+                left: 0,
+                transform: [{
+                  translateX: horizontalScrollX.interpolate({
+                    inputRange: [0, Math.max(1, screenWidth)],
+                    outputRange: [0, screenWidth * 0.5],
+                    extrapolate: 'clamp',
+                  }),
+                }],
               },
             ]}
           />
@@ -488,7 +492,7 @@ export default function CoachHomeScreen({ navigation }) {
         scrollEventThrottle={16}
         onScroll={Animated.event(
           [{ nativeEvent: { contentOffset: { x: horizontalScrollX } } }],
-          { useNativeDriver: false }
+          { useNativeDriver: true }
         )}
         onMomentumScrollEnd={(e) => {
           const page = Math.round(e.nativeEvent.contentOffset.x / Math.max(1, screenWidth));

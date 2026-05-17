@@ -19,6 +19,31 @@ export function CoachDataProvider({ children }) {
   const [initialLoading, setInitialLoading] = useState(true);
   const loaded = useRef(false);
 
+  // Short-lived per-key cache so navigating away and back to a screen
+  // (e.g. coach taps a student, scrolls, hits back, taps again) returns
+  // instantly instead of re-fetching the same Supabase rows. TTL is short
+  // enough that fresh server data still surfaces on the next focus.
+  // Keyed by an arbitrary string ("student:<id>:fps", "readiness:<id>", …).
+  const cacheRef = useRef(new Map());
+
+  const getOrFetch = useCallback(async (key, fetcher, ttlMs = 60000) => {
+    const cached = cacheRef.current.get(key);
+    if (cached && cached.expiresAt > Date.now()) return cached.data;
+    const data = await fetcher();
+    cacheRef.current.set(key, { data, expiresAt: Date.now() + ttlMs });
+    return data;
+  }, []);
+
+  const invalidateCache = useCallback((prefix) => {
+    if (!prefix) {
+      cacheRef.current.clear();
+      return;
+    }
+    for (const k of Array.from(cacheRef.current.keys())) {
+      if (k.startsWith(prefix)) cacheRef.current.delete(k);
+    }
+  }, []);
+
   const computeUnread = useCallback((notifs) => {
     return (notifs || []).filter(
       (n) =>
@@ -90,16 +115,23 @@ export function CoachDataProvider({ children }) {
 
   // Refresh when the app returns to the foreground — without this the coach
   // can sit on the home screen while a student sends a request and never see
-  // the new pending row until they manually re-launch the app.
+  // the new pending row until they manually re-launch the app. Also clears
+  // the per-key cache so any screen-level data the coach was looking at
+  // before backgrounding gets pulled fresh on the next mount.
   useEffect(() => {
     const sub = AppState.addEventListener('change', (state) => {
-      if (state === 'active') loadAll();
+      if (state === 'active') {
+        cacheRef.current.clear();
+        loadAll();
+      }
     });
     return () => sub.remove();
   }, [loadAll]);
 
-  // Refresh in background (no loading state) — called on tab focus
+  // Refresh in background (no loading state) — called on tab focus.
+  // Wipes the per-key cache so the next screen visit re-fetches fresh data.
   const refresh = useCallback(async () => {
+    cacheRef.current.clear();
     await loadAll();
   }, [loadAll]);
 
@@ -130,6 +162,8 @@ export function CoachDataProvider({ children }) {
         updateStudents,
         updateRequests,
         updateNotes,
+        getOrFetch,
+        invalidateCache,
       }}
     >
       {children}
