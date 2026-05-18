@@ -75,7 +75,7 @@ async function _getClassInputs() {
   const userId = await getUserId();
   const { data, error } = await supabase
     .from('class_inputs')
-    .select('*, focus_points!focus_points_class_input_id_fkey(id, name, subtitle, context, drill, dance, tier, status)')
+    .select('*, focus_points!focus_points_class_input_id_fkey(id, name, subtitle, context, drill, dance, tier, status, is_deleted, is_other)')
     .not('is_deleted', 'is', true)
     .order('created_at', { ascending: false });
 
