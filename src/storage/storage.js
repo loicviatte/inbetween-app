@@ -485,7 +485,9 @@ export async function getLessonReadiness(targetUserId = null) {
   const lastClass = classes?.[0];
   if (!lastClass) return null;
 
-  // Focus points produced for this student by that class.
+  // Primary focuses = those produced by the anchor class AND not currently
+  // held (a held focus is one the coach marked "Not yet" in a prior debrief
+  // — it waits until the primary list is done before re-entering).
   const { data: fps } = await supabase
     .from('focus_points')
     .select('id, name, tier')
@@ -493,7 +495,8 @@ export async function getLessonReadiness(targetUserId = null) {
     .eq('class_input_id', lastClass.id)
     .eq('is_other', false)
     .not('is_deleted', 'is', true)
-    .neq('status', 'past');
+    .neq('status', 'past')
+    .or('is_held.is.null,is_held.eq.false');
   if (!fps || fps.length === 0) return null;
 
   // Sessions completed against those focus points since the class

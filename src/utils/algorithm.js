@@ -147,10 +147,13 @@ export async function getSlots(category = null) {
     }
 
     // Only consider active/cooling_down/past_candidate focuses, and within
-    // the selected dance category if one is provided.
+    // the selected dance category if one is provided. Held focuses are
+    // filtered out here — they re-enter the Train queue as pinned slots
+    // only once the primary readiness list is done (see below).
     const visible = points.filter(
       (p) =>
         (!p.status || p.status === 'active' || p.status === 'cooling_down' || p.status === 'past_candidate') &&
+        !p.is_held &&
         focusMatchesCategory(p, category)
     );
 
@@ -158,10 +161,13 @@ export async function getSlots(category = null) {
       .map((p) => ({ ...p, _priority: computePriority(p, now) }))
       .sort((a, b) => b._priority - a._priority);
 
-    // Pin readiness focuses (in tier order) while readiness < 100%. We pull
-    // from the full points set so a focus pinned by readiness shows up even
-    // if its status (e.g. pending_coach) would normally exclude it from
-    // the regular slot pool. Category filter still applies.
+    // Slot pinning has two modes:
+    //   1) readiness < 100% → pin uncompleted readiness focuses at top
+    //      (carry the new class's checklist into the slots)
+    //   2) readiness == 100% → pin held focuses ("Not yet" carryovers
+    //      from a prior debrief) so they're the first thing the student
+    //      sees before the normal ranking resumes. After 15 min of
+    //      cumulative practice each, they auto-archive.
     const pinned = [];
     if (readiness && readiness.percent < 100) {
       const pointById = new Map(points.map((p) => [p.id, p]));
@@ -171,6 +177,13 @@ export async function getSlots(category = null) {
         if (!fp) continue;
         if (!focusMatchesCategory(fp, category)) continue;
         pinned.push({ ...fp, _priority: computePriority(fp, now), _pinned: true });
+      }
+    } else if (readiness && readiness.percent >= 100) {
+      for (const p of points) {
+        if (!p.is_held) continue;
+        if (p.status === 'past') continue;
+        if (!focusMatchesCategory(p, category)) continue;
+        pinned.push({ ...p, _priority: computePriority(p, now), _pinned: true });
       }
     }
 
@@ -402,6 +415,41 @@ export async function completeTrainingSession(sessionId, feeling = null, session
           }
         }
       }
+
+      // Auto-archive ONLY for held focuses — the ones the coach marked
+      // "Not yet" in a prior debrief. They re-enter the readiness once
+      // the primary list is done and need 15 cumulative minutes of
+      // practice to graduate. Fresh focuses (is_held=false) stay on the
+      // student's roster until the coach explicitly validates them with
+      // a "Good" verdict at the next debrief — no count-based shortcut.
+      (async () => {
+        try {
+          const { data: fpRow } = await supabase
+            .from('focus_points')
+            .select('id, is_held, status')
+            .eq('id', activeFid)
+            .maybeSingle();
+          if (!fpRow || !fpRow.is_held || fpRow.status === 'past') return;
+          const { data: dlogs } = await supabase
+            .from('practice_logs')
+            .select('duration_minutes')
+            .eq('student_id', userId)
+            .eq('focus_point_id', activeFid)
+            .not('completed_at', 'is', null);
+          const totalMin = (dlogs || []).reduce(
+            (sum, l) => sum + (l.duration_minutes || 0),
+            0,
+          );
+          if (totalMin >= 15) {
+            await supabase
+              .from('focus_points')
+              .update({ status: 'past' })
+              .eq('id', activeFid);
+          }
+        } catch (e) {
+          console.warn('[completeTrainingSession] held-archive failed:', e);
+        }
+      })();
     }
 
     // Update user stats

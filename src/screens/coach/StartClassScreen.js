@@ -1668,8 +1668,11 @@ export default function StartClassScreen({ navigation }) {
     const localMode = isLocalMode;
 
     // Persist coach verdicts on the readiness focuses (fire-and-forget).
-    // "good" → archive the focus (status = past); "not yet" stays as-is so
-    // it carries over into the next readiness pass.
+    //   "good"    → archive the focus (status = past)
+    //   "not yet" → flag as held; the focus stops appearing in the
+    //               readiness checklist until the student finishes the
+    //               new class's primary focuses (then it re-enters with
+    //               a 15-minute training target)
     const goodIds = Object.entries(readinessVerdicts)
       .filter(([, verdict]) => verdict === 'good')
       .map(([id]) => id);
@@ -1682,7 +1685,36 @@ export default function StartClassScreen({ navigation }) {
           console.warn('[StartClass] readiness verdict persist failed:', err);
         });
     }
+    const notYetIds = Object.entries(readinessVerdicts)
+      .filter(([, verdict]) => verdict === 'not_yet')
+      .map(([id]) => id);
+    if (notYetIds.length > 0) {
+      supabase
+        .from('focus_points')
+        .update({ is_held: true })
+        .in('id', notYetIds)
+        .then(() => {}, (err) => {
+          console.warn('[StartClass] not-yet hold persist failed:', err);
+        });
+    }
     setReadinessVerdicts({});
+
+    // "Validate focus points covered" — past_candidate focuses the coach
+    // explicitly checked off as done during this lesson. Move them
+    // straight to status='past' so they stop showing in the student's
+    // active focus list. Private view only — the group debrief stores
+    // names (not UUIDs) in validatedFpIds and would need a name-lookup
+    // sweep across all attending students.
+    if (isPrivate && validatedFpIds.length > 0) {
+      supabase
+        .from('focus_points')
+        .update({ status: 'past' })
+        .in('id', validatedFpIds)
+        .then(() => {}, (err) => {
+          console.warn('[StartClass] validated FP persist failed:', err);
+        });
+    }
+    setValidatedFpIds([]);
 
     // Persist question verdicts (fire-and-forget). "covered" → mark replied
     // with an auto-text so the student sees positive closure. "not_yet" is
