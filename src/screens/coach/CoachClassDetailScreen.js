@@ -6,15 +6,16 @@ import {
   ScrollView,
   TouchableOpacity,
   ActivityIndicator,
-  Image,
   Modal,
   TextInput,
   FlatList,
   Alert,
   Pressable,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
+import HeroCardGradient from '../../components/HeroCardGradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { Colors, Fonts, Spacing } from '../../theme';
@@ -822,13 +823,7 @@ export default function CoachClassDetailScreen({ route, navigation }) {
 
       {/* ── Fixed: dark hero card (matches student-side ClassDetail) ── */}
       <View style={s.heroCard}>
-        <LinearGradient
-          colors={['#4A3A18', '#1F1810', '#0A0A0A']}
-          locations={[0, 0.4, 0.85]}
-          start={{ x: 0.85, y: 1.18 }}
-          end={{ x: 0.05, y: -0.2 }}
-          style={StyleSheet.absoluteFillObject}
-        />
+        <HeroCardGradient />
         <View style={s.heroTopRow}>
           <Text style={s.heroDate}>{datePill}</Text>
           {!!heroRight && (

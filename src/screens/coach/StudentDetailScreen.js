@@ -10,7 +10,6 @@ import {
   TextInput,
   KeyboardAvoidingView,
   Platform,
-  Image,
   ActivityIndicator,
   Animated,
   Easing,
@@ -18,6 +17,7 @@ import {
   UIManager,
   useWindowDimensions,
 } from 'react-native';
+import { Image } from 'expo-image';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -47,6 +47,9 @@ import {
 } from '../../storage/coachStorage';
 import PendingFocusCard from '../../components/coach/PendingFocusCard';
 import RejectFocusSheet from '../../components/coach/RejectFocusSheet';
+import QuestionCard from '../../components/coach/QuestionCard';
+import MergeCompareCard from '../../components/coach/MergeCompareCard';
+import NameMatchCard from '../../components/coach/NameMatchCard';
 import { getNotifications, deleteNotification } from '../../storage/notificationsStorage';
 import { getUser, getLessonReadiness } from '../../storage/storage';
 import { getAllStudentMetrics } from '../../utils/studentMetrics';
@@ -415,7 +418,7 @@ function QuestionSheet({ visible, question, onClose, onDone }) {
 // ── Main Screen ─────────────────────────────────────────────────────────────
 export default function StudentDetailScreen({ route, navigation }) {
   const { studentId, studentName } = route.params;
-  const { refresh: refreshCoachData } = useCoachData();
+  const { refresh: refreshCoachData, getOrFetch, invalidateCache } = useCoachData();
   const [profile, setProfile] = useState(null);
   const [focusPoints, setFocusPoints] = useState([]);
   const [activity, setActivity] = useState([]);
@@ -495,30 +498,42 @@ export default function StudentDetailScreen({ route, navigation }) {
           const cat = categoryFromStyle(me?.dance_style);
           coachCategoryRef.current = cat;
 
-          const [p, fp, act, qs, pfp, lcd, m, notifs, { data: merges }, rd] = await Promise.all([
-            getStudentProfile(studentId),
-            getStudentFocusPoints(studentId),
-            getStudentRecentActivity(studentId, 30),
-            getStudentQuestions(studentId),
-            getPendingFocusPoints(studentId),
-            getStudentLastClassDate(studentId),
-            getAllStudentMetrics(studentId, cat),
-            getNotifications().catch(() => []),
-            supabase
-              .from('merge_requests')
-              .select('id, student_id, focus_a, focus_b, status, created_at')
-              .eq('student_id', studentId)
-              .eq('status', 'pending_coach')
-              .order('created_at', { ascending: false }),
-            getLessonReadiness(studentId).catch(() => null),
+          // All per-student reads go through the context cache so a
+          // back→tap→back round-trip is instant (60s TTL). Mutations on
+          // this screen call invalidateCache(`student:${studentId}:`) to
+          // force a re-fetch on the next visit.
+          const sk = `student:${studentId}`;
+          const [p, fp, act, qs, pfp, lcd, m, notifs, mergesRes, rd] = await Promise.all([
+            getOrFetch(`${sk}:profile`, () => getStudentProfile(studentId)),
+            getOrFetch(`${sk}:fps`, () => getStudentFocusPoints(studentId)),
+            getOrFetch(`${sk}:activity:30`, () => getStudentRecentActivity(studentId, 30)),
+            getOrFetch(`${sk}:questions`, () => getStudentQuestions(studentId)),
+            getOrFetch(`${sk}:pendingFps`, () => getPendingFocusPoints(studentId)),
+            getOrFetch(`${sk}:lastClass`, () => getStudentLastClassDate(studentId)),
+            getOrFetch(`${sk}:metrics:${cat || 'all'}`, () => getAllStudentMetrics(studentId, cat)),
+            getOrFetch('coach:notifications', () => getNotifications().catch(() => [])),
+            getOrFetch(`${sk}:merges`, () =>
+              supabase
+                .from('merge_requests')
+                .select('id, student_id, focus_a, focus_b, status, created_at')
+                .eq('student_id', studentId)
+                .eq('status', 'pending_coach')
+                .order('created_at', { ascending: false })
+            ),
+            getOrFetch(`${sk}:readiness`, () => getLessonReadiness(studentId).catch(() => null)),
           ]);
+          const { data: merges } = mergesRes || {};
           if (active) {
             setProfile(p);
             setFocusPoints(fp);
             setActivity(act);
             setQuestions(qs);
             setPendingFPs(pfp);
-            setLastClassDate(lcd);
+            // Prefer the readiness reference (most recent private with active
+            // focus points) so the activity timeline filter matches the
+            // "LAST CLASS WITH YOU" recap card. Falls back to the raw
+            // last-private date if readiness has no reference yet.
+            setLastClassDate(rd?.lastClassDate ?? lcd);
             setReadiness(rd);
             setMetrics(m);
             setNameMatches(
@@ -527,18 +542,24 @@ export default function StudentDetailScreen({ route, navigation }) {
                 n.data?.student_id === studentId
               )
             );
-            // Enrich merge requests with focus point names
+            // Enrich merge requests with full focus point objects so
+            // <MergeCompareCard> can render the side-by-side compare layout
+            // (needs name, subtitle, context, drill, tier, created_at).
             const mrList = merges || [];
             if (mrList.length > 0) {
               const fpIds = [...new Set(mrList.flatMap(mr => [mr.focus_a, mr.focus_b]))];
               const { data: fpRows } = await supabase
-                .from('focus_points').select('id, name').in('id', fpIds);
+                .from('focus_points')
+                .select('id, name, user_id, subtitle, context, dance, drill, tier, category, created_at')
+                .in('id', fpIds);
               const fpMap = {};
-              for (const f of fpRows || []) fpMap[f.id] = f.name;
+              for (const f of fpRows || []) fpMap[f.id] = f;
               setMergeRequests(mrList.map(mr => ({
                 ...mr,
-                focusAName: fpMap[mr.focus_a] || '?',
-                focusBName: fpMap[mr.focus_b] || '?',
+                focusA: fpMap[mr.focus_a] || null,
+                focusB: fpMap[mr.focus_b] || null,
+                focusAName: fpMap[mr.focus_a]?.name || '?',
+                focusBName: fpMap[mr.focus_b]?.name || '?',
               })));
             } else {
               setMergeRequests([]);
@@ -551,13 +572,25 @@ export default function StudentDetailScreen({ route, navigation }) {
       }
 
       async function reload() {
-        const [fp, qsD] = await Promise.all([
+        // Bust the cache for this student before refetching so the
+        // realtime subscription's "things changed" signal actually pulls
+        // fresh data instead of the cached snapshot.
+        invalidateCache(`student:${studentId}:`);
+        // A focus_points change can affect the activity timeline too
+        // (a class's focusPoints array is derived from focus_points.class_input_id).
+        // Re-fetch activity + readiness alongside so the "Last class with you"
+        // recap card stays in sync with the focus-point list.
+        const [fp, qsD, act, rd] = await Promise.all([
           getStudentFocusPoints(studentId),
           getStudentQuestions(studentId),
+          getStudentRecentActivity(studentId, 30),
+          getLessonReadiness(studentId).catch(() => null),
         ]);
         if (active) {
           setFocusPoints(fp);
           setQuestions(qsD);
+          setActivity(act);
+          setReadiness(rd);
         }
       }
 
@@ -581,14 +614,17 @@ export default function StudentDetailScreen({ route, navigation }) {
             { event: '*', schema: 'public', table: 'practice_logs', filter: `student_id=eq.${studentId}` },
             async () => {
               if (!active) return;
-              const [act, lcd, m] = await Promise.all([
+              invalidateCache(`student:${studentId}:`);
+              const [act, lcd, m, rd] = await Promise.all([
                 getStudentRecentActivity(studentId, 30),
                 getStudentLastClassDate(studentId),
                 getAllStudentMetrics(studentId, coachCategoryRef.current),
+                getLessonReadiness(studentId).catch(() => null),
               ]);
               if (active) {
                 setActivity(act);
-                setLastClassDate(lcd);
+                setLastClassDate(rd?.lastClassDate ?? lcd);
+                setReadiness(rd);
                 setMetrics(m);
               }
             }
@@ -742,10 +778,19 @@ export default function StudentDetailScreen({ route, navigation }) {
       .slice(0, 20);
   }, [activity, questions, sinceMs]);
 
-  // ── Last class with this coach (for recap card in Activity tab) ──────────
+  // ── Last private with this coach (for recap card in Activity tab) ───────
+  // Matches the readiness reference: most recent PRIVATE class with at least
+  // one active focus point (excluding deleted / past / is_other). Falls back
+  // to the older private when the most recent one has no usable focus points
+  // (e.g. transcript failed and all focus points were marked past/deleted).
   const lastCoachClass = useMemo(() => {
     const cls = activity.find(
-      (ev) => ev.type === 'class' && ev.withCurrentCoach && ev.classSummary
+      (ev) =>
+        ev.type === 'class' &&
+        ev.withCurrentCoach &&
+        ev.classSummary &&
+        ev.lessonType !== 'group' &&
+        (ev.focusPoints?.length ?? 0) > 0,
     );
     if (!cls) return null;
 
@@ -1170,29 +1215,6 @@ export default function StudentDetailScreen({ route, navigation }) {
                 Since last private lesson{lastClassDate ? ` · ${relativeDateShort(lastClassDate)}` : ''}
               </Text>
             </View>
-            {stats.trend !== 0 && (
-              <View
-                style={[
-                  styles.trendPill,
-                  { backgroundColor: stats.trend > 0 ? 'rgba(74,175,82,0.08)' : 'rgba(212,69,69,0.08)' },
-                ]}
-              >
-                <Ionicons
-                  name={stats.trend > 0 ? 'trending-up' : 'trending-down'}
-                  size={11}
-                  color={stats.trend > 0 ? C.green : C.red}
-                />
-                <Text
-                  style={[
-                    styles.trendText,
-                    { color: stats.trend > 0 ? C.green : C.red },
-                  ]}
-                >
-                  {stats.trend > 0 ? '+' : ''}
-                  {stats.trend}%
-                </Text>
-              </View>
-            )}
           </View>
           <View style={styles.tabContent}>
             <View style={styles.tlContainer}>
@@ -1320,46 +1342,18 @@ export default function StudentDetailScreen({ route, navigation }) {
                       QUESTIONS TO ANSWER
                     </Text>
                     {questions.map((q) => (
-                      <View
+                      <QuestionCard
                         key={`q_${q.id}`}
-                        style={[styles.actionCard, styles.actionCardRed]}
-                      >
-                        <View style={styles.actionCardHead}>
-                          <View style={styles.actionCardLabelRow}>
-                            <Ionicons name="chatbubble-outline" size={13} color={C.red} />
-                            <Text style={[styles.actionCardLabel, { color: C.red }]}>
-                              PENDING QUESTION
-                            </Text>
-                          </View>
-                          <Text style={styles.actionCardDate}>
-                            {relativeDateShort(q.created_at)}
-                          </Text>
-                        </View>
-                        <Text style={styles.actionCardMsg}>"{q.message}"</Text>
-                        <View style={styles.actionBtnRow}>
-                          <TouchableOpacity
-                            style={styles.replyBtn}
-                            onPress={() => {
-                              setActiveQuestion(q);
-                              setQuestionSheetVisible(true);
-                            }}
-                            activeOpacity={0.85}
-                          >
-                            <Ionicons name="send" size={13} color="#fff" />
-                            <Text style={styles.replyBtnText}>Reply</Text>
-                          </TouchableOpacity>
-                          <TouchableOpacity
-                            style={styles.inClassBtn}
-                            onPress={async () => {
-                              await dismissQuestion(q.id);
-                              setQuestions((prev) => prev.filter((x) => x.id !== q.id));
-                            }}
-                            activeOpacity={0.85}
-                          >
-                            <Text style={styles.inClassBtnText}>In class</Text>
-                          </TouchableOpacity>
-                        </View>
-                      </View>
+                        question={q}
+                        onReply={() => {
+                          setActiveQuestion(q);
+                          setQuestionSheetVisible(true);
+                        }}
+                        onDismiss={async () => {
+                          await dismissQuestion(q.id);
+                          setQuestions((prev) => prev.filter((x) => x.id !== q.id));
+                        }}
+                      />
                     ))}
                   </>
                 )}
@@ -1371,39 +1365,34 @@ export default function StudentDetailScreen({ route, navigation }) {
                       MERGE SUGGESTIONS
                     </Text>
                     {mergeRequests.map((mr) => (
-                      <View key={`merge_${mr.id}`} style={[styles.actionCard, styles.actionCardOrange]}>
-                        <View style={styles.actionCardLabelRow}>
-                          <Ionicons name="git-merge-outline" size={13} color={C.orange} />
-                          <Text style={[styles.actionCardLabel, { color: C.orange }]}>MERGE REQUEST</Text>
-                        </View>
-                        <Text style={styles.actionCardTitle}>
-                          "{mr.focusAName}" & "{mr.focusBName}"
-                        </Text>
-                        <View style={styles.actionBtnRow}>
-                          <TouchableOpacity
-                            style={styles.replyBtn}
-                            onPress={async () => {
-                              await supabase.from('focus_points').update({ is_deleted: true, status: 'past' }).eq('id', mr.focus_b);
-                              await supabase.from('merge_requests').update({ status: 'merged', resolved_at: new Date().toISOString(), resolved_by: 'coach' }).eq('id', mr.id);
-                              setMergeRequests(prev => prev.filter(m => m.id !== mr.id));
-                            }}
-                            activeOpacity={0.85}
-                          >
-                            <Ionicons name="checkmark" size={13} color="#fff" />
-                            <Text style={styles.replyBtnText}>Merge</Text>
-                          </TouchableOpacity>
-                          <TouchableOpacity
-                            style={styles.inClassBtn}
-                            onPress={async () => {
-                              await supabase.from('merge_requests').update({ status: 'rejected', resolved_at: new Date().toISOString(), resolved_by: 'coach' }).eq('id', mr.id);
-                              setMergeRequests(prev => prev.filter(m => m.id !== mr.id));
-                            }}
-                            activeOpacity={0.85}
-                          >
-                            <Text style={styles.inClassBtnText}>Ignore</Text>
-                          </TouchableOpacity>
-                        </View>
-                      </View>
+                      <MergeCompareCard
+                        key={`merge_${mr.id}`}
+                        mr={mr}
+                        studentName={null}
+                        onMerge={async () => {
+                          await supabase.from('focus_points').update({ is_deleted: true, status: 'past' }).eq('id', mr.focus_b);
+                          await supabase.from('merge_requests').update({ status: 'merged', resolved_at: new Date().toISOString(), resolved_by: 'coach' }).eq('id', mr.id);
+                          setMergeRequests(prev => prev.filter(m => m.id !== mr.id));
+                        }}
+                        onKeepBoth={async () => {
+                          // Match ActionNeededScreen behavior: send the newer
+                          // FP into pending_coach so it goes through normal
+                          // review instead of vanishing silently.
+                          const a = mr.focusA;
+                          const b = mr.focusB;
+                          const olderFirst = a && b && new Date(a.created_at) <= new Date(b.created_at);
+                          const incoming = olderFirst ? b : a;
+                          if (incoming) {
+                            const deadline = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
+                            await supabase
+                              .from('focus_points')
+                              .update({ status: 'pending_coach', coach_review_deadline: deadline })
+                              .eq('id', incoming.id);
+                          }
+                          await supabase.from('merge_requests').update({ status: 'rejected', resolved_at: new Date().toISOString(), resolved_by: 'coach' }).eq('id', mr.id);
+                          setMergeRequests(prev => prev.filter(m => m.id !== mr.id));
+                        }}
+                      />
                     ))}
                   </>
                 )}
@@ -1414,51 +1403,28 @@ export default function StudentDetailScreen({ route, navigation }) {
                     <Text style={[styles.actionsSectionLabel, { marginTop: 16 }]}>
                       NAME MATCHING
                     </Text>
-                    {nameMatches.map((notif) => {
-                      const d = notif.data || {};
-                      return (
-                        <View key={`name_${notif.id}`} style={[styles.actionCard, styles.actionCardOrange]}>
-                          <View style={styles.actionCardLabelRow}>
-                            <Ionicons name="help-circle-outline" size={13} color={C.orange} />
-                            <Text style={[styles.actionCardLabel, { color: C.orange }]}>NAME MATCH</Text>
-                          </View>
-                          <Text style={styles.actionCardTitle}>
-                            Is "{d.extracted_name}" the same as "{d.student_name}"?
-                          </Text>
-                          <View style={styles.actionBtnRow}>
-                            <TouchableOpacity
-                              style={styles.replyBtn}
-                              onPress={async () => {
-                                const { focus_point_ids } = d;
-                                if (focus_point_ids?.length > 0) {
-                                  await supabase.from('focus_points').update({ status: 'pending_coach' }).in('id', focus_point_ids);
-                                }
-                                await deleteNotification(notif.id);
-                                setNameMatches(prev => prev.filter(n => n.id !== notif.id));
-                              }}
-                              activeOpacity={0.85}
-                            >
-                              <Ionicons name="checkmark" size={13} color="#fff" />
-                              <Text style={styles.replyBtnText}>Confirm</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                              style={styles.inClassBtn}
-                              onPress={async () => {
-                                const { focus_point_ids } = d;
-                                if (focus_point_ids?.length > 0) {
-                                  await supabase.from('focus_points').update({ user_id: null, status: 'active' }).in('id', focus_point_ids);
-                                }
-                                await deleteNotification(notif.id);
-                                setNameMatches(prev => prev.filter(n => n.id !== notif.id));
-                              }}
-                              activeOpacity={0.85}
-                            >
-                              <Text style={styles.inClassBtnText}>Not a match</Text>
-                            </TouchableOpacity>
-                          </View>
-                        </View>
-                      );
-                    })}
+                    {nameMatches.map((notif) => (
+                      <NameMatchCard
+                        key={`name_${notif.id}`}
+                        notif={notif}
+                        onConfirm={async () => {
+                          const { focus_point_ids } = notif.data || {};
+                          if (focus_point_ids?.length > 0) {
+                            await supabase.from('focus_points').update({ status: 'pending_coach' }).in('id', focus_point_ids);
+                          }
+                          await deleteNotification(notif.id);
+                          setNameMatches(prev => prev.filter(n => n.id !== notif.id));
+                        }}
+                        onReject={async () => {
+                          const { focus_point_ids } = notif.data || {};
+                          if (focus_point_ids?.length > 0) {
+                            await supabase.from('focus_points').update({ user_id: null, status: 'active' }).in('id', focus_point_ids);
+                          }
+                          await deleteNotification(notif.id);
+                          setNameMatches(prev => prev.filter(n => n.id !== notif.id));
+                        }}
+                      />
+                    ))}
                   </>
                 )}
               </>

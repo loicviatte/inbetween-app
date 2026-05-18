@@ -10,11 +10,11 @@ import {
   KeyboardAvoidingView,
   Platform,
   Animated,
-  Image,
   Share,
   ScrollView,
   Alert,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { LinearGradient } from 'expo-linear-gradient';

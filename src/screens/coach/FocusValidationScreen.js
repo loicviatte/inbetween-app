@@ -4,6 +4,7 @@ import {
   ActivityIndicator, Modal
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import HeroCardGradient from '../../components/HeroCardGradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { Colors, Fonts, Spacing } from '../../theme';
@@ -15,35 +16,85 @@ import {
 import FocusPointEditSheet from '../../components/FocusPointEditSheet';
 import { useCoachData } from '../../context/CoachDataContext';
 
-const TIER_COLOR = { critical: '#E84040', important: '#FF9D00', supporting: '#4CAF50' };
+// Tier palette tuned for the dark hero-card background. Each tier gets a
+// translucent fill, a slightly stronger border, and a lifted text color so
+// the pill stays legible against the brown→black gradient.
+const TIER_PALETTE = {
+  critical:   { bg: 'rgba(232,64,64,0.18)',  border: 'rgba(232,64,64,0.40)',  text: '#FF8C8C' },
+  important:  { bg: 'rgba(255,157,0,0.18)',  border: 'rgba(255,157,0,0.40)',  text: '#FFC477' },
+  supporting: { bg: 'rgba(76,175,80,0.18)',  border: 'rgba(76,175,80,0.40)',  text: '#8BD98F' },
+};
+
+function hoursLeft(deadlineIso) {
+  if (!deadlineIso) return null;
+  const ms = new Date(deadlineIso) - Date.now();
+  if (ms <= 0) return 0;
+  return Math.ceil(ms / 3600000);
+}
 
 function PendingFocusCard({ fp, onApprove, onEdit, onDelete }) {
+  const tierKey = fp.tier && TIER_PALETTE[fp.tier] ? fp.tier : 'important';
+  const tier = TIER_PALETTE[tierKey];
+  const tierLabel = tierKey.toUpperCase();
+  const hrs = hoursLeft(fp.coach_review_deadline);
+  const danceLabel = Array.isArray(fp.dance) && fp.dance.length > 0
+    ? fp.dance.join(' · ').toUpperCase()
+    : null;
+
   return (
     <View style={s.card}>
-      <View style={s.cardTop}>
-        <View style={[s.tierBadge, { backgroundColor: `${TIER_COLOR[fp.tier] ?? Colors.secondary}18`, borderColor: TIER_COLOR[fp.tier] ?? Colors.secondary }]}>
-          <Text style={[s.tierText, { color: TIER_COLOR[fp.tier] ?? Colors.secondary }]}>{fp.tier?.toUpperCase() ?? 'IMPORTANT'}</Text>
+      <HeroCardGradient />
+
+      {(danceLabel || hrs !== null) && (
+        <View style={s.cardTopRow}>
+          <Text style={s.cardMetaLeft} numberOfLines={1}>{danceLabel ?? ''}</Text>
+          {hrs !== null && (
+            <Text style={s.cardMetaRight} numberOfLines={1}>
+              {hrs === 0 ? 'AUTO-PUBLISHING' : `${hrs}H LEFT`}
+            </Text>
+          )}
+        </View>
+      )}
+
+      <View style={s.cardPills}>
+        <View style={[s.tierPill, { backgroundColor: tier.bg, borderColor: tier.border }]}>
+          <Text style={[s.tierPillText, { color: tier.text }]}>{tierLabel}</Text>
         </View>
         {!!fp.group_fp && (
-          <View style={s.groupBadge}>
-            <Text style={s.groupBadgeText}>GROUP</Text>
+          <View style={s.pill}>
+            <Text style={s.pillText}>GROUP</Text>
+          </View>
+        )}
+        {fp.mention_count > 1 && (
+          <View style={s.pill}>
+            <Text style={s.pillText}>{fp.mention_count}× MENTIONED</Text>
           </View>
         )}
       </View>
-      <Text style={s.fpName}>{fp.name}</Text>
+
+      <Text style={s.fpName} numberOfLines={3}>{fp.name}</Text>
       {!!fp.subtitle && <Text style={s.fpSubtitle}>{fp.subtitle}</Text>}
+
+      {(!!fp.context || !!fp.drill) && <View style={s.divider} />}
+
       {!!fp.context && <Text style={s.fpContext} numberOfLines={3}>{fp.context}</Text>}
-      {!!fp.drill && <Text style={s.fpDrill}>Drill: {fp.drill}</Text>}
+      {!!fp.drill && (
+        <View style={s.drillBlock}>
+          <Text style={s.drillLabel}>DRILL</Text>
+          <Text style={s.drillText}>{fp.drill}</Text>
+        </View>
+      )}
+
       <View style={s.actions}>
         <TouchableOpacity style={[s.actionBtn, s.actionApprove]} onPress={() => onApprove(fp.id)} activeOpacity={0.8}>
-          <Ionicons name="checkmark" size={16} color="#fff" />
+          <Ionicons name="checkmark" size={16} color="#0A0A0A" />
           <Text style={s.actionApproveText}>Approve</Text>
         </TouchableOpacity>
         <TouchableOpacity style={s.actionIconBtn} onPress={() => onEdit(fp)} activeOpacity={0.8}>
-          <Ionicons name="pencil-outline" size={18} color={Colors.secondary} />
+          <Ionicons name="pencil-outline" size={18} color="rgba(255,255,255,0.85)" />
         </TouchableOpacity>
         <TouchableOpacity style={s.actionIconBtn} onPress={() => onDelete(fp.id)} activeOpacity={0.8}>
-          <Ionicons name="trash-outline" size={18} color="#E84040" />
+          <Ionicons name="trash-outline" size={18} color="#FF8C8C" />
         </TouchableOpacity>
       </View>
     </View>
@@ -192,20 +243,147 @@ const s = StyleSheet.create({
   list: { paddingHorizontal: Spacing.side, paddingBottom: 40, gap: 14 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 },
   doneText: { fontFamily: Fonts.jakartaSemiBold, fontSize: 16, color: Colors.secondary },
-  card: { backgroundColor: Colors.statCardBg, borderWidth: 0.5, borderColor: Colors.statCardBorder, borderRadius: 16, padding: 16, gap: 6 },
-  cardTop: { flexDirection: 'row', gap: 8, marginBottom: 2 },
-  tierBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, borderWidth: 0.5 },
-  tierText: { fontFamily: Fonts.jakartaExtraBold, fontSize: 9, letterSpacing: 0.8 },
-  groupBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, backgroundColor: 'rgba(87,136,230,0.1)', borderWidth: 0.5, borderColor: 'rgba(87,136,230,0.3)' },
-  groupBadgeText: { fontFamily: Fonts.jakartaExtraBold, fontSize: 9, color: '#5788E6', letterSpacing: 0.8 },
-  fpName: { fontFamily: Fonts.jakartaExtraBold, fontSize: 18, color: Colors.black, letterSpacing: -0.3 },
-  fpSubtitle: { fontFamily: Fonts.jakartaSemiBold, fontSize: 13, color: Colors.black, opacity: 0.75 },
-  fpContext: { fontFamily: Fonts.jakartaRegular, fontSize: 12, color: Colors.secondary, lineHeight: 18 },
-  fpDrill: { fontFamily: Fonts.jakartaRegular, fontSize: 12, color: Colors.orange, fontStyle: 'italic' },
-  actions: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 },
-  actionBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 10, borderRadius: 10 },
-  actionApprove: { backgroundColor: Colors.activeLog },
-  actionApproveText: { fontFamily: Fonts.jakartaBold, fontSize: 13, color: '#fff' },
-  actionIconBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', borderRadius: 10, backgroundColor: Colors.statCardBg, borderWidth: 0.5, borderColor: Colors.statCardBorder },
+  // ── Dark hero card (matches CoachClassDetailScreen heroCard) ──
+  card: {
+    borderRadius: 18,
+    paddingHorizontal: 18,
+    paddingTop: 14,
+    paddingBottom: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(240,194,74,0.28)',
+    overflow: 'hidden',
+  },
+  cardTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    marginBottom: 6,
+  },
+  cardMetaLeft: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 11,
+    color: 'rgba(255,255,255,0.55)',
+    letterSpacing: 0.4,
+  },
+  cardMetaRight: {
+    flexShrink: 1,
+    fontFamily: Fonts.jakartaBold,
+    fontSize: 11,
+    color: '#F6D27A',
+    letterSpacing: 0.4,
+    textAlign: 'right',
+  },
+  cardPills: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 4,
+    marginBottom: 10,
+  },
+  tierPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 999,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  tierPillText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 8.5,
+    letterSpacing: 0.8,
+  },
+  pill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.14)',
+  },
+  pillText: {
+    fontFamily: Fonts.jakartaBold,
+    fontSize: 8.5,
+    color: 'rgba(255,255,255,0.72)',
+    letterSpacing: 0.8,
+  },
+  fpName: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 22,
+    color: '#FFFFFF',
+    letterSpacing: -0.55,
+    lineHeight: 26,
+  },
+  fpSubtitle: {
+    fontFamily: Fonts.jakartaSemiBold,
+    fontSize: 13,
+    color: '#F6D27A',
+    lineHeight: 18,
+    marginTop: 6,
+  },
+  divider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: 'rgba(255,255,255,0.10)',
+    marginTop: 14,
+    marginBottom: 12,
+  },
+  fpContext: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 12.5,
+    color: 'rgba(255,255,255,0.78)',
+    lineHeight: 18,
+  },
+  drillBlock: {
+    marginTop: 12,
+  },
+  drillLabel: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 8.5,
+    color: '#F6D27A',
+    letterSpacing: 1,
+    marginBottom: 4,
+  },
+  drillText: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 12.5,
+    color: 'rgba(255,255,255,0.85)',
+    lineHeight: 18,
+  },
+  actions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 16,
+  },
+  actionBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 11,
+    borderRadius: 12,
+  },
+  actionApprove: {
+    backgroundColor: '#FFFFFF',
+  },
+  actionApproveText: {
+    fontFamily: Fonts.jakartaBold,
+    fontSize: 13,
+    color: '#0A0A0A',
+    letterSpacing: -0.2,
+  },
+  actionIconBtn: {
+    width: 42,
+    height: 42,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.14)',
+  },
 });
 

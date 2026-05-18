@@ -15,6 +15,9 @@ import { getAllFocusPointsRanked } from '../utils/algorithm';
 import { getUser } from '../storage/storage';
 import { categoryFromDances } from '../utils/danceCategory';
 import { GenericListSkeleton } from '../components/Skeleton';
+import HeroCardGradient from '../components/HeroCardGradient';
+
+const GOLD = '#F6D27A';
 
 const TIER_COLOR = {
   critical:  '#FF4B4B',
@@ -35,54 +38,40 @@ function formatDate(iso) {
 }
 
 function FocusCard({ item, index }) {
-  const dances = Array.isArray(item.dance) ? item.dance.filter(Boolean) : [];
   const cls = item.class_inputs;
 
   return (
     <View style={c.card}>
-      <View style={[c.accent, { backgroundColor: Colors.orange }]} />
-      <View style={c.body}>
+      <HeroCardGradient />
 
-        {/* Top row */}
-        <View style={c.topRow}>
-          <Text style={c.rank}>#{index + 1}</Text>
-        </View>
-
-        {/* Name */}
-        <Text style={c.name}>{item.name}</Text>
-
-        {/* Dance pills */}
-        {dances.length > 0 && (
-          <View style={c.pills}>
-            {dances.map((d, i) => (
-              <View key={i} style={c.pill}>
-                <Text style={c.pillText}>{d}</Text>
-              </View>
-            ))}
-          </View>
-        )}
-
-        {/* Subtitle */}
-        {!!item.subtitle && (
-          <Text style={c.subtitle} numberOfLines={4}>{item.subtitle}</Text>
-        )}
-
-        {/* Linked class */}
-        {!!cls && (
-          <View style={c.classBlock}>
-            <View style={c.classDivider} />
-            <View style={c.classRow}>
-              <Ionicons name="school-outline" size={11} color={Colors.secondary} />
-              <Text style={c.classMeta}>
-                {[cls.teacher_name, cls.dance, formatDate(cls.created_at)].filter(Boolean).join(' · ')}
-              </Text>
-            </View>
-            {!!cls.class_summary && (
-              <Text style={c.classSummary} numberOfLines={2}>{cls.class_summary}</Text>
-            )}
-          </View>
-        )}
+      {/* Top row: rank */}
+      <View style={c.topRow}>
+        <Text style={c.rank}>#{index + 1}</Text>
       </View>
+
+      {/* Name */}
+      <Text style={c.name}>{item.name}</Text>
+
+      {/* Subtitle */}
+      {!!item.subtitle && (
+        <Text style={c.subtitle} numberOfLines={4}>{item.subtitle}</Text>
+      )}
+
+      {/* Linked class */}
+      {!!cls && (
+        <View style={c.classBlock}>
+          <View style={c.classDivider} />
+          <View style={c.classRow}>
+            <Ionicons name="school-outline" size={11} color={GOLD} />
+            <Text style={c.classMeta}>
+              {[cls.teacher_name, cls.dance, formatDate(cls.created_at)].filter(Boolean).join(' · ')}
+            </Text>
+          </View>
+          {!!cls.class_summary && (
+            <Text style={c.classSummary} numberOfLines={2}>{cls.class_summary}</Text>
+          )}
+        </View>
+      )}
     </View>
   );
 }
@@ -178,105 +167,77 @@ export default function AllFocusPointsScreen({ navigation }) {
 }
 
 // ─── Card styles ──────────────────────────────────────────────────────────────
+// Dark "hero" card — same brown→black gradient + gold border treatment
+// used across the coach UI. <HeroCardGradient/> paints the background; the
+// container only needs the border/clipping.
 const c = StyleSheet.create({
   card: {
-    flexDirection: 'row',
-    backgroundColor: Colors.statCardBg,
-    borderRadius: 14,
-    overflow: 'hidden',
-    borderWidth: 0.5,
-    borderColor: Colors.statCardBorder,
+    borderRadius: 18,
+    paddingHorizontal: 18,
+    paddingTop: 14,
+    paddingBottom: 16,
     marginBottom: 10,
-  },
-  accent: {
-    width: 4,
-  },
-  body: {
-    flex: 1,
-    paddingHorizontal: 14,
-    paddingVertical: 13,
+    borderWidth: 1,
+    borderColor: 'rgba(240,194,74,0.28)',
+    overflow: 'hidden',
   },
 
   topRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 6,
+    marginBottom: 8,
   },
   rank: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 11,
-    color: Colors.secondary,
-    letterSpacing: 0.2,
-  },
-  tier: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.jakartaExtraBold,
     fontSize: 10,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    color: GOLD,
+    letterSpacing: 1.2,
   },
 
   name: {
     fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 16,
-    color: Colors.black,
-    letterSpacing: -0.3,
-    lineHeight: 21,
-    marginBottom: 7,
-  },
-
-  pills: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 5,
+    fontSize: 18,
+    color: '#FFFFFF',
+    letterSpacing: -0.4,
+    lineHeight: 23,
     marginBottom: 8,
-  },
-  pill: {
-    backgroundColor: 'rgba(17,12,17,0.06)',
-    borderRadius: 20,
-    paddingHorizontal: 9,
-    paddingVertical: 3,
-  },
-  pillText: {
-    fontFamily: Fonts.jakartaSemiBold,
-    fontSize: 10,
-    color: Colors.secondary,
-    textTransform: 'capitalize',
   },
 
   subtitle: {
     fontFamily: Fonts.jakartaRegular,
     fontSize: 13,
-    color: Colors.secondary,
+    color: 'rgba(255,255,255,0.78)',
     lineHeight: 19,
     marginBottom: 2,
   },
 
   classBlock: {
-    marginTop: 10,
+    marginTop: 12,
   },
   classDivider: {
     height: StyleSheet.hairlineWidth,
-    backgroundColor: Colors.statCardBorder,
-    marginBottom: 8,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    marginBottom: 10,
   },
   classRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
-    marginBottom: 3,
+    gap: 6,
+    marginBottom: 4,
   },
   classMeta: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 11,
-    color: Colors.secondary,
+    fontFamily: Fonts.jakartaBold,
+    fontSize: 10.5,
+    color: GOLD,
+    letterSpacing: 0.3,
   },
   classSummary: {
     fontFamily: Fonts.jakartaRegular,
-    fontSize: 11,
-    color: '#ACADB9',
+    fontSize: 11.5,
+    color: 'rgba(255,255,255,0.65)',
     lineHeight: 16,
-    marginLeft: 16,
+    marginLeft: 17,
   },
 });
 

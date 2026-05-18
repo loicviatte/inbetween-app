@@ -6,11 +6,11 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Alert,
-  Image,
   Animated,
   Modal,
   Pressable,
 } from 'react-native';
+import { Image } from 'expo-image';
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -1175,8 +1175,9 @@ const s = StyleSheet.create({
     fontSize: 34,
     color: '#0D0D12',
     letterSpacing: -1.4,
-    lineHeight: 34,
-    // Align baseline with the bar's vertical center
+    // Bumped from 34 → 42 so the rounded bottoms of "100" aren't clipped
+    // by a too-tight line box on iOS (Jakarta needs ~1.2× headroom).
+    lineHeight: 42,
     includeFontPadding: false,
   },
   readyPctSm: {

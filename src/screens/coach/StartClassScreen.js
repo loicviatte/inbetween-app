@@ -7,14 +7,15 @@ import {
   ScrollView,
   TextInput,
   Animated,
-  Image,
   Modal,
   Pressable,
   Alert,
   AppState,
   ActivityIndicator,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { Image } from 'expo-image';
+import { SafeAreaView, SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
+import HeroCardGradient from '../../components/HeroCardGradient';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import Svg, { Circle } from 'react-native-svg';
@@ -28,8 +29,9 @@ import * as Notifications from 'expo-notifications';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Colors, Fonts, Spacing } from '../../theme';
 import { useCoachData } from '../../context/CoachDataContext';
-import { getStudentFocusPoints, getStudentQuestions, getStudentRecentActivity, getStartClassRoster } from '../../storage/coachStorage';
+import { getStudentFocusPoints, getStudentQuestions, getStudentOpenQuestions, getStudentRecentActivity, getStartClassRoster, markQuestionCovered } from '../../storage/coachStorage';
 import { getLessonReadiness } from '../../storage/storage';
+import QuestionDetailSheet from '../../components/QuestionDetailSheet';
 import {
   getActiveCoachClass,
   setActiveCoachClass,
@@ -402,7 +404,7 @@ function PrivateCard({ st, onPress }) {
 }
 
 export default function StartClassScreen({ navigation }) {
-  const { students } = useCoachData();
+  const { students, getOrFetch } = useCoachData();
 
   const [view, setView] = useState('select');
   const [selectedStudent, setSelectedStudent] = useState(null);
@@ -1666,8 +1668,11 @@ export default function StartClassScreen({ navigation }) {
     const localMode = isLocalMode;
 
     // Persist coach verdicts on the readiness focuses (fire-and-forget).
-    // "good" → archive the focus (status = past); "not yet" stays as-is so
-    // it carries over into the next readiness pass.
+    //   "good"    → archive the focus (status = past)
+    //   "not yet" → flag as held; the focus stops appearing in the
+    //               readiness checklist until the student finishes the
+    //               new class's primary focuses (then it re-enters with
+    //               a 15-minute training target)
     const goodIds = Object.entries(readinessVerdicts)
       .filter(([, verdict]) => verdict === 'good')
       .map(([id]) => id);
@@ -1680,7 +1685,47 @@ export default function StartClassScreen({ navigation }) {
           console.warn('[StartClass] readiness verdict persist failed:', err);
         });
     }
+    const notYetIds = Object.entries(readinessVerdicts)
+      .filter(([, verdict]) => verdict === 'not_yet')
+      .map(([id]) => id);
+    if (notYetIds.length > 0) {
+      supabase
+        .from('focus_points')
+        .update({ is_held: true })
+        .in('id', notYetIds)
+        .then(() => {}, (err) => {
+          console.warn('[StartClass] not-yet hold persist failed:', err);
+        });
+    }
     setReadinessVerdicts({});
+
+    // "Validate focus points covered" — past_candidate focuses the coach
+    // explicitly checked off as done during this lesson. Move them
+    // straight to status='past' so they stop showing in the student's
+    // active focus list. Private view only — the group debrief stores
+    // names (not UUIDs) in validatedFpIds and would need a name-lookup
+    // sweep across all attending students.
+    if (isPrivate && validatedFpIds.length > 0) {
+      supabase
+        .from('focus_points')
+        .update({ status: 'past' })
+        .in('id', validatedFpIds)
+        .then(() => {}, (err) => {
+          console.warn('[StartClass] validated FP persist failed:', err);
+        });
+    }
+    setValidatedFpIds([]);
+
+    // Persist question verdicts (fire-and-forget). "covered" → mark replied
+    // with an auto-text so the student sees positive closure. "not_yet" is
+    // left as-is (still pending or still in_class for the next session).
+    const coveredQIds = Object.entries(questionVerdicts)
+      .filter(([, v]) => v === 'covered')
+      .map(([id]) => id);
+    if (coveredQIds.length > 0) {
+      Promise.all(coveredQIds.map(qid => markQuestionCovered(qid).catch(() => {}))).then(() => {});
+    }
+    setQuestionVerdicts({});
 
     setDebriefOpen(false);
     setAudioUris([]);
@@ -1783,6 +1828,8 @@ export default function StartClassScreen({ navigation }) {
   // Detail data loaded when student is picked
   const [focusPoints, setFocusPoints] = useState([]);
   const [questions, setQuestions] = useState([]);
+  const [openQuestions, setOpenQuestions] = useState([]);
+  const [viewingQuestion, setViewingQuestion] = useState(null);
   const [lastClass, setLastClass] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   // Readiness pulled from the student's previous private (focuses + tiers).
@@ -1790,6 +1837,8 @@ export default function StartClassScreen({ navigation }) {
   // verdict capture (good / not yet).
   const [studentReadiness, setStudentReadiness] = useState(null);
   const [readinessVerdicts, setReadinessVerdicts] = useState({}); // { [fpId]: 'good' | 'not_yet' }
+  const [questionVerdicts, setQuestionVerdicts] = useState({}); // { [qId]: 'covered' | 'not_yet' }
+  const [confirmingNotYet, setConfirmingNotYet] = useState(null); // { focusPointId, name } | null
 
   // Group data
   const [groupFPs, setGroupFPs] = useState([]);
@@ -1797,22 +1846,28 @@ export default function StartClassScreen({ navigation }) {
   const [attentionStudents, setAttentionStudents] = useState([]);
   const [groupLoading, setGroupLoading] = useState(false);
 
-  // Load student detail when picked
+  // Load student detail when picked. Per-student reads go through the
+  // shared context cache so tapping the same student twice is instant
+  // (60s TTL — long enough for a select→briefing→back→briefing trip).
   const loadStudentDetail = useCallback(async (student) => {
     setSelectedStudent(student);
     setDetailLoading(true);
     setView('private-briefing');
     try {
-      const [fps, qs, activity, readiness] = await Promise.all([
-        getStudentFocusPoints(student.id).catch(() => []),
-        getStudentQuestions(student.id).catch(() => []),
-        getStudentRecentActivity(student.id, 40).catch(() => []),
-        getLessonReadiness(student.id).catch(() => null),
+      const sk = `student:${student.id}`;
+      const [fps, qs, openQs, activity, readiness] = await Promise.all([
+        getOrFetch(`${sk}:fps`, () => getStudentFocusPoints(student.id).catch(() => [])),
+        getOrFetch(`${sk}:questions`, () => getStudentQuestions(student.id).catch(() => [])),
+        getOrFetch(`${sk}:openQuestions`, () => getStudentOpenQuestions(student.id).catch(() => [])),
+        getOrFetch(`${sk}:activity:40`, () => getStudentRecentActivity(student.id, 40).catch(() => [])),
+        getOrFetch(`${sk}:readiness`, () => getLessonReadiness(student.id).catch(() => null)),
       ]);
       setFocusPoints(fps || []);
       setQuestions(qs || []);
+      setOpenQuestions(openQs || []);
       setStudentReadiness(readiness);
       setReadinessVerdicts({});
+      setQuestionVerdicts({});
 
       // Find most recent class logged with THIS coach (has a summary)
       const lastCls = (activity || []).find(
@@ -2029,24 +2084,40 @@ export default function StartClassScreen({ navigation }) {
     const totalMin = Math.max(1, Math.round(debriefDurationMs / 60000));
     const validatedCount = validatedFpIds.length;
 
+    // Open questions to debrief — both pending (coach hadn't decided yet)
+    // and dismissed (coach committed to addressing them in this class).
+    // Tapping a row opens the detail popup; the inline "Answered" pill
+    // toggles a verbal-resolution mark. Both are optional — questions
+    // don't gate Done.
+    const questionsToAddress = view === 'private-briefing' ? (openQuestions || []) : [];
+    const coveredCount = Object.values(questionVerdicts).filter(v => v === 'covered').length;
+
+    // Focus-verdict gating: the coach must pick Good or Not yet for every
+    // carryover focus before Done becomes enabled. The point is to force
+    // a moment of reflection on each one — no autopilot Done.
+    const carryoverFocuses = (view === 'private-briefing' && studentReadiness)
+      ? (studentReadiness.focuses || [])
+      : [];
+    const allFocusesVerdicted = carryoverFocuses.length === 0
+      || carryoverFocuses.every(f => !!readinessVerdicts[f.focusPointId]);
+
     return (
       <Modal
         visible={debriefOpen}
-        transparent
         animationType="slide"
+        presentationStyle="fullScreen"
         onRequestClose={() => setDebriefOpen(false)}
       >
-        <Pressable style={db.overlay} onPress={() => setDebriefOpen(false)}>
-          <Pressable style={db.sheet} onPress={(e) => e.stopPropagation()}>
-            <View style={db.handle} />
-            <ScrollView
-              showsVerticalScrollIndicator={false}
-              keyboardShouldPersistTaps="handled"
-              contentContainerStyle={{ paddingBottom: 8 }}
-            >
-            <View style={db.header}>
+        {/* SafeAreaProvider is required here because Modal renders into a
+            separate React tree and doesn't inherit the host app's provider —
+            without this, `edges={['top']}` would resolve to 0 on iPhones
+            with a notch / dynamic island and the title bleeds into the
+            status bar. */}
+        <SafeAreaProvider>
+          <SafeAreaView style={db.screen} edges={['top']}>
+            <View style={db.topBar}>
               <View style={db.headerIcon}>
-                <Ionicons name="checkmark" size={22} color={C.green} />
+                <Ionicons name="checkmark" size={20} color={C.green} />
               </View>
               <View style={{ flex: 1, minWidth: 0 }}>
                 <Text style={db.headerTitle}>Class ended</Text>
@@ -2054,13 +2125,20 @@ export default function StartClassScreen({ navigation }) {
               </View>
             </View>
 
+          <ScrollView
+            style={{ flex: 1 }}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={{ paddingBottom: 24 }}
+          >
             <View style={db.durationBar}>
-              <Ionicons name="time-outline" size={16} color={C.text} />
+              <Ionicons name="time-outline" size={16} color="#F6D27A" />
               <Text style={db.durationText}>
                 Duration{' '}
                 <Text style={db.durationDim}>
                   · {totalMin} min
-                  {list.length > 0 ? ` · ${validatedCount}/${list.length} focus validated` : ''}
+                  {list.length > 0 ? ` · ${validatedCount}/${list.length} focus` : ''}
+                  {questionsToAddress.length > 0 ? ` · ${coveredCount}/${questionsToAddress.length} questions` : ''}
                 </Text>
               </Text>
             </View>
@@ -2120,13 +2198,17 @@ export default function StartClassScreen({ navigation }) {
                           <TouchableOpacity
                             style={[db.verdictBtn, verdict === 'not_yet' && db.verdictBtnNotYet]}
                             activeOpacity={0.75}
-                            onPress={() =>
-                              setReadinessVerdicts((prev) => ({
-                                ...prev,
-                                [f.focusPointId]:
-                                  prev[f.focusPointId] === 'not_yet' ? null : 'not_yet',
-                              }))
-                            }
+                            onPress={() => {
+                              // Already "not yet"? toggle off without prompt.
+                              if (verdict === 'not_yet') {
+                                setReadinessVerdicts((prev) => ({ ...prev, [f.focusPointId]: null }));
+                                return;
+                              }
+                              // First-time Not yet → confirm so the coach
+                              // realises the focus rolls over into the next
+                              // class instead of being archived.
+                              setConfirmingNotYet({ focusPointId: f.focusPointId, name: f.name });
+                            }}
                           >
                             <Text
                               style={[
@@ -2181,6 +2263,62 @@ export default function StartClassScreen({ navigation }) {
               </>
             )}
 
+            {/* Questions debrief — tap row to read the full question +
+                reply in the popup. The inline "Answered" pill toggles a
+                verbal-resolution mark (optional, doesn't gate Done). */}
+            {questionsToAddress.length > 0 && (
+              <>
+                <Text style={db.secLabel}>Questions addressed</Text>
+                <View style={db.verdictList}>
+                  {questionsToAddress.map((q) => {
+                    const verdict = questionVerdicts[q.id];
+                    const isInClass = q.status === 'dismissed';
+                    const isAnswered = verdict === 'covered';
+                    return (
+                      <TouchableOpacity
+                        key={q.id}
+                        style={db.verdictRow}
+                        activeOpacity={0.75}
+                        onPress={() => setViewingQuestion(q)}
+                      >
+                        <View style={{ flex: 1, minWidth: 0 }}>
+                          <Text style={db.verdictName} numberOfLines={2}>{q.message}</Text>
+                          {isInClass && (
+                            <Text style={db.verdictMeta}>Flagged for this class</Text>
+                          )}
+                        </View>
+                        <TouchableOpacity
+                          style={[db.verdictBtn, isAnswered && db.verdictBtnGood]}
+                          activeOpacity={0.75}
+                          onPress={(e) => {
+                            e.stopPropagation();
+                            setQuestionVerdicts((prev) => ({
+                              ...prev,
+                              [q.id]: prev[q.id] === 'covered' ? null : 'covered',
+                            }));
+                          }}
+                        >
+                          <Ionicons
+                            name="checkmark"
+                            size={13}
+                            color={isAnswered ? '#fff' : C.green}
+                          />
+                          <Text
+                            style={[
+                              db.verdictBtnText,
+                              { color: isAnswered ? '#fff' : C.green },
+                            ]}
+                          >
+                            Answered
+                          </Text>
+                        </TouchableOpacity>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </>
+            )}
+
             {audioUris.length > 0 && (
               <View style={db.recBanner}>
                 <Ionicons name="mic" size={14} color={C.orange} />
@@ -2200,18 +2338,84 @@ export default function StartClassScreen({ navigation }) {
                 </Text>
               </View>
             )}
+          </ScrollView>
 
-            <View style={db.actions}>
-              <TouchableOpacity style={db.btnDone} activeOpacity={0.88} onPress={finishDebrief}>
-                <Text style={db.btnDoneText}>Done</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={db.btnLater} onPress={finishDebrief} activeOpacity={0.6}>
-                <Text style={db.btnLaterText}>Save for later</Text>
+            <View style={db.bottomBar}>
+              <TouchableOpacity
+                style={[db.btnDone, !allFocusesVerdicted && db.btnDoneDisabled]}
+                activeOpacity={allFocusesVerdicted ? 0.88 : 1}
+                onPress={allFocusesVerdicted ? finishDebrief : undefined}
+                disabled={!allFocusesVerdicted}
+              >
+                <Text style={[db.btnDoneText, !allFocusesVerdicted && db.btnDoneTextDisabled]}>
+                  {allFocusesVerdicted ? 'Done' : 'Rate every focus to finish'}
+                </Text>
               </TouchableOpacity>
             </View>
-            </ScrollView>
-          </Pressable>
-        </Pressable>
+
+            {/* "Not yet" confirmation — clicking Not yet on a focus carries
+                it over into the next class instead of archiving it. */}
+            <Modal
+              visible={!!confirmingNotYet}
+              transparent
+              animationType="fade"
+              onRequestClose={() => setConfirmingNotYet(null)}
+            >
+              {confirmingNotYet && (
+                <Pressable style={notYet.backdrop} onPress={() => setConfirmingNotYet(null)}>
+                  <Pressable style={notYet.card} onPress={() => { /* swallow */ }}>
+                    <HeroCardGradient />
+                    <View style={notYet.iconWrap}>
+                      <Ionicons name="refresh" size={22} color="#F6D27A" />
+                    </View>
+                    <Text style={notYet.title}>Keep training this?</Text>
+                    <Text style={notYet.body}>
+                      <Text style={notYet.bodyAccent}>{confirmingNotYet.name}</Text>
+                      <Text> will stay on your student's plan and carry over into your next class.</Text>
+                    </Text>
+                    <TouchableOpacity
+                      style={notYet.primaryBtn}
+                      activeOpacity={0.85}
+                      onPress={() => {
+                        setReadinessVerdicts((prev) => ({
+                          ...prev,
+                          [confirmingNotYet.focusPointId]: 'not_yet',
+                        }));
+                        setConfirmingNotYet(null);
+                      }}
+                    >
+                      <Text style={notYet.primaryBtnText}>Yes, keep training</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={notYet.secondaryBtn}
+                      activeOpacity={0.7}
+                      onPress={() => setConfirmingNotYet(null)}
+                    >
+                      <Text style={notYet.secondaryBtnText}>Cancel</Text>
+                    </TouchableOpacity>
+                  </Pressable>
+                </Pressable>
+              )}
+            </Modal>
+
+            {/* Question detail popup — also rendered at the briefing
+                level, but Modals are global so duplicating is fine. */}
+            <Modal
+              visible={!!viewingQuestion}
+              transparent
+              animationType="fade"
+              onRequestClose={() => setViewingQuestion(null)}
+            >
+              {viewingQuestion && (
+                <QuestionDetailSheet
+                  question={viewingQuestion}
+                  role="coach"
+                  onClose={() => setViewingQuestion(null)}
+                />
+              )}
+            </Modal>
+          </SafeAreaView>
+        </SafeAreaProvider>
       </Modal>
     );
   }
@@ -2702,8 +2906,17 @@ export default function StartClassScreen({ navigation }) {
     const st = selectedStudent;
     const stuckPoints = focusPoints.filter(fp => fp.weekCount === 0);
     const trainedPoints = focusPoints.filter(fp => (fp.weekCount || 0) > 0);
-    const sessionsCount = focusPoints.reduce((a, fp) => a + (fp.weekCount || 0), 0);
-    const focusTrained = trainedPoints.length;
+    // Hero stats use the "since last private class with FPs" window
+    // (same as the readiness ring) so the 3 numbers stay consistent with the
+    // "X% ready" subtitle. Falls back to the 7-day window if readiness is
+    // null (new student / unprocessed class).
+    const readinessFocuses = studentReadiness?.focuses || [];
+    const sessionsCount = studentReadiness
+      ? readinessFocuses.reduce((a, f) => a + (f.done || 0), 0)
+      : focusPoints.reduce((a, fp) => a + (fp.weekCount || 0), 0);
+    const focusTrained = studentReadiness
+      ? readinessFocuses.filter(f => (f.done || 0) > 0).length
+      : trainedPoints.length;
     const alertLabel = st.status === 'silent'
       ? 'No practice since last class'
       : st.status === 'attention'
@@ -2756,52 +2969,72 @@ export default function StartClassScreen({ navigation }) {
                   </Text>
                 )}
               </Text>
-              {stuckPoints.length > 0 && (
-                <View style={pb.reco}>
-                  <View style={pb.recoBar} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={pb.recoLabel}>Recommendation</Text>
-                    <Text style={pb.recoText}>
-                      Re-approach "{stuckPoints[0].name}" with a new drill — current approach isn't landing.
-                    </Text>
-                  </View>
-                </View>
-              )}
             </View>
           )}
 
           {/* Carryover from last private — what to check during this lesson */}
-          {!!studentReadiness && (studentReadiness.focuses || []).length > 0 && (
+          {(!!studentReadiness && (studentReadiness.focuses || []).length > 0) || openQuestions.length > 0 ? (
             <View style={pb.checkCard}>
               <View style={pb.checkHeader}>
                 <View style={pb.checkBadge}>
                   <Text style={pb.checkBadgeText}>CHECK DURING THIS LESSON</Text>
                 </View>
-                <Text style={pb.checkPct}>{studentReadiness.percent}%</Text>
+                {!!studentReadiness && (
+                  <Text style={pb.checkPct}>{studentReadiness.percent}%</Text>
+                )}
               </View>
-              <Text style={pb.checkHint}>
-                Carryover from {st.name.split(' ')[0]}'s last private. Validate each at the end.
-              </Text>
-              <View style={pb.checkRows}>
-                {studentReadiness.focuses.map((f) => {
-                  const tierColor =
-                    f.tier === 'critical' ? C.red : f.tier === 'important' ? C.orange : C.gray;
-                  return (
-                    <View key={f.focusPointId} style={pb.checkRow}>
-                      <View style={[pb.checkDot, { backgroundColor: tierColor }]} />
-                      <Text style={pb.checkName} numberOfLines={1}>{f.name}</Text>
-                      <Text style={[pb.checkTier, { color: tierColor }]}>{f.tier}</Text>
-                      <View style={pb.checkProgress}>
-                        <Text style={pb.checkProgressText}>
-                          {f.done}<Text style={pb.checkProgressOf}>/{f.target}</Text>
-                        </Text>
-                      </View>
-                    </View>
-                  );
-                })}
-              </View>
+              {!!studentReadiness && (studentReadiness.focuses || []).length > 0 && (
+                <>
+                  <Text style={pb.checkHint}>
+                    Carryover from {st.name.split(' ')[0]}'s last private. Validate each at the end.
+                  </Text>
+                  <View style={pb.checkRows}>
+                    {studentReadiness.focuses.map((f) => {
+                      const tierColor =
+                        f.tier === 'critical' ? C.red : f.tier === 'important' ? C.orange : C.gray;
+                      return (
+                        <View key={f.focusPointId} style={pb.checkRow}>
+                          <View style={[pb.checkDot, { backgroundColor: tierColor }]} />
+                          <Text style={pb.checkName} numberOfLines={1}>{f.name}</Text>
+                          <Text style={[pb.checkTier, { color: tierColor }]}>{f.tier}</Text>
+                          <View style={pb.checkProgress}>
+                            <Text style={pb.checkProgressText}>
+                              {f.done}<Text style={pb.checkProgressOf}>/{f.target}</Text>
+                            </Text>
+                          </View>
+                        </View>
+                      );
+                    })}
+                  </View>
+                </>
+              )}
+
+              {openQuestions.length > 0 && (
+                <>
+                  <Text style={pb.checkSubLabel}>QUESTIONS · {openQuestions.length}</Text>
+                  <View style={pb.checkRows}>
+                    {openQuestions.map((q) => {
+                      const isInClass = q.status === 'dismissed';
+                      return (
+                        <TouchableOpacity
+                          key={q.id}
+                          style={pb.checkRow}
+                          activeOpacity={0.7}
+                          onPress={() => setViewingQuestion(q)}
+                        >
+                          <View style={[pb.checkDot, { backgroundColor: isInClass ? '#F6D27A' : 'rgba(255,255,255,0.45)' }]} />
+                          <Text style={pb.checkName} numberOfLines={2}>{q.message}</Text>
+                          <Text style={[pb.checkTier, { color: isInClass ? '#F6D27A' : 'rgba(255,255,255,0.55)' }]}>
+                            {isInClass ? 'in class' : 'open'}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </>
+              )}
             </View>
-          )}
+          ) : null}
 
           {/* Last class with you */}
           {lastClass && (
@@ -2853,21 +3086,6 @@ export default function StartClassScreen({ navigation }) {
                 </View>
               )}
             </View>
-          )}
-
-          {/* Questions */}
-          {questions.length > 0 && (
-            <>
-              <Text style={pb.secLabel}>Student questions</Text>
-              <View style={pb.questionsWrap}>
-                {questions.map((q, i) => (
-                  <View key={q.id} style={[pb.qRow, i > 0 && pb.qRowBorder]}>
-                    <Text style={pb.qNum}>{String(i + 1).padStart(2, '0')}</Text>
-                    <Text style={pb.qText}>{q.message}</Text>
-                  </View>
-                ))}
-              </View>
-            </>
           )}
 
           {/* Focus points trained */}
@@ -2937,17 +3155,23 @@ export default function StartClassScreen({ navigation }) {
                 <Circle cx={28} cy={28} r={25} fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth={3} />
                 <Circle cx={28} cy={28} r={25} fill="none" stroke={C.orange}
                   strokeWidth={3}
-                  strokeDasharray={`${2 * Math.PI * 25 * ((st.global || 0) / 100)} ${2 * Math.PI * 25}`}
+                  strokeDasharray={`${2 * Math.PI * 25 * ((studentReadiness?.percent || 0) / 100)} ${2 * Math.PI * 25}`}
                   strokeLinecap="round" transform="rotate(-90 28 28)" />
               </Svg>
               <View style={pb.heroAvatarInner}>
-                <Text style={pb.heroAvatarText}>{initials(st.name)[0]}</Text>
+                {st.photoUrl ? (
+                  <Image source={{ uri: st.photoUrl }} style={pb.heroAvatarImg} />
+                ) : (
+                  <Text style={pb.heroAvatarText}>{initials(st.name)[0]}</Text>
+                )}
               </View>
             </View>
             <View style={{ flex: 1, minWidth: 0 }}>
               <Text style={pb.heroName} numberOfLines={1}>{st.name}</Text>
               <Text style={pb.heroSub}>
-                Trained <Text style={pb.heroSubStrong}>{sessionsCount}x</Text> since last private lesson
+                {studentReadiness?.percent != null
+                  ? <><Text style={pb.heroSubStrong}>{studentReadiness.percent}%</Text> ready for this lesson</>
+                  : <>Trained <Text style={pb.heroSubStrong}>{sessionsCount}x</Text> since last private lesson</>}
               </Text>
             </View>
           </View>
@@ -2984,6 +3208,21 @@ export default function StartClassScreen({ navigation }) {
         {renderDebriefModal()}
         {renderRecStartConfirmPrompt()}
         {renderRecStopConfirmPrompt()}
+
+        <Modal
+          visible={!!viewingQuestion}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setViewingQuestion(null)}
+        >
+          {viewingQuestion && (
+            <QuestionDetailSheet
+              question={viewingQuestion}
+              role="coach"
+              onClose={() => setViewingQuestion(null)}
+            />
+          )}
+        </Modal>
       </SafeAreaView>
     );
   }
@@ -3038,17 +3277,6 @@ export default function StartClassScreen({ navigation }) {
                     </>
                   )}
                 </Text>
-                {underPracticed && underPracticed.practiced < totalStudents / 2 && (
-                  <View style={pb.reco}>
-                    <View style={pb.recoBar} />
-                    <View style={{ flex: 1 }}>
-                      <Text style={pb.recoLabel}>Recommendation</Text>
-                      <Text style={pb.recoText}>
-                        Open with a group {underPracticed.name} exercise — most students skipped it in solo practice.
-                      </Text>
-                    </View>
-                  </View>
-                )}
               </View>
             )}
 
@@ -3297,6 +3525,11 @@ const pb = StyleSheet.create({
     fontFamily: Fonts.jakartaExtraBold,
     fontSize: 17,
     color: '#E8A838',
+  },
+  heroAvatarImg: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
   },
   heroName: {
     fontFamily: Fonts.jakartaExtraBold,
@@ -3621,62 +3854,83 @@ const pb = StyleSheet.create({
   },
 
   // Check-during-lesson card (readiness carryover)
+  // Dark brown card matching the student-side lesson readiness panel
+  // (ProfileScreen → ready.card). Same #1F1810 + gold border treatment so
+  // coach and student see the same visual language for "what's left".
   checkCard: {
     marginHorizontal: Spacing.side,
     marginBottom: 22,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 16,
+    backgroundColor: '#1F1810',
+    borderRadius: 20,
+    padding: 18,
+    paddingBottom: 6,
     borderWidth: 1,
-    borderColor: 'rgba(232,181,48,0.4)',
-    shadowColor: '#E8B530',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 12,
-    elevation: 1,
+    borderColor: 'rgba(240,194,74,0.28)',
+    overflow: 'hidden',
+    shadowColor: '#0A0A0A',
+    shadowOffset: { width: 0, height: 14 },
+    shadowOpacity: 0.5,
+    shadowRadius: 22,
+    elevation: 8,
   },
   checkHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 8,
+    marginBottom: 10,
   },
   checkBadge: {
-    backgroundColor: 'rgba(232,181,48,0.16)',
+    backgroundColor: 'rgba(240,194,74,0.14)',
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 6,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(240,194,74,0.30)',
   },
   checkBadgeText: {
     fontFamily: Fonts.jakartaExtraBold,
     fontSize: 9,
     letterSpacing: 0.8,
-    color: '#B07C12',
+    color: '#F6D27A',
   },
   checkPct: {
     fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 16,
-    color: '#0E0E0E',
-    letterSpacing: -0.3,
+    fontSize: 18,
+    color: '#FFFFFF',
+    letterSpacing: -0.4,
   },
   checkHint: {
     fontFamily: Fonts.jakartaRegular,
     fontSize: 12,
-    color: '#666',
+    color: 'rgba(255,255,255,0.55)',
     lineHeight: 17,
-    marginBottom: 12,
+    marginBottom: 14,
+  },
+  // Sub-section label between focus rows and questions inside the
+  // brown "Check during this lesson" card.
+  checkSubLabel: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 10,
+    color: '#F6D27A',
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
+    marginTop: 14,
+    marginBottom: 4,
+    paddingTop: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(255,255,255,0.10)',
   },
   checkRows: {
-    gap: 6,
+    marginHorizontal: -18,
   },
   checkRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    backgroundColor: 'rgba(13,13,18,0.03)',
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    borderTopWidth: 0.5,
+    borderTopColor: 'rgba(255,255,255,0.10)',
   },
   checkDot: {
     width: 7,
@@ -3685,9 +3939,10 @@ const pb = StyleSheet.create({
   },
   checkName: {
     flex: 1,
-    fontFamily: Fonts.jakartaSemiBold,
-    fontSize: 13,
-    color: '#0E0E0E',
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 13.5,
+    color: '#FFFFFF',
+    letterSpacing: -0.05,
   },
   checkTier: {
     fontFamily: Fonts.jakartaExtraBold,
@@ -3702,12 +3957,13 @@ const pb = StyleSheet.create({
   checkProgressText: {
     fontFamily: Fonts.jakartaExtraBold,
     fontSize: 13,
-    color: '#0E0E0E',
+    color: '#F6D27A',
+    letterSpacing: -0.2,
   },
   checkProgressOf: {
     fontFamily: Fonts.jakartaSemiBold,
     fontSize: 11,
-    color: 'rgba(13,13,18,0.4)',
+    color: 'rgba(246,210,122,0.5)',
   },
 });
 
@@ -4905,6 +5161,36 @@ const ad = StyleSheet.create({
 
 // ── End-of-class debrief sheet styles ──────────────────────────────────────
 const db = StyleSheet.create({
+  // Full-screen container — no longer a bottom sheet. The debrief earns
+  // its own view because the coach is doing real work (validating focus
+  // points + questions + writing a class note), not just dismissing.
+  screen: {
+    flex: 1,
+    backgroundColor: '#FFFFFF',
+  },
+  topBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    paddingHorizontal: 24,
+    paddingTop: 16,
+    paddingBottom: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: 'rgba(13,13,18,0.08)',
+  },
+  // Sticky action bar at the bottom — Done is always reachable, Save for
+  // later sits underneath as a secondary out.
+  bottomBar: {
+    paddingHorizontal: 24,
+    paddingTop: 12,
+    paddingBottom: 16,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(13,13,18,0.08)',
+    backgroundColor: '#FFFFFF',
+    gap: 6,
+  },
+  // Legacy aliases — retained until the old overlay/sheet path is fully
+  // removed elsewhere (e.g. group debrief which still uses Modal sheet).
   overlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.45)',
@@ -4953,6 +5239,9 @@ const db = StyleSheet.create({
     color: '#999',
     marginTop: 2,
   },
+  // Brown duration card — same family as "Check during this lesson" on
+  // the briefing screen so the visual language carries through into the
+  // debrief.
   durationBar: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -4960,27 +5249,31 @@ const db = StyleSheet.create({
     marginHorizontal: 24,
     marginTop: 16,
     paddingHorizontal: 16,
-    paddingVertical: 12,
-    backgroundColor: '#F5F5F5',
-    borderRadius: 12,
+    paddingVertical: 13,
+    backgroundColor: '#1F1810',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(240,194,74,0.28)',
   },
   durationText: {
     fontFamily: Fonts.jakartaExtraBold,
     fontSize: 13,
-    color: '#0E0E0E',
+    color: '#FFFFFF',
   },
   durationDim: {
     fontFamily: Fonts.jakartaMedium,
-    color: '#999',
+    color: 'rgba(255,255,255,0.55)',
   },
+  // Gold uppercase eyebrow — matches the section labels used in the
+  // student readiness card and the coach action-needed pillars.
   secLabel: {
     fontFamily: Fonts.jakartaExtraBold,
     fontSize: 10,
-    color: '#B0B0B0',
+    color: '#F6D27A',
     textTransform: 'uppercase',
-    letterSpacing: 0.6,
+    letterSpacing: 1.2,
     marginHorizontal: 24,
-    marginTop: 20,
+    marginTop: 24,
     marginBottom: 10,
   },
   noteArea: {
@@ -4989,7 +5282,7 @@ const db = StyleSheet.create({
   noteInput: {
     minHeight: 88,
     padding: 16,
-    borderRadius: 16,
+    borderRadius: 14,
     borderWidth: 1.5,
     borderColor: '#E5E5E5',
     backgroundColor: '#FFFFFF',
@@ -5005,6 +5298,8 @@ const db = StyleSheet.create({
     marginTop: 6,
     paddingLeft: 2,
   },
+  // Focus point validation list — dark brown cards matching the rest of
+  // the debrief surface.
   fpList: {
     marginHorizontal: 24,
     gap: 8,
@@ -5016,17 +5311,20 @@ const db = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 14,
     borderRadius: 14,
-    backgroundColor: '#F8F8F8',
+    backgroundColor: '#1F1810',
+    borderWidth: 1,
+    borderColor: 'rgba(240,194,74,0.28)',
   },
   fpItemSelected: {
-    backgroundColor: 'rgba(74,175,82,0.06)',
+    backgroundColor: '#1F1810',
+    borderColor: 'rgba(76,175,80,0.45)',
   },
   fpCheck: {
-    width: 28,
-    height: 28,
+    width: 26,
+    height: 26,
     borderRadius: 10,
-    borderWidth: 2,
-    borderColor: '#DDD',
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.25)',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -5037,16 +5335,18 @@ const db = StyleSheet.create({
   fpName: {
     fontFamily: Fonts.jakartaExtraBold,
     fontSize: 14,
-    color: '#0E0E0E',
+    color: '#FFFFFF',
   },
   fpMeta: {
     fontFamily: Fonts.jakartaMedium,
     fontSize: 11,
-    color: '#999',
+    color: 'rgba(255,255,255,0.55)',
     marginTop: 2,
   },
 
-  // Readiness verdicts (Good / Not yet)
+  // Verdict rows (Good / Not yet + Covered / Not yet) — same dark card
+  // pattern as focus items, with translucent buttons that stay readable
+  // on the brown surface until the coach picks one.
   verdictList: {
     gap: 8,
     marginHorizontal: 24,
@@ -5055,17 +5355,28 @@ const db = StyleSheet.create({
   verdictRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F8F8F8',
+    backgroundColor: '#1F1810',
     borderRadius: 14,
     paddingHorizontal: 14,
-    paddingVertical: 10,
+    paddingVertical: 12,
     gap: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(240,194,74,0.28)',
   },
   verdictName: {
     flex: 1,
     fontFamily: Fonts.jakartaSemiBold,
     fontSize: 13,
-    color: '#0E0E0E',
+    color: '#FFFFFF',
+    lineHeight: 18,
+  },
+  verdictMeta: {
+    fontFamily: Fonts.jakartaBold,
+    fontSize: 9.5,
+    color: '#F6D27A',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    marginTop: 4,
   },
   verdictBtns: {
     flexDirection: 'row',
@@ -5078,9 +5389,9 @@ const db = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 7,
     borderRadius: 10,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: 'rgba(13,13,18,0.08)',
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.14)',
   },
   verdictBtnGood: {
     backgroundColor: '#4AAF52',
@@ -5107,12 +5418,20 @@ const db = StyleSheet.create({
     paddingVertical: 18,
     alignItems: 'center',
   },
+  btnDoneDisabled: {
+    backgroundColor: 'rgba(13,13,18,0.08)',
+  },
   btnDoneText: {
     fontFamily: Fonts.jakartaExtraBold,
     fontSize: 16,
     color: '#FFFFFF',
     letterSpacing: 1,
     textTransform: 'uppercase',
+  },
+  btnDoneTextDisabled: {
+    color: 'rgba(13,13,18,0.40)',
+    letterSpacing: 0.5,
+    fontSize: 13,
   },
   btnLater: {
     alignItems: 'center',
@@ -5141,6 +5460,83 @@ const db = StyleSheet.create({
     fontSize: 12,
     color: '#E8A838',
     flex: 1,
+  },
+});
+
+// "Not yet" confirmation popup — same dark hero card pattern as
+// ApproveConfirmSheet so the gesture feels consistent across the app.
+const notYet = StyleSheet.create({
+  backdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    justifyContent: 'center',
+    paddingHorizontal: 28,
+  },
+  card: {
+    borderRadius: 22,
+    paddingHorizontal: 24,
+    paddingTop: 22,
+    paddingBottom: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(240,194,74,0.28)',
+    overflow: 'hidden',
+  },
+  iconWrap: {
+    alignSelf: 'center',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(240,194,74,0.14)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(240,194,74,0.30)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+  title: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 20,
+    color: '#FFFFFF',
+    letterSpacing: -0.5,
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  body: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 13.5,
+    color: 'rgba(255,255,255,0.78)',
+    lineHeight: 20,
+    textAlign: 'center',
+    marginBottom: 22,
+  },
+  bodyAccent: {
+    fontFamily: Fonts.jakartaBold,
+    color: '#F6D27A',
+  },
+  primaryBtn: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    paddingVertical: 13,
+    marginBottom: 4,
+  },
+  primaryBtnText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 14,
+    color: '#0A0A0A',
+    letterSpacing: 0.2,
+  },
+  secondaryBtn: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+  },
+  secondaryBtnText: {
+    fontFamily: Fonts.jakartaSemiBold,
+    fontSize: 13.5,
+    color: 'rgba(255,255,255,0.65)',
+    letterSpacing: 0.1,
   },
 });
 

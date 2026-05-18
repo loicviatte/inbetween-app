@@ -1,15 +1,12 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import HeroCardGradient from '../HeroCardGradient';
+import { Ionicons } from '@expo/vector-icons';
 import { Fonts } from '../../theme';
 
-const C = {
-  card: '#FFFFFF',
-  dark: '#141414',
-  text: '#0E0E0E',
-  gray: '#999',
-  orange: '#E8A838',
-  red: '#D44545',
-};
+const GOLD = '#F6D27A';
+const URGENT_BORDER = 'rgba(232,64,64,0.55)';
+const DEFAULT_BORDER = 'rgba(240,194,74,0.28)';
 
 export default function PendingFocusCard({
   fp,
@@ -19,6 +16,7 @@ export default function PendingFocusCard({
   onApprove,
   onEdit,
   onDelete,
+  onShowContext,
 }) {
   const hoursLeft = fp.coach_review_deadline
     ? Math.max(0, Math.ceil((new Date(fp.coach_review_deadline) - Date.now()) / 3600000))
@@ -28,8 +26,6 @@ export default function PendingFocusCard({
   const src = Array.isArray(fp.source_class_input) ? fp.source_class_input[0] : fp.source_class_input;
   const classSummary = src?.class_summary || null;
   const fpNameLower = fp.name?.trim().toLowerCase();
-  // Student's note only makes sense for private lessons — practice_point_1/2 on class_inputs
-  // is populated from a single student's focus points and has no meaning in a group context.
   const isGroup = src?.lesson_type === 'public' || src?.lesson_type === 'group' || !!fp.group_fp;
   const studentNote = isGroup
     ? null
@@ -41,31 +37,40 @@ export default function PendingFocusCard({
 
   return (
     <TouchableOpacity
-      style={[s.fpCard, isExpanded && s.fpCardExpanded]}
+      style={[s.card, { borderColor: isUrgent ? URGENT_BORDER : DEFAULT_BORDER }]}
       activeOpacity={0.92}
       onPress={onToggle}
     >
-      {isUrgent && <View style={s.urgentAccent} />}
+      <HeroCardGradient />
 
-      {/* Meta header */}
+      {/* Top row: REVIEW (left) · student name (centered) · Xh left (right) */}
       <View style={s.metaRow}>
-        <Text style={s.metaCategory}>REVIEW</Text>
+        <View style={s.metaSide}>
+          <Text style={s.metaCategory}>REVIEW</Text>
+        </View>
         {!!studentName && (
-          <>
-            <Text style={s.metaSep}>·</Text>
-            <Text style={s.metaStudent} numberOfLines={1}>{studentName}</Text>
-          </>
-        )}
-        <View style={{ flex: 1 }} />
-        {hoursLeft !== null && (
-          <Text style={[s.metaTime, isUrgent && s.metaTimeUrgent]}>
-            {hoursLeft}h left
+          <Text style={s.studentName} numberOfLines={1}>
+            {studentName}
           </Text>
         )}
+        <View style={[s.metaSide, s.metaSideRight]}>
+          {hoursLeft !== null && (
+            <Text style={[s.metaTime, isUrgent && s.metaTimeUrgent]}>
+              {hoursLeft === 0 ? 'auto-publishing' : `${hoursLeft}h left`}
+            </Text>
+          )}
+        </View>
       </View>
 
       {/* FP name */}
-      <Text style={s.fpName} numberOfLines={2}>{fp.name}</Text>
+      <Text style={s.fpName}>{fp.name}</Text>
+
+      {/* Subtitle */}
+      {!!fp.subtitle && (
+        <Text style={s.fpSubtitle} numberOfLines={isExpanded ? undefined : 2}>
+          {fp.subtitle}
+        </Text>
+      )}
 
       {/* Context preview */}
       {!!fp.context && (
@@ -76,7 +81,7 @@ export default function PendingFocusCard({
 
       {/* Expanded */}
       {isExpanded && (
-        <View style={s.fpExpanded}>
+        <View style={s.expanded}>
           {!!studentNote && (
             <View style={s.quoteBlock}>
               <Text style={s.quoteLabel}>Student's note</Text>
@@ -86,26 +91,17 @@ export default function PendingFocusCard({
               </View>
             </View>
           )}
-          {!!classSummary && (
-            <View style={s.quoteBlock}>
-              <Text style={s.quoteLabel}>Class summary</Text>
-              <View style={s.quoteRow}>
-                <View style={s.quoteBar} />
-                <Text style={s.quoteText}>{classSummary}</Text>
-              </View>
-            </View>
-          )}
           {!!fp.drill && (
             <View style={s.quoteBlock}>
-              <Text style={[s.quoteLabel, { color: C.orange }]}>Drill suggestion</Text>
+              <Text style={[s.quoteLabel, s.quoteLabelGold]}>Drill suggestion</Text>
               <View style={s.quoteRow}>
-                <View style={[s.quoteBar, { backgroundColor: C.orange }]} />
+                <View style={[s.quoteBar, s.quoteBarGold]} />
                 <Text style={s.quoteText}>{fp.drill}</Text>
               </View>
             </View>
           )}
 
-          <View style={s.fpActions}>
+          <View style={s.actions}>
             <TouchableOpacity style={s.approveBtn} onPress={() => onApprove(fp.id)} activeOpacity={0.85}>
               <Text style={s.approveBtnText}>Approve</Text>
             </TouchableOpacity>
@@ -116,6 +112,14 @@ export default function PendingFocusCard({
               <Text style={s.rejectBtnText}>Reject</Text>
             </TouchableOpacity>
           </View>
+
+          {!!src && !!onShowContext && (
+            <TouchableOpacity style={s.contextBtn} onPress={() => onShowContext(fp)} activeOpacity={0.7}>
+              <Ionicons name="book-outline" size={14} color="rgba(255,255,255,0.85)" />
+              <Text style={s.contextBtnText}>Read class context</Text>
+              <Ionicons name="chevron-forward" size={14} color="rgba(255,255,255,0.45)" />
+            </TouchableOpacity>
+          )}
         </View>
       )}
     </TouchableOpacity>
@@ -123,109 +127,111 @@ export default function PendingFocusCard({
 }
 
 const s = StyleSheet.create({
-  fpCard: {
-    backgroundColor: C.card,
-    borderRadius: 14,
-    paddingVertical: 18,
+  card: {
+    borderRadius: 18,
     paddingHorizontal: 18,
+    paddingTop: 14,
+    paddingBottom: 16,
     marginBottom: 10,
+    borderWidth: 1,
     overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOpacity: 0.035,
-    shadowOffset: { width: 0, height: 1 },
-    shadowRadius: 3,
-    elevation: 1,
   },
-  fpCardExpanded: {
-    shadowOpacity: 0.07,
-    shadowRadius: 10,
-    elevation: 3,
-  },
-  urgentAccent: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    bottom: 0,
-    width: 2.5,
-    backgroundColor: C.red,
-  },
+
+  // ── Top meta row ──
   metaRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    marginBottom: 6,
+    marginBottom: 14,
+  },
+  metaSide: {
+    flex: 1,
+  },
+  metaSideRight: {
+    alignItems: 'flex-end',
   },
   metaCategory: {
     fontFamily: Fonts.jakartaExtraBold,
     fontSize: 10,
     letterSpacing: 1.2,
-    color: C.orange,
+    color: GOLD,
     textTransform: 'uppercase',
-  },
-  metaSep: {
-    fontSize: 10,
-    color: '#C8C8C8',
-    marginHorizontal: -2,
-  },
-  metaStudent: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 11,
-    color: C.gray,
-    letterSpacing: 0.2,
-    flexShrink: 1,
   },
   metaTime: {
     fontFamily: Fonts.jakartaBold,
     fontSize: 11,
-    color: C.orange,
-    letterSpacing: 0.1,
+    color: GOLD,
+    letterSpacing: 0.2,
   },
   metaTimeUrgent: {
-    color: C.red,
+    color: '#FF8C8C',
   },
+  studentName: {
+    fontFamily: Fonts.jakartaSemiBold,
+    fontSize: 15,
+    color: 'rgba(255,255,255,0.92)',
+    letterSpacing: -0.2,
+    textAlign: 'center',
+    flexShrink: 1,
+    paddingHorizontal: 8,
+  },
+
+  // ── Title / subtitle / body ──
   fpName: {
     fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 18,
-    lineHeight: 24,
-    letterSpacing: -0.3,
-    color: C.text,
+    fontSize: 22,
+    lineHeight: 26,
+    letterSpacing: -0.55,
+    color: '#FFFFFF',
+  },
+  fpSubtitle: {
+    fontFamily: Fonts.jakartaSemiBold,
+    fontSize: 11.5,
+    color: GOLD,
+    lineHeight: 16,
+    marginTop: 6,
   },
   fpDetail: {
     fontFamily: Fonts.jakartaRegular,
-    fontSize: 13.5,
-    color: '#5C6370',
-    lineHeight: 20,
+    fontSize: 13,
+    color: 'rgba(255,255,255,0.78)',
+    lineHeight: 19,
     marginTop: 8,
   },
-  fpExpanded: {
-    marginTop: 18,
-    paddingTop: 18,
+
+  // ── Expanded ──
+  expanded: {
+    marginTop: 16,
+    paddingTop: 16,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#E8E8E8',
+    borderTopColor: 'rgba(255,255,255,0.12)',
   },
   quoteBlock: { marginBottom: 16 },
   quoteLabel: {
     fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 10,
-    color: C.gray,
+    fontSize: 9.5,
+    color: 'rgba(255,255,255,0.55)',
     letterSpacing: 1.2,
     textTransform: 'uppercase',
     marginBottom: 7,
   },
+  quoteLabelGold: { color: GOLD },
   quoteRow: { flexDirection: 'row', gap: 12 },
   quoteBar: {
     width: 2,
-    backgroundColor: '#E0E0E0',
+    backgroundColor: 'rgba(255,255,255,0.18)',
     borderRadius: 1,
   },
+  quoteBarGold: { backgroundColor: GOLD },
   quoteText: {
     flex: 1,
     fontFamily: Fonts.jakartaRegular,
     fontSize: 13.5,
-    color: C.text,
+    color: 'rgba(255,255,255,0.85)',
     lineHeight: 20,
   },
-  fpActions: {
+
+  // ── Actions ──
+  actions: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 14,
@@ -235,14 +241,14 @@ const s = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: C.dark,
+    backgroundColor: '#FFFFFF',
     borderRadius: 999,
     paddingVertical: 12,
   },
   approveBtnText: {
     fontFamily: Fonts.jakartaExtraBold,
     fontSize: 13,
-    color: '#fff',
+    color: '#0A0A0A',
     letterSpacing: 0.2,
   },
   textBtn: {
@@ -252,13 +258,31 @@ const s = StyleSheet.create({
   editBtnText: {
     fontFamily: Fonts.jakartaBold,
     fontSize: 13,
-    color: C.text,
+    color: '#FFFFFF',
     letterSpacing: 0.1,
   },
   rejectBtnText: {
     fontFamily: Fonts.jakartaBold,
     fontSize: 13,
-    color: C.red,
+    color: '#FF8C8C',
+    letterSpacing: 0.1,
+  },
+  contextBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: 14,
+    paddingVertical: 11,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.14)',
+  },
+  contextBtnText: {
+    fontFamily: Fonts.jakartaSemiBold,
+    fontSize: 12.5,
+    color: 'rgba(255,255,255,0.85)',
     letterSpacing: 0.1,
   },
 });

@@ -485,7 +485,9 @@ export async function getLessonReadiness(targetUserId = null) {
   const lastClass = classes?.[0];
   if (!lastClass) return null;
 
-  // Focus points produced for this student by that class.
+  // Primary focuses = those produced by the anchor class AND not currently
+  // held (a held focus is one the coach marked "Not yet" in a prior debrief
+  // — it waits until the primary list is done before re-entering).
   const { data: fps } = await supabase
     .from('focus_points')
     .select('id, name, tier')
@@ -493,7 +495,8 @@ export async function getLessonReadiness(targetUserId = null) {
     .eq('class_input_id', lastClass.id)
     .eq('is_other', false)
     .not('is_deleted', 'is', true)
-    .neq('status', 'past');
+    .neq('status', 'past')
+    .or('is_held.is.null,is_held.eq.false');
   if (!fps || fps.length === 0) return null;
 
   // Sessions completed against those focus points since the class
@@ -820,6 +823,22 @@ export async function askCoach(message, question_type = 'clarification', focusPo
     const { applyFocusEvent } = await import('../utils/algorithm');
     await applyFocusEvent(focusPointId, eventType, userId).catch(() => {});
   }
+}
+
+// Returns the student's own questions to their coach with current status.
+// Filters to "active" statuses — pending (still in the coach's queue),
+// dismissed (coach will cover it in the next class), and replied (coach
+// answered). Past/rejected are excluded.
+export async function getMyCoachQuestions() {
+  const userId = await getUserId();
+  const { data } = await supabase
+    .from('coach_messages')
+    .select('id, message, reply, status, created_at')
+    .eq('student_id', userId)
+    .in('status', ['pending', 'dismissed', 'replied'])
+    .order('created_at', { ascending: false })
+    .limit(20);
+  return data || [];
 }
 
 export async function getCoachReplies() {
