@@ -29,6 +29,7 @@ import {
   getRecentClassInputs,
   getTopFocusPointsWithCounts,
   getLessonReadiness,
+  getTeacherContextForAI,
 } from '../storage/storage';
 import { getSlots, getSessionCountForFocus, startTrainingSession } from '../utils/algorithm';
 import {
@@ -256,6 +257,9 @@ export default function HomeScreen({ navigation }) {
     }
     setShowFilter(isBoth);
     setCategory(cat);
+
+    // Pre-warm the AI assistant context so the chat in FocusSessionScreen has a warm cache
+    getTeacherContextForAI().catch(() => {});
 
     const [slots, sessions, classes, focusTrained, wa, savedPhoto, readinessValue] = await Promise.all([
       getSlots(cat),

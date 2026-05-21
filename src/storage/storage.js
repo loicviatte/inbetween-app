@@ -11,10 +11,10 @@ export async function getUserId() {
 const _cache = {};
 const CACHE_TTL = 15000; // 15s — fresh enough, avoids duplicate network calls
 
-function cached(key, fetcher) {
+function cached(key, fetcher, ttl = CACHE_TTL) {
   return async function (...args) {
     const entry = _cache[key];
-    if (entry && Date.now() - entry.ts < CACHE_TTL) return entry.data;
+    if (entry && Date.now() - entry.ts < ttl) return entry.data;
     const data = await fetcher(...args);
     _cache[key] = { data, ts: Date.now() };
     return data;
@@ -63,11 +63,13 @@ export async function getUserSummary() {
 
 // ─── AI Coach Context ─────────────────────────────────────────────────────────
 
-export async function getTeacherContextForAI() {
+async function _getTeacherContextForAI() {
   const { data, error } = await supabase.functions.invoke('get-teacher-context');
   if (error) throw error;
   return data;
 }
+// 2 min TTL — heavy payload (transcripts, knowledge base), pre-warmed from HomeScreen
+export const getTeacherContextForAI = cached('teacherContext', _getTeacherContextForAI, 120000);
 
 // ─── Class Inputs ────────────────────────────────────────────────────────────
 
@@ -75,7 +77,7 @@ async function _getClassInputs() {
   const userId = await getUserId();
   const { data, error } = await supabase
     .from('class_inputs')
-    .select('*, focus_points!focus_points_class_input_id_fkey(id, name, subtitle, context, drill, dance, tier, status)')
+    .select('*, focus_points!focus_points_class_input_id_fkey(id, name, subtitle, context, drill, dance, tier, status, is_deleted, is_other)')
     .not('is_deleted', 'is', true)
     .order('created_at', { ascending: false });
 

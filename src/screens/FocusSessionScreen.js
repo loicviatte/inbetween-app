@@ -1574,7 +1574,7 @@ I don't have that in your data, but you can send the question to your coach if y
   async function handleAiSend(textOverride) {
     const raw = typeof textOverride === 'string' ? textOverride : aiQuestion;
     const text = raw.trim();
-    if (!text || aiSending) return;
+    if (!text || aiSending || !aiContext) return;
     if (typeof textOverride !== 'string') setAiQuestion('');
     Keyboard.dismiss();
     const newMessages = [...aiMessages, { role: 'user', content: text }];
@@ -2000,7 +2000,7 @@ I don't have that in your data, but you can send the question to your coach if y
                   : <Ionicons name={aiRecording ? 'stop-circle' : 'mic'} size={16} color={aiRecording ? '#E84040' : 'rgba(255,255,255,0.6)'} />
                 }
               </TouchableOpacity>
-              <TouchableOpacity onPress={handleAiSend} disabled={!aiQuestion.trim() || aiSending} style={[styles.aiCardSendBtn, (!aiQuestion.trim() || aiSending) && { opacity: 0.35 }]} activeOpacity={0.7}>
+              <TouchableOpacity onPress={handleAiSend} disabled={!aiQuestion.trim() || aiSending || !aiContext} style={[styles.aiCardSendBtn, (!aiQuestion.trim() || aiSending || !aiContext) && { opacity: 0.35 }]} activeOpacity={0.7}>
                 <Text style={styles.aiCardSendIcon}>↑</Text>
               </TouchableOpacity>
             </View>

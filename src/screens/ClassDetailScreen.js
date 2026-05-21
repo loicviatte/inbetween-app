@@ -245,7 +245,13 @@ export default function ClassDetailScreen({ route, navigation }) {
   const isRecorded = !!item.transcript;
   const teacherDisplay = item.teacher_name || item._teacher_fallback || null;
   const teacherInitials = getInitials(teacherDisplay);
-  const focusPoints = item.focus_points ? sortFocusPoints(item.focus_points) : [];
+  const focusPoints = item.focus_points
+    ? sortFocusPoints(
+        item.focus_points.filter(
+          (fp) => fp.status !== 'pending_coach' && !fp.is_deleted && !fp.is_other,
+        ),
+      )
+    : [];
   const lessonTypeLabel = item.lesson_type
     ? (isPrivateLesson(item.lesson_type) ? 'Private' : 'Group')
     : null;
