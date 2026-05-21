@@ -6,17 +6,18 @@ import {
   ScrollView,
   TouchableOpacity,
   TextInput,
-  Image,
   Pressable,
   Animated,
   Dimensions,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import Svg, { Circle } from 'react-native-svg';
 import { Fonts, Spacing } from '../../theme';
 import { respondToCoachRequest } from '../../storage/coachStorage';
 import { CoachHomeScreenSkeleton } from '../../components/Skeleton';
 import { useCoachData } from '../../context/CoachDataContext';
+import { getLessonReadiness } from '../../storage/storage';
 
 // ── Palette ─────────────────────────────────────────────────────────────────
 const C = {
@@ -75,12 +76,16 @@ function shortDate(iso) {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
-// ── Health ring ─────────────────────────────────────────────────────────────
+// ── Readiness ring ──────────────────────────────────────────────────────────
+// Driven by lesson-readiness % (same metric as the student detail hero ring
+// and the Dashboard student strip).
 function HealthRing({ value = 0, size = 42, strokeWidth = 3 }) {
-  const color = value >= 75 ? C.green : value >= 55 ? C.orange : C.red;
+  const color = value >= 70 ? C.green : value >= 40 ? C.orange : C.red;
   const r = (size - strokeWidth) / 2;
   const circ = 2 * Math.PI * r;
-  const off = circ - (Math.max(0, Math.min(100, value)) / 100) * circ;
+  // Floor at 1% so a 0%-ready student still shows a tiny visible dot.
+  const visibleValue = Math.max(1, Math.min(100, value));
+  const off = circ - (visibleValue / 100) * circ;
   return (
     <Svg width={size} height={size} style={{ transform: [{ rotate: '-90deg' }] }}>
       <Circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={C.surface} strokeWidth={strokeWidth} />
@@ -169,11 +174,11 @@ function AlertLine({ alert }) {
 }
 
 // ── Attention student card ──────────────────────────────────────────────────
-function AttentionCard({ student, onPress }) {
+function AttentionCard({ student, readinessPercent = 0, onPress }) {
   return (
     <Pressable style={styles.attentionCard} onPress={onPress}>
       <View style={styles.ringWrap}>
-        <HealthRing value={student.health} size={42} strokeWidth={3} />
+        <HealthRing value={readinessPercent} size={42} strokeWidth={3} />
         <View style={[styles.ringAvatar, { width: 30, height: 30 }]}>
           <AvatarBadge student={student} size={30} fontSize={13} />
         </View>
@@ -193,14 +198,14 @@ function AttentionCard({ student, onPress }) {
 }
 
 // ── On-track student row (compact) ──────────────────────────────────────────
-function OnTrackRow({ student, onPress, isLast }) {
+function OnTrackRow({ student, readinessPercent = 0, onPress, isLast }) {
   return (
     <Pressable
       style={[styles.onTrackRow, !isLast && styles.onTrackRowDivider]}
       onPress={onPress}
     >
       <View style={styles.ringWrap}>
-        <HealthRing value={student.health} size={38} strokeWidth={2.5} />
+        <HealthRing value={readinessPercent} size={38} strokeWidth={2.5} />
         <View style={[styles.ringAvatar, { width: 28, height: 28 }]}>
           <AvatarBadge student={student} size={28} fontSize={11} />
         </View>
@@ -288,6 +293,38 @@ function RequestRow({ student, onAccept, onReject }) {
 // ── Screen ──────────────────────────────────────────────────────────────────
 export default function CoachHomeScreen({ navigation }) {
   const { students, requests, initialLoading: loading, refresh, updateRequests } = useCoachData();
+
+  // Lesson readiness % per student — drives the ring around each avatar.
+  // Same metric as DashboardScreen + student detail hero ring.
+  const [readinessByStudent, setReadinessByStudent] = useState({});
+  const lastReadinessSigRef = useRef(null);
+  useEffect(() => {
+    if (!students || students.length === 0) {
+      setReadinessByStudent({});
+      return;
+    }
+    const signature = students.map((s) => s.id).sort().join('|');
+    if (signature === lastReadinessSigRef.current) return;
+    lastReadinessSigRef.current = signature;
+
+    let alive = true;
+    (async () => {
+      try {
+        const readinesses = await Promise.all(
+          students.map((s) => getLessonReadiness(s.id).catch(() => null)),
+        );
+        if (!alive) return;
+        const byStudent = {};
+        for (let i = 0; i < students.length; i++) {
+          byStudent[students[i].id] = readinesses[i]?.percent ?? 0;
+        }
+        setReadinessByStudent(byStudent);
+      } catch {
+        if (alive) setReadinessByStudent({});
+      }
+    })();
+    return () => { alive = false; };
+  }, [students]);
 
   const [filter, setFilter] = useState('all'); // 'all' | 'last_private'
 
@@ -415,11 +452,15 @@ export default function CoachHomeScreen({ navigation }) {
             style={[
               styles.filterUnderline,
               {
-                left: horizontalScrollX.interpolate({
-                  inputRange: [0, Math.max(1, screenWidth)],
-                  outputRange: ['0%', '50%'],
-                  extrapolate: 'clamp',
-                }),
+                // Native-driver friendly: animate transform instead of `left`.
+                left: 0,
+                transform: [{
+                  translateX: horizontalScrollX.interpolate({
+                    inputRange: [0, Math.max(1, screenWidth)],
+                    outputRange: [0, screenWidth * 0.5],
+                    extrapolate: 'clamp',
+                  }),
+                }],
               },
             ]}
           />
@@ -451,7 +492,7 @@ export default function CoachHomeScreen({ navigation }) {
         scrollEventThrottle={16}
         onScroll={Animated.event(
           [{ nativeEvent: { contentOffset: { x: horizontalScrollX } } }],
-          { useNativeDriver: false }
+          { useNativeDriver: true }
         )}
         onMomentumScrollEnd={(e) => {
           const page = Math.round(e.nativeEvent.contentOffset.x / Math.max(1, screenWidth));
@@ -485,7 +526,12 @@ export default function CoachHomeScreen({ navigation }) {
                 </View>
                 <View style={{ gap: 8 }}>
                   {attention.map((s) => (
-                    <AttentionCard key={s.id} student={s} onPress={() => openStudent(s)} />
+                    <AttentionCard
+                      key={s.id}
+                      student={s}
+                      readinessPercent={readinessByStudent[s.id] || 0}
+                      onPress={() => openStudent(s)}
+                    />
                   ))}
                 </View>
               </View>
@@ -502,6 +548,7 @@ export default function CoachHomeScreen({ navigation }) {
                     <OnTrackRow
                       key={s.id}
                       student={s}
+                      readinessPercent={readinessByStudent[s.id] || 0}
                       onPress={() => openStudent(s)}
                       isLast={i === onTrack.length - 1}
                     />

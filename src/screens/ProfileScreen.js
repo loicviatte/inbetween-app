@@ -4,7 +4,6 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  Image,
   Animated,
   Modal,
   TextInput,
@@ -14,6 +13,7 @@ import {
   ActivityIndicator,
   ScrollView,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
@@ -37,8 +37,11 @@ import {
   unlinkCoachForCategory,
   getMyCoachForCategory,
   getLessonReadiness,
+  getMyCoachQuestions,
 } from '../storage/storage';
 import { supabase } from '../services/supabase/client';
+import HeroCardGradient from '../components/HeroCardGradient';
+import QuestionDetailSheet from '../components/QuestionDetailSheet';
 import RadarChart, { RADAR_LABELS } from '../components/RadarChart';
 import { useProfile } from '../context/ProfileContext';
 import { clearUserCaches } from '../storage/userCaches';
@@ -92,10 +95,15 @@ function ReadinessMeter({ percent = 0, size = 84, stroke = 6 }) {
 }
 
 // ─── Focus row inside readiness card ─────────────────────────────────────────
+const TIER_LABEL = {
+  critical: 'Critical focus',
+  important: 'Important focus',
+  supporting: 'Supporting focus',
+};
 function FocusReadyRow({ row, isLast }) {
   if (!row) return null;
   const partial = row.done > 0;
-  const labelText = row.kind === 'primary' ? 'Primary focus · from last private' : 'Secondary focus · from last private';
+  const labelText = `${TIER_LABEL[row.tier] || 'Focus'} · from last private`;
   return (
     <View style={[ready.focusRow, !isLast && ready.focusRowBorder]}>
       <View style={[ready.check, partial && ready.checkPartial]}>
@@ -113,6 +121,55 @@ function FocusReadyRow({ row, isLast }) {
         {row.done}<Text style={ready.focusProgressOf}>/{row.target}</Text>
       </Text>
     </View>
+  );
+}
+
+// Question row — shown after the focus list inside the readiness card.
+// Status drives the badge + the secondary line:
+//   pending    → muted chat icon, "Awaiting coach reply"
+//   dismissed  → gold "IN NEXT CLASS" badge, "Coach will cover it"
+//   replied    → gold reply badge, "Replied" + the actual reply preview
+function QuestionReadyRow({ question, isLast, onPress }) {
+  if (!question) return null;
+  const status = question.status;
+  const isReplied = status === 'replied';
+  const isInClass = status === 'dismissed';
+  const handled = isReplied || isInClass;
+
+  const metaText = isReplied
+    ? (question.reply ? `Replied: ${question.reply}` : 'Coach replied')
+    : isInClass
+      ? 'Coach will cover it in your next class'
+      : 'Awaiting coach reply';
+
+  return (
+    <TouchableOpacity
+      style={[ready.focusRow, !isLast && ready.focusRowBorder]}
+      activeOpacity={0.65}
+      onPress={onPress}
+    >
+      <View style={[ready.check, handled && ready.checkPartial]}>
+        <Ionicons
+          name={isReplied ? 'chatbubble-ellipses' : isInClass ? 'time-outline' : 'chatbubble-outline'}
+          size={11}
+          color={handled ? '#F6D27A' : 'rgba(255,255,255,0.40)'}
+        />
+      </View>
+      <View style={ready.focusBody}>
+        <Text style={ready.focusName} numberOfLines={1}>{question.message}</Text>
+        <Text style={ready.focusMeta} numberOfLines={2}>{metaText}</Text>
+      </View>
+      {isInClass && (
+        <View style={ready.inClassBadge}>
+          <Text style={ready.inClassBadgeText}>IN CLASS</Text>
+        </View>
+      )}
+      {isReplied && (
+        <View style={ready.repliedBadge}>
+          <Text style={ready.repliedBadgeText}>REPLIED</Text>
+        </View>
+      )}
+    </TouchableOpacity>
   );
 }
 
@@ -204,6 +261,9 @@ export default function ProfileScreen({ navigation }) {
   const [stats, setStats] = useState({ totalClasses: 0, totalSessions: 0, activeFocusAreas: 0 });
   const [radarScores, setRadarScores] = useState([0, 0, 0, 0, 0]);
   const [readiness, setReadiness] = useState(null);
+  const [coachQuestions, setCoachQuestions] = useState([]);
+  const [viewingQuestion, setViewingQuestion] = useState(null);
+  const [questionsExpanded, setQuestionsExpanded] = useState(false);
   const [editVisible, setEditVisible] = useState(false);
   const [editName, setEditName] = useState('');
   const [editStudio, setEditStudio] = useState(null);
@@ -238,6 +298,7 @@ export default function ProfileScreen({ navigation }) {
       latinCoachData,
       ballroomCoachData,
       readinessValue,
+      coachQs,
     ] = await Promise.all([
       getUser(),
       getClassInputs(),
@@ -248,6 +309,7 @@ export default function ProfileScreen({ navigation }) {
       getMyCoachForCategory('latin'),
       getMyCoachForCategory('ballroom'),
       getLessonReadiness().catch(() => null),
+      getMyCoachQuestions().catch(() => []),
     ]);
 
     let totalSessions = 0;
@@ -293,6 +355,7 @@ export default function ProfileScreen({ navigation }) {
     setStats(s);
     setRadarScores(scores);
     setReadiness(readinessValue);
+    setCoachQuestions(coachQs || []);
     if (userData?.name) {
       const ini = userData.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
       setInitials(ini);
@@ -507,9 +570,9 @@ export default function ProfileScreen({ navigation }) {
   const readinessSubtitle = (() => {
     if (!readiness) return 'After a class log, your focus targets show up here.';
     if (readiness.minutesRemaining === 0) {
-      return `Both focus points trained — keep the streak going.`;
+      return `All focus points trained — keep the streak going.`;
     }
-    return `Train your two focus points from the last lesson — ~${readiness.minutesRemaining} min to go.`;
+    return `Train your focus points from the last lesson — ~${readiness.minutesRemaining} min to go.`;
   })();
 
   if (isLoading) {
@@ -618,7 +681,7 @@ export default function ProfileScreen({ navigation }) {
           >
             <View style={styles.section}>
               <View style={styles.sectionRow}>
-                <Text style={styles.sectionLabel}>LESSON READINESS</Text>
+                <Text style={[styles.sectionLabel, { textTransform: 'none', letterSpacing: 0 }]}>Get ready for next private lesson</Text>
                 <View style={styles.sectionRule} />
               </View>
 
@@ -633,9 +696,43 @@ export default function ProfileScreen({ navigation }) {
 
                 <View style={ready.divider} />
 
-                {readiness?.primary && <FocusReadyRow row={readiness.primary} />}
-                {readiness?.secondary && (
-                  <FocusReadyRow row={readiness.secondary} isLast />
+                {(readiness?.focuses || []).length > 0 && (
+                  <Text style={ready.sectionLabel}>Focus points</Text>
+                )}
+                {(readiness?.focuses || []).map((focus, idx, arr) => (
+                  <FocusReadyRow
+                    key={focus.focusPointId}
+                    row={focus}
+                    isLast={idx === arr.length - 1}
+                  />
+                ))}
+
+                {coachQuestions.length > 0 && (
+                  <>
+                    <View style={ready.divider} />
+                    <TouchableOpacity
+                      style={ready.sectionToggle}
+                      onPress={() => setQuestionsExpanded(v => !v)}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={ready.sectionLabelInline}>
+                        Questions · {coachQuestions.length}
+                      </Text>
+                      <Ionicons
+                        name={questionsExpanded ? 'chevron-up' : 'chevron-down'}
+                        size={14}
+                        color="#F6D27A"
+                      />
+                    </TouchableOpacity>
+                    {questionsExpanded && coachQuestions.map((q, idx, arr) => (
+                      <QuestionReadyRow
+                        key={q.id}
+                        question={q}
+                        isLast={idx === arr.length - 1}
+                        onPress={() => setViewingQuestion(q)}
+                      />
+                    ))}
+                  </>
                 )}
               </View>
             </View>
@@ -794,6 +891,22 @@ export default function ProfileScreen({ navigation }) {
                 </Pressable>
               </Pressable>
             </KeyboardAvoidingView>
+          </Modal>
+
+          {/* ── Question detail modal ── */}
+          <Modal
+            visible={!!viewingQuestion}
+            transparent
+            animationType="fade"
+            onRequestClose={() => setViewingQuestion(null)}
+          >
+            {viewingQuestion && (
+              <QuestionDetailSheet
+                question={viewingQuestion}
+                role="student"
+                onClose={() => setViewingQuestion(null)}
+              />
+            )}
           </Modal>
         </Animated.View>
       </SafeAreaView>
@@ -1166,7 +1279,60 @@ const ready = StyleSheet.create({
     fontFamily: Fonts.jakartaSemiBold,
     color: 'rgba(246,210,122,0.5)',
   },
+  inClassBadge: {
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 999,
+    backgroundColor: 'rgba(240,194,74,0.16)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(240,194,74,0.40)',
+  },
+  inClassBadgeText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 8.5,
+    color: '#F6D27A',
+    letterSpacing: 0.8,
+  },
+  repliedBadge: {
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 999,
+    backgroundColor: 'rgba(76,175,80,0.18)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(76,175,80,0.40)',
+  },
+  repliedBadgeText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 8.5,
+    color: '#8BD98F',
+    letterSpacing: 0.8,
+  },
+  sectionLabel: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 10,
+    color: '#F6D27A',
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
+    marginTop: 14,
+    marginBottom: 10,
+  },
+  sectionToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 4,
+    marginTop: 14,
+    marginBottom: 4,
+  },
+  sectionLabelInline: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 10,
+    color: '#F6D27A',
+    letterSpacing: 1.2,
+    textTransform: 'uppercase',
+  },
 });
+
 
 const strengths = StyleSheet.create({
   card: {

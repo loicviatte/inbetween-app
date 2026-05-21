@@ -132,7 +132,19 @@ async function handleCallback(recordingId: string, chunkIdx: number, body: Webho
       console.error('[assemblyai-webhook] could not load transcript', body.transcript_id)
       return
     }
-    const utterances = Array.isArray(fetched.utterances) ? fetched.utterances : []
+    const rawUtterances = Array.isArray(fetched.utterances) ? fetched.utterances : []
+    const rawText = typeof fetched.text === 'string' ? fetched.text : ''
+    const language = String(fetched.language_code || '').toLowerCase()
+    const isEnglish = !language || language === 'en' || language.startsWith('en_') || language.startsWith('en-')
+
+    let utterances = rawUtterances
+    let text = rawText
+    if (!isEnglish) {
+      const translated = await translateUtterancesToEnglish(rawUtterances, language)
+      if (translated) utterances = translated
+      const translatedText = await translateTextToEnglish(rawText, language)
+      if (translatedText) text = translatedText
+    }
     const speakerLabels = identifyCoachSpeaker(utterances)
     const durationMs = Math.round((Number(fetched.audio_duration) || 0) * 1000)
 
@@ -142,8 +154,10 @@ async function handleCallback(recordingId: string, chunkIdx: number, body: Webho
         status: 'transcribed',
         transcript_json: {
           utterances,
-          text: typeof fetched.text === 'string' ? fetched.text : '',
+          text,
           audio_duration: fetched.audio_duration,
+          source_language: language || null,
+          translated: !isEnglish,
         },
         speaker_labels: speakerLabels,
         duration_ms: durationMs,
@@ -156,6 +170,84 @@ async function handleCallback(recordingId: string, chunkIdx: number, body: Webho
 
   // After every chunk callback, check whether the recording is now complete.
   await tryFinalizeRecording(recordingId)
+}
+
+const ANTHROPIC_API_KEY = Deno.env.get('ANTHROPIC_API_KEY')
+
+async function callClaudeForTranslation(prompt: string, maxTokens: number): Promise<string | null> {
+  if (!ANTHROPIC_API_KEY) {
+    console.warn('[assemblyai-webhook] ANTHROPIC_API_KEY not set; skipping translation')
+    return null
+  }
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5',
+        max_tokens: maxTokens,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+    })
+    if (!res.ok) {
+      console.warn('[assemblyai-webhook] translate http error:', res.status, await res.text().catch(() => ''))
+      return null
+    }
+    const data = await res.json()
+    const text = data?.content?.[0]?.text
+    return typeof text === 'string' ? text : null
+  } catch (err) {
+    console.warn('[assemblyai-webhook] translate threw:', err instanceof Error ? err.message : err)
+    return null
+  }
+}
+
+async function translateUtterancesToEnglish(
+  utterances: Array<{ start: number; end: number; speaker: string; text: string }>,
+  sourceLang: string,
+): Promise<Array<{ start: number; end: number; speaker: string; text: string }> | null> {
+  if (!Array.isArray(utterances) || utterances.length === 0) return utterances
+  const inputs = utterances.map((u) => String(u.text ?? ''))
+  const prompt =
+    `Translate each string in the JSON array below from ${sourceLang || 'the source language'} to English. ` +
+    `Preserve dance terminology (waltz, rumba, paso doble, frame, hold, lead, follow, CBM, etc.) verbatim — do not translate dance terms. ` +
+    `Preserve proper names. Keep tone natural. ` +
+    `Return ONLY a JSON array of strings, same length and order as the input. No preamble, no markdown fences.\n\n` +
+    `Input:\n${JSON.stringify(inputs)}`
+  const raw = await callClaudeForTranslation(prompt, 8192)
+  if (!raw) return null
+  const cleaned = raw.replace(/^```(?:json)?\s*|\s*```$/g, '').trim()
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(cleaned)
+  } catch {
+    console.warn('[assemblyai-webhook] translate utterances parse failed:', cleaned.slice(0, 200))
+    return null
+  }
+  if (!Array.isArray(parsed) || parsed.length !== utterances.length) {
+    console.warn('[assemblyai-webhook] translate utterances bad shape', { expected: utterances.length, got: Array.isArray(parsed) ? parsed.length : 'not-array' })
+    return null
+  }
+  return utterances.map((u, i) => ({
+    ...u,
+    text: typeof parsed[i] === 'string' ? (parsed[i] as string) : String(u.text ?? ''),
+  }))
+}
+
+async function translateTextToEnglish(text: string, sourceLang: string): Promise<string | null> {
+  if (!text || !text.trim()) return text
+  const prompt =
+    `Translate the following text from ${sourceLang || 'the source language'} to English. ` +
+    `Preserve dance terminology (waltz, rumba, paso doble, frame, hold, lead, follow, CBM, etc.) verbatim — do not translate dance terms. ` +
+    `Preserve proper names. Return ONLY the translation, no preamble.\n\n` +
+    text
+  const raw = await callClaudeForTranslation(prompt, 8192)
+  if (!raw) return null
+  return raw.trim()
 }
 
 async function fetchTranscriptDetails(jobId: string): Promise<any | null> {

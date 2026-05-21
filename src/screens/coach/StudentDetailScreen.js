@@ -10,13 +10,14 @@ import {
   TextInput,
   KeyboardAvoidingView,
   Platform,
-  Image,
   ActivityIndicator,
   Animated,
+  Easing,
   LayoutAnimation,
   UIManager,
   useWindowDimensions,
 } from 'react-native';
+import { Image } from 'expo-image';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -46,8 +47,11 @@ import {
 } from '../../storage/coachStorage';
 import PendingFocusCard from '../../components/coach/PendingFocusCard';
 import RejectFocusSheet from '../../components/coach/RejectFocusSheet';
+import QuestionCard from '../../components/coach/QuestionCard';
+import MergeCompareCard from '../../components/coach/MergeCompareCard';
+import NameMatchCard from '../../components/coach/NameMatchCard';
 import { getNotifications, deleteNotification } from '../../storage/notificationsStorage';
-import { getUser } from '../../storage/storage';
+import { getUser, getLessonReadiness } from '../../storage/storage';
 import { getAllStudentMetrics } from '../../utils/studentMetrics';
 import { categoryFromStyle } from '../../utils/danceCategory';
 import FocusPointEditSheet from '../../components/FocusPointEditSheet';
@@ -165,6 +169,62 @@ function Card({ style, children }) {
   return (
     <View style={[styles.card, style]}>
       {children}
+    </View>
+  );
+}
+
+// ── Readiness ring (mirrors the student-side ProfileScreen meter) ──────────
+const TIER_LABEL = {
+  critical: 'Critical focus',
+  important: 'Important focus',
+  supporting: 'Supporting focus',
+};
+
+function ReadinessRing({ percent = 0, size = 72, stroke = 5 }) {
+  const r = (size - stroke) / 2;
+  const cx = size / 2;
+  const cy = size / 2;
+  const circumference = 2 * Math.PI * r;
+  const filled = (Math.max(0, Math.min(100, percent)) / 100) * circumference;
+  const remainder = circumference - filled;
+  return (
+    <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
+      <Svg width={size} height={size} style={{ transform: [{ rotate: '-90deg' }], position: 'absolute' }}>
+        <Circle cx={cx} cy={cy} r={r} stroke="rgba(255,255,255,0.10)" strokeWidth={stroke} fill="none" />
+        <Circle
+          cx={cx}
+          cy={cy}
+          r={r}
+          stroke="#E8B530"
+          strokeWidth={stroke}
+          fill="none"
+          strokeDasharray={`${filled} ${remainder}`}
+          strokeLinecap="round"
+        />
+      </Svg>
+      <Text style={styles.readyPct}>
+        {Math.round(percent)}<Text style={styles.readyPctSm}>%</Text>
+      </Text>
+    </View>
+  );
+}
+
+function FocusReadyRow({ row, isLast }) {
+  if (!row) return null;
+  const partial = row.done > 0;
+  const labelText = `${TIER_LABEL[row.tier] || 'Focus'} · from last private`;
+  return (
+    <View style={[styles.readyFocusRow, !isLast && styles.readyFocusRowBorder]}>
+      <View style={[styles.readyCheck, partial && styles.readyCheckPartial]}>
+        {partial && <Ionicons name="checkmark" size={11} color="#F6D27A" />}
+      </View>
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={styles.readyFocusName} numberOfLines={1}>{row.name}</Text>
+        <Text style={styles.readyFocusMeta} numberOfLines={1}>{labelText}</Text>
+      </View>
+      <Text style={styles.readyFocusProgress}>
+        {row.done}<Text style={styles.readyFocusProgressOf}>/{row.target}</Text>
+      </Text>
     </View>
   );
 }
@@ -358,7 +418,7 @@ function QuestionSheet({ visible, question, onClose, onDone }) {
 // ── Main Screen ─────────────────────────────────────────────────────────────
 export default function StudentDetailScreen({ route, navigation }) {
   const { studentId, studentName } = route.params;
-  const { refresh: refreshCoachData } = useCoachData();
+  const { refresh: refreshCoachData, getOrFetch, invalidateCache } = useCoachData();
   const [profile, setProfile] = useState(null);
   const [focusPoints, setFocusPoints] = useState([]);
   const [activity, setActivity] = useState([]);
@@ -367,6 +427,7 @@ export default function StudentDetailScreen({ route, navigation }) {
   const [mergeRequests, setMergeRequests] = useState([]);
   const [nameMatches, setNameMatches] = useState([]);
   const [lastClassDate, setLastClassDate] = useState(null);
+  const [readiness, setReadiness] = useState(null);
   const [metrics, setMetrics] = useState({ progression: 0, retention: 100, global: 0 });
   // Coach's dance category, used to filter metrics. Held in a ref because the
   // realtime subscription closure (set up once per studentId) needs the latest
@@ -437,29 +498,43 @@ export default function StudentDetailScreen({ route, navigation }) {
           const cat = categoryFromStyle(me?.dance_style);
           coachCategoryRef.current = cat;
 
-          const [p, fp, act, qs, pfp, lcd, m, notifs, { data: merges }] = await Promise.all([
-            getStudentProfile(studentId),
-            getStudentFocusPoints(studentId),
-            getStudentRecentActivity(studentId, 30),
-            getStudentQuestions(studentId),
-            getPendingFocusPoints(studentId),
-            getStudentLastClassDate(studentId),
-            getAllStudentMetrics(studentId, cat),
-            getNotifications().catch(() => []),
-            supabase
-              .from('merge_requests')
-              .select('id, student_id, focus_a, focus_b, status, created_at')
-              .eq('student_id', studentId)
-              .eq('status', 'pending_coach')
-              .order('created_at', { ascending: false }),
+          // All per-student reads go through the context cache so a
+          // back→tap→back round-trip is instant (60s TTL). Mutations on
+          // this screen call invalidateCache(`student:${studentId}:`) to
+          // force a re-fetch on the next visit.
+          const sk = `student:${studentId}`;
+          const [p, fp, act, qs, pfp, lcd, m, notifs, mergesRes, rd] = await Promise.all([
+            getOrFetch(`${sk}:profile`, () => getStudentProfile(studentId)),
+            getOrFetch(`${sk}:fps`, () => getStudentFocusPoints(studentId)),
+            getOrFetch(`${sk}:activity:30`, () => getStudentRecentActivity(studentId, 30)),
+            getOrFetch(`${sk}:questions`, () => getStudentQuestions(studentId)),
+            getOrFetch(`${sk}:pendingFps`, () => getPendingFocusPoints(studentId)),
+            getOrFetch(`${sk}:lastClass`, () => getStudentLastClassDate(studentId)),
+            getOrFetch(`${sk}:metrics:${cat || 'all'}`, () => getAllStudentMetrics(studentId, cat)),
+            getOrFetch('coach:notifications', () => getNotifications().catch(() => [])),
+            getOrFetch(`${sk}:merges`, () =>
+              supabase
+                .from('merge_requests')
+                .select('id, student_id, focus_a, focus_b, status, created_at')
+                .eq('student_id', studentId)
+                .eq('status', 'pending_coach')
+                .order('created_at', { ascending: false })
+            ),
+            getOrFetch(`${sk}:readiness`, () => getLessonReadiness(studentId).catch(() => null)),
           ]);
+          const { data: merges } = mergesRes || {};
           if (active) {
             setProfile(p);
             setFocusPoints(fp);
             setActivity(act);
             setQuestions(qs);
             setPendingFPs(pfp);
-            setLastClassDate(lcd);
+            // Prefer the readiness reference (most recent private with active
+            // focus points) so the activity timeline filter matches the
+            // "LAST CLASS WITH YOU" recap card. Falls back to the raw
+            // last-private date if readiness has no reference yet.
+            setLastClassDate(rd?.lastClassDate ?? lcd);
+            setReadiness(rd);
             setMetrics(m);
             setNameMatches(
               (notifs || []).filter(n =>
@@ -467,18 +542,24 @@ export default function StudentDetailScreen({ route, navigation }) {
                 n.data?.student_id === studentId
               )
             );
-            // Enrich merge requests with focus point names
+            // Enrich merge requests with full focus point objects so
+            // <MergeCompareCard> can render the side-by-side compare layout
+            // (needs name, subtitle, context, drill, tier, created_at).
             const mrList = merges || [];
             if (mrList.length > 0) {
               const fpIds = [...new Set(mrList.flatMap(mr => [mr.focus_a, mr.focus_b]))];
               const { data: fpRows } = await supabase
-                .from('focus_points').select('id, name').in('id', fpIds);
+                .from('focus_points')
+                .select('id, name, user_id, subtitle, context, dance, drill, tier, category, created_at')
+                .in('id', fpIds);
               const fpMap = {};
-              for (const f of fpRows || []) fpMap[f.id] = f.name;
+              for (const f of fpRows || []) fpMap[f.id] = f;
               setMergeRequests(mrList.map(mr => ({
                 ...mr,
-                focusAName: fpMap[mr.focus_a] || '?',
-                focusBName: fpMap[mr.focus_b] || '?',
+                focusA: fpMap[mr.focus_a] || null,
+                focusB: fpMap[mr.focus_b] || null,
+                focusAName: fpMap[mr.focus_a]?.name || '?',
+                focusBName: fpMap[mr.focus_b]?.name || '?',
               })));
             } else {
               setMergeRequests([]);
@@ -491,13 +572,25 @@ export default function StudentDetailScreen({ route, navigation }) {
       }
 
       async function reload() {
-        const [fp, qsD] = await Promise.all([
+        // Bust the cache for this student before refetching so the
+        // realtime subscription's "things changed" signal actually pulls
+        // fresh data instead of the cached snapshot.
+        invalidateCache(`student:${studentId}:`);
+        // A focus_points change can affect the activity timeline too
+        // (a class's focusPoints array is derived from focus_points.class_input_id).
+        // Re-fetch activity + readiness alongside so the "Last class with you"
+        // recap card stays in sync with the focus-point list.
+        const [fp, qsD, act, rd] = await Promise.all([
           getStudentFocusPoints(studentId),
           getStudentQuestions(studentId),
+          getStudentRecentActivity(studentId, 30),
+          getLessonReadiness(studentId).catch(() => null),
         ]);
         if (active) {
           setFocusPoints(fp);
           setQuestions(qsD);
+          setActivity(act);
+          setReadiness(rd);
         }
       }
 
@@ -521,14 +614,17 @@ export default function StudentDetailScreen({ route, navigation }) {
             { event: '*', schema: 'public', table: 'practice_logs', filter: `student_id=eq.${studentId}` },
             async () => {
               if (!active) return;
-              const [act, lcd, m] = await Promise.all([
+              invalidateCache(`student:${studentId}:`);
+              const [act, lcd, m, rd] = await Promise.all([
                 getStudentRecentActivity(studentId, 30),
                 getStudentLastClassDate(studentId),
                 getAllStudentMetrics(studentId, coachCategoryRef.current),
+                getLessonReadiness(studentId).catch(() => null),
               ]);
               if (active) {
                 setActivity(act);
-                setLastClassDate(lcd);
+                setLastClassDate(rd?.lastClassDate ?? lcd);
+                setReadiness(rd);
                 setMetrics(m);
               }
             }
@@ -682,10 +778,19 @@ export default function StudentDetailScreen({ route, navigation }) {
       .slice(0, 20);
   }, [activity, questions, sinceMs]);
 
-  // ── Last class with this coach (for recap card in Activity tab) ──────────
+  // ── Last private with this coach (for recap card in Activity tab) ───────
+  // Matches the readiness reference: most recent PRIVATE class with at least
+  // one active focus point (excluding deleted / past / is_other). Falls back
+  // to the older private when the most recent one has no usable focus points
+  // (e.g. transcript failed and all focus points were marked past/deleted).
   const lastCoachClass = useMemo(() => {
     const cls = activity.find(
-      (ev) => ev.type === 'class' && ev.withCurrentCoach && ev.classSummary
+      (ev) =>
+        ev.type === 'class' &&
+        ev.withCurrentCoach &&
+        ev.classSummary &&
+        ev.lessonType !== 'group' &&
+        (ev.focusPoints?.length ?? 0) > 0,
     );
     if (!cls) return null;
 
@@ -877,26 +982,60 @@ export default function StudentDetailScreen({ route, navigation }) {
   const tabIndex = tabs.indexOf(activeTab);
   const actionCount = actions.length;
 
-  // When activeTab changes via a tab tap, sync the horizontal pager to the
-  // matching page. On first mount we jump without animation (needed on
-  // Android — `contentOffset` only honours the initial x on iOS) and also
-  // seed `horizontalScrollX` so the underline renders at the right tab;
-  // otherwise the Animated.Value sits at 0 until the first scroll event
-  // fires, leaving the trait under Information while the pager is on
-  // Activity.
+  // First mount: jump without animation (needed on Android — contentOffset
+  // only honours the initial x on iOS). Subsequent changes are driven by
+  // `smoothScrollToTab` below (manual frame-by-frame animation so both the
+  // underline AND the page glide together with an explicit easing curve).
   const pagerFirstMount = useRef(true);
   useEffect(() => {
     if (!screenWidth) return;
-    const targetX = tabIndex * screenWidth;
     if (pagerFirstMount.current) {
+      const targetX = tabIndex * screenWidth;
       horizontalScrollX.setValue(targetX);
       pagerRef.current?.scrollTo({ x: targetX, animated: false });
       pagerFirstMount.current = false;
-    } else {
-      pagerRef.current?.scrollTo({ x: targetX, animated: true });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tabIndex, screenWidth]);
+  }, [screenWidth]);
+
+  // Single animated value that drives both the pager scroll position AND
+  // the underline. We listen to it frame-by-frame and call scrollTo with
+  // `animated:false` so each frame is a snapshot — this guarantees the page
+  // slides in lock-step with the trait, regardless of whether ScrollView's
+  // own animated scrollTo behaves consistently across RN versions.
+  const tapAnim = useRef(new Animated.Value(0)).current;
+  const tapAnimListenerRef = useRef(null);
+  const smoothScrollToTab = useCallback((nextTab) => {
+    const nextIndex = tabs.indexOf(nextTab);
+    if (nextIndex < 0 || !screenWidth) {
+      setActiveTab(nextTab);
+      return;
+    }
+    const currentIndex = tabs.indexOf(activeTab);
+    const fromX = currentIndex * screenWidth;
+    const toX = nextIndex * screenWidth;
+    setActiveTab(nextTab);
+    if (fromX === toX) return;
+    if (tapAnimListenerRef.current != null) {
+      tapAnim.removeListener(tapAnimListenerRef.current);
+    }
+    tapAnim.setValue(fromX);
+    tapAnimListenerRef.current = tapAnim.addListener(({ value }) => {
+      pagerRef.current?.scrollTo({ x: value, animated: false });
+      horizontalScrollX.setValue(value);
+    });
+    Animated.timing(tapAnim, {
+      toValue: toX,
+      duration: 280,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: false,
+    }).start(() => {
+      if (tapAnimListenerRef.current != null) {
+        tapAnim.removeListener(tapAnimListenerRef.current);
+        tapAnimListenerRef.current = null;
+      }
+    });
+  }, [activeTab, screenWidth, tabs, tapAnim, horizontalScrollX]);
 
   if (loading) {
     return <StudentDetailSkeleton onBack={() => navigation.goBack()} />;
@@ -966,94 +1105,40 @@ export default function StudentDetailScreen({ route, navigation }) {
           >
           <Animated.View style={{ height: heroSpacerHeight }} pointerEvents="none" />
           <View style={styles.tabContent}>
-            <Card style={{ borderWidth: 2, borderColor: 'rgba(232,168,56,0.12)' }}>
-              <View style={styles.briefHead}>
-                <View style={styles.briefIconWrap}>
-                  <Ionicons name="flash" size={14} color={C.orange} />
-                </View>
-                <Text style={styles.briefTitle}>Next class briefing</Text>
-              </View>
-
-              {/* Stats row: sessions / practiced / questions */}
-              <View style={styles.briefStatsRow}>
-                <View style={styles.briefStat}>
-                  <Text style={styles.briefStatNum}>{stats.sessionsSince}</Text>
-                  <Text style={styles.briefStatLabel}>Sessions</Text>
-                </View>
-                <View style={styles.briefStatDivider} />
-                <View style={styles.briefStat}>
-                  <Text style={styles.briefStatNum}>
-                    {focusPoints.filter((f) => f.weekCount > 0).length}
+            {/* Lesson readiness — mirrors the student's profile card. Same
+                 data source, same dark-brown styling so the coach sees
+                 exactly what the student sees. */}
+            <Card style={styles.readyCardOverride}>
+              <Text style={styles.readyEyebrow}>Student's readiness for next class</Text>
+              <View style={styles.readyHeaderRow}>
+                <ReadinessRing percent={readiness?.percent ?? 0} />
+                <View style={{ flex: 1, minWidth: 0, marginLeft: 14 }}>
+                  <Text style={styles.readyTitle}>
+                    {!readiness
+                      ? 'No private logged yet.'
+                      : readiness.percent >= 100
+                        ? 'Ready for next private.'
+                        : readiness.percent >= 50
+                          ? 'Almost ready.'
+                          : 'Building up.'}
                   </Text>
-                  <Text style={styles.briefStatLabel}>Practiced</Text>
-                </View>
-                <View style={styles.briefStatDivider} />
-                <View style={styles.briefStat}>
-                  <Text
-                    style={[
-                      styles.briefStatNum,
-                      questions.length > 0 && { color: C.orange },
-                    ]}
-                  >
-                    {questions.length}
+                  <Text style={styles.readySubtitle}>
+                    {!readiness
+                      ? 'Focuses will appear here once a private is processed.'
+                      : readiness.minutesRemaining === 0
+                        ? `All ${readiness.focuses.length} focus points trained.`
+                        : `${readiness.focuses.length} focus point${readiness.focuses.length > 1 ? 's' : ''} · ~${readiness.minutesRemaining} min to go`}
                   </Text>
-                  <Text style={styles.briefStatLabel}>Questions</Text>
                 </View>
               </View>
-
-              {/* Practiced this week */}
-              {focusPoints.some((f) => f.weekCount > 0) && (
-                <View style={styles.briefSection}>
-                  <Text style={styles.briefSectionLabel}>PRACTICED THIS WEEK</Text>
-                  {focusPoints
-                    .filter((f) => f.weekCount > 0)
-                    .slice(0, 4)
-                    .map((f) => (
-                      <View key={f.id} style={styles.briefPracticedRow}>
-                        <Ionicons name="checkmark-circle" size={14} color={C.green} />
-                        <Text style={styles.briefPracticedText} numberOfLines={1}>
-                          {f.name}
-                        </Text>
-                        <Text style={styles.briefPracticedCount}>{f.weekCount}×</Text>
-                      </View>
-                    ))}
-                </View>
-              )}
-
-              {/* Pending questions */}
-              {questions.length > 0 && (
-                <View style={styles.briefSection}>
-                  <Text style={styles.briefSectionLabel}>PENDING QUESTIONS</Text>
-                  {questions.slice(0, 2).map((q) => (
-                    <TouchableOpacity
-                      key={q.id}
-                      style={styles.briefQuestionRow}
-                      activeOpacity={0.85}
-                      onPress={() => {
-                        setActiveQuestion(q);
-                        setQuestionSheetVisible(true);
-                      }}
-                    >
-                      <Ionicons name="chatbubble" size={12} color={C.orange} />
-                      <Text style={styles.briefQuestionText} numberOfLines={2}>
-                        {q.message}
-                      </Text>
-                    </TouchableOpacity>
+              {(readiness?.focuses?.length || 0) > 0 && (
+                <>
+                  <View style={styles.readyDivider} />
+                  {readiness.focuses.map((f, i, arr) => (
+                    <FocusReadyRow key={f.focusPointId} row={f} isLast={i === arr.length - 1} />
                   ))}
-                </View>
+                </>
               )}
-
-              <View style={styles.recBlock}>
-                <Text style={styles.recLabel}>RECOMMENDATIONS</Text>
-                {recommendations.map((r, i) => (
-                  <View key={i} style={styles.recRow}>
-                    <View style={styles.recNum}>
-                      <Text style={styles.recNumText}>{i + 1}</Text>
-                    </View>
-                    <Text style={styles.recText}>{r}</Text>
-                  </View>
-                ))}
-              </View>
             </Card>
 
             {/* Working on */}
@@ -1130,29 +1215,6 @@ export default function StudentDetailScreen({ route, navigation }) {
                 Since last private lesson{lastClassDate ? ` · ${relativeDateShort(lastClassDate)}` : ''}
               </Text>
             </View>
-            {stats.trend !== 0 && (
-              <View
-                style={[
-                  styles.trendPill,
-                  { backgroundColor: stats.trend > 0 ? 'rgba(74,175,82,0.08)' : 'rgba(212,69,69,0.08)' },
-                ]}
-              >
-                <Ionicons
-                  name={stats.trend > 0 ? 'trending-up' : 'trending-down'}
-                  size={11}
-                  color={stats.trend > 0 ? C.green : C.red}
-                />
-                <Text
-                  style={[
-                    styles.trendText,
-                    { color: stats.trend > 0 ? C.green : C.red },
-                  ]}
-                >
-                  {stats.trend > 0 ? '+' : ''}
-                  {stats.trend}%
-                </Text>
-              </View>
-            )}
           </View>
           <View style={styles.tabContent}>
             <View style={styles.tlContainer}>
@@ -1280,46 +1342,18 @@ export default function StudentDetailScreen({ route, navigation }) {
                       QUESTIONS TO ANSWER
                     </Text>
                     {questions.map((q) => (
-                      <View
+                      <QuestionCard
                         key={`q_${q.id}`}
-                        style={[styles.actionCard, styles.actionCardRed]}
-                      >
-                        <View style={styles.actionCardHead}>
-                          <View style={styles.actionCardLabelRow}>
-                            <Ionicons name="chatbubble-outline" size={13} color={C.red} />
-                            <Text style={[styles.actionCardLabel, { color: C.red }]}>
-                              PENDING QUESTION
-                            </Text>
-                          </View>
-                          <Text style={styles.actionCardDate}>
-                            {relativeDateShort(q.created_at)}
-                          </Text>
-                        </View>
-                        <Text style={styles.actionCardMsg}>"{q.message}"</Text>
-                        <View style={styles.actionBtnRow}>
-                          <TouchableOpacity
-                            style={styles.replyBtn}
-                            onPress={() => {
-                              setActiveQuestion(q);
-                              setQuestionSheetVisible(true);
-                            }}
-                            activeOpacity={0.85}
-                          >
-                            <Ionicons name="send" size={13} color="#fff" />
-                            <Text style={styles.replyBtnText}>Reply</Text>
-                          </TouchableOpacity>
-                          <TouchableOpacity
-                            style={styles.inClassBtn}
-                            onPress={async () => {
-                              await dismissQuestion(q.id);
-                              setQuestions((prev) => prev.filter((x) => x.id !== q.id));
-                            }}
-                            activeOpacity={0.85}
-                          >
-                            <Text style={styles.inClassBtnText}>In class</Text>
-                          </TouchableOpacity>
-                        </View>
-                      </View>
+                        question={q}
+                        onReply={() => {
+                          setActiveQuestion(q);
+                          setQuestionSheetVisible(true);
+                        }}
+                        onDismiss={async () => {
+                          await dismissQuestion(q.id);
+                          setQuestions((prev) => prev.filter((x) => x.id !== q.id));
+                        }}
+                      />
                     ))}
                   </>
                 )}
@@ -1331,39 +1365,34 @@ export default function StudentDetailScreen({ route, navigation }) {
                       MERGE SUGGESTIONS
                     </Text>
                     {mergeRequests.map((mr) => (
-                      <View key={`merge_${mr.id}`} style={[styles.actionCard, styles.actionCardOrange]}>
-                        <View style={styles.actionCardLabelRow}>
-                          <Ionicons name="git-merge-outline" size={13} color={C.orange} />
-                          <Text style={[styles.actionCardLabel, { color: C.orange }]}>MERGE REQUEST</Text>
-                        </View>
-                        <Text style={styles.actionCardTitle}>
-                          "{mr.focusAName}" & "{mr.focusBName}"
-                        </Text>
-                        <View style={styles.actionBtnRow}>
-                          <TouchableOpacity
-                            style={styles.replyBtn}
-                            onPress={async () => {
-                              await supabase.from('focus_points').update({ is_deleted: true, status: 'past' }).eq('id', mr.focus_b);
-                              await supabase.from('merge_requests').update({ status: 'merged', resolved_at: new Date().toISOString(), resolved_by: 'coach' }).eq('id', mr.id);
-                              setMergeRequests(prev => prev.filter(m => m.id !== mr.id));
-                            }}
-                            activeOpacity={0.85}
-                          >
-                            <Ionicons name="checkmark" size={13} color="#fff" />
-                            <Text style={styles.replyBtnText}>Merge</Text>
-                          </TouchableOpacity>
-                          <TouchableOpacity
-                            style={styles.inClassBtn}
-                            onPress={async () => {
-                              await supabase.from('merge_requests').update({ status: 'rejected', resolved_at: new Date().toISOString(), resolved_by: 'coach' }).eq('id', mr.id);
-                              setMergeRequests(prev => prev.filter(m => m.id !== mr.id));
-                            }}
-                            activeOpacity={0.85}
-                          >
-                            <Text style={styles.inClassBtnText}>Ignore</Text>
-                          </TouchableOpacity>
-                        </View>
-                      </View>
+                      <MergeCompareCard
+                        key={`merge_${mr.id}`}
+                        mr={mr}
+                        studentName={null}
+                        onMerge={async () => {
+                          await supabase.from('focus_points').update({ is_deleted: true, status: 'past' }).eq('id', mr.focus_b);
+                          await supabase.from('merge_requests').update({ status: 'merged', resolved_at: new Date().toISOString(), resolved_by: 'coach' }).eq('id', mr.id);
+                          setMergeRequests(prev => prev.filter(m => m.id !== mr.id));
+                        }}
+                        onKeepBoth={async () => {
+                          // Match ActionNeededScreen behavior: send the newer
+                          // FP into pending_coach so it goes through normal
+                          // review instead of vanishing silently.
+                          const a = mr.focusA;
+                          const b = mr.focusB;
+                          const olderFirst = a && b && new Date(a.created_at) <= new Date(b.created_at);
+                          const incoming = olderFirst ? b : a;
+                          if (incoming) {
+                            const deadline = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
+                            await supabase
+                              .from('focus_points')
+                              .update({ status: 'pending_coach', coach_review_deadline: deadline })
+                              .eq('id', incoming.id);
+                          }
+                          await supabase.from('merge_requests').update({ status: 'rejected', resolved_at: new Date().toISOString(), resolved_by: 'coach' }).eq('id', mr.id);
+                          setMergeRequests(prev => prev.filter(m => m.id !== mr.id));
+                        }}
+                      />
                     ))}
                   </>
                 )}
@@ -1374,51 +1403,28 @@ export default function StudentDetailScreen({ route, navigation }) {
                     <Text style={[styles.actionsSectionLabel, { marginTop: 16 }]}>
                       NAME MATCHING
                     </Text>
-                    {nameMatches.map((notif) => {
-                      const d = notif.data || {};
-                      return (
-                        <View key={`name_${notif.id}`} style={[styles.actionCard, styles.actionCardOrange]}>
-                          <View style={styles.actionCardLabelRow}>
-                            <Ionicons name="help-circle-outline" size={13} color={C.orange} />
-                            <Text style={[styles.actionCardLabel, { color: C.orange }]}>NAME MATCH</Text>
-                          </View>
-                          <Text style={styles.actionCardTitle}>
-                            Is "{d.extracted_name}" the same as "{d.student_name}"?
-                          </Text>
-                          <View style={styles.actionBtnRow}>
-                            <TouchableOpacity
-                              style={styles.replyBtn}
-                              onPress={async () => {
-                                const { focus_point_ids } = d;
-                                if (focus_point_ids?.length > 0) {
-                                  await supabase.from('focus_points').update({ status: 'pending_coach' }).in('id', focus_point_ids);
-                                }
-                                await deleteNotification(notif.id);
-                                setNameMatches(prev => prev.filter(n => n.id !== notif.id));
-                              }}
-                              activeOpacity={0.85}
-                            >
-                              <Ionicons name="checkmark" size={13} color="#fff" />
-                              <Text style={styles.replyBtnText}>Confirm</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                              style={styles.inClassBtn}
-                              onPress={async () => {
-                                const { focus_point_ids } = d;
-                                if (focus_point_ids?.length > 0) {
-                                  await supabase.from('focus_points').update({ user_id: null, status: 'active' }).in('id', focus_point_ids);
-                                }
-                                await deleteNotification(notif.id);
-                                setNameMatches(prev => prev.filter(n => n.id !== notif.id));
-                              }}
-                              activeOpacity={0.85}
-                            >
-                              <Text style={styles.inClassBtnText}>Not a match</Text>
-                            </TouchableOpacity>
-                          </View>
-                        </View>
-                      );
-                    })}
+                    {nameMatches.map((notif) => (
+                      <NameMatchCard
+                        key={`name_${notif.id}`}
+                        notif={notif}
+                        onConfirm={async () => {
+                          const { focus_point_ids } = notif.data || {};
+                          if (focus_point_ids?.length > 0) {
+                            await supabase.from('focus_points').update({ status: 'pending_coach' }).in('id', focus_point_ids);
+                          }
+                          await deleteNotification(notif.id);
+                          setNameMatches(prev => prev.filter(n => n.id !== notif.id));
+                        }}
+                        onReject={async () => {
+                          const { focus_point_ids } = notif.data || {};
+                          if (focus_point_ids?.length > 0) {
+                            await supabase.from('focus_points').update({ user_id: null, status: 'active' }).in('id', focus_point_ids);
+                          }
+                          await deleteNotification(notif.id);
+                          setNameMatches(prev => prev.filter(n => n.id !== notif.id));
+                        }}
+                      />
+                    ))}
                   </>
                 )}
               </>
@@ -1446,10 +1452,14 @@ export default function StudentDetailScreen({ route, navigation }) {
             >
               <View style={styles.avatarWrap}>
                 <ActivityRing
-                  progress={metrics.global}
+                  progress={readiness?.percent ?? 0}
                   size={62}
                   strokeWidth={3.5}
-                  color={metrics.global > 70 ? C.green : metrics.global >= 40 ? C.orange : C.red}
+                  color={
+                    (readiness?.percent ?? 0) >= 100 ? C.green
+                      : (readiness?.percent ?? 0) >= 50 ? C.orange
+                        : '#E8B530'
+                  }
                 />
                 <View style={styles.avatarBadge}>
                   {profile?.photo_url ? (
@@ -1487,28 +1497,54 @@ export default function StudentDetailScreen({ route, navigation }) {
               </View>
             </Animated.View>
 
-            <Animated.View style={{ opacity: gaugesOpacity }} pointerEvents="none">
-              <View style={styles.gaugeRow}>
-                <Gauge
-                  value={metrics.progression}
-                  color={metrics.progression > 70 ? C.green : metrics.progression >= 40 ? C.orange : C.red}
-                  label="Progression"
-                  dark
-                  dashWhenZero
+            <Animated.View style={{ opacity: gaugesOpacity }} pointerEvents="box-none">
+              {/* Readiness summary — replaces the old Progression/Retention/
+                   Global gauges. Tap → jumps to the Information tab where
+                   the full readiness card (focus rows + targets) lives. */}
+              <TouchableOpacity
+                style={styles.heroReadyBlock}
+                activeOpacity={0.85}
+                onPress={() => {
+                  smoothScrollToTab('information');
+                  // Make sure the readiness card is at the top of the Info tab.
+                  scrollRefInfo.current?.scrollTo?.({ y: 0, animated: true });
+                }}
+              >
+                <Text style={styles.heroReadyPct}>
+                  {readiness?.percent ?? 0}<Text style={styles.heroReadyPctSm}>%</Text>
+                </Text>
+                <View style={{ flex: 1, marginLeft: 14 }}>
+                  {(() => {
+                    const p = readiness?.percent ?? 0;
+                    const statusColor = p >= 100 ? C.green : p >= 50 ? C.orange : C.red;
+                    const statusText = !readiness
+                      ? 'No private logged yet'
+                      : p >= 100
+                        ? 'Ready for next private'
+                        : p >= 50
+                          ? 'Almost ready for next private'
+                          : 'Not ready for next private';
+                    return (
+                      <Text style={[styles.heroReadyLabel, { color: statusColor }]}>
+                        {statusText}
+                      </Text>
+                    );
+                  })()}
+                  <Text style={styles.heroReadyDetail}>
+                    {!readiness
+                      ? 'Log a private to start tracking'
+                      : readiness.percent >= 100
+                        ? `All ${readiness.focuses.length} focus points trained`
+                        : `${readiness.focuses.length} focus point${readiness.focuses.length > 1 ? 's' : ''} · ~${readiness.minutesRemaining} min to go`}
+                  </Text>
+                </View>
+                <Ionicons
+                  name="chevron-forward"
+                  size={16}
+                  color="rgba(255,255,255,0.4)"
+                  style={{ marginLeft: 6 }}
                 />
-                <Gauge
-                  value={metrics.retention}
-                  color={metrics.retention > 70 ? C.green : metrics.retention >= 40 ? C.orange : C.red}
-                  label="Retention"
-                  dark
-                />
-                <Gauge
-                  value={metrics.global}
-                  color={metrics.global > 70 ? C.green : metrics.global >= 40 ? C.orange : C.red}
-                  label="Global"
-                  dark
-                />
-              </View>
+              </TouchableOpacity>
 
               <View style={styles.heroFooter}>
                 <View style={styles.heroFooterLeft}>
@@ -1546,7 +1582,7 @@ export default function StudentDetailScreen({ route, navigation }) {
                 <TouchableOpacity
                   key={tab}
                   style={styles.tabBtn}
-                  onPress={() => setActiveTab(tab)}
+                  onPress={() => smoothScrollToTab(tab)}
                   activeOpacity={0.7}
                 >
                   <View style={styles.tabLabelRow}>
@@ -1792,6 +1828,44 @@ const styles = StyleSheet.create({
     marginTop: 20,
     paddingVertical: 4,
   },
+  heroReadyBlock: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 20,
+    backgroundColor: 'rgba(232,181,48,0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(232,181,48,0.32)',
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
+  heroReadyPct: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 36,
+    color: '#fff',
+    letterSpacing: -1.5,
+    lineHeight: 38,
+    includeFontPadding: false,
+  },
+  heroReadyPctSm: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 16,
+    color: 'rgba(255,255,255,0.45)',
+    letterSpacing: -0.4,
+  },
+  heroReadyLabel: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 13.5,
+    letterSpacing: -0.2,
+    marginBottom: 4,
+  },
+  heroReadyDetail: {
+    fontFamily: Fonts.jakartaSemiBold,
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.78)',
+    letterSpacing: 0.1,
+    lineHeight: 16,
+  },
   heroFooter: {
     marginTop: 14,
     backgroundColor: 'rgba(255,255,255,0.04)',
@@ -1919,6 +1993,110 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: C.sub,
     lineHeight: 21,
+  },
+
+  // Readiness card — dark brown, mirrors the student-profile card exactly.
+  readyCardOverride: {
+    backgroundColor: '#1F1810',
+    borderWidth: 1,
+    borderColor: 'rgba(240,194,74,0.28)',
+    borderRadius: 20,
+    paddingBottom: 6,
+    overflow: 'hidden',
+    shadowColor: '#0A0A0A',
+    shadowOpacity: 0.5,
+    shadowOffset: { width: 0, height: 14 },
+    shadowRadius: 22,
+    elevation: 8,
+  },
+  readyEyebrow: {
+    fontFamily: Fonts.jakartaBold,
+    fontSize: 13,
+    color: '#fff',
+    letterSpacing: -0.1,
+    marginBottom: 14,
+  },
+  readyHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 14,
+  },
+  readyPct: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 22,
+    color: '#fff',
+    letterSpacing: -0.6,
+  },
+  readyPctSm: {
+    fontFamily: Fonts.jakartaSemiBold,
+    fontSize: 13,
+    color: 'rgba(255,255,255,0.55)',
+  },
+  readyTitle: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 14.5,
+    color: '#fff',
+    letterSpacing: -0.2,
+    lineHeight: 19,
+  },
+  readySubtitle: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 11.5,
+    color: 'rgba(255,255,255,0.55)',
+    marginTop: 5,
+    lineHeight: 16,
+  },
+  readyDivider: {
+    height: 0.5,
+    backgroundColor: 'rgba(255,255,255,0.10)',
+    marginHorizontal: -18,
+  },
+  readyFocusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 12,
+  },
+  readyFocusRowBorder: {
+    borderBottomWidth: 0.5,
+    borderBottomColor: 'rgba(255,255,255,0.08)',
+  },
+  readyCheck: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.20)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  readyCheckPartial: {
+    borderColor: '#E8B530',
+    backgroundColor: 'rgba(232,181,48,0.18)',
+  },
+  readyFocusName: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 13.5,
+    color: '#fff',
+    letterSpacing: -0.05,
+    lineHeight: 16,
+  },
+  readyFocusMeta: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 10.5,
+    color: 'rgba(255,255,255,0.55)',
+    marginTop: 3,
+  },
+  readyFocusProgress: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 13,
+    color: '#F6D27A',
+    letterSpacing: -0.2,
+  },
+  readyFocusProgressOf: {
+    fontFamily: Fonts.jakartaSemiBold,
+    fontSize: 11,
+    color: 'rgba(246,210,122,0.5)',
   },
 
   // Brief stats row

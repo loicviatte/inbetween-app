@@ -273,12 +273,12 @@ const styles = StyleSheet.create({
   },
   pillSolid: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: '#0D0D12',
+    backgroundColor: '#000000',
     borderRadius: 30,
   },
   pillGlass: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(13,13,18,0.85)',
+    backgroundColor: 'rgba(0,0,0,0.92)',
     borderRadius: 30,
     overflow: 'hidden',
   },

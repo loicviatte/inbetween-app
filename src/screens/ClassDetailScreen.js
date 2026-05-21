@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
+import HeroCardGradient from '../components/HeroCardGradient';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors, Fonts, Spacing } from '../theme';
 import { getClassInputs, getNotesLinkedToClass, getNotes, saveNote } from '../storage/storage';
@@ -133,6 +134,27 @@ function Pill({ children, variant = 'default', avatar, shrink = false }) {
   );
 }
 
+function TabBtn({ label, active, onPress, badge }) {
+  return (
+    <TouchableOpacity style={s.tab} onPress={onPress} activeOpacity={0.75}>
+      <Text
+        style={[s.tabText, active && s.tabTextActive]}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={0.85}
+      >
+        {label}
+      </Text>
+      {badge != null ? (
+        <Text style={s.tabBadge}>{badge}</Text>
+      ) : (
+        <View style={{ height: 6 }} />
+      )}
+      {active ? <View style={s.tabUnderline} /> : <View style={{ height: 2 }} />}
+    </TouchableOpacity>
+  );
+}
+
 function SectionEyebrow({ label }) {
   return (
     <View style={s.sectionEyebrow}>
@@ -178,6 +200,7 @@ export default function ClassDetailScreen({ route, navigation }) {
   const [item, setItem] = useState(null);
   const [linkedNotes, setLinkedNotes] = useState([]);
   const [allNotes, setAllNotes] = useState([]);
+  const [activeTab, setActiveTab] = useState('summary');
   const [pickerVisible, setPickerVisible] = useState(false);
 
   async function load() {
@@ -254,13 +277,7 @@ export default function ClassDetailScreen({ route, navigation }) {
         >
           {/* ── Hero card (dark) ── */}
           <View style={s.heroCard}>
-            <LinearGradient
-              colors={['#4A3A18', '#1F1810', '#0A0A0A']}
-              locations={[0, 0.4, 0.85]}
-              start={{ x: 0.85, y: 1.18 }}
-              end={{ x: 0.05, y: -0.2 }}
-              style={StyleSheet.absoluteFillObject}
-            />
+            <HeroCardGradient />
             <View style={s.heroTopRow}>
               <Text style={s.heroDate}>{formatDate(item.created_at)}</Text>
               {!!teacherDisplay && (
@@ -290,66 +307,96 @@ export default function ClassDetailScreen({ route, navigation }) {
             </View>
           </View>
 
-          {/* ── Class summary ── */}
-          {!!item.class_summary && (
+          {/* ── Tabs bar (Summary / Focus points / Notes) ── */}
+          <View style={s.tabsBar}>
+            <TabBtn
+              label="Summary"
+              active={activeTab === 'summary'}
+              onPress={() => setActiveTab('summary')}
+            />
+            <TabBtn
+              label="Focus points"
+              active={activeTab === 'focus'}
+              badge={focusPoints.length > 0 ? focusPoints.length : null}
+              onPress={() => setActiveTab('focus')}
+            />
+            <TabBtn
+              label="Notes"
+              active={activeTab === 'notes'}
+              badge={linkedNotes.length > 0 ? linkedNotes.length : null}
+              onPress={() => setActiveTab('notes')}
+            />
+          </View>
+
+          {/* ── Summary tab ── */}
+          {activeTab === 'summary' && (
             <>
-              <SectionEyebrow label="Class summary" />
-              <View style={s.summaryCard}>
-                <Text style={s.summaryText}>{item.class_summary}</Text>
-              </View>
+              {!!item.class_summary ? (
+                <View style={s.summaryCard}>
+                  <Text style={s.summaryText}>{item.class_summary}</Text>
+                </View>
+              ) : (
+                <Text style={s.placeholder}>No summary yet for this class.</Text>
+              )}
             </>
           )}
 
-          {/* ── Focus points ── */}
-          {focusPoints.length > 0 && (
+          {/* ── Focus points tab ── */}
+          {activeTab === 'focus' && (
             <>
-              <SectionEyebrow label="Focus points" />
-              <View style={s.focusList}>
-                {focusPoints.map((fp, idx) => (
-                  <FocusCard key={fp.id || idx} index={idx} focus={fp} />
-                ))}
-              </View>
+              {focusPoints.length > 0 ? (
+                <View style={s.focusList}>
+                  {focusPoints.map((fp, idx) => (
+                    <FocusCard key={fp.id || idx} index={idx} focus={fp} />
+                  ))}
+                </View>
+              ) : (
+                <Text style={s.placeholder}>No focus points extracted from this class.</Text>
+              )}
             </>
           )}
 
-          {/* ── Linked notes (Variation A: Ghost button) ── */}
-          <SectionEyebrow label="Linked notes" />
-          {linkedNotes.length === 0 ? (
-            <View style={s.linkA}>
-              <View style={s.linkAIcon}>
-                <Ionicons name="link-outline" size={14} color={FG_3} />
-              </View>
-              <View style={{ flex: 1, minWidth: 0 }}>
-                <Text style={s.linkATitle}>No notes linked</Text>
-                <Text style={s.linkASubtitle}>Tie a saved note to this class.</Text>
-              </View>
-              <TouchableOpacity
-                style={s.linkABtn}
-                onPress={() => setPickerVisible(true)}
-                activeOpacity={0.78}
-              >
-                <Ionicons name="add" size={11} color={INK_950} />
-                <Text style={s.linkABtnText}>Link</Text>
-              </TouchableOpacity>
-            </View>
-          ) : (
-            <View style={{ gap: 9 }}>
-              {linkedNotes.map((note) => (
-                <LinkedNoteCard
-                  key={note.id}
-                  note={note}
-                  onPress={() => navigation.navigate('NoteDetail', { noteId: note.id, backLabel: title })}
-                />
-              ))}
-              <TouchableOpacity
-                style={s.linkMoreBtn}
-                onPress={() => setPickerVisible(true)}
-                activeOpacity={0.78}
-              >
-                <Ionicons name="add" size={11} color={FG_2} />
-                <Text style={s.linkMoreBtnText}>Link another note</Text>
-              </TouchableOpacity>
-            </View>
+          {/* ── Notes tab ── */}
+          {activeTab === 'notes' && (
+            <>
+              {linkedNotes.length === 0 ? (
+                <View style={s.linkA}>
+                  <View style={s.linkAIcon}>
+                    <Ionicons name="link-outline" size={14} color={FG_3} />
+                  </View>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={s.linkATitle}>No notes linked</Text>
+                    <Text style={s.linkASubtitle}>Tie a saved note to this class.</Text>
+                  </View>
+                  <TouchableOpacity
+                    style={s.linkABtn}
+                    onPress={() => setPickerVisible(true)}
+                    activeOpacity={0.78}
+                  >
+                    <Ionicons name="add" size={11} color={INK_950} />
+                    <Text style={s.linkABtnText}>Link</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <View style={{ gap: 9 }}>
+                  {linkedNotes.map((note) => (
+                    <LinkedNoteCard
+                      key={note.id}
+                      note={note}
+                      onPress={() => navigation.navigate('NoteDetail', { noteId: note.id, backLabel: title })}
+                    />
+                  ))}
+                  <TouchableOpacity
+                    style={s.linkMoreBtn}
+                    onPress={() => setPickerVisible(true)}
+                    activeOpacity={0.78}
+                  >
+                    <Ionicons name="add" size={11} color={FG_2} />
+                    <Text style={s.linkMoreBtnText}>Link another note</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+            </>
           )}
         </ScrollView>
 
@@ -787,5 +834,56 @@ const s = StyleSheet.create({
   pickerCheckActive: {
     backgroundColor: Colors.activeFocus,
     borderColor: Colors.activeFocus,
+  },
+
+  // ── Tabs bar (Summary / Focus points / Notes) ──
+  tabsBar: {
+    flexDirection: 'row',
+    paddingHorizontal: 4,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(13,13,18,0.10)',
+    marginTop: 18,
+    marginBottom: 18,
+  },
+  tab: {
+    flex: 1,
+    alignItems: 'center',
+    paddingTop: 8,
+    paddingBottom: 0,
+    gap: 0,
+  },
+  tabText: {
+    fontFamily: Fonts.jakartaSemiBold,
+    fontSize: 15,
+    color: 'rgba(13,13,18,0.45)',
+    letterSpacing: -0.2,
+  },
+  tabTextActive: {
+    fontFamily: Fonts.jakartaExtraBold,
+    color: INK_950,
+  },
+  tabBadge: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 11,
+    color: '#C8732B',
+    letterSpacing: 0.2,
+    marginTop: 0,
+  },
+  tabUnderline: {
+    marginTop: 2,
+    height: 2,
+    width: 60,
+    borderRadius: 2,
+    backgroundColor: INK_950,
+  },
+
+  placeholder: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 13.5,
+    color: 'rgba(13,13,18,0.45)',
+    textAlign: 'center',
+    paddingVertical: 32,
+    paddingHorizontal: 16,
+    lineHeight: 20,
   },
 });

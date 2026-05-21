@@ -37,35 +37,21 @@ import { StyleSheet } from 'react-native';
 
 const navigationRef = createNavigationContainerRef();
 
-// Student screens
+// Student screens — only the 3 tab-roots are imported eagerly. Everything
+// else is loaded the first time the user navigates there (see getComponent
+// usage below). On a cold start this saves parsing ~25 heavy screen
+// modules before first paint.
 import HomeScreen from './src/screens/HomeScreen';
 import LogScreen from './src/screens/LogScreen';
 import ProfileScreen from './src/screens/ProfileScreen';
-import ClassDetailScreen from './src/screens/ClassDetailScreen';
-import NoteDetailScreen from './src/screens/NoteDetailScreen';
-import FocusSessionScreen from './src/screens/FocusSessionScreen';
 import LoginScreen from './src/screens/LoginScreen';
-import RegisterScreen from './src/screens/RegisterScreen';
-import NotificationsScreen from './src/screens/NotificationsScreen';
-import AllFocusPointsScreen from './src/screens/AllFocusPointsScreen';
 import CustomTabBar from './src/components/CustomTabBar';
-import TrainerReviewScreen from './src/screens/TrainerReviewScreen';
-import TrainerStudentsScreen from './src/screens/TrainerStudentsScreen';
-import TrainerFocusHistoryScreen from './src/screens/TrainerFocusHistoryScreen';
-import AttendanceConfirmScreen from './src/screens/AttendanceConfirmScreen';
 
-// Coach screens
+// Coach screens — only the 3 tab-roots are eager. The rest are deferred
+// to first navigation via require() inside getComponent().
 import CoachHomeScreen from './src/screens/coach/CoachHomeScreen';
-import FocusValidationScreen from './src/screens/coach/FocusValidationScreen';
-import StudentDetailScreen from './src/screens/coach/StudentDetailScreen';
 import DashboardScreen from './src/screens/coach/DashboardScreen';
-import CoachProfileScreen from './src/screens/coach/CoachProfileScreen';
-import CoachSessionDetailScreen from './src/screens/coach/CoachSessionDetailScreen';
-import NameMatchConfirmScreen from './src/screens/coach/NameMatchConfirmScreen';
-import CoachNotesScreen from './src/screens/coach/CoachNotesScreen';
-import CoachNoteDetailScreen from './src/screens/coach/CoachNoteDetailScreen';
-import StartClassScreen from './src/screens/coach/StartClassScreen';
-import ActionNeededScreen from './src/screens/coach/ActionNeededScreen';
+import CoachClassesScreen from './src/screens/coach/CoachClassesScreen';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -129,45 +115,49 @@ function AppNavigator() {
       <Stack.Screen name="MainTabs" component={MainTabs} />
       <Stack.Screen
         name="ClassDetail"
-        component={ClassDetailScreen}
+        getComponent={() => require('./src/screens/ClassDetailScreen').default}
         options={{ animation: 'slide_from_right' }}
       />
       <Stack.Screen
         name="NoteDetail"
-        component={NoteDetailScreen}
+        getComponent={() => require('./src/screens/NoteDetailScreen').default}
         options={{ animation: 'slide_from_right' }}
       />
       <Stack.Screen
         name="FocusSession"
-        component={FocusSessionScreen}
+        getComponent={() => require('./src/screens/FocusSessionScreen').default}
         options={{ animation: 'slide_from_right' }}
       />
       <Stack.Screen
         name="Notifications"
-        component={NotificationsScreen}
+        getComponent={() => require('./src/screens/NotificationsScreen').default}
         options={{ animation: 'slide_from_left' }}
       />
       <Stack.Screen
         name="AllFocusPoints"
-        component={AllFocusPointsScreen}
+        getComponent={() => require('./src/screens/AllFocusPointsScreen').default}
         options={{ animation: 'slide_from_right' }}
       />
       <Stack.Screen
         name="TrainerReview"
-        component={TrainerReviewScreen}
+        getComponent={() => require('./src/screens/TrainerReviewScreen').default}
         options={{ animation: 'slide_from_right' }}
       />
       <Stack.Screen
         name="TrainerStudents"
-        component={TrainerStudentsScreen}
+        getComponent={() => require('./src/screens/TrainerStudentsScreen').default}
         options={{ animation: 'slide_from_right' }}
       />
       <Stack.Screen
         name="TrainerFocusHistory"
-        component={TrainerFocusHistoryScreen}
+        getComponent={() => require('./src/screens/TrainerFocusHistoryScreen').default}
         options={{ animation: 'slide_from_right' }}
       />
-      <Stack.Screen name="AttendanceConfirm" component={AttendanceConfirmScreen} options={{ animation: 'slide_from_bottom', presentation: 'modal' }} />
+      <Stack.Screen
+        name="AttendanceConfirm"
+        getComponent={() => require('./src/screens/AttendanceConfirmScreen').default}
+        options={{ animation: 'slide_from_bottom', presentation: 'modal' }}
+      />
     </Stack.Navigator>
   );
 }
@@ -175,23 +165,38 @@ function AppNavigator() {
 // ─── Coach Navigator ──────────────────────────────────────────────────────────
 
 function CoachMainTabs() {
+  // Track the active tab so the header strip can match the page background
+  // underneath it: cream `#F2F2EF` for DASHBOARD (top of its gradient) and
+  // pure white for STUDENTS / CLASS, both of which use a white surface.
+  const [activeRoute, setActiveRoute] = useState('DASHBOARD');
+  const headerBg = activeRoute === 'DASHBOARD' ? '#F2F2EF' : '#FFFFFF';
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: '#FFFFFF' }} edges={['top']}>
-      <CoachTabHeader />
-      <Tab.Navigator
-        initialRouteName="DASHBOARD"
-        tabBar={(props) => <CustomTabBar {...props} />}
-        screenOptions={{
-          headerShown: false,
-          lazy: false,
-          tabBarStyle: { backgroundColor: 'transparent', borderTopWidth: 0, elevation: 0 },
-        }}
-      >
-        <Tab.Screen name="STUDENTS" component={CoachHomeScreen} />
-        <Tab.Screen name="DASHBOARD" component={DashboardScreen} />
-        <Tab.Screen name="NOTES" component={CoachNotesScreen} />
-      </Tab.Navigator>
-    </SafeAreaView>
+    <View style={{ flex: 1, backgroundColor: '#FFFFFF' }}>
+      <SafeAreaView style={{ backgroundColor: headerBg }} edges={['top']}>
+        <CoachTabHeader />
+      </SafeAreaView>
+      <View style={{ flex: 1 }}>
+        <Tab.Navigator
+          initialRouteName="DASHBOARD"
+          tabBar={(props) => <CustomTabBar {...props} />}
+          screenListeners={{
+            state: (e) => {
+              const r = e.data?.state?.routes?.[e.data.state.index];
+              if (r?.name) setActiveRoute(r.name);
+            },
+          }}
+          screenOptions={{
+            headerShown: false,
+            lazy: false,
+            tabBarStyle: { backgroundColor: 'transparent', borderTopWidth: 0, elevation: 0 },
+          }}
+        >
+          <Tab.Screen name="STUDENTS" component={CoachHomeScreen} />
+          <Tab.Screen name="DASHBOARD" component={DashboardScreen} />
+          <Tab.Screen name="CLASS" component={CoachClassesScreen} />
+        </Tab.Navigator>
+      </View>
+    </View>
   );
 }
 
@@ -202,25 +207,59 @@ function CoachAppNavigator() {
       <CoachStack.Screen name="CoachMainTabs" component={CoachMainTabs} />
       <CoachStack.Screen
         name="StudentDetail"
-        component={StudentDetailScreen}
+        getComponent={() => require('./src/screens/coach/StudentDetailScreen').default}
         options={{ animation: 'slide_from_right' }}
       />
       <CoachStack.Screen
         name="CoachSessionDetail"
-        component={CoachSessionDetailScreen}
+        getComponent={() => require('./src/screens/coach/CoachSessionDetailScreen').default}
         options={{ animation: 'slide_from_right' }}
       />
       <CoachStack.Screen
         name="Notifications"
-        component={NotificationsScreen}
+        getComponent={() => require('./src/screens/NotificationsScreen').default}
         options={{ animation: 'slide_from_left' }}
       />
-      <CoachStack.Screen name="StartClass" component={StartClassScreen} options={{ animation: 'slide_from_bottom' }} />
-      <CoachStack.Screen name="ActionNeeded" component={ActionNeededScreen} options={{ animation: 'slide_from_right' }} />
-      <CoachStack.Screen name="FocusValidation" component={FocusValidationScreen} options={{ animation: 'slide_from_right' }} />
-      <CoachStack.Screen name="NameMatchConfirm" component={NameMatchConfirmScreen} options={{ animation: 'slide_from_bottom', presentation: 'modal' }} />
-      <CoachStack.Screen name="CoachProfile" component={CoachProfileScreen} options={{ animation: 'slide_from_right' }} />
-      <CoachStack.Screen name="CoachNoteDetail" component={CoachNoteDetailScreen} options={{ animation: 'slide_from_right' }} />
+      <CoachStack.Screen
+        name="StartClass"
+        getComponent={() => require('./src/screens/coach/StartClassScreen').default}
+        options={{ animation: 'slide_from_bottom' }}
+      />
+      <CoachStack.Screen
+        name="LocalUpload"
+        getComponent={() => require('./src/screens/coach/LocalUploadScreen').default}
+        options={{ animation: 'slide_from_right' }}
+      />
+      <CoachStack.Screen
+        name="ActionNeeded"
+        getComponent={() => require('./src/screens/coach/ActionNeededScreen').default}
+        options={{ animation: 'slide_from_right' }}
+      />
+      <CoachStack.Screen
+        name="FocusValidation"
+        getComponent={() => require('./src/screens/coach/FocusValidationScreen').default}
+        options={{ animation: 'slide_from_right' }}
+      />
+      <CoachStack.Screen
+        name="NameMatchConfirm"
+        getComponent={() => require('./src/screens/coach/NameMatchConfirmScreen').default}
+        options={{ animation: 'slide_from_bottom', presentation: 'modal' }}
+      />
+      <CoachStack.Screen
+        name="CoachProfile"
+        getComponent={() => require('./src/screens/coach/CoachProfileScreen').default}
+        options={{ animation: 'slide_from_right' }}
+      />
+      <CoachStack.Screen
+        name="CoachNoteDetail"
+        getComponent={() => require('./src/screens/coach/CoachNoteDetailScreen').default}
+        options={{ animation: 'slide_from_right' }}
+      />
+      <CoachStack.Screen
+        name="CoachClassDetail"
+        getComponent={() => require('./src/screens/coach/CoachClassDetailScreen').default}
+        options={{ animation: 'slide_from_right' }}
+      />
     </CoachStack.Navigator>
     </CoachDataProvider>
   );
@@ -231,9 +270,18 @@ function CoachAppNavigator() {
 function TrainerNavigator() {
   return (
     <TrainerStack.Navigator screenOptions={{ headerShown: false }}>
-      <TrainerStack.Screen name="TrainerReview" component={TrainerReviewScreen} />
-      <TrainerStack.Screen name="TrainerStudents" component={TrainerStudentsScreen} />
-      <TrainerStack.Screen name="TrainerFocusHistory" component={TrainerFocusHistoryScreen} />
+      <TrainerStack.Screen
+        name="TrainerReview"
+        getComponent={() => require('./src/screens/TrainerReviewScreen').default}
+      />
+      <TrainerStack.Screen
+        name="TrainerStudents"
+        getComponent={() => require('./src/screens/TrainerStudentsScreen').default}
+      />
+      <TrainerStack.Screen
+        name="TrainerFocusHistory"
+        getComponent={() => require('./src/screens/TrainerFocusHistoryScreen').default}
+      />
     </TrainerStack.Navigator>
   );
 }
@@ -244,7 +292,10 @@ function AuthNavigator() {
   return (
     <AuthStack.Navigator screenOptions={{ headerShown: false }}>
       <AuthStack.Screen name="Login" component={LoginScreen} />
-      <AuthStack.Screen name="Register" component={RegisterScreen} />
+      <AuthStack.Screen
+        name="Register"
+        getComponent={() => require('./src/screens/RegisterScreen').default}
+      />
     </AuthStack.Navigator>
   );
 }

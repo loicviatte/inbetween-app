@@ -156,7 +156,7 @@ export async function finalizeRecording(
       },
       body: JSON.stringify({
         audio_url: signed.signedUrl,
-        speech_models: ['universal-3-pro'],
+        speech_models: ['universal-3-pro', 'universal-2'],
         prompt: DANCE_PROMPT,
         speaker_labels: true,
         punctuate: true,

@@ -48,6 +48,11 @@ import Svg, {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Colors, Fonts, Spacing } from '../theme';
+import HeroCardGradient from '../components/HeroCardGradient';
+
+// Sessions shorter than this don't count as a real practice — the prompt
+// asks the user to keep training or cancel outright.
+const MIN_SESSION_SECONDS = 180; // 3 minutes
 import { getFocusPoints, getClassInputsForFocus, getClassInputs, getTrainingSessionsThisWeek, getTeacherContextForAI, askCoach } from '../storage/storage';
 import { callClaudeChat } from '../services/ai/anthropic';
 import { completeTrainingSession, getSessionLabel } from '../utils/algorithm';
@@ -1142,6 +1147,8 @@ export default function FocusSessionScreen({ route, navigation }) {
   const overrunTriggerSecRef = useRef(OVERRUN_FIRST_PROMPT_SEC);
   const overrunAutoStopTimerRef = useRef(null);
   const [showFeelingModal, setShowFeelingModal] = useState(false);
+  const [showShortSessionPrompt, setShowShortSessionPrompt] = useState(false);
+  const [shortSessionElapsed, setShortSessionElapsed] = useState(0);
   const [showStopConfirm, setShowStopConfirm] = useState(false);
   const sessionCompletedRef = useRef(false);
   const stopHoldAnim = useRef(new Animated.Value(0)).current;
@@ -1726,6 +1733,19 @@ I don't have that in your data, but you can send the question to your coach if y
   }
 
   function handleEndSession() {
+    // Sessions shorter than 3 minutes don't count — same threshold a coach
+    // uses to validate a focus point during class. Block here with a prompt
+    // instead of going straight to the feeling modal so the student can
+    // either commit to a real session or scrap this attempt.
+    const active = getActiveSession();
+    if (active?.startedAt) {
+      const elapsedSec = Math.floor((Date.now() - active.startedAt) / 1000);
+      if (elapsedSec < MIN_SESSION_SECONDS) {
+        setShortSessionElapsed(elapsedSec);
+        setShowShortSessionPrompt(true);
+        return;
+      }
+    }
     if (intervalRef.current) clearInterval(intervalRef.current);
     _stopOverTime();
     cancelOverrunAutoStop();
@@ -1734,6 +1754,28 @@ I don't have that in your data, but you can send the question to your coach if y
     setSessionActive(false);
     setSessionPaused(false);
     setShowFeelingModal(true);
+  }
+
+  // "Cancel" on the too-short prompt: discard the session entirely. The
+  // practice_log row stays without a completed_at (it never counted in
+  // stats anyway) and the screen pops back.
+  async function handleCancelShortSession() {
+    setShowShortSessionPrompt(false);
+    if (intervalRef.current) clearInterval(intervalRef.current);
+    _stopOverTime();
+    cancelOverrunAutoStop();
+    const active = getActiveSession();
+    if (active?.liveActivityId) {
+      laEndFocusPoint(active.liveActivityId, false).catch(() => {});
+    }
+    clearActiveSession();
+    navigation.goBack();
+  }
+
+  // "Keep training" on the too-short prompt: just close the prompt. The
+  // interval is still running so the timer never paused.
+  function handleContinueShortSession() {
+    setShowShortSessionPrompt(false);
   }
 
   async function handleSave(feeling, note) {
@@ -2156,6 +2198,35 @@ I don't have that in your data, but you can send the question to your coach if y
             </TouchableOpacity>
           </View>
         </View>
+      </Modal>
+
+      {/* Too-short session prompt — appears when the user tries to end a
+          session before MIN_SESSION_SECONDS. Same threshold a coach uses
+          to validate practice in class. */}
+      <Modal visible={showShortSessionPrompt} transparent animationType="fade" onRequestClose={handleContinueShortSession}>
+        <Pressable style={shortS.backdrop} onPress={handleContinueShortSession}>
+          <Pressable style={shortS.card} onPress={() => { /* swallow */ }}>
+            <HeroCardGradient />
+            <View style={shortS.iconWrap}>
+              <Ionicons name="time-outline" size={22} color="#F6D27A" />
+            </View>
+            <Text style={shortS.title}>Just getting started</Text>
+            <Text style={shortS.body}>
+              You've only trained for{' '}
+              <Text style={shortS.bodyAccent}>
+                {Math.floor(shortSessionElapsed / 60)}m {shortSessionElapsed % 60}s
+              </Text>
+              . Sessions under 3 minutes don't count — keep going, or cancel this one and try again later.
+            </Text>
+            <TouchableOpacity style={shortS.primaryBtn} onPress={handleContinueShortSession} activeOpacity={0.85}>
+              <Ionicons name="play" size={14} color="#0A0A0A" />
+              <Text style={shortS.primaryBtnText}>Keep training</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={shortS.secondaryBtn} onPress={handleCancelShortSession} activeOpacity={0.7}>
+              <Text style={shortS.secondaryBtnText}>Cancel session</Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
       </Modal>
     </SafeAreaView>
     </View>
@@ -3492,5 +3563,84 @@ const chat = StyleSheet.create({
     fontSize: 18,
     color: Colors.white,
     fontWeight: "bold",
+  },
+});
+
+// Too-short session prompt — dark hero card with gold accents matching the
+// rest of the app's confirmation modals.
+const shortS = StyleSheet.create({
+  backdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    justifyContent: 'center',
+    paddingHorizontal: 28,
+  },
+  card: {
+    borderRadius: 22,
+    paddingHorizontal: 24,
+    paddingTop: 22,
+    paddingBottom: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(240,194,74,0.28)',
+    overflow: 'hidden',
+  },
+  iconWrap: {
+    alignSelf: 'center',
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(240,194,74,0.14)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(240,194,74,0.30)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+  title: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 20,
+    color: '#FFFFFF',
+    letterSpacing: -0.5,
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  body: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 13.5,
+    color: 'rgba(255,255,255,0.78)',
+    lineHeight: 20,
+    textAlign: 'center',
+    marginBottom: 22,
+  },
+  bodyAccent: {
+    fontFamily: Fonts.jakartaBold,
+    color: '#F6D27A',
+  },
+  primaryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    paddingVertical: 13,
+    marginBottom: 4,
+  },
+  primaryBtnText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 14,
+    color: '#0A0A0A',
+    letterSpacing: 0.2,
+  },
+  secondaryBtn: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+  },
+  secondaryBtnText: {
+    fontFamily: Fonts.jakartaSemiBold,
+    fontSize: 13.5,
+    color: 'rgba(255,255,255,0.65)',
+    letterSpacing: 0.1,
   },
 });

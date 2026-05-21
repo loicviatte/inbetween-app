@@ -19,27 +19,50 @@ export type AudioInput = {
   isCurrent: boolean;
 };
 
+// Memoised handle on the native module. Resolved lazily and cached, with a
+// graceful null fallback when the module isn't built into the running
+// binary (Expo Go, simulator without a recompile, etc.). Without this guard
+// the very first `requireNativeModule` call throws and crashes the screen
+// the moment the coach taps Start.
+let _modCache: any | null | undefined;
+function getMod(): any | null {
+  if (Platform.OS !== 'ios') return null;
+  if (_modCache !== undefined) return _modCache;
+  try {
+    _modCache = requireNativeModule('AudioRoutePicker');
+  } catch (err) {
+    if (__DEV__) {
+      console.warn(
+        '[audio-route-picker] Native module not found — falling back to OS defaults. Rebuild the dev client to enable the route picker.',
+        err,
+      );
+    }
+    _modCache = null;
+  }
+  return _modCache;
+}
+
 export async function presentAudioRoutePicker(): Promise<void> {
-  if (Platform.OS !== 'ios') return;
-  const mod = requireNativeModule('AudioRoutePicker');
+  const mod = getMod();
+  if (!mod) return;
   return mod.presentPicker();
 }
 
 export function getCurrentInputRoute(): AudioRoute {
-  if (Platform.OS !== 'ios') return { name: null, type: 'none', isBluetooth: false };
-  const mod = requireNativeModule('AudioRoutePicker');
+  const mod = getMod();
+  if (!mod) return { name: null, type: 'none', isBluetooth: false };
   return mod.getCurrentInputRoute();
 }
 
 export async function listAvailableInputs(): Promise<AudioInput[]> {
-  if (Platform.OS !== 'ios') return [];
-  const mod = requireNativeModule('AudioRoutePicker');
+  const mod = getMod();
+  if (!mod) return [];
   return await mod.listAvailableInputs();
 }
 
 export async function setPreferredInput(uid: string): Promise<void> {
-  if (Platform.OS !== 'ios') return;
-  const mod = requireNativeModule('AudioRoutePicker');
+  const mod = getMod();
+  if (!mod) return;
   await mod.setPreferredInput(uid);
 }
 
@@ -57,8 +80,8 @@ export type RouteChangeEvent = {
 };
 
 export function addRouteChangeListener(handler: (e: RouteChangeEvent) => void): { remove: () => void } {
-  if (Platform.OS !== 'ios') return { remove: () => {} };
-  const mod = requireNativeModule('AudioRoutePicker');
+  const mod = getMod();
+  if (!mod) return { remove: () => {} };
   const emitter = new EventEmitter(mod);
   const sub = emitter.addListener('onRouteChange', handler);
   return { remove: () => sub.remove() };

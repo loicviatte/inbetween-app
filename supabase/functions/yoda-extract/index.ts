@@ -1,5 +1,5 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { callAnthropic } from '../_shared/aiLogger.ts'
+import { computeAnthropicCost, AnthropicUsage } from '../_shared/anthropic-pricing.ts'
 
 // ─── Deno / Supabase Edge Runtime globals ────────────────────────────────────
 
@@ -96,6 +96,194 @@ function trimAllDrills(value: unknown): unknown {
     return out
   }
   return value
+}
+
+// ─── Anthropic call with retry on 5xx / 429 ──────────────────────────────────
+//
+// Anthropic returns 529 ("Overloaded") sporadically during traffic spikes —
+// they explicitly document it as retriable. 503 and 502 occur during deploys.
+// 429 means we're being rate-limited.
+//
+// Without retry, a single transient blip on Anthropic's side kills a coach's
+// class permanently (status=error, no focus points ever shown). We saw this
+// in prod on 2026-05-12 — testmarius's class extraction got a 529 on the
+// first call and stayed broken until manual intervention.
+//
+// Strategy: up to 4 attempts, exponential backoff (2s, 4s, 8s). Non-retriable
+// errors (4xx other than 429) throw immediately so we don't waste minutes
+// retrying e.g. a malformed prompt.
+
+interface AnthropicCallOptions {
+  /** Tag the call so logs separate "extract" vs "title" vs "dedupe". */
+  context: string
+  /** Active Supabase client — required to log to ai_call_logs.
+   * Pass undefined and we skip logging (no crash). */
+  supabase?: ReturnType<typeof createClient>
+  /** class_input_id this call belongs to, for billing rollup. */
+  classInputId?: string
+  /** user_id of the coach whose class is being processed. */
+  userId?: string
+}
+
+async function fetchAnthropicWithRetry(
+  body: Record<string, unknown>,
+  options: AnthropicCallOptions,
+): Promise<Response> {
+  const { context, supabase, classInputId, userId } = options
+  const url = 'https://api.anthropic.com/v1/messages'
+  const headers = {
+    'Content-Type': 'application/json',
+    'x-api-key': Deno.env.get('ANTHROPIC_API_KEY')!,
+    'anthropic-version': '2023-06-01',
+  }
+  const model = (body.model as string | undefined) ?? 'unknown'
+
+  const MAX_ATTEMPTS = 4
+  let lastErrText = ''
+  let lastStatus = 0
+  const startedAt = Date.now()
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    let res: Response
+    try {
+      res = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      })
+    } catch (err) {
+      // Network-level failure (DNS, TLS, socket reset) — same retry policy
+      lastErrText = err instanceof Error ? err.message : String(err)
+      console.error(`[yoda-extract] ${context} network error on attempt ${attempt}: ${lastErrText}`)
+      if (attempt === MAX_ATTEMPTS) {
+        await logAnthropicCallSafe(supabase, {
+          function_name: 'yoda-extract',
+          context,
+          model,
+          class_input_id: classInputId,
+          user_id: userId,
+          status: 'error',
+          attempts: attempt,
+          duration_ms: Date.now() - startedAt,
+          error_message: lastErrText,
+          usage: null,
+        })
+        throw new Error(`Anthropic API network error after ${MAX_ATTEMPTS} attempts: ${lastErrText}`)
+      }
+      const backoffMs = 2000 * Math.pow(2, attempt - 1)
+      await new Promise((r) => setTimeout(r, backoffMs))
+      continue
+    }
+
+    if (res.ok) {
+      // Drain the body, extract usage for cost logging, and return a
+      // fresh Response so the caller can .json() it normally.
+      const text = await res.text()
+      let usage: AnthropicUsage | null = null
+      try {
+        const parsed = JSON.parse(text)
+        usage = parsed?.usage ?? null
+      } catch {
+        // Caller will trip on its own JSON parse if the body is bad.
+      }
+      await logAnthropicCallSafe(supabase, {
+        function_name: 'yoda-extract',
+        context,
+        model,
+        class_input_id: classInputId,
+        user_id: userId,
+        status: 'success',
+        attempts: attempt,
+        duration_ms: Date.now() - startedAt,
+        usage,
+      })
+      return new Response(text, { status: res.status, headers: res.headers })
+    }
+
+    lastStatus = res.status
+    lastErrText = await res.text()
+
+    // 429 = rate limit; 5xx = server problems on Anthropic's side. All
+    // documented as retriable. 4xx (other than 429) means our request is
+    // malformed — retrying won't help, fail fast.
+    const isRetriable = res.status === 429 || res.status >= 500
+    console.error(
+      `[yoda-extract] ${context} Anthropic ${res.status} on attempt ${attempt}/${MAX_ATTEMPTS}: ${lastErrText.slice(0, 200)}`,
+    )
+
+    if (!isRetriable || attempt === MAX_ATTEMPTS) {
+      await logAnthropicCallSafe(supabase, {
+        function_name: 'yoda-extract',
+        context,
+        model,
+        class_input_id: classInputId,
+        user_id: userId,
+        status: 'error',
+        attempts: attempt,
+        duration_ms: Date.now() - startedAt,
+        error_message: `${res.status}: ${lastErrText.slice(0, 500)}`,
+        usage: null,
+      })
+      throw new Error(`Anthropic API ${res.status}: ${lastErrText}`)
+    }
+
+    // Anthropic includes a Retry-After header on 429; honor it if present.
+    const retryAfter = res.headers.get('retry-after')
+    let backoffMs = 2000 * Math.pow(2, attempt - 1) // 2s, 4s, 8s
+    if (retryAfter) {
+      const ra = parseInt(retryAfter, 10)
+      if (!isNaN(ra) && ra > 0 && ra < 60) backoffMs = ra * 1000
+    }
+    console.log(`[yoda-extract] ${context} retrying in ${backoffMs}ms…`)
+    await new Promise((r) => setTimeout(r, backoffMs))
+  }
+
+  throw new Error(`Anthropic API ${lastStatus}: ${lastErrText}`)
+}
+
+/**
+ * Best-effort insert into ai_call_logs. Never throws — a logging failure
+ * shouldn't kill the actual processing call. Cost is computed from
+ * usage when present; absent usage (errors) records 0.
+ */
+async function logAnthropicCallSafe(
+  supabase: ReturnType<typeof createClient> | undefined,
+  row: {
+    function_name: string
+    context: string
+    model: string
+    class_input_id?: string
+    user_id?: string
+    status: 'success' | 'error'
+    attempts: number
+    duration_ms: number
+    error_message?: string
+    usage: AnthropicUsage | null
+  },
+): Promise<void> {
+  if (!supabase) return
+  try {
+    const usage = row.usage ?? {}
+    const costUsd = row.usage ? computeAnthropicCost(row.model, usage) : 0
+    await supabase.from('ai_call_logs').insert({
+      function_name: row.function_name,
+      context: row.context,
+      model: row.model,
+      class_input_id: row.class_input_id ?? null,
+      user_id: row.user_id ?? null,
+      input_tokens: usage.input_tokens ?? 0,
+      output_tokens: usage.output_tokens ?? 0,
+      cache_creation_input_tokens: usage.cache_creation_input_tokens ?? 0,
+      cache_read_input_tokens: usage.cache_read_input_tokens ?? 0,
+      cost_usd: costUsd,
+      duration_ms: row.duration_ms,
+      attempts: row.attempts,
+      status: row.status,
+      error_message: row.error_message ?? null,
+    })
+  } catch (err) {
+    console.error('[ai_call_logs] insert failed:', err instanceof Error ? err.message : String(err))
+  }
 }
 
 // ─── System prompt ────────────────────────────────────────────────────────────
@@ -381,25 +569,50 @@ async function notifyGroupClassAttendance(
   coachName: string,
   classDate: string,
 ): Promise<void> {
-  // Get all students connected to this coach
-  const { data: requests } = await supabase
-    .from('coach_requests')
-    .select('student_id')
-    .eq('coach_id', coachId)
-    .eq('status', 'accepted')
+  // Group class flow does not require the coach to pre-select attendees:
+  // every student in the same dance studio as the coach gets prompted, and
+  // the coach edits the attendance roster afterwards from the class detail.
+  const { data: coach } = await supabase
+    .from('users')
+    .select('studio_id')
+    .eq('id', coachId)
+    .maybeSingle()
 
-  const studentIds: string[] = (requests ?? []).map((r: any) => r.student_id)
+  let studentIds: string[] = []
+  if (coach?.studio_id) {
+    const { data: students } = await supabase
+      .from('users')
+      .select('id')
+      .eq('studio_id', coach.studio_id)
+      .eq('role', 'student')
+    studentIds = (students ?? []).map((s: any) => s.id)
+  }
+
+  if (studentIds.length === 0) {
+    // Coach has no studio (or studio is empty) — keep the prompt useful by
+    // falling back to their connected students.
+    const { data: requests } = await supabase
+      .from('coach_requests')
+      .select('student_id')
+      .eq('coach_id', coachId)
+      .eq('status', 'accepted')
+    studentIds = (requests ?? []).map((r: any) => r.student_id)
+  }
+
   if (studentIds.length === 0) return
 
-  // Insert class_input_students rows for attendance tracking
+  // UPSERT preserves anything `finalize_recording_atomic` already wrote
+  // (e.g. attendance the coach started editing) while ensuring every
+  // studio member ends up represented in class_input_students.
   const cisRows = studentIds.map((sid: string) => ({
     class_input_id: classInputId,
     student_id: sid,
     attendance: 'pending',
   }))
-  await supabase.from('class_input_students').upsert(cisRows, { onConflict: 'class_input_id,student_id' })
+  await supabase
+    .from('class_input_students')
+    .upsert(cisRows, { onConflict: 'class_input_id,student_id' })
 
-  // Send attendance notification to each student
   const notifications = studentIds.map((sid: string) => ({
     user_id: sid,
     type: 'group_class_attendance',
@@ -409,7 +622,7 @@ async function notifyGroupClassAttendance(
   }))
   const { error } = await supabase.from('notifications').insert(notifications)
   if (error) console.error('[yoda-extract] Failed to insert attendance notifications:', error.message)
-  else console.log(`[yoda-extract] ✓ Sent attendance notifications to ${studentIds.length} students for class ${classInputId}`)
+  else console.log(`[yoda-extract] ✓ Sent attendance notifications to ${studentIds.length} studio students for class ${classInputId}`)
 }
 
 // ─── Generate alternative versions for each focus point ──────────────────────
@@ -456,20 +669,16 @@ Return ONLY a JSON object with this structure:
 }
 No markdown, no explanation.${NO_HYPHEN_RULE}`
 
-  const altData = await callAnthropic(
+  const altRes = await fetchAnthropicWithRetry(
     {
       model: 'claude-sonnet-4-6',
       max_tokens: 3000,
       messages: [{ role: 'user', content: altPrompt }],
     },
-    {
-      function_name: 'yoda-extract',
-      context: 'alternatives',
-      class_input_id: classInputId,
-      user_id: studentId,
-      supabase,
-    },
+    { context: 'alternatives', supabase, classInputId },
   )
+
+  const altData = await altRes.json()
   const rawAltText: string = (altData.content?.[0]?.text ?? '').trim()
     .replace(/^```(?:json)?\s*/i, '')
     .replace(/\s*```$/i, '')
@@ -723,22 +932,23 @@ async function processRecord(record: ClassInputRecord): Promise<void> {
       `transcript: ${transcript}`,
     ].join('\n')
 
-    // Call Claude via the Anthropic Messages API (wrapped to log to ai_call_logs)
-    const anthropicData = await callAnthropic(
+    // Call Claude via the Anthropic Messages API (with retry on 5xx/429).
+    // max_tokens=16000: group classes with multiple students return
+    // per-student summaries plus group-level fields, easily exceeding the
+    // previous 4000-token limit on 1h+ classes. Sonnet 4.6 supports up to
+    // 64k output tokens; 16k gives us headroom for big group sessions
+    // while keeping latency reasonable.
+    const anthropicRes = await fetchAnthropicWithRetry(
       {
         model: 'claude-sonnet-4-6',
         max_tokens: 16000,
         system: effectiveSystemPrompt,
         messages: [{ role: 'user', content: userMessage }],
       },
-      {
-        function_name: 'yoda-extract',
-        context: 'main_extract',
-        class_input_id: id,
-        user_id,
-        supabase,
-      },
+      { context: 'extract', supabase, classInputId: id, userId: user_id },
     )
+
+    const anthropicData = await anthropicRes.json()
     const rawText: string = anthropicData.content?.[0]?.text ?? ''
     const stopReason: string | undefined = anthropicData.stop_reason
 
@@ -786,31 +996,50 @@ async function processRecord(record: ClassInputRecord): Promise<void> {
       await supabase.from('class_inputs').update(updates).eq('id', id)
     }
 
-    // Generate title from transcript if not already set
+    // Generate title — uses the just-extracted class_summary (concise +
+    // already focused on the technical content) rather than the raw
+    // transcript head. The first 1500 chars of a transcript are almost
+    // always small-talk / setup, which Claude then summarises into
+    // generic, useless titles like "Latin Dance Class Introduction".
+    // Feeding the distilled summary instead gives Claude the actual
+    // teaching content and yields specific titles ("Rumba Walk Phases",
+    // "Center Lead in Cha Cha", etc.).
     const { data: existingRow } = await supabase
       .from('class_inputs')
-      .select('title')
+      .select('title, class_summary')
       .eq('id', id)
       .single()
-    if (!existingRow?.title && transcript) {
+    if (!existingRow?.title && (existingRow?.class_summary || transcript)) {
+      const sourceContent =
+        existingRow?.class_summary ?? transcript!.slice(0, 3000)
+      // Title generation is best-effort: failures don't fail the whole
+      // extraction. Still wrap in retry so transient 5xx don't lose the
+      // title silently.
       try {
-        const titleData = await callAnthropic(
+        const titleRes = await fetchAnthropicWithRetry(
           {
             model: 'claude-haiku-4-5',
-            max_tokens: 20,
+            max_tokens: 30,
             messages: [{
               role: 'user',
-              content: `Here is a dance lesson transcript:\n\n${transcript.slice(0, 1500)}\n\nWrite a 2 to 5 word title summarizing what this lesson was about. Capitalize each word. Return ONLY the title, nothing else.${NO_HYPHEN_RULE}`,
+              content: `You are titling a dance class for a coach's dashboard.
+
+CLASS SUMMARY:
+${sourceContent}
+
+Write a SPECIFIC 4 to 8 word title that captures the technical topic taught.
+
+RULES:
+- Mention the dance style(s) (e.g. Rumba, Cha Cha, Waltz, Tango, Salsa, Bachata) when they're the main focus.
+- Name the specific technique or mechanic taught (e.g. "Walk Phases", "Center Lead", "Hip Action", "Frame Connection", "Spin Mechanics").
+- AVOID generic words: "Introduction", "Basics", "Class", "Session", "Practice", "Overview", "Technique" (on its own), "Lesson", "Lecture".
+- Capitalize each significant word.
+- Return ONLY the title — no quotes, no preamble.${NO_HYPHEN_RULE}`,
             }],
           },
-          {
-            function_name: 'yoda-extract',
-            context: 'title_gen',
-            class_input_id: id,
-            user_id,
-            supabase,
-          },
+          { context: 'title', supabase, classInputId: id, userId: user_id },
         )
+        const titleData = await titleRes.json()
         const generatedTitle = stripHyphens(
           (titleData.content?.[0]?.text ?? '').trim().replace(/^["']|["']$/g, '')
         )
@@ -818,8 +1047,8 @@ async function processRecord(record: ClassInputRecord): Promise<void> {
           await supabase.from('class_inputs').update({ title: generatedTitle }).eq('id', id)
           console.log(`[yoda-extract] ✓ Generated title: "${generatedTitle}" for ${id}`)
         }
-      } catch (titleErr) {
-        console.warn('[yoda-extract] title generation failed:', titleErr)
+      } catch (err) {
+        console.warn(`[yoda-extract] title generation failed for ${id}: ${err instanceof Error ? err.message : String(err)}`)
       }
     }
 
@@ -851,10 +1080,10 @@ async function processRecord(record: ClassInputRecord): Promise<void> {
       let toInsert = newCandidates
 
       if (existing.length > 0) {
-        // Ask Claude Haiku to filter out entries already covered by existing knowledge
-        let dedupeData: { content?: Array<{ text?: string }> } | null = null
+        // Best-effort dedup. If Anthropic fails entirely after retries we
+        // just insert all candidates rather than fail the whole class.
         try {
-          dedupeData = await callAnthropic(
+          const dedupeRes = await fetchAnthropicWithRetry(
             {
               model: 'claude-haiku-4-5',
               max_tokens: 800,
@@ -874,19 +1103,9 @@ If all are duplicates, return an empty array.
 Return ONLY a JSON array of numbers, e.g. [1, 3]. No explanation.`,
               }],
             },
-            {
-              function_name: 'yoda-extract',
-              context: 'knowledge_dedupe',
-              class_input_id: id,
-              user_id,
-              supabase,
-            },
+            { context: 'dedupe', supabase, classInputId: id, userId: user_id },
           )
-        } catch (dedupeErr) {
-          console.warn('[yoda-extract] knowledge dedupe failed:', dedupeErr)
-        }
-
-        if (dedupeData) {
+          const dedupeData = await dedupeRes.json()
           const rawText = (dedupeData.content?.[0]?.text ?? '').trim()
           try {
             const indices: number[] = JSON.parse(rawText)
@@ -897,6 +1116,8 @@ Return ONLY a JSON array of numbers, e.g. [1, 3]. No explanation.`,
           } catch {
             console.warn('[yoda-extract] Failed to parse deduplication response, inserting all candidates')
           }
+        } catch (err) {
+          console.warn(`[yoda-extract] dedupe call failed (will insert all candidates): ${err instanceof Error ? err.message : String(err)}`)
         }
       }
 

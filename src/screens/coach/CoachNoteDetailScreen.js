@@ -13,8 +13,8 @@ import {
   FlatList,
   Keyboard,
   Animated,
-  Image,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
@@ -25,6 +25,7 @@ import {
   deleteCoachNote,
   getMyStudents,
 } from '../../storage/coachStorage';
+import { supabase } from '../../services/supabase/client';
 
 import { useVideoPlayer, VideoView } from 'expo-video';
 
@@ -165,7 +166,7 @@ function StudentPickerModal({ visible, onClose, onSelect, currentId }) {
 const BOTTOM_BAR_H = 50;
 
 export default function CoachNoteDetailScreen({ route, navigation }) {
-  const { noteId } = route.params || {};
+  const { noteId, linkedClassInputId } = route.params || {};
   const isNew = !noteId;
 
   const idRef = useRef(noteId || null);
@@ -173,14 +174,17 @@ export default function CoachNoteDetailScreen({ route, navigation }) {
   const [content, setContent] = useState('');
   const [video_clips, setVideoClips] = useState([]);
   const [linkedStudent, setLinkedStudent] = useState(null); // { id, name, photoUrl }
+  const [linkedClass, setLinkedClass] = useState(
+    linkedClassInputId ? { id: linkedClassInputId } : null,
+  );
   const [noteDate, setNoteDate] = useState(null);
   const [pickerVisible, setPickerVisible] = useState(false);
   const [playingVideoUri, setPlayingVideoUri] = useState(null);
   const [keyboardVisible, setKeyboardVisible] = useState(false);
 
   const autoSaveTimer = useRef(null);
-  const hasChanges = useRef(false);
-  const stateRef = useRef({ title, content, video_clips, linkedStudent });
+  const hasChanges = useRef(!!linkedClassInputId);
+  const stateRef = useRef({ title, content, video_clips, linkedStudent, linkedClass });
 
   const fabBottom = useRef(new Animated.Value(BOTTOM_BAR_H + 16)).current;
 
@@ -199,8 +203,8 @@ export default function CoachNoteDetailScreen({ route, navigation }) {
   }, []);
 
   useEffect(() => {
-    stateRef.current = { title, content, video_clips, linkedStudent };
-  }, [title, content, video_clips, linkedStudent]);
+    stateRef.current = { title, content, video_clips, linkedStudent, linkedClass };
+  }, [title, content, video_clips, linkedStudent, linkedClass]);
 
   useEffect(() => {
     if (!isNew) {
@@ -210,11 +214,36 @@ export default function CoachNoteDetailScreen({ route, navigation }) {
           setContent(note.content || '');
           setVideoClips(note.video_clips || []);
           setLinkedStudent(note.linkedStudent || null);
+          setLinkedClass(note.linkedClass || null);
           setNoteDate(note.updated_at || note.created_at || null);
         }
       });
     }
   }, [noteId, isNew]);
+
+  // Hydrate the linked-class title when arriving from class detail with an
+  // id but no title — keeps the badge readable instead of "Linked to class".
+  useEffect(() => {
+    if (!linkedClass?.id || linkedClass?.title) return;
+    let active = true;
+    supabase
+      .from('class_inputs')
+      .select('id, title, ai_primary_focus, lesson_type, created_at')
+      .eq('id', linkedClass.id)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (!active || !data) return;
+        setLinkedClass({
+          id: data.id,
+          title: data.title || data.ai_primary_focus || 'Class',
+          lessonType: data.lesson_type || null,
+          createdAt: data.created_at,
+        });
+      });
+    return () => {
+      active = false;
+    };
+  }, [linkedClass?.id, linkedClass?.title]);
 
   async function persist(data) {
     const savedId = await saveCoachNote({
@@ -223,6 +252,7 @@ export default function CoachNoteDetailScreen({ route, navigation }) {
       content: data.content,
       video_clips: data.video_clips,
       linked_student_id: data.linkedStudent?.id || null,
+      linked_class_input_id: data.linkedClass?.id || null,
     });
     if (!idRef.current && savedId) idRef.current = savedId;
   }
@@ -370,6 +400,41 @@ export default function CoachNoteDetailScreen({ route, navigation }) {
               </TouchableOpacity>
               <TouchableOpacity
                 onPress={() => handleLinkSelect(null)}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons name="close-circle" size={16} color={Colors.secondary} />
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* Linked class badge */}
+          {linkedClass && (
+            <View style={styles.linkedRow}>
+              <View style={[styles.linkedAvatar, styles.linkedClassAvatar]}>
+                <Ionicons name="school" size={12} color="#2F6B33" />
+              </View>
+              <TouchableOpacity
+                style={{ flex: 1 }}
+                onPress={() => {
+                  if (linkedClass.id) {
+                    navigation.navigate('CoachClassDetail', { classId: linkedClass.id });
+                  }
+                }}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.linkedText} numberOfLines={1}>
+                  Linked to{' '}
+                  <Text style={styles.linkedClassName}>
+                    {linkedClass.title || 'class'}
+                  </Text>
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => {
+                  setLinkedClass(null);
+                  hasChanges.current = true;
+                  scheduleAutoSave();
+                }}
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               >
                 <Ionicons name="close-circle" size={16} color={Colors.secondary} />
@@ -556,6 +621,15 @@ const styles = StyleSheet.create({
   linkedName: {
     fontFamily: Fonts.jakartaBold,
     color: Colors.orange,
+  },
+  linkedClassAvatar: {
+    backgroundColor: 'rgba(76,175,80,0.16)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  linkedClassName: {
+    fontFamily: Fonts.jakartaBold,
+    color: '#2F6B33',
   },
 
   titleInput: {
