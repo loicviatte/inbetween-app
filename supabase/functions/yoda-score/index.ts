@@ -68,28 +68,68 @@ async function publishExpiredFocusPoints(supabase: any): Promise<void> {
   const now = new Date().toISOString()
   const { data: expired } = await supabase
     .from('focus_points')
-    .select('id, user_id, group_fp, source_class_input_id')
+    .select('id, user_id, group_fp, source_class_input_id, class_input_id')
     .eq('status', 'pending_coach')
     .lte('coach_review_deadline', now)
 
-  for (const fp of expired ?? []) {
-    if (fp.group_fp && fp.source_class_input_id) {
-      const { data: cis } = await supabase
-        .from('class_input_students')
-        .select('student_id, attendance')
-        .eq('class_input_id', fp.source_class_input_id)
-      const excluded = new Set((cis ?? []).filter((r: any) => r.attendance === 'no').map((r: any) => r.student_id))
-      if (excluded.has(fp.user_id)) {
-        await supabase.from('focus_points').update({ is_deleted: true, status: 'past' }).eq('id', fp.id)
-      } else {
-        await supabase.from('focus_points').update({ status: 'active', coach_review_deadline: null }).eq('id', fp.id)
-      }
+  if (!expired || expired.length === 0) return
+
+  // Admin gate: only publish FPs whose parent class_input is admin-approved.
+  // Before approval, the 18h coach window doesn't start; approveClass
+  // resets the deadline at approval time so the coach gets a fresh window.
+  const classIds: string[] = [
+    ...new Set(
+      (expired as any[])
+        .map((fp) => fp.class_input_id)
+        .filter((v: any): v is string => !!v),
+    ),
+  ]
+  const approvedSet = new Set<string>()
+  if (classIds.length > 0) {
+    const { data: approvedClasses } = await supabase
+      .from('class_inputs')
+      .select('id')
+      .in('id', classIds)
+      .not('admin_approved_at', 'is', null)
+    for (const c of (approvedClasses ?? []) as { id: string }[]) {
+      approvedSet.add(c.id)
+    }
+  }
+  const eligible = (expired as any[]).filter(
+    (fp) => fp.class_input_id == null || approvedSet.has(fp.class_input_id),
+  )
+
+  // Group FPs publish only if the student explicitly confirmed attendance
+  // (attendance_responses.attended = true). Pending or missing responses
+  // count as "not attended" → soft-delete. Source of truth is
+  // attendance_responses, NOT class_input_students.attendance.
+  const groupEligible = eligible.filter((fp: any) => fp.group_fp && fp.source_class_input_id)
+  const groupClassIds = [...new Set(groupEligible.map((fp: any) => fp.source_class_input_id as string))]
+  const groupStudentIds = [...new Set(groupEligible.map((fp: any) => fp.user_id as string))]
+  const attendedKeys = new Set<string>()
+  if (groupClassIds.length > 0 && groupStudentIds.length > 0) {
+    const { data: attendedRows } = await supabase
+      .from('attendance_responses')
+      .select('class_input_id, student_id')
+      .in('class_input_id', groupClassIds)
+      .in('student_id', groupStudentIds)
+      .eq('attended', true)
+    for (const r of (attendedRows ?? []) as any[]) {
+      attendedKeys.add(`${r.class_input_id}:${r.student_id}`)
+    }
+  }
+
+  for (const fp of eligible) {
+    const isGroup = !!(fp.group_fp && fp.source_class_input_id)
+    const attended = !isGroup || attendedKeys.has(`${fp.source_class_input_id}:${fp.user_id}`)
+    if (!attended) {
+      await supabase.from('focus_points').update({ is_deleted: true, status: 'past', coach_review_deadline: null }).eq('id', fp.id)
     } else {
       await supabase.from('focus_points').update({ status: 'active', coach_review_deadline: null }).eq('id', fp.id)
     }
   }
-  if ((expired ?? []).length > 0) {
-    console.log(`[yoda-score] Auto-published ${expired!.length} expired pending_coach FPs`)
+  if (eligible.length > 0) {
+    console.log(`[yoda-score] Auto-published ${eligible.length} expired pending_coach FPs (${expired.length - eligible.length} gated by admin)`)
   }
 }
 
@@ -467,6 +507,51 @@ async function processStudentFocusPoints(
   if (otherRows.length > 0) {
     const { error: otherError } = await supabase.from('focus_points').insert(otherRows)
     if (otherError) console.error('[yoda-score] Error inserting other_focus_points:', otherError.message)
+  }
+
+  // ── CAP TO 3 ACTIVE PER STUDENT PER CLASS ────────────────────────────────────
+  // Keep only the 3 most important new FPs from this class in pending_coach/
+  // active state. Demote the rest to 'past' (they stay in the audit trail for
+  // the feedback loop). Ranking: tier > explicit_priority > base_score >
+  // mention_count > created_at desc.
+  {
+    const { data: classFps } = await supabase
+      .from('focus_points')
+      .select('id, tier, status, explicit_priority, base_score, mention_count, created_at, name')
+      .eq('user_id', studentId)
+      .eq('class_input_id', classInputId)
+      .eq('is_deleted', false)
+      .eq('is_archived', false)
+      .in('status', ['pending_coach', 'active'])
+
+    if (classFps && classFps.length > 3) {
+      const tierRank: Record<string, number> = { critical: 1, important: 2, supporting: 3 }
+      const sorted = [...classFps].sort((a: any, b: any) => {
+        const tA = tierRank[a.tier] ?? 4
+        const tB = tierRank[b.tier] ?? 4
+        if (tA !== tB) return tA - tB
+        const epA = a.explicit_priority ? 1 : 0
+        const epB = b.explicit_priority ? 1 : 0
+        if (epA !== epB) return epB - epA
+        const bsA = a.base_score ?? 0
+        const bsB = b.base_score ?? 0
+        if (bsA !== bsB) return bsB - bsA
+        const mcA = a.mention_count ?? 0
+        const mcB = b.mention_count ?? 0
+        if (mcA !== mcB) return mcB - mcA
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      })
+      const toDemote = sorted.slice(3) as any[]
+      for (const fp of toDemote) {
+        await supabase
+          .from('focus_points')
+          .update({ status: 'past', coach_review_deadline: null })
+          .eq('id', fp.id)
+      }
+      console.log(
+        `[yoda-score] cap-to-3: kept ${sorted.slice(0, 3).map((f: any) => f.name).join(', ')}; demoted ${toDemote.length} for student ${studentId}`,
+      )
+    }
   }
 
   // Notify coach only for focus points that were actually created (pending_coach), not merges

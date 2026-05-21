@@ -1,4 +1,5 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { callAnthropic } from '../_shared/aiLogger.ts'
 
 // ─── Deno / Supabase Edge Runtime globals ────────────────────────────────────
 
@@ -455,25 +456,20 @@ Return ONLY a JSON object with this structure:
 }
 No markdown, no explanation.${NO_HYPHEN_RULE}`
 
-  const altRes = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': Deno.env.get('ANTHROPIC_API_KEY')!,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
+  const altData = await callAnthropic(
+    {
       model: 'claude-sonnet-4-6',
       max_tokens: 3000,
       messages: [{ role: 'user', content: altPrompt }],
-    }),
-  })
-
-  if (!altRes.ok) {
-    throw new Error(`Alternatives API ${altRes.status}: ${await altRes.text()}`)
-  }
-
-  const altData = await altRes.json()
+    },
+    {
+      function_name: 'yoda-extract',
+      context: 'alternatives',
+      class_input_id: classInputId,
+      user_id: studentId,
+      supabase,
+    },
+  )
   const rawAltText: string = (altData.content?.[0]?.text ?? '').trim()
     .replace(/^```(?:json)?\s*/i, '')
     .replace(/\s*```$/i, '')
@@ -570,6 +566,34 @@ async function loadTrainerFeedback(supabase: ReturnType<typeof createClient>): P
     }
     if (scoreLines.length > 0) {
       result += `\n\n## SCORE DECISIONS FEEDBACK — learn from these validated decisions:\n${scoreLines.join('\n')}`
+    }
+  }
+
+  // Also load class-level admin edits (title, class_summary, practice_point_*,
+  // ai_primary_focus, ai_secondary_focus, priority_score_*). These are not
+  // tied to ai_training_candidates so they live in class_input_edits — pull
+  // the 30 most recent so the model sees the patterns of "AI said X, admin
+  // corrected to Y" for class-level fields too.
+  const { data: classEdits } = await supabase
+    .from('class_input_edits')
+    .select('field_name, ai_value, human_value, edited_at')
+    .order('edited_at', { ascending: false })
+    .limit(30)
+
+  if (classEdits && classEdits.length > 0) {
+    const editLines: string[] = []
+    for (const row of classEdits as Array<{
+      field_name: string
+      ai_value: string | null
+      human_value: string | null
+    }>) {
+      const ai = (row.ai_value ?? '').trim().slice(0, 120)
+      const human = (row.human_value ?? '').trim().slice(0, 120)
+      if (!ai && !human) continue
+      editLines.push(`[CLASS-LEVEL EDIT] field: ${row.field_name}, AI: "${ai}", admin corrected to: "${human}"`)
+    }
+    if (editLines.length > 0) {
+      result += `\n\n## CLASS-LEVEL CORRECTIONS — admin's corrections on class fields:\n${editLines.join('\n')}`
     }
   }
 
@@ -699,28 +723,22 @@ async function processRecord(record: ClassInputRecord): Promise<void> {
       `transcript: ${transcript}`,
     ].join('\n')
 
-    // Call Claude via the Anthropic Messages API
-    const anthropicRes = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': Deno.env.get('ANTHROPIC_API_KEY')!,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
+    // Call Claude via the Anthropic Messages API (wrapped to log to ai_call_logs)
+    const anthropicData = await callAnthropic(
+      {
         model: 'claude-sonnet-4-6',
         max_tokens: 16000,
         system: effectiveSystemPrompt,
         messages: [{ role: 'user', content: userMessage }],
-      }),
-    })
-
-    if (!anthropicRes.ok) {
-      const errText = await anthropicRes.text()
-      throw new Error(`Anthropic API ${anthropicRes.status}: ${errText}`)
-    }
-
-    const anthropicData = await anthropicRes.json()
+      },
+      {
+        function_name: 'yoda-extract',
+        context: 'main_extract',
+        class_input_id: id,
+        user_id,
+        supabase,
+      },
+    )
     const rawText: string = anthropicData.content?.[0]?.text ?? ''
     const stopReason: string | undefined = anthropicData.stop_reason
 
@@ -775,24 +793,24 @@ async function processRecord(record: ClassInputRecord): Promise<void> {
       .eq('id', id)
       .single()
     if (!existingRow?.title && transcript) {
-      const titleRes = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': Deno.env.get('ANTHROPIC_API_KEY')!,
-          'anthropic-version': '2023-06-01',
-        },
-        body: JSON.stringify({
-          model: 'claude-haiku-4-5',
-          max_tokens: 20,
-          messages: [{
-            role: 'user',
-            content: `Here is a dance lesson transcript:\n\n${transcript.slice(0, 1500)}\n\nWrite a 2 to 5 word title summarizing what this lesson was about. Capitalize each word. Return ONLY the title, nothing else.${NO_HYPHEN_RULE}`,
-          }],
-        }),
-      })
-      if (titleRes.ok) {
-        const titleData = await titleRes.json()
+      try {
+        const titleData = await callAnthropic(
+          {
+            model: 'claude-haiku-4-5',
+            max_tokens: 20,
+            messages: [{
+              role: 'user',
+              content: `Here is a dance lesson transcript:\n\n${transcript.slice(0, 1500)}\n\nWrite a 2 to 5 word title summarizing what this lesson was about. Capitalize each word. Return ONLY the title, nothing else.${NO_HYPHEN_RULE}`,
+            }],
+          },
+          {
+            function_name: 'yoda-extract',
+            context: 'title_gen',
+            class_input_id: id,
+            user_id,
+            supabase,
+          },
+        )
         const generatedTitle = stripHyphens(
           (titleData.content?.[0]?.text ?? '').trim().replace(/^["']|["']$/g, '')
         )
@@ -800,6 +818,8 @@ async function processRecord(record: ClassInputRecord): Promise<void> {
           await supabase.from('class_inputs').update({ title: generatedTitle }).eq('id', id)
           console.log(`[yoda-extract] ✓ Generated title: "${generatedTitle}" for ${id}`)
         }
+      } catch (titleErr) {
+        console.warn('[yoda-extract] title generation failed:', titleErr)
       }
     }
 
@@ -832,19 +852,15 @@ async function processRecord(record: ClassInputRecord): Promise<void> {
 
       if (existing.length > 0) {
         // Ask Claude Haiku to filter out entries already covered by existing knowledge
-        const dedupeRes = await fetch('https://api.anthropic.com/v1/messages', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': Deno.env.get('ANTHROPIC_API_KEY')!,
-            'anthropic-version': '2023-06-01',
-          },
-          body: JSON.stringify({
-            model: 'claude-haiku-4-5',
-            max_tokens: 800,
-            messages: [{
-              role: 'user',
-              content: `You are deduplicating a dance coach's knowledge base.
+        let dedupeData: { content?: Array<{ text?: string }> } | null = null
+        try {
+          dedupeData = await callAnthropic(
+            {
+              model: 'claude-haiku-4-5',
+              max_tokens: 800,
+              messages: [{
+                role: 'user',
+                content: `You are deduplicating a dance coach's knowledge base.
 
 EXISTING ENTRIES:
 ${existing.map((e, i) => `${i + 1}. [${e.type}] ${e.content}`).join('\n')}
@@ -856,12 +872,21 @@ Return ONLY the indices (1-based) of NEW CANDIDATES that add genuinely new infor
 When in doubt, reject. Only keep entries that a coach would clearly want as a separate item in their knowledge base.
 If all are duplicates, return an empty array.
 Return ONLY a JSON array of numbers, e.g. [1, 3]. No explanation.`,
-            }],
-          }),
-        })
+              }],
+            },
+            {
+              function_name: 'yoda-extract',
+              context: 'knowledge_dedupe',
+              class_input_id: id,
+              user_id,
+              supabase,
+            },
+          )
+        } catch (dedupeErr) {
+          console.warn('[yoda-extract] knowledge dedupe failed:', dedupeErr)
+        }
 
-        if (dedupeRes.ok) {
-          const dedupeData = await dedupeRes.json()
+        if (dedupeData) {
           const rawText = (dedupeData.content?.[0]?.text ?? '').trim()
           try {
             const indices: number[] = JSON.parse(rawText)

@@ -9,6 +9,13 @@ import { hydrateRecordingQueue } from './src/storage/recordingQueue';
 import { reconcileAuthUser } from './src/storage/userCaches';
 import { pokeUploadWorker } from './src/services/uploadWorker';
 import {
+  trackAppOpen,
+  trackAppClose,
+  trackScreenView,
+  resetAnalyticsUser,
+  flush as flushAnalytics,
+} from './src/services/analytics';
+import {
   hydrateActiveCoachClass,
   getActiveCoachClass,
   patchActiveCoachClass,
@@ -270,8 +277,17 @@ export default function App() {
       pokeUploadWorker();
       // And re-poke whenever the app comes back to the foreground — that's
       // when iOS gives us network/JS time again after a lock screen pause.
+      // Track the initial foreground (app launch) — AppState.addEventListener
+      // only fires on transitions, so the very first 'active' frame is lost
+      // without an explicit call here.
+      trackAppOpen();
       appStateSub = AppState.addEventListener('change', (state) => {
-        if (state === 'active') pokeUploadWorker();
+        if (state === 'active') {
+          pokeUploadWorker();
+          trackAppOpen();
+        } else if (state === 'background' || state === 'inactive') {
+          trackAppClose();
+        }
       });
       if (cancelled) return;
       try {
@@ -456,6 +472,9 @@ export default function App() {
         loadRole(s.user.id);
       } else {
         setUserRole(null);
+        // Drop the cached user_id so the next signed-in user doesn't inherit
+        // any buffered events from the previous session.
+        resetAnalyticsUser();
       }
     });
 
@@ -480,7 +499,25 @@ export default function App() {
   return (
     <ProfileProvider>
       <SafeAreaProvider>
-        <NavigationContainer theme={AppTheme} ref={navigationRef} onReady={drainPendingNotifTap}>
+        <NavigationContainer
+          theme={AppTheme}
+          ref={navigationRef}
+          onReady={() => {
+            drainPendingNotifTap();
+            // Capture the landing screen on cold start — onStateChange
+            // doesn't fire for the initial route.
+            try {
+              const route = navigationRef.getCurrentRoute();
+              if (route?.name) trackScreenView(route.name);
+            } catch {}
+          }}
+          onStateChange={() => {
+            try {
+              const route = navigationRef.getCurrentRoute();
+              if (route?.name) trackScreenView(route.name);
+            } catch {}
+          }}
+        >
           <StatusBar style="dark" />
           {session
             ? (userEmail === TRAINER_EMAIL
