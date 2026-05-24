@@ -9,7 +9,8 @@ export async function getUserId() {
 
 // ─── In-memory cache (speeds up stack screens that reuse tab data) ───────────
 const _cache = {};
-const CACHE_TTL = 15000; // 15s — fresh enough, avoids duplicate network calls
+const CACHE_TTL = 60000; // 60s — long enough that tab switches & back-nav feel instant.
+// Critical mutations call invalidateCache(key) explicitly, so we don't need a tight TTL.
 
 function cached(key, fetcher, ttl = CACHE_TTL) {
   return async function (...args) {
