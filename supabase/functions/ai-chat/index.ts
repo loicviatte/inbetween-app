@@ -1,8 +1,8 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { callAnthropic } from '../_shared/aiLogger.ts'
 
 const ANTHROPIC_API_KEY = Deno.env.get('ANTHROPIC_API_KEY')
 const DEFAULT_MODEL = 'claude-haiku-4-5-20251001'
-const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages'
 
 Deno.serve(async (req: Request) => {
   // ── Auth ──
@@ -46,34 +46,36 @@ Deno.serve(async (req: Request) => {
     return new Response(JSON.stringify({ error: 'Missing prompt or messages' }), { status: 400 })
   }
 
-  // ── Call Anthropic ──
-  const payload: Record<string, unknown> = {
-    model,
-    max_tokens: Math.min(maxTokens, 2000),
-    messages: apiMessages,
-  }
-  if (systemPrompt) payload.system = systemPrompt
-
-  const res = await fetch(ANTHROPIC_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify(payload),
-  })
-
-  if (!res.ok) {
-    const errText = await res.text()
-    console.error('[ai-chat] Anthropic error', res.status, errText)
+  // ── Call Anthropic via the shared wrapper so usage + cost lands in
+  //     ai_call_logs alongside every other LLM call we make.
+  let data
+  try {
+    data = await callAnthropic(
+      {
+        model,
+        max_tokens: Math.min(maxTokens, 2000),
+        system: systemPrompt,
+        messages: apiMessages,
+      },
+      {
+        function_name: 'ai-chat',
+        context: 'chat',
+        // Conversational chat isn't tied to a specific class.
+        class_input_id: null,
+        user_id: user.id,
+        // deno-lint-ignore no-explicit-any
+        supabase: serviceClient as any,
+      },
+    )
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    console.error('[ai-chat] Anthropic error', msg)
     return new Response(
-      JSON.stringify({ error: `Anthropic ${res.status}: ${errText}` }),
+      JSON.stringify({ error: msg }),
       { status: 502 }
     )
   }
 
-  const data = await res.json()
   const text = (data.content?.[0]?.text ?? '').trim()
 
   return new Response(

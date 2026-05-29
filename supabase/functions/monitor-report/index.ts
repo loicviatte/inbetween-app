@@ -10,6 +10,7 @@
 //   6. Render HTML + PDF, persist to monitoring_reports, fire Telegram alerts.
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { callAnthropic } from '../_shared/aiLogger.ts'
 import { SYSTEM_PROMPT } from './prompt.ts'
 import { runAllChecks, type DetectedAnomaly } from './checks.ts'
 import { buildSnapshot } from './snapshot.ts'
@@ -61,23 +62,27 @@ function paris(d: Date) {
   return new Date(d.toLocaleString('en-US', { timeZone: 'Europe/Paris' }))
 }
 
-async function callClaude(payload: unknown): Promise<ClaudeOutput> {
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-api-key': Deno.env.get('ANTHROPIC_API_KEY')!,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
+async function callClaude(
+  // deno-lint-ignore no-explicit-any
+  sb: any,
+  payload: unknown,
+): Promise<ClaudeOutput> {
+  const json = await callAnthropic(
+    {
       model: CLAUDE_MODEL,
       max_tokens: 8000,
       system: SYSTEM_PROMPT,
       messages: [{ role: 'user', content: JSON.stringify(payload) }],
-    }),
-  })
-  if (!res.ok) throw new Error(`Claude API ${res.status}: ${await res.text()}`)
-  const json = await res.json()
+    },
+    {
+      function_name: 'monitor-report',
+      context: 'report',
+      // monitor-report is system-wide — no class/user attribution.
+      class_input_id: null,
+      user_id: null,
+      supabase: sb,
+    },
+  )
   const text = json?.content?.[0]?.text ?? ''
   const cleaned = text.trim().replace(/^```json\s*/i, '').replace(/```$/, '').trim()
   return JSON.parse(cleaned) as ClaudeOutput
@@ -227,7 +232,7 @@ async function handleRun() {
 
   let llmOut: ClaudeOutput
   try {
-    llmOut = await callClaude(payload)
+    llmOut = await callClaude(sb, payload)
   } catch (e) {
     console.error('[monitor] Claude call failed:', e)
     await sb.from('monitoring_reports').insert({

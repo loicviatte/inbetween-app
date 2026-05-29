@@ -6,6 +6,11 @@
 import { createClient, type SupabaseClient } from 'jsr:@supabase/supabase-js@2'
 
 // USD per million tokens. Add new models as they're used.
+//
+// Keys must match the EXACT model string used in the API call. Some callers
+// pass the dated snapshot id (e.g. `claude-haiku-4-5-20251001`), others pass
+// the family alias (e.g. `claude-haiku-4-5`). We strip the trailing date
+// suffix in `lookupPricing()` below so both forms resolve to the same row.
 const PRICING: Record<
   string,
   { input: number; output: number; cacheWrite: number; cacheRead: number }
@@ -17,6 +22,15 @@ const PRICING: Record<
   default: { input: 3, output: 15, cacheWrite: 3.75, cacheRead: 0.3 },
 }
 
+// Strip the trailing `-YYYYMMDD` snapshot date if present. So
+// `claude-haiku-4-5-20251001` → `claude-haiku-4-5`, but
+// `claude-haiku-4-5` → `claude-haiku-4-5` (unchanged).
+function lookupPricing(model: string): typeof PRICING[string] {
+  if (PRICING[model]) return PRICING[model]
+  const stripped = model.replace(/-\d{8}$/, '')
+  return PRICING[stripped] ?? PRICING.default
+}
+
 type AnthropicUsage = {
   input_tokens?: number
   output_tokens?: number
@@ -26,7 +40,7 @@ type AnthropicUsage = {
 
 function computeCost(model: string, usage: AnthropicUsage | undefined): number {
   if (!usage) return 0
-  const rates = PRICING[model] ?? PRICING.default
+  const rates = lookupPricing(model)
   return (
     ((usage.input_tokens ?? 0) * rates.input +
       (usage.output_tokens ?? 0) * rates.output +
