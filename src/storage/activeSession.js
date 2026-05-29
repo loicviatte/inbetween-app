@@ -47,7 +47,15 @@ export function clearActiveSession() {
 export async function hydrateActiveSession() {
   try {
     const raw = await AsyncStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
+    return _hydrateActiveSessionFromValue(raw);
+  } catch {}
+  return null;
+}
+
+/** Internal: apply a raw value already read elsewhere (used by batched hydrate). */
+export function _hydrateActiveSessionFromValue(raw) {
+  if (!raw) return null;
+  try {
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed.startedAt === 'number') {
       _session = parsed;

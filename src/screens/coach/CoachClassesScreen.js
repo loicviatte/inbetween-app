@@ -12,7 +12,7 @@ import {
   Dimensions,
 } from 'react-native';
 import { Image } from 'expo-image';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Colors, Fonts, Spacing } from '../../theme';
@@ -271,7 +271,9 @@ export default function CoachClassesScreen({ navigation }) {
 
   const linkedNotesCount = notes.filter(n => n.linkedClass || n.linkedStudent).length;
 
-  if (notesLoading && classesLoading) return <CoachNotesSkeleton />;
+  // Show skeleton if EITHER source is still loading — otherwise the screen
+  // flashes a half-empty state (e.g. notes done, classes still fetching).
+  if (notesLoading || classesLoading) return <CoachNotesSkeleton />;
 
   return (
     <View style={styles.safe}>

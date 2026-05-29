@@ -11,9 +11,10 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import HeroCardGradient from '../components/HeroCardGradient';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { Colors, Fonts, Spacing } from '../theme';
 import { getClassInputs, getNotesLinkedToClass, getNotes, saveNote } from '../storage/storage';
+import { SkeletonBox } from '../components/Skeleton';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -235,7 +236,61 @@ export default function ClassDetailScreen({ route, navigation }) {
           locations={PAGE_GRADIENT_LOCATIONS}
           style={StyleSheet.absoluteFillObject}
         />
-        <SafeAreaView style={s.safe} edges={['top']} />
+        <SafeAreaView style={s.safe} edges={['top']}>
+          {/* Top bar (back button placeholder) */}
+          <View style={s.topBar}>
+            <TouchableOpacity
+              style={s.iconBtn}
+              onPress={() => navigation.goBack()}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="chevron-back" size={20} color={INK_950} />
+            </TouchableOpacity>
+            <View style={{ width: 40, height: 40 }} />
+          </View>
+
+          <View style={s.scroll}>
+            {/* Hero card skeleton — dark to mimic real heroCard */}
+            <View style={[s.heroCard, { paddingVertical: 22, gap: 14 }]}>
+              <HeroCardGradient />
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                <SkeletonBox width={90} height={12} borderRadius={4} style={{ backgroundColor: 'rgba(255,255,255,0.18)' }} />
+                <SkeletonBox width={70} height={12} borderRadius={4} style={{ backgroundColor: 'rgba(255,255,255,0.18)' }} />
+              </View>
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                <SkeletonBox width={64} height={22} borderRadius={11} style={{ backgroundColor: 'rgba(255,255,255,0.18)' }} />
+                <SkeletonBox width={80} height={22} borderRadius={11} style={{ backgroundColor: 'rgba(255,255,255,0.18)' }} />
+              </View>
+              <SkeletonBox width="78%" height={26} borderRadius={6} style={{ backgroundColor: 'rgba(255,255,255,0.22)', marginTop: 4 }} />
+              <SkeletonBox width="55%" height={20} borderRadius={5} style={{ backgroundColor: 'rgba(255,255,255,0.18)' }} />
+              <View style={{ flexDirection: 'row', gap: 24, marginTop: 8 }}>
+                <View style={{ gap: 6 }}>
+                  <SkeletonBox width={24} height={20} borderRadius={4} style={{ backgroundColor: 'rgba(255,255,255,0.22)' }} />
+                  <SkeletonBox width={36} height={10} borderRadius={3} style={{ backgroundColor: 'rgba(255,255,255,0.16)' }} />
+                </View>
+                <View style={{ gap: 6 }}>
+                  <SkeletonBox width={24} height={20} borderRadius={4} style={{ backgroundColor: 'rgba(255,255,255,0.22)' }} />
+                  <SkeletonBox width={36} height={10} borderRadius={3} style={{ backgroundColor: 'rgba(255,255,255,0.16)' }} />
+                </View>
+              </View>
+            </View>
+
+            {/* Tabs bar */}
+            <View style={[s.tabsBar, { gap: 24 }]}>
+              <SkeletonBox width={70} height={14} borderRadius={4} />
+              <SkeletonBox width={90} height={14} borderRadius={4} />
+              <SkeletonBox width={50} height={14} borderRadius={4} />
+            </View>
+
+            {/* Content card */}
+            <View style={[s.summaryCard, { gap: 10 }]}>
+              <SkeletonBox width="100%" height={12} borderRadius={4} />
+              <SkeletonBox width="95%" height={12} borderRadius={4} />
+              <SkeletonBox width="88%" height={12} borderRadius={4} />
+              <SkeletonBox width="70%" height={12} borderRadius={4} />
+            </View>
+          </View>
+        </SafeAreaView>
       </View>
     );
   }

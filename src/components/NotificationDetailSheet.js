@@ -7,7 +7,7 @@ import {
   ActivityIndicator,
   Alert,
 } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { Colors, Fonts } from '../theme';
 
 const ATTENDANCE_TYPES = new Set(['attendance_check', 'group_class_attendance']);

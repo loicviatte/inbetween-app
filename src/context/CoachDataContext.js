@@ -54,27 +54,41 @@ export function CoachDataProvider({ children }) {
   }, []);
 
   const loadAll = useCallback(async () => {
+    // ─── Critical wave: blocks first render. Just the data the coach
+    // home screen NEEDS to render its student list + identity. The rest
+    // (feed, notes, action badges) populates in the background.
     try {
-      const [s, ev, r, n, u, notifs, fps, mergesRes] = await Promise.all([
+      const [s, u] = await Promise.all([
         getMyStudents().catch(() => []),
-        getCoachActivityFeed().catch(() => []),
-        getPendingCoachRequests().catch(() => []),
-        getCoachNotes().catch(() => []),
         getUser().catch(() => null),
-        getNotifications().catch(() => []),
-        getPendingFocusPoints(null).catch(() => []),
-        supabase
-          .from('merge_requests')
-          .select('id, student_id', { count: 'exact' })
-          .eq('status', 'pending_coach')
-          .then((res) => res)
-          .catch(() => ({ count: 0, data: [] })),
       ]);
       setStudents(s || []);
+      setUser(u);
+    } catch {}
+    if (!loaded.current) {
+      loaded.current = true;
+      setInitialLoading(false);
+    }
+
+    // ─── Deferred wave: fires in parallel, doesn't block render.
+    // Notes / feed / counts arrive a beat later but the coach can
+    // already see + tap their students.
+    Promise.all([
+      getCoachActivityFeed().catch(() => []),
+      getPendingCoachRequests().catch(() => []),
+      getCoachNotes().catch(() => []),
+      getNotifications().catch(() => []),
+      getPendingFocusPoints(null).catch(() => []),
+      supabase
+        .from('merge_requests')
+        .select('id, student_id', { count: 'exact' })
+        .eq('status', 'pending_coach')
+        .then((res) => res)
+        .catch(() => ({ count: 0, data: [] })),
+    ]).then(([ev, r, n, notifs, fps, mergesRes]) => {
       setEvents((ev || []).slice(0, 12));
       setRequests(r || []);
       setNotes(n || []);
-      setUser(u);
       setUnreadCount(computeUnread(notifs));
 
       const focusCount = (fps || []).length;
@@ -101,11 +115,7 @@ export function CoachDataProvider({ children }) {
         if (sid) perStudent[sid] = (perStudent[sid] || 0) + 1;
       }
       setStudentActionCounts(perStudent);
-    } catch {}
-    if (!loaded.current) {
-      loaded.current = true;
-      setInitialLoading(false);
-    }
+    }).catch(() => {});
   }, [computeUnread]);
 
   // Load once on mount

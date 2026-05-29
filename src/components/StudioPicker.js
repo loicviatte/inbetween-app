@@ -12,7 +12,7 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { Colors, Fonts } from '../theme';
 import { listStudios, createStudio } from '../storage/studioStorage';
 import { filterStudios, hasExactMatch } from '../utils/studioMatch';

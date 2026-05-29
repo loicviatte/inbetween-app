@@ -63,7 +63,15 @@ export function subscribeToActiveCoachClass(fn) {
 export async function hydrateActiveCoachClass() {
   try {
     const raw = await AsyncStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
+    return _hydrateActiveCoachClassFromValue(raw);
+  } catch {}
+  return null;
+}
+
+/** Internal: apply a raw value already read elsewhere (used by batched hydrate). */
+export function _hydrateActiveCoachClassFromValue(raw) {
+  if (!raw) return null;
+  try {
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed.startedAt === 'number') {
       _class = parsed;

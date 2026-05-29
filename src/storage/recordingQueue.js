@@ -97,6 +97,30 @@ export async function hydrateRecordingQueue() {
   );
 }
 
+/**
+ * Internal: hydrate from a raw value already read (used by batched startup
+ * hydrate). Skips the `withQueue` write chain to avoid persisting back the
+ * same JSON we just read — only resets `uploading` → `pending` so the
+ * worker re-picks chunks left mid-upload.
+ */
+export function _hydrateRecordingQueueFromValue(raw) {
+  if (_cache != null) return _cache; // already hydrated
+  let parsed = [];
+  if (raw) {
+    try {
+      const j = JSON.parse(raw);
+      if (Array.isArray(j)) parsed = j;
+    } catch {}
+  }
+  const now = Date.now();
+  const normalized = parsed.map((e) =>
+    e && e.status === 'uploading' ? { ...e, status: 'pending', nextAttemptAt: now } : e,
+  );
+  _cache = normalized;
+  notify();
+  return _cache;
+}
+
 /** Subscribe to queue changes. Returns unsubscribe. */
 export function subscribeToRecordingQueue(fn) {
   _listeners.add(fn);

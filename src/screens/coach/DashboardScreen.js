@@ -10,7 +10,7 @@ import {
   AppState,
 } from 'react-native';
 import { Image } from 'expo-image';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import Svg, { Circle } from 'react-native-svg';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Colors, Fonts, Spacing } from '../../theme';
@@ -373,6 +373,16 @@ function renderSyncPill(autoSync) {
 // ── Screen ──────────────────────────────────────────────────────────────────
 export default function DashboardScreen({ navigation }) {
   const { students, events, actionCounts, studentActionCounts, initialLoading: loading } = useCoachData();
+
+  // Pre-mount sibling tabs (STUDENTS + CLASS) shortly after DASHBOARD
+  // settles, so a tap on either feels instant.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      try { navigation.preload?.('STUDENTS'); } catch {}
+      try { navigation.preload?.('CLASS'); } catch {}
+    }, 600);
+    return () => clearTimeout(t);
+  }, [navigation]);
 
   // Subscribe to the running coach class so the Start Class button swaps
   // into a compact "Class in Progress" pill (same spirit as HomeScreen).

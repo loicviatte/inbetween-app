@@ -30,7 +30,7 @@ const EXPAND_ANIMATION = {
   },
 };
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { Fonts, Spacing } from '../../theme';
 import { useCoachData } from '../../context/CoachDataContext';
 import {

@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -14,7 +14,7 @@ import { Image } from 'expo-image';
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import TabHeader from '../components/TabHeader';
 import * as Clipboard from 'expo-clipboard';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -211,6 +211,17 @@ function WeekHeatmap({ activity, onDayPress }) {
 }
 
 export default function HomeScreen({ navigation }) {
+  // Pre-mount sibling tabs (LOG + PROFILE) shortly after TRAIN settles, so
+  // a tap on either feels instant instead of paying parse + first-fetch
+  // cost. Idempotent: subsequent calls are no-ops once the screen renders.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      try { navigation.preload?.('LOG'); } catch {}
+      try { navigation.preload?.('PROFILE'); } catch {}
+    }, 600);
+    return () => clearTimeout(t);
+  }, [navigation]);
+
   const [user, setUser] = useState(null);
   const [slot1, setSlot1] = useState(null);
   const [slot2, setSlot2] = useState(null);
@@ -240,6 +251,10 @@ export default function HomeScreen({ navigation }) {
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const [isLoading, setIsLoading] = useState(true);
   const hasLoadedRef = useRef(false);
+  // Throttle background refreshes: if the user pops back to TRAIN within
+  // FRESH_TTL ms of the last successful load, skip the network round-trip.
+  const FRESH_TTL = 60000; // 60s
+  const lastLoadRef = useRef(0);
 
   async function load(catOverride) {
     // Determine which category filter to apply. Only dual-style users get
@@ -258,9 +273,12 @@ export default function HomeScreen({ navigation }) {
     setShowFilter(isBoth);
     setCategory(cat);
 
-    // Pre-warm the AI assistant context so the chat in FocusSessionScreen has a warm cache
-    getTeacherContextForAI().catch(() => {});
+    // Pre-warm the AI assistant context so the chat in FocusSessionScreen
+    // has a warm cache. Deferred 2s so it doesn't compete with the
+    // Supabase fetches that produce the first paint.
+    setTimeout(() => { getTeacherContextForAI().catch(() => {}); }, 2000);
 
+    // ─── Wave 1 (blocking): everything we need to render the hero + cards ──
     const [slots, sessions, classes, focusTrained, wa, savedPhoto, readinessValue] = await Promise.all([
       getSlots(cat),
       getTrainingSessionsThisWeek(),
@@ -280,25 +298,31 @@ export default function HomeScreen({ navigation }) {
     setWeekActivity(wa || {});
     setReadiness(readinessValue);
     setPhotoUri(savedPhoto || null);
-    const [c1, c2] = await Promise.all([
+    lastLoadRef.current = Date.now();
+
+    // ─── Wave 2 (non-blocking): session counts + metrics fill in after ──
+    // Kicked off in parallel and applied when they land, so the screen
+    // renders immediately instead of waiting on a 2nd & 3rd serial wave.
+    Promise.all([
       slots.slot1?.id ? getSessionCountForFocus(slots.slot1.id) : Promise.resolve(0),
       slots.slot2?.id ? getSessionCountForFocus(slots.slot2.id) : Promise.resolve(0),
-    ]);
-    setSessionCount(c1);
-    setSlot2Count(c2);
-    let m = { progression: 0, retention: 100, global: 0 };
-    if (u?.id) {
-      try { m = await getAllStudentMetrics(u.id, cat); } catch {}
-      setMetrics(m);
-    }
-    AsyncStorage.setItem(HOME_CACHE_KEY, JSON.stringify({
-      user: u, slot1: slots.slot1, slot2: slots.slot2, slot3: slots.slot3,
-      sessionCount: c1, slot2Count: c2,
-      sessionsThisWeek: sessions, classesThisWeek: classes,
-      focusTrainedThisWeek: focusTrained, weekActivity: wa || {}, metrics: m,
-      readiness: readinessValue,
-      category: cat,
-    })).catch(() => {});
+      u?.id ? getAllStudentMetrics(u.id, cat).catch(() => null) : Promise.resolve(null),
+    ]).then(([c1, c2, m]) => {
+      setSessionCount(c1);
+      setSlot2Count(c2);
+      const metricsFinal = m || { progression: 0, retention: 100, global: 0 };
+      if (m) setMetrics(metricsFinal);
+      // Persist the FULL snapshot (with timestamp) once everything is in.
+      AsyncStorage.setItem(HOME_CACHE_KEY, JSON.stringify({
+        ts: Date.now(),
+        user: u, slot1: slots.slot1, slot2: slots.slot2, slot3: slots.slot3,
+        sessionCount: c1, slot2Count: c2,
+        sessionsThisWeek: sessions, classesThisWeek: classes,
+        focusTrainedThisWeek: focusTrained, weekActivity: wa || {}, metrics: metricsFinal,
+        readiness: readinessValue,
+        category: cat,
+      })).catch(() => {});
+    }).catch(() => {});
   }
 
   async function handleSelectCategory(next) {
@@ -315,11 +339,15 @@ export default function HomeScreen({ navigation }) {
     const isFirst = !hasLoadedRef.current;
     if (isFirst) setIsLoading(true);
     async function init() {
+      let hadCache = false;
+      let cacheTs = 0;
       if (isFirst) {
         try {
           const raw = await AsyncStorage.getItem(HOME_CACHE_KEY);
           if (raw) {
             const c = JSON.parse(raw);
+            hadCache = true;
+            cacheTs = c.ts || 0;
             setUser(c.user);
             setShowFilter(c.user?.dance_style === 'Latin & Ballroom');
             setCategory(c.category ?? null);
@@ -334,11 +362,21 @@ export default function HomeScreen({ navigation }) {
             setWeekActivity(c.weekActivity || {});
             setReadiness(c.readiness || null);
             if (c.metrics) setMetrics(c.metrics);
-            setIsLoading(false);
+            // Seed lastLoadRef from cache so subsequent focuses honor freshness
+            // and don't redundantly refetch.
+            if (cacheTs) lastLoadRef.current = cacheTs;
+            setIsLoading(false); // stale-while-revalidate: show cache instantly
           }
         } catch {}
       }
-      try { await load(); } catch {}
+      // Skip the network refresh entirely if cache is fresh (< FRESH_TTL).
+      // Tab switches & quick back-nav feel instant, no spinner flash.
+      const fresh = isFirst
+        ? hadCache && cacheTs && (Date.now() - cacheTs < FRESH_TTL)
+        : (Date.now() - lastLoadRef.current < FRESH_TTL);
+      if (!fresh) {
+        try { await load(); } catch {}
+      }
       hasLoadedRef.current = true;
       setIsLoading(false);
       if (isFirst) {

@@ -31,7 +31,7 @@ import {
   createAudioPlayer,
   useAudioRecorder,
 } from 'expo-audio';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { BlurView } from 'expo-blur';
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
