@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -14,7 +14,7 @@ import { Image } from 'expo-image';
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import TabHeader from '../components/TabHeader';
 import * as Clipboard from 'expo-clipboard';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -211,6 +211,17 @@ function WeekHeatmap({ activity, onDayPress }) {
 }
 
 export default function HomeScreen({ navigation }) {
+  // Pre-mount sibling tabs (LOG + PROFILE) shortly after TRAIN settles, so
+  // a tap on either feels instant instead of paying parse + first-fetch
+  // cost. Idempotent: subsequent calls are no-ops once the screen renders.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      try { navigation.preload?.('LOG'); } catch {}
+      try { navigation.preload?.('PROFILE'); } catch {}
+    }, 600);
+    return () => clearTimeout(t);
+  }, [navigation]);
+
   const [user, setUser] = useState(null);
   const [slot1, setSlot1] = useState(null);
   const [slot2, setSlot2] = useState(null);
@@ -262,8 +273,10 @@ export default function HomeScreen({ navigation }) {
     setShowFilter(isBoth);
     setCategory(cat);
 
-    // Pre-warm the AI assistant context so the chat in FocusSessionScreen has a warm cache
-    getTeacherContextForAI().catch(() => {});
+    // Pre-warm the AI assistant context so the chat in FocusSessionScreen
+    // has a warm cache. Deferred 2s so it doesn't compete with the
+    // Supabase fetches that produce the first paint.
+    setTimeout(() => { getTeacherContextForAI().catch(() => {}); }, 2000);
 
     // ─── Wave 1 (blocking): everything we need to render the hero + cards ──
     const [slots, sessions, classes, focusTrained, wa, savedPhoto, readinessValue] = await Promise.all([

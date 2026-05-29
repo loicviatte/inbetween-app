@@ -17,7 +17,7 @@ import {
 import Slider from '@react-native-community/slider';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import { Colors, Typography, Spacing, Fonts } from '../theme';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import {
   extractPrimaryFocus,
   extractSecondaryFocus,

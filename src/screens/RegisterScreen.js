@@ -13,7 +13,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { supabase } from '../services/supabase/client';
 import { Colors, Fonts, Spacing } from '../theme';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { filterStudios, hasExactMatch } from '../utils/studioMatch';
 
 export default function RegisterScreen({ navigation }) {

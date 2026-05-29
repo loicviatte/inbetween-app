@@ -28,7 +28,7 @@ import {
   StyleSheet,
   Alert,
 } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { Fonts, Spacing } from '../theme';
 import { parseDjiFileName } from '../services/localRecordingMatcher';
 import {

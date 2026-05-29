@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { View, Text, StyleSheet, Pressable, ScrollView, ActivityIndicator, Animated, PanResponder, Modal } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { Colors, Fonts, Spacing } from '../theme';
 import { getNotifications, markAllNotificationsRead, deleteNotification } from '../storage/notificationsStorage';
 import { supabase } from '../services/supabase/client';

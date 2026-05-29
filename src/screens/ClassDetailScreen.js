@@ -11,7 +11,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import HeroCardGradient from '../components/HeroCardGradient';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { Colors, Fonts, Spacing } from '../theme';
 import { getClassInputs, getNotesLinkedToClass, getNotes, saveNote } from '../storage/storage';
 import { SkeletonBox } from '../components/Skeleton';

@@ -11,7 +11,7 @@ import {
   Dimensions,
 } from 'react-native';
 import { Image } from 'expo-image';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import Svg, { Circle } from 'react-native-svg';
 import { Fonts, Spacing } from '../../theme';
 import { respondToCoachRequest } from '../../storage/coachStorage';

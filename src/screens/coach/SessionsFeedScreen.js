@@ -13,7 +13,7 @@ import { Colors, Fonts, Spacing } from '../../theme';
 import { getCoachActivityFeed } from '../../storage/coachStorage';
 import { getUser } from '../../storage/storage';
 import { SessionsFeedScreenSkeleton } from '../../components/Skeleton';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 
 function formatSectionTitle(date) {
   const now = new Date();

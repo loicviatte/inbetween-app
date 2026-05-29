@@ -31,25 +31,25 @@ export const Fonts = {
   ttLight: 'BricolageGrotesque-Light',
   ttRegular: 'BricolageGrotesque-Regular',
   ttMedium: 'BricolageGrotesque-Medium',
-  ttDemiBold: 'TTTravelsNext-DemiBold',
-  ttBold: 'TTTravelsNext-Bold',
-  ttExtraBold: 'TTTravelsNext-ExtraBold',
+  ttDemiBold: 'TTTravelsNextTrl-DmBd',
+  ttBold: 'TTTravelsNextTrl-Bd',
+  ttExtraBold: 'TTTravelsNextTrl-XBd',
   // Legacy aliases — body weights → Bricolage; title weights → TT Travels
-  monument: 'TTTravelsNext-ExtraBold',     // logo only — keep heaviest
+  monument: 'TTTravelsNextTrl-XBd',     // logo only — keep heaviest
   jakartaLight: 'BricolageGrotesque-Light',
   jakartaRegular: 'BricolageGrotesque-Regular', // body
   jakartaMedium: 'BricolageGrotesque-Medium',
-  jakartaSemiBold: 'TTTravelsNext-DemiBold',
-  jakartaBold: 'TTTravelsNext-DemiBold',   // titles use DemiBold per design
-  jakartaExtraBold: 'TTTravelsNext-DemiBold',
+  jakartaSemiBold: 'TTTravelsNextTrl-DmBd',
+  jakartaBold: 'TTTravelsNextTrl-DmBd',   // titles use DemiBold per design
+  jakartaExtraBold: 'TTTravelsNextTrl-DmBd',
   montserratMedium: 'BricolageGrotesque-Medium',
-  montserratSemiBold: 'TTTravelsNext-DemiBold',
+  montserratSemiBold: 'TTTravelsNextTrl-DmBd',
 };
 
 // Legacy Typography shim — used by FocusScreen, LogScreen, LogModal
 export const Typography = {
-  largeHeading: { fontFamily: 'TTTravelsNext-DemiBold', fontSize: 24, color: '#0D0D12' },
-  sectionTitle: { fontFamily: 'TTTravelsNext-DemiBold', fontSize: 18, color: 'rgba(0,0,0,0.75)' },
+  largeHeading: { fontFamily: 'TTTravelsNextTrl-DmBd', fontSize: 24, color: '#0D0D12' },
+  sectionTitle: { fontFamily: 'TTTravelsNextTrl-DmBd', fontSize: 18, color: 'rgba(0,0,0,0.75)' },
   body: { fontFamily: 'BricolageGrotesque-Regular', fontSize: 14, color: '#0D0D12' },
   secondary: { fontFamily: 'BricolageGrotesque-Regular', fontSize: 12, color: '#818898' },
 };

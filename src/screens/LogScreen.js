@@ -41,7 +41,7 @@ import {
 } from '../storage/pendingClasses';
 import { processClassDraft } from '../services/classSubmission';
 import LogModal from '../components/LogModal';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import TabHeader from '../components/TabHeader';
 import LogSkeleton from '../components/LogSkeleton';
 
