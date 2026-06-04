@@ -28,8 +28,12 @@ import { supabase } from './supabase/client';
 import {
   parseDjiFileName,
   matchFilesToClasses,
+  groupMicFilesIntoSessions,
+  matchSessionsToClasses,
   MatchSession,
   MatchConfidence,
+  MicFile,
+  MicSession,
 } from './localRecordingMatcher';
 import * as DjiFiles from 'local-recording-files';
 
@@ -46,17 +50,26 @@ export interface PendingClassRow {
 
 export type AdminReviewStatus = 'approved' | 'pending';
 
+/** One imported file (a chunk). A split recording has several, ordered. */
+export interface SyncPartRef {
+  fileName: string;
+  relativePath: string;
+  sizeBytes: number;
+}
+
 export interface SyncPair {
   classId: string;
-  micFile: {
-    fileName: string;
-    relativePath: string;
-    index: number;
-    timestamp: Date;
-    durationSec: number;
-    sizeBytes: number;
-  };
+  /**
+   * Ordered parts of one continuous recording (DJI splits at ~30:50). Each
+   * becomes a chunk (idx 0..N-1); the server stitches them via
+   * composeTranscript. Single-file recordings have exactly one part.
+   */
+  parts: SyncPartRef[];
+  /** DJI session index shared by the parts (first part). */
+  index: number;
+  startTimestamp: Date;
   confidence: MatchConfidence;
+  /** Total duration across all parts. */
   actualDurationSec: number;
   studentName: string | null;
   /** Derived from confidence + session.status — auto-approved when sure. */
@@ -78,6 +91,8 @@ export interface AutoSyncCallbacks {
   onPairStart?: (pair: SyncPair, idx: number, total: number) => void;
   /** Called after each pair finishes (success OR error). */
   onPairDone?: (pair: SyncPair, idx: number, total: number, err?: Error) => void;
+  /** Human-readable live status (copy/upload phase + byte %) for a UI label. */
+  onProgress?: (status: string) => void;
 }
 
 export interface AutoSyncOptions extends AutoSyncCallbacks {
@@ -125,6 +140,15 @@ function approximateWavDurationSec(sizeBytes: number): number {
  * LocalUploadScreen, which bypasses this filter.
  */
 const MIN_VALID_DURATION_SEC = 60;
+
+// After upload, the small m4a is kept on-device for a few days as a local
+// backup (the big WAV is deleted right away — its original lives on the DJI
+// mic). We move it out of tmp (which iOS purges unpredictably) into this
+// cache subfolder, and purgeExpiredM4aBackups() deletes anything older than
+// the retention window. cacheDirectory means iOS may reclaim it sooner under
+// storage pressure — that's an acceptable upper-bound-only guarantee.
+const M4A_BACKUP_DIR = `${FileSystem.cacheDirectory ?? ''}dji-m4a-backup/`;
+const M4A_BACKUP_RETENTION_MS = 3 * 24 * 60 * 60 * 1000; // 3 days
 
 function deriveAdminReviewStatus(
   sessionStatus: MatchSession['status'],
@@ -192,18 +216,34 @@ async function fetchImportedFilenames(userId: string): Promise<Set<string>> {
   // permanently block re-syncing the same file.
   const { data } = await supabase
     .from('class_recordings')
-    .select('mic_file_name')
+    .select('mic_file_name, meta')
     .eq('user_id', userId)
     .eq('local_recording_mode', true)
     .not('mic_file_name', 'is', null)
     .not('status', 'in', '(failed,discarded)')
     .limit(500);
-  return new Set((data ?? []).map((r: any) => r.mic_file_name as string));
+  const names = new Set<string>();
+  for (const r of (data ?? []) as any[]) {
+    if (r.mic_file_name) names.add(r.mic_file_name as string);
+    // A split recording stores every part's filename in meta.mic_file_names
+    // (mic_file_name only holds the first part). Collect them all so the
+    // 2nd/3rd part of an already-imported session isn't re-offered as new.
+    const partNames = r.meta?.mic_file_names;
+    if (Array.isArray(partNames)) {
+      for (const n of partNames) if (typeof n === 'string') names.add(n);
+    }
+  }
+  return names;
 }
 
 // ─── Upload ──────────────────────────────────────────────────────────────
 
-async function uploadFileToStorage(localUri: string, storagePath: string): Promise<void> {
+async function uploadFileToStorage(
+  localUri: string,
+  storagePath: string,
+  onProgress?: (fraction: number) => void,
+  contentType: string = 'audio/wav',
+): Promise<void> {
   // Use expo-file-system's BINARY_CONTENT upload — RN fetch+blob+supabase
   // upload silently produces a 0-byte object on iOS for file:// URIs.
   // See uploadWorker.js for the legacy-pipeline analogue.
@@ -211,55 +251,120 @@ async function uploadFileToStorage(localUri: string, storagePath: string): Promi
   if (!session) throw new Error('Not signed in');
 
   const url = `${process.env.EXPO_PUBLIC_SUPABASE_URL}/storage/v1/object/class-audio/${storagePath}`;
-  const upRes = await FileSystem.uploadAsync(url, localUri, {
-    httpMethod: 'PUT',
+  const options = {
+    httpMethod: 'PUT' as const,
     uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
     headers: {
       Authorization: `Bearer ${session.access_token}`,
-      'Content-Type': 'audio/wav',
+      'Content-Type': contentType,
       'x-upsert': 'true',
     },
+  };
+  // createUploadTask streams byte progress via the callback; uploadAsync()
+  // resolves the same { status, body } shape as the plain upload.
+  const task = FileSystem.createUploadTask(url, localUri, options, (p: any) => {
+    const total = p?.totalBytesExpectedToSend ?? 0;
+    if (onProgress && total > 0) {
+      onProgress(Math.min(1, (p?.totalBytesSent ?? 0) / total));
+    }
   });
-  if (upRes.status < 200 || upRes.status >= 300) {
-    throw new Error(`Storage upload ${upRes.status}: ${(upRes.body ?? '').slice(0, 200)}`);
+  const upRes = await task.uploadAsync();
+  if (!upRes || upRes.status < 200 || upRes.status >= 300) {
+    throw new Error(`Storage upload ${upRes?.status}: ${(upRes?.body ?? '').slice(0, 200)}`);
   }
 }
 
-export async function attachFileToClass(args: {
+/**
+ * Attach one continuous recording — possibly split across several DJI files —
+ * to a pending class. Each part is uploaded as an ordered chunk (0.wav,
+ * 1.wav, …) and `expected_chunks` is set to the part count, so finalize-class
+ * + the AssemblyAI webhook transcribe every part and composeTranscript
+ * stitches them into one timeline. A single-file recording is just the
+ * one-part case.
+ */
+export async function attachSessionToClass(args: {
   classId: string;
   userId: string;
-  file: { uri: string; name: string; size: number };
+  /** Ordered parts (chunk 0..N-1). */
+  parts: Array<{ uri: string; name: string; size: number }>;
   matched: { confidence: MatchConfidence; actualDurationSec: number };
   adminReviewStatus: AdminReviewStatus;
+  /** Per-part progress: (1-based index, total, 0..1 fraction, phase). */
+  onUploadProgress?: (
+    partIndex: number,
+    partCount: number,
+    fraction: number,
+    phase?: 'compressing' | 'uploading',
+  ) => void;
 }): Promise<void> {
-  const { classId, userId, file, matched, adminReviewStatus } = args;
-  const storagePath = `${userId}/${classId}/0.wav`;
+  const { classId, userId, parts, matched, adminReviewStatus, onUploadProgress } = args;
+  if (parts.length === 0) throw new Error('attachSessionToClass: no parts to upload');
 
-  await uploadFileToStorage(file.uri, storagePath);
+  // Compress each part on-device, then upload it as its own chunk, in order.
+  for (let idx = 0; idx < parts.length; idx++) {
+    // DJI WAV parts are ~266 MB — over Supabase's 50 MB free-tier cap and
+    // heavy on mobile. Transcode to AAC/m4a (~10-30 MB) before upload;
+    // AssemblyAI transcribes m4a identically (same format as the live path).
+    onUploadProgress?.(idx + 1, parts.length, 0, 'compressing');
+    const m4aUri = await DjiFiles.transcodeToM4A(parts[idx].uri);
+    const storagePath = `${userId}/${classId}/${idx}.m4a`;
+    await uploadFileToStorage(
+      m4aUri,
+      storagePath,
+      (frac) => onUploadProgress?.(idx + 1, parts.length, frac, 'uploading'),
+      'audio/mp4',
+    );
+    const { error: chunkErr } = await supabase
+      .from('class_recording_chunks')
+      .upsert({
+        recording_id: classId,
+        idx,
+        storage_path: storagePath,
+        status: 'uploaded',
+      });
+    if (chunkErr) throw chunkErr;
 
-  const { error: chunkErr } = await supabase
-    .from('class_recording_chunks')
-    .upsert({
-      recording_id: classId,
-      idx: 0,
-      storage_path: storagePath,
-      status: 'uploaded',
-    });
-  if (chunkErr) throw chunkErr;
+    // Delete the WAV right away — it's huge and disposable (a cache copy of a
+    // file that still lives on the DJI mic, the real backup).
+    try { await FileSystem.deleteAsync(parts[idx].uri, { idempotent: true }); } catch {}
+    // Keep the small m4a on-device as a short-lived local backup: move it out
+    // of tmp into the cache backup folder; purgeExpiredM4aBackups() deletes it
+    // after the retention window. Best-effort — if the move fails it just
+    // stays in tmp and gets purged by iOS instead.
+    try {
+      await FileSystem.makeDirectoryAsync(M4A_BACKUP_DIR, { intermediates: true });
+      await FileSystem.moveAsync({ from: m4aUri, to: `${M4A_BACKUP_DIR}${classId}_${idx}.m4a` });
+    } catch { /* leave it in tmp */ }
+  }
 
-  const djiMeta = parseDjiFileName(file.name);
+  const first = parts[0];
+  const djiMeta = parseDjiFileName(first.name);
+  const totalSizeBytes = parts.reduce((sum, p) => sum + (p.size || 0), 0);
+  const partNames = parts.map((p) => p.name);
+
+  // Preserve the existing meta (event log) while recording every part's
+  // filename for dedup — fetchImportedFilenames reads meta.mic_file_names.
+  const { data: existing } = await supabase
+    .from('class_recordings')
+    .select('meta')
+    .eq('id', classId)
+    .maybeSingle();
+  const mergedMeta = { ...((existing?.meta as Record<string, unknown>) ?? {}), mic_file_names: partNames };
+
   const { error: updErr } = await supabase
     .from('class_recordings')
     .update({
       status: 'ready',
-      expected_chunks: 1,
+      expected_chunks: parts.length,
       audio_folder: `${userId}/${classId}/`,
       last_heartbeat_at: new Date().toISOString(),
-      mic_file_name: file.name,
+      // mic_file_name holds the first part (back-compat / display); the full
+      // list lives in meta.mic_file_names.
+      mic_file_name: first.name,
       mic_file_index: djiMeta?.index ?? null,
       mic_file_timestamp: djiMeta?.timestamp?.toISOString() ?? null,
       mic_file_duration_sec: matched.actualDurationSec,
-      mic_file_size_bytes: file.size,
+      mic_file_size_bytes: totalSizeBytes,
       file_imported_at: new Date().toISOString(),
       match_confidence: matched.confidence,
       admin_review_status: adminReviewStatus,
@@ -268,6 +373,7 @@ export async function attachFileToClass(args: {
       admin_reviewed_at: adminReviewStatus === 'approved'
         ? new Date().toISOString()
         : null,
+      meta: mergedMeta,
     })
     .eq('id', classId);
   if (updErr) throw updErr;
@@ -287,6 +393,50 @@ export async function attachFileToClass(args: {
   } catch {
     /* finalize-class is fire-and-forget */
   }
+}
+
+/**
+ * Single-file convenience wrapper around attachSessionToClass. Kept for the
+ * manual single-pick path and any caller that already has one file.
+ */
+export async function attachFileToClass(args: {
+  classId: string;
+  userId: string;
+  file: { uri: string; name: string; size: number };
+  matched: { confidence: MatchConfidence; actualDurationSec: number };
+  adminReviewStatus: AdminReviewStatus;
+}): Promise<void> {
+  const { classId, userId, file, matched, adminReviewStatus } = args;
+  return attachSessionToClass({ classId, userId, parts: [file], matched, adminReviewStatus });
+}
+
+/**
+ * Sweep the on-device m4a backup folder, deleting any file older than the
+ * retention window (3 days). The uploaded audio already lives in Supabase
+ * Storage, so these are pure local backups — safe to drop once stale. Call
+ * this on a surface the coach opens regularly (the upload screen). No-ops if
+ * the folder doesn't exist yet. Best-effort: never throws.
+ */
+export async function purgeExpiredM4aBackups(): Promise<void> {
+  try {
+    const info = await FileSystem.getInfoAsync(M4A_BACKUP_DIR);
+    if (!info.exists) return;
+    const names = await FileSystem.readDirectoryAsync(M4A_BACKUP_DIR);
+    const now = Date.now();
+    for (const name of names) {
+      const path = `${M4A_BACKUP_DIR}${name}`;
+      try {
+        const fi = await FileSystem.getInfoAsync(path);
+        // expo-file-system reports modificationTime in seconds since epoch.
+        const ageMs = fi.exists && fi.modificationTime
+          ? now - fi.modificationTime * 1000
+          : Infinity;
+        if (ageMs > M4A_BACKUP_RETENTION_MS) {
+          await FileSystem.deleteAsync(path, { idempotent: true });
+        }
+      } catch { /* skip this file */ }
+    }
+  } catch { /* best-effort */ }
 }
 
 // ─── Planning: figure out what to import without uploading yet ──────────
@@ -315,32 +465,40 @@ export async function planAutoSync(
   const allEntries = await DjiFiles.listFiles();
   const importedFilenames = await fetchImportedFilenames(userId);
 
-  // Filter to:
-  //   (a) DJI-pattern filenames
-  //   (b) Filename not already in the DB (avoid duplicates / re-syncs).
-  //       We dedup by EXACT filename, not by mic_file_index — the
-  //       index counter restarts at 1 whenever the mic is reformatted,
-  //       so using indices as a proxy for "imported so far" would
-  //       silently filter out the entire post-reset batch.
-  //   (c) File date matches one of the pending classes' dates — sidesteps
-  //       ancient files lying on the mic that have no plausible match.
-  const pendingDates = new Set(
-    pendingClasses.map((p) => p.startedAt.toISOString().slice(0, 10)),
-  );
+  // Acceptable file dates: each pending class's date ± a couple of days.
+  // The DJI mic's RTC is frequently unset/wrong (we've seen it a full day
+  // off), and parseDjiFileName builds the timestamp in local time, so a tz
+  // shift can nudge the UTC date by one. Chronological ORDER still drives
+  // the real matching — this window only excludes ancient files on the mic,
+  // while tolerating the clock drift that used to surface as "No new
+  // recordings" even though the right files were sitting right there.
+  const DATE_TOLERANCE_DAYS = 2;
+  const acceptableDates = new Set<string>();
+  for (const p of pendingClasses) {
+    const base = new Date(Date.UTC(
+      p.startedAt.getUTCFullYear(),
+      p.startedAt.getUTCMonth(),
+      p.startedAt.getUTCDate(),
+    ));
+    for (let d = -DATE_TOLERANCE_DAYS; d <= DATE_TOLERANCE_DAYS; d++) {
+      const dt = new Date(base);
+      dt.setUTCDate(dt.getUTCDate() + d);
+      acceptableDates.add(dt.toISOString().slice(0, 10));
+    }
+  }
+
+  // Filter to DJI-pattern files, not already imported (dedup by exact
+  // filename — the index counter restarts on reformat), within the date
+  // window. NOTE: we do NOT drop short files here — a split recording can
+  // end in a short tail part (e.g. a 28s 3rd chunk of a 62-min class) that
+  // must stay with its session. The <60s filter is applied per SESSION below.
   const candidates = allEntries
     .map((entry: any) => {
       const meta = parseDjiFileName(entry.name);
       if (!meta) return null;
       if (importedFilenames.has(entry.name)) return null;
       const fileDate = meta.timestamp.toISOString().slice(0, 10);
-      if (!pendingDates.has(fileDate)) return null;
-      // Filter out files too short to plausibly be a real class —
-      // typically test recordings, accidental REC starts, or
-      // momentary stops. See MIN_VALID_DURATION_SEC for the
-      // reasoning. Caps stray-file inflation that would otherwise
-      // force count_mismatch on every sync.
-      const approxDur = approximateWavDurationSec(entry.sizeBytes);
-      if (approxDur < MIN_VALID_DURATION_SEC) return null;
+      if (!acceptableDates.has(fileDate)) return null;
       return { entry, meta };
     })
     .filter(Boolean) as Array<{ entry: any; meta: { index: number; timestamp: Date } }>;
@@ -355,15 +513,36 @@ export async function planAutoSync(
     };
   }
 
-  const micFiles = candidates.map(({ entry, meta }) => ({
-    fileName: entry.name as string,
-    relativePath: (entry.relativePath ?? entry.name) as string,
-    index: meta.index,
-    timestamp: meta.timestamp,
-    durationSec: approximateWavDurationSec(entry.sizeBytes),
-    sizeBytes: entry.sizeBytes as number,
-    uri: '',
-  }));
+  // Build MicFiles + a name→relativePath lookup (relativePath is what
+  // DjiFiles.copyFileToCache needs; MicFile itself doesn't carry it).
+  const relPathByName = new Map<string, string>();
+  const micFiles: MicFile[] = candidates.map(({ entry, meta }) => {
+    relPathByName.set(entry.name as string, (entry.relativePath ?? entry.name) as string);
+    return {
+      fileName: entry.name as string,
+      index: meta.index,
+      timestamp: meta.timestamp,
+      durationSec: approximateWavDurationSec(entry.sizeBytes),
+      sizeBytes: entry.sizeBytes as number,
+      uri: '',
+    };
+  });
+
+  // Stitch split parts into continuous recording sessions, then drop
+  // sessions too short to be a real class (symmetric with the pending-class
+  // <60s filter — the short tail part survives because we sum the session).
+  const sessions = groupMicFilesIntoSessions(micFiles)
+    .filter((s) => s.durationSec >= MIN_VALID_DURATION_SEC);
+
+  if (sessions.length === 0) {
+    return {
+      pairs: [],
+      status: 'no_candidates',
+      totalFilesInFolder: allEntries.length,
+      errors: [],
+      importedCount: 0,
+    };
+  }
 
   const classesForMatcher = pendingClasses.map((p) => ({
     id: p.id,
@@ -372,70 +551,74 @@ export async function planAutoSync(
     studentName: p.studentName,
   }));
 
-  const session = matchFilesToClasses(classesForMatcher, micFiles);
+  const sessionToParts = (session: MicSession): SyncPartRef[] =>
+    session.parts.map((p) => ({
+      fileName: p.fileName,
+      relativePath: relPathByName.get(p.fileName) ?? p.fileName,
+      sizeBytes: p.sizeBytes,
+    }));
 
   // Resolve match pairs. Two paths:
   //   - status === 'matched': trust the 1:1 chronological pairing
-  //   - status === 'count_mismatch': greedy time + duration scoring
-  //     with a ±2h window (RTC drift tolerance). Always lands in admin
-  //     review since the pairing decision was made under uncertainty.
+  //   - status === 'count_mismatch': greedy duration scoring (no wall-clock
+  //     gate — RTC drift makes absolute time unreliable). Always lands in
+  //     admin review since the pairing decision was made under uncertainty.
+  const result = matchSessionsToClasses(classesForMatcher, sessions);
   const pairs: SyncPair[] = [];
 
-  if (session.status === 'matched') {
-    for (const m of session.matches) {
+  if (result.status === 'matched') {
+    for (const m of result.matches) {
       const cls = pendingClasses.find((p) => p.id === m.class.id);
       pairs.push({
         classId: m.class.id,
-        micFile: micFiles.find((f) => f.fileName === m.file.fileName)!,
+        parts: sessionToParts(m.session),
+        index: m.session.index,
+        startTimestamp: m.session.startTimestamp,
         confidence: m.confidence,
         actualDurationSec: m.actualDurationSec,
         studentName: cls?.studentName ?? null,
-        adminReviewStatus: deriveAdminReviewStatus(session.status, m.confidence),
+        adminReviewStatus: deriveAdminReviewStatus(result.status, m.confidence),
       });
     }
-  } else if (session.status === 'count_mismatch') {
-    const sortedClasses = [...classesForMatcher].sort(
-      (a, b) => +a.startedAt - +b.startedAt,
-    );
-    const usedFileIndices = new Set<number>();
-    const PROXIMITY_WINDOW_MS = 2 * 60 * 60 * 1000;
+  } else if (result.status === 'count_mismatch') {
+    const sortedClasses = [...classesForMatcher].sort((a, b) => +a.startedAt - +b.startedAt);
+    const sortedSessions = [...sessions].sort((a, b) => +a.startTimestamp - +b.startTimestamp);
+    const used = new Set<number>();
     for (const cls of sortedClasses) {
-      const expectedDurSec = cls.endedAt
-        ? (+cls.endedAt - +cls.startedAt) / 1000
-        : 0;
+      const expectedDurSec = cls.endedAt ? (+cls.endedAt - +cls.startedAt) / 1000 : 0;
       let bestIdx = -1;
       let bestScore = Infinity;
-      for (let i = 0; i < micFiles.length; i++) {
-        if (usedFileIndices.has(i)) continue;
-        const timeDeltaMs = Math.abs(+micFiles[i].timestamp - +cls.startedAt);
-        if (timeDeltaMs > PROXIMITY_WINDOW_MS) continue;
-        const timeScore = timeDeltaMs / 60_000;
+      for (let i = 0; i < sortedSessions.length; i++) {
+        if (used.has(i)) continue;
         let durScore = 0;
         if (expectedDurSec > 0) {
-          const ratio = micFiles[i].durationSec / expectedDurSec;
+          const ratio = sortedSessions[i].durationSec / expectedDurSec;
           if (ratio < 0.85) durScore = (0.85 - ratio) * 100;
           else if (ratio > 1.15) durScore = (ratio - 1.15) * 100;
         }
-        const score = timeScore + durScore;
+        // Tie-break toward earlier sessions for stable chronological pairing.
+        const score = durScore + i * 0.001;
         if (score < bestScore) {
           bestScore = score;
           bestIdx = i;
         }
       }
       if (bestIdx === -1) continue;
-      usedFileIndices.add(bestIdx);
-      const scored = matchFilesToClasses([cls], [micFiles[bestIdx]]);
+      used.add(bestIdx);
+      const session = sortedSessions[bestIdx];
+      const scored = matchSessionsToClasses([cls], [session]);
       const m = scored.matches[0];
       if (!m) continue;
       const pendingRow = pendingClasses.find((p) => p.id === cls.id);
       pairs.push({
         classId: cls.id,
-        micFile: micFiles[bestIdx],
+        parts: sessionToParts(session),
+        index: session.index,
+        startTimestamp: session.startTimestamp,
         confidence: m.confidence,
         actualDurationSec: m.actualDurationSec,
         studentName: pendingRow?.studentName ?? null,
-        // count_mismatch path is always pending review, regardless of
-        // individual file confidence — the pairing itself was a guess.
+        // count_mismatch path is always pending review — the pairing was a guess.
         adminReviewStatus: 'pending',
       });
     }
@@ -443,7 +626,7 @@ export async function planAutoSync(
 
   return {
     pairs,
-    status: session.status,
+    status: result.status,
     totalFilesInFolder: allEntries.length,
     errors: [],
     importedCount: 0,
@@ -469,27 +652,38 @@ export async function executeAutoSync(
 
   for (let i = 0; i < pairsToImport.length; i++) {
     const pair = pairsToImport[i];
+    const ci = i + 1;
     opts.onPairStart?.(pair, i, total);
     try {
-      const cacheUri = await DjiFiles.copyFileToCache(pair.micFile.relativePath);
-      await attachFileToClass({
+      // Copy every part out of the mic's security-scoped folder into the
+      // app cache, preserving order, then upload them as ordered chunks.
+      const fileParts: Array<{ uri: string; name: string; size: number }> = [];
+      for (let p = 0; p < pair.parts.length; p++) {
+        opts.onProgress?.(`Recording ${ci}/${total} · reading part ${p + 1}/${pair.parts.length}…`);
+        const cacheUri = await DjiFiles.copyFileToCache(pair.parts[p].relativePath);
+        fileParts.push({ uri: cacheUri, name: pair.parts[p].fileName, size: pair.parts[p].sizeBytes });
+      }
+      await attachSessionToClass({
         classId: pair.classId,
         userId,
-        file: {
-          uri: cacheUri,
-          name: pair.micFile.fileName,
-          size: pair.micFile.sizeBytes,
-        },
+        parts: fileParts,
         matched: {
           confidence: pair.confidence,
           actualDurationSec: pair.actualDurationSec,
         },
         adminReviewStatus: pair.adminReviewStatus,
+        onUploadProgress: (partIndex, partCount, frac, phase) =>
+          opts.onProgress?.(
+            phase === 'compressing'
+              ? `Recording ${ci}/${total} · compressing part ${partIndex}/${partCount}…`
+              : `Recording ${ci}/${total} · uploading part ${partIndex}/${partCount} · ${Math.round(frac * 100)}%`,
+          ),
       });
       imported += 1;
       opts.onPairDone?.(pair, i, total);
     } catch (err: any) {
       const msg = err?.message ?? String(err);
+      console.warn(`[autoSync] import failed for class ${pair.classId} (${pair.parts.length} part(s)): ${msg}`);
       errors.push({ classId: pair.classId, error: msg });
       opts.onPairDone?.(pair, i, total, err instanceof Error ? err : new Error(msg));
     }

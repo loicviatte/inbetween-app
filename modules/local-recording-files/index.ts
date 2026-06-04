@@ -121,6 +121,22 @@ export async function copyFileToCache(relativePath: string): Promise<string> {
   return await mod.copyFileToCache(relativePath);
 }
 
+/**
+ * Compresses a (large, uncompressed) WAV into a small AAC/.m4a in the app
+ * cache and returns its local file:// URI. The DJI mic records 48 kHz /
+ * 24-bit WAV (~8.6 MB/min) — far too big for Supabase's 50 MB free-tier
+ * per-object limit and needlessly heavy to upload over mobile. AAC is
+ * plenty for speech transcription (AssemblyAI handles m4a natively).
+ *
+ * `inputUri` is a local file:// URI (e.g. from copyFileToCache or the
+ * document picker). Returns the .m4a file:// URI ready to upload.
+ */
+export async function transcodeToM4A(inputUri: string): Promise<string> {
+  const mod = getMod();
+  if (!mod) throw new Error('LocalRecordingFiles module unavailable on this platform');
+  return await mod.transcodeToM4A(inputUri);
+}
+
 // ─── Audio route monitor ─────────────────────────────────────────────────
 //
 // Pre-class hook for first-time setup: while the coach is on the dashboard

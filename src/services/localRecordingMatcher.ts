@@ -39,6 +39,23 @@ export interface MicFile {
   uri: string;            // local URI on phone after copy
 }
 
+/**
+ * A single continuous recording, possibly split by the DJI mic across
+ * several files. The mic caps each WAV at ~30:50 (≈266 MB at 48 kHz /
+ * 24-bit / mono) and immediately resumes into the next file, reusing the
+ * same DJI index (DJI_NN_...) for every part. A MicSession stitches those
+ * parts back into one logical recording so it can map to one class and
+ * upload as ordered chunks.
+ */
+export interface MicSession {
+  index: number;          // DJI index shared by all parts of the session
+  parts: MicFile[];       // ordered by timestamp == chunk order (idx 0..N-1)
+  startTimestamp: Date;   // first part's timestamp
+  durationSec: number;    // sum of every part's duration
+  sizeBytes: number;      // sum of every part's size
+  fileName: string;       // first part's filename (representative / display)
+}
+
 export type MatchConfidence = 'high' | 'medium' | 'low';
 
 export interface MatchResult {
@@ -252,4 +269,154 @@ export function parseDjiDirectory(
     });
   }
   return parsed.sort((a, b) => a.index - b.index);
+}
+
+// ─── Multi-part session grouping ───────────────────────────────────────────
+
+// How far apart (in seconds) two parts may be and still count as one
+// continuous recording. The DJI mic resumes into the next file within a
+// second or two of hitting the size cap, so the real gap is ~0. We allow a
+// generous window only to absorb the error in our size→duration estimate
+// (a full part's duration is derived from bytes, so it can be off by a few
+// seconds). A shared DJI index is required on top of this, so the window
+// can be loose without risking a merge of two genuinely separate classes
+// (those get distinct indices).
+const SESSION_CONTIGUITY_TOLERANCE_SEC = 300;
+
+function isContinuationOfSession(session: MicSession, file: MicFile): boolean {
+  // The DJI mic reuses the same index (DJI_NN_...) for every part of a
+  // recording it had to split, so a shared index is the primary signal.
+  if (file.index !== session.index) return false;
+  // Temporal contiguity guards against the mic reusing an index after a
+  // card reformat: a "part" that starts hours/days after the previous one
+  // ended is a different recording, not a continuation.
+  const last = session.parts[session.parts.length - 1];
+  const lastEndMs = +last.timestamp + last.durationSec * 1000;
+  const gapSec = (+file.timestamp - lastEndMs) / 1000;
+  return (
+    gapSec >= -SESSION_CONTIGUITY_TOLERANCE_SEC &&
+    gapSec <= SESSION_CONTIGUITY_TOLERANCE_SEC
+  );
+}
+
+/**
+ * Group DJI mic files into continuous recording sessions. Consecutive parts
+ * that share a DJI index and start where the previous part ended are merged
+ * into one MicSession; everything else starts a fresh session. Parts within
+ * a session are ordered by timestamp (== upload chunk order).
+ *
+ * Example (real data): DJI_02 ×2 contiguous → one 49-min session;
+ * DJI_03 ×3 contiguous → one 62-min session; the lone DJI_04 / DJI_05
+ * short clips stay as their own single-part sessions.
+ */
+export function groupMicFilesIntoSessions(files: MicFile[]): MicSession[] {
+  const sorted = [...files].sort((a, b) => +a.timestamp - +b.timestamp);
+  const sessions: MicSession[] = [];
+  for (const file of sorted) {
+    const current = sessions[sessions.length - 1];
+    if (current && isContinuationOfSession(current, file)) {
+      current.parts.push(file);
+      current.durationSec += file.durationSec;
+      current.sizeBytes += file.sizeBytes;
+    } else {
+      sessions.push({
+        index: file.index,
+        parts: [file],
+        startTimestamp: file.timestamp,
+        durationSec: file.durationSec,
+        sizeBytes: file.sizeBytes,
+        fileName: file.fileName,
+      });
+    }
+  }
+  return sessions;
+}
+
+// ─── Session ↔ class matching ──────────────────────────────────────────────
+
+export interface SessionMatchResult {
+  class: ClassRecording;
+  session: MicSession;
+  confidence: MatchConfidence;
+  expectedDurationSec: number;
+  actualDurationSec: number;
+  durationRatio: number;
+  reasons: string[];
+}
+
+export interface SessionMatchSession {
+  status: MatchSessionStatus;
+  matches: SessionMatchResult[];
+  unmatchedClasses: ClassRecording[];
+  unmatchedSessions: MicSession[];
+}
+
+function scoreSessionMatch(cls: ClassRecording, session: MicSession): {
+  confidence: MatchConfidence;
+  expectedDurationSec: number;
+  actualDurationSec: number;
+  durationRatio: number;
+  reasons: string[];
+} {
+  const expectedDurationSec = cls.endedAt
+    ? Math.round((+cls.endedAt - +cls.startedAt) / 1000)
+    : 0;
+  const actualDurationSec = Math.round(session.durationSec);
+  const ratio = expectedDurationSec > 0 ? actualDurationSec / expectedDurationSec : 0;
+  const partLabel = session.parts.length === 1 ? '1 part' : `${session.parts.length} parts`;
+  const reasons: string[] = [];
+  let confidence: MatchConfidence;
+
+  if (expectedDurationSec <= 0) {
+    confidence = 'medium';
+    reasons.push('Class has no end timestamp; falling back to chronological position only.');
+  } else if (ratio >= HIGH_RATIO_MIN && ratio <= HIGH_RATIO_MAX) {
+    confidence = 'high';
+    reasons.push(
+      `Duration matches (${actualDurationSec}s across ${partLabel} vs expected ${expectedDurationSec}s, ratio ${ratio.toFixed(2)}).`
+    );
+  } else if (ratio >= MEDIUM_RATIO_MIN && ratio <= MEDIUM_RATIO_MAX) {
+    confidence = 'medium';
+    reasons.push(
+      `Duration off (${actualDurationSec}s across ${partLabel} vs expected ${expectedDurationSec}s, ratio ${ratio.toFixed(2)}). Within 50%.`
+    );
+  } else {
+    confidence = 'low';
+    reasons.push(
+      `Duration far from expected (${actualDurationSec}s across ${partLabel} vs ${expectedDurationSec}s, ratio ${ratio.toFixed(2)}).`
+    );
+  }
+
+  return { confidence, expectedDurationSec, actualDurationSec, durationRatio: ratio, reasons };
+}
+
+/**
+ * Match recording sessions to classes — the multi-part-aware analogue of
+ * matchFilesToClasses. Sessions are matched 1:1 by chronological position
+ * (i-th session ↔ i-th class) and scored by total duration, exactly like
+ * the single-file matcher but with split parts already stitched.
+ */
+export function matchSessionsToClasses(
+  classes: ClassRecording[],
+  sessions: MicSession[],
+): SessionMatchSession {
+  const sortedClasses = [...classes].sort((a, b) => +a.startedAt - +b.startedAt);
+  const sortedSessions = [...sessions].sort((a, b) => +a.startTimestamp - +b.startTimestamp);
+
+  if (sortedClasses.length === 0) {
+    return { status: 'no_pending_classes', matches: [], unmatchedClasses: [], unmatchedSessions: sortedSessions };
+  }
+  if (sortedSessions.length === 0) {
+    return { status: 'no_new_files', matches: [], unmatchedClasses: sortedClasses, unmatchedSessions: [] };
+  }
+  if (sortedSessions.length !== sortedClasses.length) {
+    return { status: 'count_mismatch', matches: [], unmatchedClasses: sortedClasses, unmatchedSessions: sortedSessions };
+  }
+
+  const matches: SessionMatchResult[] = sortedClasses.map((cls, i) => {
+    const session = sortedSessions[i];
+    return { class: cls, session, ...scoreSessionMatch(cls, session) };
+  });
+
+  return { status: 'matched', matches, unmatchedClasses: [], unmatchedSessions: [] };
 }
