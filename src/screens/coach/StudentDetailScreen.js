@@ -550,7 +550,7 @@ export default function StudentDetailScreen({ route, navigation }) {
               const fpIds = [...new Set(mrList.flatMap(mr => [mr.focus_a, mr.focus_b]))];
               const { data: fpRows } = await supabase
                 .from('focus_points')
-                .select('id, name, user_id, subtitle, context, dance, drill, tier, category, created_at')
+                .select('id, name, user_id, subtitle, context, dance, drill, tier, category, created_at, class_input_id, source_class_input_id')
                 .in('id', fpIds);
               const fpMap = {};
               for (const f of fpRows || []) fpMap[f.id] = f;
@@ -1370,6 +1370,22 @@ export default function StudentDetailScreen({ route, navigation }) {
                         mr={mr}
                         studentName={null}
                         onMerge={async () => {
+                          // Re-anchor focus_a to focus_b's class so the
+                          // readiness card sees the merge in the current
+                          // private. Preserve focus_a's source as the
+                          // original creation class (backfill for legacy
+                          // rows). Mirrors ActionNeededScreen.handleMerge.
+                          const a = mr.focusA;
+                          const b = mr.focusB;
+                          if (a && b?.class_input_id) {
+                            await supabase
+                              .from('focus_points')
+                              .update({
+                                class_input_id: b.class_input_id,
+                                source_class_input_id: a.source_class_input_id ?? a.class_input_id ?? b.class_input_id,
+                              })
+                              .eq('id', mr.focus_a);
+                          }
                           await supabase.from('focus_points').update({ is_deleted: true, status: 'past' }).eq('id', mr.focus_b);
                           await supabase.from('merge_requests').update({ status: 'merged', resolved_at: new Date().toISOString(), resolved_by: 'coach' }).eq('id', mr.id);
                           setMergeRequests(prev => prev.filter(m => m.id !== mr.id));

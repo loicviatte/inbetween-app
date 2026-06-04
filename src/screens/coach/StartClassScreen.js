@@ -29,8 +29,9 @@ import * as Notifications from 'expo-notifications';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Colors, Fonts, Spacing } from '../../theme';
 import { useCoachData } from '../../context/CoachDataContext';
-import { getStudentFocusPoints, getStudentQuestions, getStudentOpenQuestions, getStudentRecentActivity, getStartClassRoster, markQuestionCovered } from '../../storage/coachStorage';
+import { getStudentFocusPoints, getStudentQuestions, getStudentOpenQuestions, getStudentRecentActivity, getStartClassRoster, markQuestionCovered, linkCoveredQuestionsToClass } from '../../storage/coachStorage';
 import { getLessonReadiness } from '../../storage/storage';
+import { getMyCouples } from '../../storage/coupleStorage';
 import QuestionDetailSheet from '../../components/QuestionDetailSheet';
 import {
   getActiveCoachClass,
@@ -408,6 +409,13 @@ export default function StartClassScreen({ navigation }) {
 
   const [view, setView] = useState('select');
   const [selectedStudent, setSelectedStudent] = useState(null);
+  const [selectedCouple, setSelectedCouple] = useState(null); // couple class context
+  const [couples, setCouples] = useState([]);
+  useEffect(() => {
+    let alive = true;
+    getMyCouples().then((cs) => { if (alive) setCouples(cs); }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
   const [searchQuery, setSearchQuery] = useState('');
   // Per-student readiness + focus briefings, loaded for the select view.
   const [roster, setRoster] = useState([]);
@@ -1317,12 +1325,14 @@ export default function StartClassScreen({ navigation }) {
       localMode = isLocalRecordingMode(user);
       if (user && isNewRecordingPipelineEnabled(user)) {
         const isPrivate = view === 'private-briefing';
+        const isCouple = view === 'couple-briefing';
         const { data: rec, error: insertErr } = await supabase
           .from('class_recordings')
           .insert({
             user_id: user.id,
-            lesson_type: isPrivate ? 'private' : 'group',
+            lesson_type: isCouple ? 'couple' : (isPrivate ? 'private' : 'group'),
             student_id: isPrivate ? (selectedStudent?.id ?? null) : null,
+            couple_id: isCouple ? (selectedCouple?.coupleId ?? null) : null,
             status: 'recording',
             audio_folder: null, // filled in below once we have the row id
             // Local-recording-mode metadata: phone records nothing during
@@ -1339,7 +1349,14 @@ export default function StartClassScreen({ navigation }) {
           .from('class_recordings')
           .update({ audio_folder: `${user.id}/${recordingId}/` })
           .eq('id', recordingId);
-        if (!isPrivate && Array.isArray(students) && students.length > 0) {
+        if (isCouple && selectedCouple) {
+          await supabase
+            .from('class_recording_students')
+            .insert([
+              { recording_id: recordingId, student_id: selectedCouple.dancerA.id },
+              { recording_id: recordingId, student_id: selectedCouple.dancerB.id },
+            ]);
+        } else if (!isPrivate && Array.isArray(students) && students.length > 0) {
           await supabase
             .from('class_recording_students')
             .insert(students.map((s) => ({ recording_id: recordingId, student_id: s.id })));
@@ -1593,7 +1610,7 @@ export default function StartClassScreen({ navigation }) {
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
     );
   }
-  function transcribeAndSubmit(uris, isPrivate, studentId, allStudents) {
+  function transcribeAndSubmit(uris, isPrivate, studentId, allStudents, coveredQuestionIds = [], coupleCtx = null) {
     const list = Array.isArray(uris) ? uris.filter(Boolean) : (uris ? [uris] : []);
     const run = async () => {
       try {
@@ -1638,17 +1655,28 @@ export default function StartClassScreen({ navigation }) {
           .insert({
             user_id: userId,
             transcript,
-            lesson_type: isPrivate ? 'private' : 'group',
+            lesson_type: coupleCtx ? 'couple' : (isPrivate ? 'private' : 'group'),
             student_id: isPrivate ? (studentId ?? null) : null,
+            couple_id: coupleCtx?.coupleId ?? null,
             status: 'pending',
           })
           .select('id')
           .single();
         if (insertErr) throw insertErr;
-        if (!isPrivate && classInput?.id && allStudents.length > 0) {
+        if (coupleCtx && classInput?.id && coupleCtx.dancerIds?.length > 0) {
+          await supabase.from('class_input_students').insert(
+            coupleCtx.dancerIds.map((sid) => ({ class_input_id: classInput.id, student_id: sid }))
+          );
+        } else if (!isPrivate && classInput?.id && allStudents.length > 0) {
           await supabase.from('class_input_students').insert(
             allStudents.map((s) => ({ class_input_id: classInput.id, student_id: s.id }))
           );
+        }
+        // Backfill the covered_class_input_id on the questions the coach
+        // ticked off during the briefing — now that the class_input row
+        // exists, ClassDetailScreen can list them under the summary.
+        if (classInput?.id && coveredQuestionIds.length > 0) {
+          await linkCoveredQuestionsToClass(coveredQuestionIds, classInput.id).catch(() => {});
         }
       } catch (err) {
         console.warn('[StartClass] Background transcription failed:', err);
@@ -1719,6 +1747,11 @@ export default function StartClassScreen({ navigation }) {
     // Persist question verdicts (fire-and-forget). "covered" → mark replied
     // with an auto-text so the student sees positive closure. "not_yet" is
     // left as-is (still pending or still in_class for the next session).
+    // The covered_class_input_id link is set later by transcribeAndSubmit
+    // once the class_input row exists (legacy pipeline). NEW PIPELINE TODO:
+    // finalize-class needs to receive coveredQIds (via class_recordings or
+    // request body) and apply the same link server-side after creating the
+    // class_input row.
     const coveredQIds = Object.entries(questionVerdicts)
       .filter(([, v]) => v === 'covered')
       .map(([id]) => id);
@@ -1774,7 +1807,12 @@ export default function StartClassScreen({ navigation }) {
         });
       } else {
         // Legacy path: client-side AssemblyAI per chunk.
-        transcribeAndSubmit(uris, isPrivate, selectedStudent?.id, students);
+        transcribeAndSubmit(
+          uris, isPrivate, selectedStudent?.id, students, coveredQIds,
+          view === 'couple-briefing' && selectedCouple
+            ? { coupleId: selectedCouple.coupleId, dancerIds: [selectedCouple.dancerA?.id, selectedCouple.dancerB?.id].filter(Boolean) }
+            : null,
+        );
       }
       setClassRecorded(true);
       if (popToTopTimerRef.current) clearTimeout(popToTopTimerRef.current);
@@ -2838,6 +2876,24 @@ export default function StartClassScreen({ navigation }) {
                 })}
               </View>
             </TouchableOpacity>
+
+            {couples.length > 0 && couples.map((c) => (
+              <TouchableOpacity
+                key={c.coupleId}
+                style={[sc.groupCard, { marginTop: 10 }]}
+                activeOpacity={0.88}
+                onPress={() => { setSelectedCouple(c); setView('couple-briefing'); }}
+              >
+                <View style={[sc.groupIconBtn, { backgroundColor: 'rgba(46,70,112,0.12)' }]}>
+                  <Ionicons name="heart" size={18} color="#2E4670" />
+                </View>
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={sc.groupTitle}>{c.name}</Text>
+                  <Text style={sc.groupSub}>Couple lesson</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color="#B0B0B0" />
+              </TouchableOpacity>
+            ))}
           </ScrollView>
         </SafeAreaView>
       </View>
@@ -3228,6 +3284,40 @@ export default function StartClassScreen({ navigation }) {
   }
 
   // ── VIEW 4: Group briefing ─────────────────────────────────────────────
+  // ── Couple briefing — record a couple lesson (reuses the shared
+  // start/stop bottom bar + debrief; startClassNow/finishDebrief branch on
+  // view === 'couple-briefing' + selectedCouple). ──────────────────────────
+  if (view === 'couple-briefing' && selectedCouple) {
+    return (
+      <SafeAreaView style={s.safe} edges={['top']}>
+        <View style={{ flex: 1 }}>
+          <View style={s.headerRow}>
+            <TouchableOpacity onPress={() => { setView('select'); setSelectedCouple(null); }} style={s.backBtn} activeOpacity={0.7}>
+              <Ionicons name="chevron-back" size={22} color={C.text} />
+            </TouchableOpacity>
+            <Text style={sc.cbTitle} numberOfLines={1}>{selectedCouple.name}</Text>
+            <View style={{ width: 40 }} />
+          </View>
+          <ScrollView contentContainerStyle={{ paddingBottom: 140 }} showsVerticalScrollIndicator={false}>
+            <View style={sc.cbHero}>
+              <View style={sc.cbIcon}><Ionicons name="heart" size={26} color="#2E4670" /></View>
+              <Text style={sc.cbName}>{selectedCouple.name}</Text>
+              <Text style={sc.cbSub}>{selectedCouple.dancerA?.name} & {selectedCouple.dancerB?.name}</Text>
+              <Text style={sc.cbStyles}>
+                {[selectedCouple.doesLatin && 'Latin', selectedCouple.doesBallroom && 'Ballroom'].filter(Boolean).join(' · ') || 'Couple'}
+              </Text>
+              <Text style={sc.cbHint}>
+                Record the couple lesson. Shared corrections become couple focus points; individual ones go to each dancer.
+              </Text>
+            </View>
+          </ScrollView>
+          {renderBottomBar()}
+        </View>
+        {renderDebriefModal()}
+      </SafeAreaView>
+    );
+  }
+
   if (view === 'group-briefing') {
     const totalStudents = students.length;
     const topFocus = groupFPs[0] || null;
@@ -5802,6 +5892,13 @@ const sc = StyleSheet.create({
   },
 
   // Group class card (dark)
+  cbTitle: { flex: 1, textAlign: 'center', fontFamily: Fonts.jakartaBold, fontSize: 17, color: '#0E0E0E' },
+  cbHero: { alignItems: 'center', paddingTop: 24, paddingHorizontal: 28 },
+  cbIcon: { width: 60, height: 60, borderRadius: 30, backgroundColor: 'rgba(46,70,112,0.12)', alignItems: 'center', justifyContent: 'center', marginBottom: 14 },
+  cbName: { fontFamily: Fonts.jakartaExtraBold, fontSize: 26, color: '#0E0E0E', letterSpacing: -0.6 },
+  cbSub: { fontFamily: Fonts.jakartaSemiBold, fontSize: 15, color: '#444', marginTop: 6 },
+  cbStyles: { fontFamily: Fonts.jakartaRegular, fontSize: 13, color: '#8A8A8A', marginTop: 4 },
+  cbHint: { fontFamily: Fonts.jakartaRegular, fontSize: 13.5, color: '#6B6B6B', textAlign: 'center', lineHeight: 19, marginTop: 18 },
   groupCard: {
     flexDirection: 'row',
     alignItems: 'center',

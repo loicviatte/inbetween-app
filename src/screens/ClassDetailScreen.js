@@ -14,6 +14,7 @@ import HeroCardGradient from '../components/HeroCardGradient';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Colors, Fonts, Spacing } from '../theme';
 import { getClassInputs, getNotesLinkedToClass, getNotes, saveNote } from '../storage/storage';
+import { getQuestionsCoveredInClass } from '../storage/coachStorage';
 import { SkeletonBox } from '../components/Skeleton';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -203,15 +204,18 @@ export default function ClassDetailScreen({ route, navigation }) {
   const [allNotes, setAllNotes] = useState([]);
   const [activeTab, setActiveTab] = useState('summary');
   const [pickerVisible, setPickerVisible] = useState(false);
+  const [coveredQuestions, setCoveredQuestions] = useState([]);
 
   async function load() {
-    const [inputs, notes, linked] = await Promise.all([
+    const [inputs, notes, linked, covered] = await Promise.all([
       getClassInputs(), getNotes(), getNotesLinkedToClass(inputId),
+      getQuestionsCoveredInClass(inputId).catch(() => []),
     ]);
     const found = inputs.find((i) => i.id === inputId);
     setItem(found || null);
     setLinkedNotes(linked);
     setAllNotes(notes);
+    setCoveredQuestions(covered || []);
   }
 
   useEffect(() => { load(); }, [inputId]);
@@ -398,6 +402,19 @@ export default function ClassDetailScreen({ route, navigation }) {
                 </View>
               ) : (
                 <Text style={s.placeholder}>No summary yet for this class.</Text>
+              )}
+              {coveredQuestions.length > 0 && (
+                <View style={s.coveredBlock}>
+                  <Text style={s.coveredEyebrow}>
+                    QUESTIONS COVERED · {coveredQuestions.length}
+                  </Text>
+                  {coveredQuestions.map((q) => (
+                    <View key={q.id} style={s.coveredRow}>
+                      <Ionicons name="chatbubble-ellipses" size={13} color={GOLD_500} style={s.coveredIcon} />
+                      <Text style={s.coveredText}>{q.message}</Text>
+                    </View>
+                  ))}
+                </View>
               )}
             </>
           )}
@@ -667,6 +684,35 @@ const s = StyleSheet.create({
     fontSize: 13.5,
     color: INK_950,
     lineHeight: 20,
+  },
+  coveredBlock: {
+    marginTop: 14,
+    paddingTop: 14,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: LINE,
+    gap: 8,
+  },
+  coveredEyebrow: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 9.5,
+    color: GOLD_500,
+    letterSpacing: 0.8,
+    marginBottom: 4,
+  },
+  coveredRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+  },
+  coveredIcon: {
+    marginTop: 2,
+  },
+  coveredText: {
+    flex: 1,
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 13,
+    color: INK_950,
+    lineHeight: 18,
   },
 
   // ── Focus point cards ───────────────────────────────────

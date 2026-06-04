@@ -1,5 +1,5 @@
 import { supabase } from '../services/supabase/client';
-import { categoryFromStyle, categoryFromDances } from '../utils/danceCategory';
+import { categoryFromStyle, categoryFromDances, focusMatchesCategory } from '../utils/danceCategory';
 
 export async function getUserId() {
   const { data: { session } } = await supabase.auth.getSession();
@@ -266,7 +266,7 @@ export async function getWeekActivity() {
         .not('completed_at', 'is', null),
       supabase
         .from('class_inputs')
-        .select('id, created_at, title, practice_point_1, ai_primary_focus')
+        .select('id, created_at, title, practice_point_1, ai_primary_focus, lesson_type')
         .or(`user_id.eq.${userId},student_id.eq.${userId}`)
         .not('is_deleted', 'is', true)
         .gte('created_at', mondayISO),
@@ -442,6 +442,51 @@ export async function getDayStreak() {
   return streak;
 }
 
+// ─── Profile statistics mini-card ────────────────────────────────────────────
+// All-time best daily streak + total minutes trained this calendar month, in a
+// single query. Best streak = the longest run of consecutive calendar days
+// that each have ≥1 completed practice_log (DST-safe via UTC day ordinals).
+export async function getProfileActivityStats() {
+  try {
+    const userId = await getUserId();
+    const { data } = await supabase
+      .from('practice_logs')
+      .select('started_at, duration_minutes')
+      .eq('student_id', userId)
+      .not('completed_at', 'is', null);
+    const logs = data || [];
+
+    const now = new Date();
+    const firstOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    let monthMinutes = 0;
+    const dayKeys = new Set();
+    for (const l of logs) {
+      const d = new Date(l.started_at);
+      if (d >= firstOfMonth) monthMinutes += l.duration_minutes || 0;
+      dayKeys.add(`${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`);
+    }
+
+    const dayNums = [...dayKeys]
+      .map((k) => {
+        const [y, m, d] = k.split('-').map(Number);
+        return Math.floor(Date.UTC(y, m, d) / 86400000);
+      })
+      .sort((a, b) => a - b);
+    let bestStreakDays = 0;
+    let run = 0;
+    let prev = null;
+    for (const n of dayNums) {
+      run = prev !== null && n - prev === 1 ? run + 1 : 1;
+      if (run > bestStreakDays) bestStreakDays = run;
+      prev = n;
+    }
+
+    return { bestStreakDays, monthMinutes };
+  } catch {
+    return { bestStreakDays: 0, monthMinutes: 0 };
+  }
+}
+
 // ─── Lesson readiness ────────────────────────────────────────────────────────
 // "How ready you are for your next private" — measured against the focus
 // points extracted from your most recent private. Critical focuses need 3
@@ -454,7 +499,10 @@ function targetForTier(tier) {
 
 // Pass `targetUserId` to inspect another student's readiness (coach view).
 // Omit it to read the readiness of the currently authenticated user.
-export async function getLessonReadiness(targetUserId = null) {
+// `category` ('latin' | 'ballroom' | null) restricts to one style — the style
+// is derived from each focus's `dance` array (danceCategory.focusMatchesCategory);
+// null keeps the legacy all-styles behaviour. Untagged focuses match any style.
+export async function getLessonReadiness(targetUserId = null, category = null) {
   const userId = targetUserId || (await getUserId());
 
   // Source of truth = the focus_points the AI extracted for this student,
@@ -464,14 +512,16 @@ export async function getLessonReadiness(targetUserId = null) {
   // private that actually has focus_points.
   const { data: fpClassRefs } = await supabase
     .from('focus_points')
-    .select('class_input_id')
+    .select('class_input_id, dance')
     .eq('user_id', userId)
     .eq('is_other', false)
     .not('is_deleted', 'is', true)
     .neq('status', 'past')
     .not('class_input_id', 'is', null);
   const distinctClassIds = Array.from(
-    new Set((fpClassRefs ?? []).map(r => r.class_input_id))
+    new Set((fpClassRefs ?? [])
+      .filter(r => focusMatchesCategory(r, category))
+      .map(r => r.class_input_id))
   );
   if (distinctClassIds.length === 0) return null;
 
@@ -491,16 +541,17 @@ export async function getLessonReadiness(targetUserId = null) {
   // Primary focuses = those produced by the anchor class AND not currently
   // held (a held focus is one the coach marked "Not yet" in a prior debrief
   // — it waits until the primary list is done before re-entering).
-  const { data: fps } = await supabase
+  const { data: fpsRaw } = await supabase
     .from('focus_points')
-    .select('id, name, tier')
+    .select('id, name, tier, dance')
     .eq('user_id', userId)
     .eq('class_input_id', lastClass.id)
     .eq('is_other', false)
     .not('is_deleted', 'is', true)
     .neq('status', 'past')
     .or('is_held.is.null,is_held.eq.false');
-  if (!fps || fps.length === 0) return null;
+  const fps = (fpsRaw ?? []).filter(f => focusMatchesCategory(f, category));
+  if (fps.length === 0) return null;
 
   // Sessions completed against those focus points since the class
   const ids = fps.map(f => f.id);

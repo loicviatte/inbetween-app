@@ -135,6 +135,11 @@ export default function CoachAppNavigator({ navigationRef }) {
           options={{ animation: 'slide_from_right' }}
         />
         <CoachStack.Screen
+          name="CoupleDetail"
+          getComponent={() => require('../screens/coach/CoupleDetailScreen').default}
+          options={{ animation: 'slide_from_right' }}
+        />
+        <CoachStack.Screen
           name="CoachSessionDetail"
           getComponent={() => require('../screens/coach/CoachSessionDetailScreen').default}
           options={{ animation: 'slide_from_right' }}

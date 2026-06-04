@@ -52,6 +52,7 @@ export function isNativeRecorderEnabled(user) {
 
 const LOCAL_RECORDING_BETA_EMAILS = new Set([
   'viatteloic@gmail.com',
+  'kuzmenkotatyan@gmail.com', // Tanya
 ]);
 
 export function isLocalRecordingMode(user) {

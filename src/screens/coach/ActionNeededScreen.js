@@ -117,7 +117,7 @@ export default function ActionNeededScreen({ navigation }) {
         const fpIds = [...new Set(mrList.flatMap(m => [m.focus_a, m.focus_b]))];
         const { data: fpRows } = await supabase
           .from('focus_points')
-          .select('id, name, user_id, subtitle, context, dance, drill, tier, category, created_at')
+          .select('id, name, user_id, subtitle, context, dance, drill, tier, category, created_at, class_input_id, source_class_input_id')
           .in('id', fpIds);
         const fpMap = {};
         for (const fp of fpRows || []) fpMap[fp.id] = fp;
@@ -264,7 +264,24 @@ export default function ActionNeededScreen({ navigation }) {
 
   const handleMerge = async (mr) => {
     try {
-      // Keep focus_a, delete focus_b, mark merged
+      // Keep focus_a, delete focus_b, mark merged. Carry focus_b's
+      // class_input_id onto focus_a so the readiness card anchors to the
+      // class that surfaced this merge (otherwise focus_a stays pinned to
+      // its original creation class and disappears from the latest
+      // private's checklist). source_class_input_id locks the original
+      // creation class — backfilled from focus_a.class_input_id for legacy
+      // rows where it was never set.
+      const a = mr.focusA;
+      const b = mr.focusB;
+      if (a && b?.class_input_id) {
+        await supabase
+          .from('focus_points')
+          .update({
+            class_input_id: b.class_input_id,
+            source_class_input_id: a.source_class_input_id ?? a.class_input_id ?? b.class_input_id,
+          })
+          .eq('id', mr.focus_a);
+      }
       await supabase.from('focus_points').update({ is_deleted: true, status: 'past' }).eq('id', mr.focus_b);
       await supabase.from('merge_requests').update({ status: 'merged', resolved_at: new Date().toISOString(), resolved_by: 'coach' }).eq('id', mr.id);
       setMergeRequests(prev => prev.filter(m => m.id !== mr.id));

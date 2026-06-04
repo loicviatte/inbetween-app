@@ -56,6 +56,7 @@ const MIN_SESSION_SECONDS = 180; // 3 minutes
 import { getFocusPoints, getClassInputsForFocus, getClassInputs, getTrainingSessionsThisWeek, getTeacherContextForAI, askCoach } from '../storage/storage';
 import { callClaudeChat } from '../services/ai/anthropic';
 import { completeTrainingSession, getSessionLabel } from '../utils/algorithm';
+import { acquireCoupleLock, heartbeatCoupleLock, releaseCoupleLock, completeCoupleTrainingSession, getCoupleFocusPointById } from '../storage/coupleStorage';
 import {
   setActiveSession,
   getActiveSession,
@@ -1082,7 +1083,7 @@ function DurationPicker({ value, onChange }) {
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 
 export default function FocusSessionScreen({ route, navigation }) {
-  const { focusPointId, sessionId, rank = 0, sessionCount = 0 } = route.params;
+  const { focusPointId, sessionId, rank = 0, sessionCount = 0, couple = false, coupleId = null } = route.params;
   const [focusPoint, setFocusPoint] = useState(null);
   const [classInputs, setClassInputs] = useState([]);
   const [notesLoading, setNotesLoading] = useState(true);
@@ -1163,8 +1164,11 @@ export default function FocusSessionScreen({ route, navigation }) {
 
   useEffect(() => {
     async function loadData() {
-      const points = await getFocusPoints();
-      const fp = points.find(p => p.id === focusPointId) || null;
+      // Couple sessions carry a couple_focus_points id (not a solo focus_points
+      // one), so load it from the couple table; solo stays on getFocusPoints().
+      const fp = (couple && coupleId)
+        ? await getCoupleFocusPointById(focusPointId).catch(() => null)
+        : ((await getFocusPoints()).find(p => p.id === focusPointId) || null);
       if (fp) {
         // Smooth height transition from skeleton → real content
         LayoutAnimation.configureNext({
@@ -1176,8 +1180,12 @@ export default function FocusSessionScreen({ route, navigation }) {
         contentFade.setValue(0);
         setFocusPoint(fp);
         Animated.timing(contentFade, { toValue: 1, duration: 300, useNativeDriver: true }).start();
-        const inputs = await getClassInputsForFocus(fp.name);
-        setClassInputs(inputs);
+        // Coach-notes feed is solo-scoped (queries the student's class_inputs),
+        // so skip it for couple to avoid showing mismatched notes.
+        if (!couple) {
+          const inputs = await getClassInputsForFocus(fp.name);
+          setClassInputs(inputs);
+        }
       }
       setNotesLoading(false);
     }
@@ -1233,6 +1241,8 @@ export default function FocusSessionScreen({ route, navigation }) {
       if (remaining > 0) {
         setTimeLeft(Math.floor(remaining));
         setOverTime(0);
+        // Couple lock heartbeat (~every 30s) so the partner sees it stay live.
+        if (couple && coupleId && Math.floor(elapsed) % 30 === 0) heartbeatCoupleLock(coupleId);
       } else {
         setTimeLeft(0);
         const over = Math.floor(-remaining);
@@ -1256,6 +1266,22 @@ export default function FocusSessionScreen({ route, navigation }) {
   }
 
   async function startSession() {
+    // Couple: reserve the couple-wide lock first (one dancer trains at a time).
+    if (couple && coupleId) {
+      try {
+        const res = await acquireCoupleLock(coupleId, focusPointId, duration);
+        if (!res.ok) {
+          Alert.alert('In use', 'Your partner is training this couple focus right now — try again in a moment.');
+          return;
+        }
+      } catch (e) {
+        Alert.alert(
+          'No connection',
+          "Couldn't reserve the couple session — you may be offline. Make sure your partner isn't training the same focus at the same time.",
+        );
+        // Proceed optimistically per spec (offline allowed, with a warning).
+      }
+    }
     const startedAt = Date.now();
     let liveActivityId = null;
     try {
@@ -1267,7 +1293,7 @@ export default function FocusSessionScreen({ route, navigation }) {
     } catch (err) {
       console.warn('[FocusSession] Could not start live activity:', err);
     }
-    setActiveSession({ sessionId, focusPointId, focusPointName: focusPoint?.name, rank, sessionCount, duration, startedAt, liveActivityId });
+    setActiveSession({ sessionId, focusPointId, focusPointName: focusPoint?.name, rank, sessionCount, duration, startedAt, liveActivityId, couple, coupleId });
     setSessionActive(true);
     setSessionDone(false);
     setTimeLeft(duration * 60);
@@ -1327,14 +1353,18 @@ export default function FocusSessionScreen({ route, navigation }) {
     // the elapsed math in completeTrainingSession lands on capMinutes.
     const capMinutes = duration + Math.round(overrunTriggerSecRef.current / 60);
     const fakeStartedAt = Date.now() - capMinutes * 60_000;
-    await completeTrainingSession(
-      sessionId,
-      null,
-      'Auto stopped after no response to overtime check.',
-      focusPointId,
-      fakeStartedAt,
-      null,
-    );
+    if (couple && coupleId) {
+      await completeCoupleTrainingSession(coupleId, focusPointId, null, 'Auto stopped after no response to overtime check.', fakeStartedAt);
+    } else {
+      await completeTrainingSession(
+        sessionId,
+        null,
+        'Auto stopped after no response to overtime check.',
+        focusPointId,
+        fakeStartedAt,
+        null,
+      );
+    }
     const active = getActiveSession();
     if (active?.liveActivityId) {
       laEndFocusPoint(active.liveActivityId, false).catch(() => {});
@@ -1379,6 +1409,7 @@ export default function FocusSessionScreen({ route, navigation }) {
     if (existing?.liveActivityId) {
       laEndFocusPoint(existing.liveActivityId, false).catch(() => {});
     }
+    if (couple && coupleId) releaseCoupleLock(coupleId);
     clearActiveSession();
   }
 
@@ -1768,6 +1799,7 @@ I don't have that in your data, but you can send the question to your coach if y
     if (active?.liveActivityId) {
       laEndFocusPoint(active.liveActivityId, false).catch(() => {});
     }
+    if (couple && coupleId) releaseCoupleLock(coupleId);
     clearActiveSession();
     navigation.goBack();
   }
@@ -1783,7 +1815,11 @@ I don't have that in your data, but you can send the question to your coach if y
     sessionCompletedRef.current = true;
     const active = getActiveSession();
     const startedAtMs = active?.startedAt ?? null;
-    await completeTrainingSession(sessionId, feeling, note, focusPointId, startedAtMs);
+    if (couple && coupleId) {
+      await completeCoupleTrainingSession(coupleId, focusPointId, feeling, note, startedAtMs);
+    } else {
+      await completeTrainingSession(sessionId, feeling, note, focusPointId, startedAtMs);
+    }
     if (active?.liveActivityId) {
       laEndFocusPoint(active.liveActivityId, true).catch(() => {});
     }
@@ -1797,7 +1833,11 @@ I don't have that in your data, but you can send the question to your coach if y
     sessionCompletedRef.current = true;
     const active = getActiveSession();
     const startedAtMs = active?.startedAt ?? null;
-    await completeTrainingSession(sessionId, null, null, focusPointId, startedAtMs, null);
+    if (couple && coupleId) {
+      await completeCoupleTrainingSession(coupleId, focusPointId, null, null, startedAtMs, null);
+    } else {
+      await completeTrainingSession(sessionId, null, null, focusPointId, startedAtMs, null);
+    }
     if (active?.liveActivityId) {
       laEndFocusPoint(active.liveActivityId, false).catch(() => {});
     }
@@ -1836,10 +1876,12 @@ I don't have that in your data, but you can send the question to your coach if y
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
 
           {/* Focus Card — expands downward to include AI chat, same as "read more" */}
-          <View style={styles.focusCard}>
-            {/* Gold accent — concentrated top-right (offset from Home's bottom-right) */}
+          <View style={[styles.focusCard, couple && { backgroundColor: '#2E4670' }]}>
+            {/* Accent glow top-right — gold for solo, blue for couple */}
             <LinearGradient
-              colors={['rgba(242,185,64,0.22)', 'transparent', 'transparent']}
+              colors={couple
+                ? ['rgba(143,176,221,0.20)', 'transparent', 'transparent']
+                : ['rgba(242,185,64,0.22)', 'transparent', 'transparent']}
               locations={[0, 0.55, 1]}
               start={{ x: 1, y: 0 }}
               end={{ x: 0, y: 1 }}

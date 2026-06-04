@@ -747,12 +747,42 @@ export async function dismissQuestion(messageId) {
 // Mark a question as addressed verbally during the class — sets status to
 // 'replied' with an auto-generated reply so the student sees a positive
 // closure ("Covered in your last class.") instead of the question lingering
-// forever in their open-questions list.
-export async function markQuestionCovered(messageId) {
+// forever in their open-questions list. When classInputId is provided the
+// link is persisted too, so the class detail screen can list every
+// question addressed in that lesson under the summary.
+export async function markQuestionCovered(messageId, classInputId = null) {
+  const update = { status: 'replied', reply: 'Covered in your last class.' };
+  if (classInputId) update.covered_class_input_id = classInputId;
   await supabase
     .from('coach_messages')
-    .update({ status: 'replied', reply: 'Covered in your last class.' })
+    .update(update)
     .eq('id', messageId);
+}
+
+// After a class_input row is created, retroactively link a batch of
+// already-covered questions to it. Used by the recording-upload flow:
+// finishDebrief marks the questions covered up-front (so the student gets
+// closure even if the recording is abandoned), then we set the FK once
+// the class_input id exists.
+export async function linkCoveredQuestionsToClass(messageIds, classInputId) {
+  if (!classInputId || !messageIds?.length) return;
+  await supabase
+    .from('coach_messages')
+    .update({ covered_class_input_id: classInputId })
+    .in('id', messageIds);
+}
+
+// Returns questions addressed verbally during a given class — ordered
+// chronologically by when the student asked them so the class detail
+// screen can render them as a "questions covered" block under the summary.
+export async function getQuestionsCoveredInClass(classInputId) {
+  if (!classInputId) return [];
+  const { data } = await supabase
+    .from('coach_messages')
+    .select('id, message, reply, status, created_at, replied_at')
+    .eq('covered_class_input_id', classInputId)
+    .order('created_at', { ascending: true });
+  return data || [];
 }
 
 
