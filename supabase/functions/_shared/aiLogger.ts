@@ -131,6 +131,53 @@ export async function callAnthropic(
   }
 }
 
+// Helper: log an OpenAI Whisper transcription call. Whisper-1 bills by
+// audio minutes at $0.006/min — no tokens involved.
+const OPENAI_WHISPER_USD_PER_MIN = 0.006
+
+export async function logOpenAICall({
+  supabase,
+  user_id,
+  class_input_id,
+  context = 'transcribe',
+  model = 'whisper-1',
+  audio_seconds,
+  duration_ms,
+  status,
+  error_message,
+}: {
+  supabase: SupabaseClient
+  user_id?: string | null
+  class_input_id?: string | null
+  context?: string
+  model?: string
+  audio_seconds: number
+  duration_ms: number
+  status: 'success' | 'error'
+  error_message?: string | null
+}) {
+  const minutes = audio_seconds / 60
+  const cost_usd = minutes * OPENAI_WHISPER_USD_PER_MIN
+  try {
+    await supabase.from('ai_call_logs').insert({
+      function_name: 'whisper-transcribe',
+      context,
+      model,
+      user_id: user_id ?? null,
+      class_input_id: class_input_id ?? null,
+      input_tokens: 0,
+      output_tokens: 0,
+      cost_usd,
+      duration_ms,
+      attempts: 1,
+      status,
+      error_message,
+    })
+  } catch (logErr) {
+    console.warn('[aiLogger] failed to log OpenAI call:', logErr)
+  }
+}
+
 // Helper: log an AssemblyAI transcription call (no token counts; price by
 // audio_seconds_minute). Free plan = $0; standard plan ~$0.12/hour.
 export async function logAssemblyAICall({

@@ -40,8 +40,7 @@ import {
   setAudioModeAsync,
   useAudioRecorder,
 } from 'expo-audio';
-
-const OPENAI_API_KEY = process.env.EXPO_PUBLIC_OPENAI_API_KEY;
+import { supabase } from '../services/supabase/client';
 
 const LATIN_DANCES    = ['Cha Cha', 'Samba', 'Rumba', 'Paso Doble', 'Jive'];
 const STANDARD_DANCES = ['Waltz', 'Tango', 'V. Waltz', 'Foxtrot', 'Quickstep'];
@@ -78,17 +77,19 @@ const WHISPER_PROMPT =
   'Common terms: Cuban motion, CBM, CBMP, frame, connection, contra body, line of dance, diagonal wall, centre, New York, Alemana, Fan, Natural Turn, Reverse Turn, spot turn, shoulder to shoulder. ' +
   'Output: plain text only, one paragraph per natural topic shift, no headers, no bullet points, no timestamps, no added commentary.';
 
+// Whisper transcription via the server-side proxy at
+// supabase/functions/whisper-transcribe. The OpenAI key stays server-side
+// and every call lands in ai_call_logs for cost tracking.
 async function transcribeAudio(uri) {
-  if (!OPENAI_API_KEY || OPENAI_API_KEY.startsWith('sk-ant-')) {
-    throw new Error('NO_OPENAI_KEY');
-  }
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session?.access_token) throw new Error('NO_AUTH_SESSION');
   const formData = new FormData();
   formData.append('file', { uri, type: 'audio/m4a', name: 'recording.m4a' });
-  formData.append('model', 'whisper-1');
   formData.append('prompt', WHISPER_PROMPT);
-  const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+  const url = `${process.env.EXPO_PUBLIC_SUPABASE_URL}/functions/v1/whisper-transcribe`;
+  const res = await fetch(url, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
+    headers: { Authorization: `Bearer ${session.access_token}` },
     body: formData,
   });
   if (!res.ok) {
@@ -135,12 +136,8 @@ function MicButton({ targetSetter }) {
       if (text) targetSetter((prev) => (prev ? prev + ' ' : '') + text);
     } catch (e) {
       console.warn('[MicButton] stopRecording error:', e);
-      if (e.message === 'NO_OPENAI_KEY') {
-        const keyPreview = OPENAI_API_KEY ? `"${OPENAI_API_KEY.substring(0, 12)}..."` : 'undefined';
-        Alert.alert(
-          'OpenAI key missing',
-          `Current value: ${keyPreview}\n\nReplace EXPO_PUBLIC_OPENAI_API_KEY in .env with a real OpenAI key (sk-proj-...) then restart with: npx expo start --clear`
-        );
+      if (e.message === 'NO_AUTH_SESSION') {
+        Alert.alert('Not signed in', 'Sign in to transcribe voice notes.');
       } else {
         Alert.alert('Transcription failed', e.message);
       }
