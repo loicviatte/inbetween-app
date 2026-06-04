@@ -40,7 +40,6 @@ import {
   setAudioModeAsync,
   useAudioRecorder,
 } from 'expo-audio';
-import { supabase } from '../services/supabase/client';
 
 const LATIN_DANCES    = ['Cha Cha', 'Samba', 'Rumba', 'Paso Doble', 'Jive'];
 const STANDARD_DANCES = ['Waltz', 'Tango', 'V. Waltz', 'Foxtrot', 'Quickstep'];
