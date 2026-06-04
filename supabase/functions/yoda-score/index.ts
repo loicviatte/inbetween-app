@@ -91,6 +91,21 @@ async function publishExpiredFocusPoints(supabase: any): Promise<void> {
   if ((expired ?? []).length > 0) {
     console.log(`[yoda-score] Auto-published ${expired!.length} expired pending_coach FPs`)
   }
+
+  // Couple focus points — same 18h auto-publish (no per-dancer attendance).
+  const { data: expiredCouple } = await supabase
+    .from('couple_focus_points')
+    .select('id')
+    .eq('status', 'pending_coach')
+    .lte('coach_review_deadline', now)
+  for (const cfp of expiredCouple ?? []) {
+    await supabase.from('couple_focus_points')
+      .update({ status: 'active', coach_review_deadline: null })
+      .eq('id', cfp.id)
+  }
+  if ((expiredCouple ?? []).length > 0) {
+    console.log(`[yoda-score] Auto-published ${expiredCouple!.length} expired pending_coach couple FPs`)
+  }
 }
 
 // ─── class_input event ────────────────────────────────────────────────────────
@@ -197,7 +212,10 @@ async function processClassInput(supabase: any, payload: any): Promise<void> {
         last_mentioned_at: now.toISOString(),
         class_input_id: class_input_id,
         source_class_input_id: class_input_id,
-        status: 'active',
+        // Couple FP go through coach review like solo: pending_coach until the
+        // couple-coach approves (or the 18h deadline auto-publishes them).
+        status: 'pending_coach',
+        coach_review_deadline: new Date(now.getTime() + 18 * 60 * 60 * 1000).toISOString(),
         is_deleted: false,
         is_other: false,
       })

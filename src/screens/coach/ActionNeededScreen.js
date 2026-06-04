@@ -11,6 +11,7 @@ import {
   LayoutAnimation,
   Platform,
   UIManager,
+  Alert,
 } from 'react-native';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
@@ -41,6 +42,12 @@ import {
   approveAllPendingForStudent,
   rejectPendingFocusPoint,
 } from '../../storage/coachStorage';
+import {
+  getPendingCoupleFocusPoints,
+  approveCoupleFocusPoint,
+  rejectCoupleFocusPoint,
+  approveAllPendingCoupleFocusPoints,
+} from '../../storage/coupleStorage';
 import FocusPointEditSheet from '../../components/FocusPointEditSheet';
 import ClassContextSheet from '../../components/coach/ClassContextSheet';
 import ApproveConfirmSheet from '../../components/coach/ApproveConfirmSheet';
@@ -79,6 +86,7 @@ export default function ActionNeededScreen({ navigation }) {
 
   // Focus points
   const [pendingFPs, setPendingFPs] = useState([]);
+  const [pendingCoupleFPs, setPendingCoupleFPs] = useState([]);
   const [fpLoading, setFpLoading] = useState(true);
   const [editingFp, setEditingFp] = useState(null);
   const [rejectingFp, setRejectingFp] = useState(null);
@@ -97,8 +105,9 @@ export default function ActionNeededScreen({ navigation }) {
   const loadData = useCallback(async () => {
     setFpLoading(true);
     try {
-      const [fps, notifs, { data: merges }] = await Promise.all([
+      const [fps, coupleFps, notifs, { data: merges }] = await Promise.all([
         getPendingFocusPoints(null).catch(() => []),
+        getPendingCoupleFocusPoints().catch(() => []),
         getNotifications().catch(() => []),
         supabase
           .from('merge_requests')
@@ -107,6 +116,7 @@ export default function ActionNeededScreen({ navigation }) {
           .order('created_at', { ascending: false }),
       ]);
       setPendingFPs(fps || []);
+      setPendingCoupleFPs(coupleFps || []);
       setNameMatches(
         (notifs || []).filter(n => n.type === 'name_match_confirm')
       );
@@ -229,8 +239,41 @@ export default function ActionNeededScreen({ navigation }) {
       const studentIds = [...new Set(pendingFPs.map(fp => fp.user_id).filter(Boolean))];
       await Promise.all(studentIds.map(id => approveAllPendingForStudent(id)));
       setPendingFPs([]);
+      const coupleIds = [...new Set(pendingCoupleFPs.map(fp => fp.couple_id).filter(Boolean))];
+      await Promise.all(coupleIds.map(id => approveAllPendingCoupleFocusPoints(id)));
+      setPendingCoupleFPs([]);
       refresh();
     } catch {}
+  };
+
+  // ── Couple focus point review ──
+  const handleApproveCouple = async (fp) => {
+    try {
+      await approveCoupleFocusPoint(fp.id);
+      setPendingCoupleFPs(prev => prev.filter(x => x.id !== fp.id));
+      refresh();
+    } catch {}
+  };
+
+  const handleRejectCouple = (fp) => {
+    Alert.alert(
+      'Decline couple focus?',
+      `"${fp.name}" won't be shown to ${fp.coupleName || 'the couple'}.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Decline',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await rejectCoupleFocusPoint({ fpId: fp.id, coupleId: fp.couple_id, fpName: fp.name });
+              setPendingCoupleFPs(prev => prev.filter(x => x.id !== fp.id));
+              refresh();
+            } catch {}
+          },
+        },
+      ],
+    );
   };
 
   const handleConfirmName = async (notif) => {
@@ -329,14 +372,15 @@ export default function ActionNeededScreen({ navigation }) {
     }
     return sharedIds.size + solo;
   })();
+  const focusTabCount = reviewCount + pendingCoupleFPs.length;
 
   const tabs = [
-    { key: 'focus', label: 'Focus points', count: reviewCount },
+    { key: 'focus', label: 'Focus points', count: focusTabCount },
     { key: 'merge', label: 'Merge', count: mergeRequests.length },
     { key: 'name', label: 'Names', count: nameMatches.length },
   ];
 
-  const totalCount = reviewCount + mergeRequests.length + nameMatches.length;
+  const totalCount = focusTabCount + mergeRequests.length + nameMatches.length;
 
   // Horizontal pager: sync tab selection <-> swipe gesture, drive a moving underline.
   const screenWidth = Dimensions.get('window').width;
@@ -468,9 +512,9 @@ export default function ActionNeededScreen({ navigation }) {
             )}
 
             {/* Bulk actions */}
-            {pendingFPs.length > 0 && (
+            {(pendingFPs.length > 0 || pendingCoupleFPs.length > 0) && (
               <View style={s.bulkRow}>
-                <Text style={s.bulkLabel}>{reviewCount} to review</Text>
+                <Text style={s.bulkLabel}>{focusTabCount} to review</Text>
                 <TouchableOpacity style={s.bulkBtn} onPress={handleApproveAll} activeOpacity={0.8}>
                   <Text style={s.bulkBtnText}>Approve all</Text>
                 </TouchableOpacity>
@@ -554,11 +598,40 @@ export default function ActionNeededScreen({ navigation }) {
                       {soloFPs.map(renderSoloCard)}
                     </>
                   )}
+                  {pendingCoupleFPs.length > 0 && (
+                    <>
+                      <Text style={[s.sectionHeader, (groupAggregates.length > 0 || soloFPs.length > 0) && s.sectionHeaderSpaced]}>
+                        Couple focus points · {pendingCoupleFPs.length}
+                      </Text>
+                      {pendingCoupleFPs.map((fp) => (
+                        <View key={fp.id} style={cpl.card}>
+                          <View style={cpl.head}>
+                            <View style={cpl.couplePill}>
+                              <Ionicons name="heart" size={10} color="#2E4670" />
+                              <Text style={cpl.couplePillText} numberOfLines={1}>{fp.coupleName}</Text>
+                            </View>
+                            {!!fp.tier && <Text style={cpl.tier}>{fp.tier}</Text>}
+                          </View>
+                          <Text style={cpl.name} numberOfLines={2}>{fp.name}</Text>
+                          {!!fp.subtitle && <Text style={cpl.sub} numberOfLines={2}>{fp.subtitle}</Text>}
+                          <View style={cpl.actions}>
+                            <TouchableOpacity style={cpl.declineBtn} onPress={() => handleRejectCouple(fp)} activeOpacity={0.8}>
+                              <Text style={cpl.declineText}>Decline</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity style={cpl.approveBtn} onPress={() => handleApproveCouple(fp)} activeOpacity={0.85}>
+                              <Ionicons name="checkmark" size={15} color="#fff" />
+                              <Text style={cpl.approveText}>Approve</Text>
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      ))}
+                    </>
+                  )}
                 </>
               );
             })()}
 
-            {pendingFPs.length === 0 && !fpLoading && (
+            {pendingFPs.length === 0 && pendingCoupleFPs.length === 0 && !fpLoading && (
               <View style={s.emptyState}>
                 <Ionicons name="checkmark-circle" size={40} color={C.green} />
                 <Text style={s.emptyTitle}>All clear</Text>
@@ -669,6 +742,32 @@ export default function ActionNeededScreen({ navigation }) {
 }
 
 // ── Styles ──────────────────────────────────────────────────────────────────
+const cpl = StyleSheet.create({
+  card: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(46,70,112,0.18)',
+    padding: 14,
+    marginBottom: 10,
+  },
+  head: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
+  couplePill: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    backgroundColor: 'rgba(46,70,112,0.10)',
+    paddingHorizontal: 9, paddingVertical: 4, borderRadius: 999, flexShrink: 1,
+  },
+  couplePillText: { fontFamily: Fonts.jakartaBold, fontSize: 11, color: '#2E4670' },
+  tier: { fontFamily: Fonts.jakartaSemiBold, fontSize: 10.5, color: 'rgba(10,10,10,0.4)', textTransform: 'uppercase', letterSpacing: 0.4 },
+  name: { fontFamily: Fonts.jakartaExtraBold, fontSize: 16, color: '#0A0A0A', letterSpacing: -0.3 },
+  sub: { fontFamily: Fonts.jakartaRegular, fontSize: 12.5, color: 'rgba(10,10,10,0.55)', marginTop: 3, lineHeight: 17 },
+  actions: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 12 },
+  declineBtn: { flex: 1, paddingVertical: 11, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(10,10,10,0.14)', alignItems: 'center' },
+  declineText: { fontFamily: Fonts.jakartaBold, fontSize: 13.5, color: 'rgba(10,10,10,0.6)' },
+  approveBtn: { flex: 1, flexDirection: 'row', gap: 6, paddingVertical: 11, borderRadius: 12, backgroundColor: '#2E4670', alignItems: 'center', justifyContent: 'center' },
+  approveText: { fontFamily: Fonts.jakartaBold, fontSize: 13.5, color: '#fff' },
+});
+
 const s = StyleSheet.create({
   safe: { flex: 1, backgroundColor: C.bg },
 

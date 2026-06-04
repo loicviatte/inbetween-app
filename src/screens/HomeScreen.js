@@ -48,6 +48,7 @@ import { generateCoachShareSummary } from '../services/ai/anthropic';
 import LogModal from '../components/LogModal';
 import HomeSkeleton from '../components/HomeSkeleton';
 import MetricGauge from '../components/MetricGauge';
+import BottomSheet from '../components/BottomSheet';
 import { getAllStudentMetrics } from '../utils/studentMetrics';
 
 // Enable LayoutAnimation on Android (no-op on iOS where it's always on).
@@ -1297,9 +1298,7 @@ export default function HomeScreen({ navigation }) {
         </TouchableOpacity>
       </Modal>
 
-      <Modal visible={dayModal !== null} transparent animationType="slide" onRequestClose={() => setDayModal(null)}>
-        <TouchableOpacity style={dm.overlay} activeOpacity={1} onPress={() => setDayModal(null)}>
-          <TouchableOpacity style={dm.sheet} activeOpacity={1} onPress={() => {}}>
+      <BottomSheet visible={dayModal !== null} onClose={() => setDayModal(null)} sheetStyle={dm.sheet}>
             <View style={dm.handle} />
             <Text style={dm.dayName}>{dayModal !== null ? DAY_NAMES[dayModal] : ''}</Text>
             {(weekActivity[dayModal]?.sessions?.length ?? 0) > 0 && (
@@ -1333,9 +1332,7 @@ export default function HomeScreen({ navigation }) {
                 ))}
               </View>
             )}
-          </TouchableOpacity>
-        </TouchableOpacity>
-      </Modal>
+      </BottomSheet>
       </Animated.View>
     </SafeAreaView>
     </View>

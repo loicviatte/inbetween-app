@@ -34,6 +34,7 @@ import { clearUserCaches } from '../../storage/userCaches';
 import { supabase } from '../../services/supabase/client';
 import { CoachProfileScreenSkeleton } from '../../components/Skeleton';
 import StudioPicker from '../../components/StudioPicker';
+import BottomSheet from '../../components/BottomSheet';
 
 const AVATAR_KEY = '@coach_profile_photo';
 const CACHE_KEY = '@cache_coach_profile';
@@ -57,9 +58,23 @@ export default function CoachProfileScreen({ navigation }) {
   const [inviteCode, setInviteCode] = useState('');
   const [copied, setCopied] = useState(false);
   const [photoUri, setPhotoUri] = useState(null);
+  const [activeTab, setActiveTab] = useState('code'); // 'code' | 'settings'
+  const tabSlide = useRef(new Animated.Value(0)).current; // sliding pill (0=code, 1=settings)
+  const [subtabW, setSubtabW] = useState(0);
+  const selectTab = (key) => {
+    setActiveTab(key);
+    Animated.spring(tabSlide, {
+      toValue: key === 'settings' ? 1 : 0,
+      useNativeDriver: true,
+      friction: 9,
+      tension: 90,
+    }).start();
+  };
 
   const [editVisible, setEditVisible] = useState(false);
+  const [editMode, setEditMode] = useState('account'); // 'account' | 'studio' | 'style'
   const [editName, setEditName] = useState('');
+  const [editEmail, setEditEmail] = useState('');
   const [editStudio, setEditStudio] = useState(null);
   const [editStyle, setEditStyle] = useState('');
   const [saving, setSaving] = useState(false);
@@ -224,8 +239,10 @@ export default function CoachProfileScreen({ navigation }) {
 
   // ── Edit modal ──────────────────────────────────────────────────────────
 
-  function openEdit() {
+  function openEdit(mode = 'account') {
+    setEditMode(mode);
     setEditName(user?.name || '');
+    setEditEmail(user?.email || '');
     setEditStudio(user?.studio || null);
     setEditStyle(user?.dance_style || '');
     setEditVisible(true);
@@ -236,16 +253,30 @@ export default function CoachProfileScreen({ navigation }) {
     setSaving(true);
     const name = editName.trim();
     const studio_id = editStudio?.id || null;
-    await saveUserProfile({ name, studio_id, dance_style: editStyle });
-    setUser(prev => ({
-      ...prev,
-      name,
-      studio_id,
-      studio: editStudio,
-      dance_style: editStyle,
-    }));
+    const newEmail = editEmail.trim();
+    try {
+      await saveUserProfile({ name, studio_id, dance_style: editStyle });
+      setUser(prev => ({
+        ...prev,
+        name,
+        studio_id,
+        studio: editStudio,
+        dance_style: editStyle,
+      }));
+      let emailNotice = false;
+      if (newEmail && newEmail.toLowerCase() !== (user?.email || '').toLowerCase()) {
+        const { error } = await supabase.auth.updateUser({ email: newEmail });
+        if (error) throw error;
+        emailNotice = true;
+      }
+      setEditVisible(false);
+      if (emailNotice) {
+        Alert.alert('Confirm your new email', `We sent a confirmation link to ${newEmail}. Your email updates once you tap it.`);
+      }
+    } catch (e) {
+      Alert.alert('Could not save', e.message || 'Please try again.');
+    }
     setSaving(false);
-    setEditVisible(false);
   }
 
   async function handleLogout() {
@@ -355,7 +386,45 @@ export default function CoachProfileScreen({ navigation }) {
               </View>
             </View>
 
-            {/* ── Invite section ── */}
+            {/* ── Code | Settings subtabs (sliding pill) ── */}
+            <View
+              style={subtab.bar}
+              onLayout={(e) => setSubtabW(e.nativeEvent.layout.width)}
+            >
+              {subtabW > 0 && (
+                <Animated.View
+                  pointerEvents="none"
+                  style={[
+                    subtab.thumb,
+                    {
+                      width: (subtabW - 8) / 2,
+                      transform: [{
+                        translateX: tabSlide.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [0, (subtabW - 8) / 2],
+                        }),
+                      }],
+                    },
+                  ]}
+                />
+              )}
+              {[{ key: 'code', label: 'Code' }, { key: 'settings', label: 'Settings' }].map((t) => {
+                const on = activeTab === t.key;
+                return (
+                  <TouchableOpacity
+                    key={t.key}
+                    style={subtab.btn}
+                    onPress={() => selectTab(t.key)}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={[subtab.btnTxt, on && subtab.btnTxtOn]}>{t.label}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            {/* ── Code tab: invite code ── */}
+            {activeTab === 'code' && (
             <View style={styles.section}>
               <View style={styles.sectionRow}>
                 <Text style={styles.sectionLabel}>YOUR INVITE CODE</Text>
@@ -416,112 +485,165 @@ export default function CoachProfileScreen({ navigation }) {
                 )}
               </View>
             </View>
+            )}
 
-            <TouchableOpacity
-              style={styles.logoutBtn}
-              onPress={handleLogout}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.logoutText}>Log out</Text>
-            </TouchableOpacity>
+            {/* ── Settings tab: account + log out ── */}
+            {activeTab === 'settings' && (
+            <View style={styles.section}>
+              <View style={styles.sectionRow}>
+                <Text style={styles.sectionLabel}>ACCOUNT</Text>
+                <View style={styles.sectionRule} />
+              </View>
+
+              <View style={set.card}>
+                <TouchableOpacity style={set.row} onPress={() => openEdit('account')} activeOpacity={0.7}>
+                  <Ionicons name="person-outline" size={18} color={INK_950} />
+                  <View style={set.rowMid}>
+                    <Text style={set.rowLabel}>Account</Text>
+                    <Text style={set.rowValue} numberOfLines={1}>{user?.name || '—'}</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={16} color="rgba(10,10,10,0.3)" />
+                </TouchableOpacity>
+                <TouchableOpacity style={set.row} onPress={() => openEdit('studio')} activeOpacity={0.7}>
+                  <Ionicons name="business-outline" size={18} color={INK_950} />
+                  <View style={set.rowMid}>
+                    <Text style={set.rowLabel}>Studio</Text>
+                    <Text style={set.rowValue} numberOfLines={1}>{user?.studio?.name || 'Not set'}</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={16} color="rgba(10,10,10,0.3)" />
+                </TouchableOpacity>
+                <TouchableOpacity style={[set.row, set.rowLast]} onPress={() => openEdit('style')} activeOpacity={0.7}>
+                  <Ionicons name="musical-notes-outline" size={18} color={INK_950} />
+                  <View style={set.rowMid}>
+                    <Text style={set.rowLabel}>Dance style</Text>
+                    <Text style={set.rowValue} numberOfLines={1}>{user?.dance_style || 'Not set'}</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={16} color="rgba(10,10,10,0.3)" />
+                </TouchableOpacity>
+              </View>
+
+              <TouchableOpacity
+                style={styles.logoutBtn}
+                onPress={handleLogout}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.logoutText}>Log out</Text>
+              </TouchableOpacity>
+            </View>
+            )}
           </ScrollView>
 
           {/* Edit Modal */}
-          <Modal
+          <BottomSheet
             visible={editVisible}
-            transparent
-            animationType="slide"
-            onRequestClose={() => setEditVisible(false)}
+            onClose={() => setEditVisible(false)}
+            sheetStyle={em.sheet}
+            avoidKeyboard
           >
-            <KeyboardAvoidingView
-              behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-              style={{ flex: 1 }}
+            <View style={em.handle} />
+            <Text style={em.title}>
+              {editMode === 'studio' ? 'Studio' : editMode === 'style' ? 'Dance style' : 'Account'}
+            </Text>
+
+            {editMode === 'account' && (
+              <>
+                <TouchableOpacity
+                  style={em.avatarWrap}
+                  onPress={handlePickPhoto}
+                  activeOpacity={0.85}
+                >
+                  {photoUri ? (
+                    <Image source={{ uri: photoUri }} style={em.avatarPhoto} />
+                  ) : (
+                    <View style={em.avatar}>
+                      <Text style={em.avatarInitials}>{initials}</Text>
+                    </View>
+                  )}
+                  <View style={em.editBadge}>
+                    <Text style={em.editIcon}>✎</Text>
+                  </View>
+                </TouchableOpacity>
+
+                <View style={em.field}>
+                  <Text style={em.fieldLabel}>Name</Text>
+                  <TextInput
+                    style={em.input}
+                    value={editName}
+                    onChangeText={setEditName}
+                    placeholder="Your name"
+                    placeholderTextColor="rgba(17,12,17,0.3)"
+                    autoCorrect={false}
+                  />
+                </View>
+
+                <View style={em.field}>
+                  <Text style={em.fieldLabel}>Email</Text>
+                  <TextInput
+                    style={em.input}
+                    value={editEmail}
+                    onChangeText={setEditEmail}
+                    placeholder="you@email.com"
+                    placeholderTextColor="rgba(17,12,17,0.3)"
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    keyboardType="email-address"
+                  />
+                </View>
+              </>
+            )}
+
+            {editMode === 'studio' && (
+              <View style={em.field}>
+                <Text style={em.fieldLabel}>Studio</Text>
+                <StudioPicker
+                  value={editStudio}
+                  onChange={setEditStudio}
+                  allowCreate
+                />
+              </View>
+            )}
+
+            {editMode === 'style' && (
+              <View style={em.field}>
+                <Text style={em.fieldLabel}>Dance Style</Text>
+                <View style={em.pillRow}>
+                  {['Latin', 'Ballroom', 'Latin & Ballroom'].map(s => (
+                    <TouchableOpacity
+                      key={s}
+                      style={[em.pill, editStyle === s && em.pillActive]}
+                      onPress={() => setEditStyle(s)}
+                      activeOpacity={0.75}
+                    >
+                      <Text
+                        style={[
+                          em.pillText,
+                          editStyle === s && em.pillTextActive,
+                        ]}
+                      >
+                        {s}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+            )}
+
+            <TouchableOpacity
+              style={em.saveBtn}
+              onPress={handleSave}
+              activeOpacity={0.88}
+              disabled={saving}
             >
-              <Pressable style={em.overlay} onPress={() => setEditVisible(false)}>
-                <Pressable style={em.sheet} onPress={() => {}}>
-                  <View style={em.handle} />
-                  <Text style={em.title}>Edit Profile</Text>
-
-                  <TouchableOpacity
-                    style={em.avatarWrap}
-                    onPress={handlePickPhoto}
-                    activeOpacity={0.85}
-                  >
-                    {photoUri ? (
-                      <Image source={{ uri: photoUri }} style={em.avatarPhoto} />
-                    ) : (
-                      <View style={em.avatar}>
-                        <Text style={em.avatarInitials}>{initials}</Text>
-                      </View>
-                    )}
-                    <View style={em.editBadge}>
-                      <Text style={em.editIcon}>✎</Text>
-                    </View>
-                  </TouchableOpacity>
-
-                  <View style={em.field}>
-                    <Text style={em.fieldLabel}>Name</Text>
-                    <TextInput
-                      style={em.input}
-                      value={editName}
-                      onChangeText={setEditName}
-                      placeholder="Your name"
-                      placeholderTextColor="rgba(17,12,17,0.3)"
-                      autoCorrect={false}
-                    />
-                  </View>
-
-                  <View style={em.field}>
-                    <Text style={em.fieldLabel}>Studio</Text>
-                    <StudioPicker
-                      value={editStudio}
-                      onChange={setEditStudio}
-                      allowCreate
-                    />
-                  </View>
-
-                  <View style={em.field}>
-                    <Text style={em.fieldLabel}>Dance Style</Text>
-                    <View style={em.pillRow}>
-                      {['Latin', 'Ballroom', 'Latin & Ballroom'].map(s => (
-                        <TouchableOpacity
-                          key={s}
-                          style={[em.pill, editStyle === s && em.pillActive]}
-                          onPress={() => setEditStyle(s)}
-                          activeOpacity={0.75}
-                        >
-                          <Text
-                            style={[
-                              em.pillText,
-                              editStyle === s && em.pillTextActive,
-                            ]}
-                          >
-                            {s}
-                          </Text>
-                        </TouchableOpacity>
-                      ))}
-                    </View>
-                  </View>
-
-                  <TouchableOpacity
-                    style={em.saveBtn}
-                    onPress={handleSave}
-                    activeOpacity={0.88}
-                    disabled={saving}
-                  >
-                    <Text style={em.saveBtnText}>{saving ? 'Saving…' : 'Save'}</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={em.cancelBtn}
-                    onPress={() => setEditVisible(false)}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={em.cancelBtnText}>Cancel</Text>
-                  </TouchableOpacity>
-                </Pressable>
-              </Pressable>
-            </KeyboardAvoidingView>
-          </Modal>
+              <Text style={em.saveBtnText}>{saving ? 'Saving…' : 'Save'}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={em.cancelBtn}
+              onPress={() => setEditVisible(false)}
+              activeOpacity={0.7}
+            >
+              <Text style={em.cancelBtnText}>Cancel</Text>
+            </TouchableOpacity>
+          </BottomSheet>
         </Animated.View>
       </SafeAreaView>
     </View>
@@ -720,6 +842,58 @@ const glance = StyleSheet.create({
     textTransform: 'uppercase',
   },
   cellDivider: { width: 1, height: 32, backgroundColor: LINE },
+});
+
+const subtab = StyleSheet.create({
+  bar: {
+    flexDirection: 'row',
+    backgroundColor: 'rgba(255,255,255,0.45)',
+    borderWidth: 1,
+    borderColor: 'rgba(10,10,10,0.09)',
+    borderRadius: 999,
+    padding: 4,
+    marginTop: 22,
+    marginBottom: 18,
+  },
+  btn: { flex: 1, borderRadius: 999, paddingVertical: 9, alignItems: 'center', justifyContent: 'center' },
+  thumb: {
+    position: 'absolute',
+    top: 4,
+    bottom: 4,
+    left: 4,
+    borderRadius: 999,
+    backgroundColor: '#0A0A0A',
+    shadowColor: '#0A0A0A',
+    shadowOpacity: 0.25,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  btnTxt: { fontFamily: Fonts.jakartaSemiBold, fontSize: 12.5, color: 'rgba(10,10,10,0.45)', letterSpacing: 0.1 },
+  btnTxtOn: { color: '#fff' },
+});
+
+const set = StyleSheet.create({
+  card: {
+    backgroundColor: 'rgba(255,255,255,0.6)',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(10,10,10,0.08)',
+    overflow: 'hidden',
+  },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(10,10,10,0.06)',
+  },
+  rowLast: { borderBottomWidth: 0 },
+  rowMid: { flex: 1, minWidth: 0 },
+  rowLabel: { fontFamily: Fonts.jakartaSemiBold, fontSize: 13, color: INK_950 },
+  rowValue: { fontFamily: Fonts.jakartaRegular, fontSize: 12, color: 'rgba(10,10,10,0.5)', marginTop: 2 },
 });
 
 const invite = StyleSheet.create({

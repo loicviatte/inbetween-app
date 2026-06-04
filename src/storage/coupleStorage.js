@@ -213,6 +213,7 @@ export async function getCoupleReadiness(coupleId, category = null) {
     .eq('is_other', false)
     .not('is_deleted', 'is', true)
     .neq('status', 'past')
+    .neq('status', 'pending_coach')
     .not('class_input_id', 'is', null);
   const distinctClassIds = Array.from(
     new Set((fpRefs ?? [])
@@ -240,6 +241,7 @@ export async function getCoupleReadiness(coupleId, category = null) {
     .eq('is_other', false)
     .not('is_deleted', 'is', true)
     .neq('status', 'past')
+    .neq('status', 'pending_coach')
     .or('is_held.is.null,is_held.eq.false');
   const fps = (fpsRaw ?? []).filter(f => focusMatchesCategory(f, category));
   if (fps.length === 0) return null;
@@ -501,8 +503,84 @@ export async function getCoupleFocusPoints(coupleId) {
     .eq('is_deleted', false)
     .eq('is_other', false)
     .neq('status', 'past')
+    .neq('status', 'pending_coach')
     .order('created_at', { ascending: false });
   return data || [];
+}
+
+// ─── Couple focus point — coach review (mirror of solo pending_coach flow) ──────
+// New couple FP from a class land in `pending_coach`; the couple-coach reviews
+// them here and approves → `active` (or rejects → `past`). RLS `cfp_update` is
+// coach-only (is_couple_coach), so only the couple coach can run these.
+
+// Pending couple FP across all couples this coach coaches (for ActionNeeded).
+export async function getPendingCoupleFocusPoints() {
+  const couples = await getMyCouples().catch(() => []);
+  const coupleIds = (couples || []).map((c) => c.coupleId);
+  if (coupleIds.length === 0) return [];
+  const byId = new Map((couples || []).map((c) => [c.coupleId, c]));
+  const { data, error } = await supabase
+    .from('couple_focus_points')
+    .select('id, couple_id, name, subtitle, context, drill, tier, dance, coach_review_deadline, source_class_input_id, created_at, ' +
+            'source_class_input:source_class_input_id(title, created_at, class_summary, lesson_type, dance)')
+    .in('couple_id', coupleIds)
+    .eq('status', 'pending_coach')
+    .eq('is_other', false)
+    .eq('is_deleted', false)
+    .order('created_at', { ascending: true });
+  if (error) throw error;
+  // Attach the couple display name (Anna & Loic) for the review card header.
+  return (data || []).map((fp) => ({ ...fp, coupleName: byId.get(fp.couple_id)?.name || 'Couple' }));
+}
+
+export async function approveCoupleFocusPoint(fpId) {
+  const { error } = await supabase
+    .from('couple_focus_points')
+    .update({ status: 'active', coach_review_deadline: null })
+    .eq('id', fpId);
+  if (error) throw error;
+}
+
+export async function editAndApproveCoupleFocusPoint(fpId, updates) {
+  const allowed = ['name', 'subtitle', 'context', 'drill', 'tier'];
+  const filtered = Object.fromEntries(Object.entries(updates || {}).filter(([k]) => allowed.includes(k)));
+  const { error } = await supabase
+    .from('couple_focus_points')
+    .update({ ...filtered, status: 'active', coach_review_deadline: null })
+    .eq('id', fpId);
+  if (error) throw error;
+}
+
+export async function rejectCoupleFocusPoint({ fpId, coupleId, fpName, reason }) {
+  const { error } = await supabase
+    .from('couple_focus_points')
+    .update({ is_deleted: true, status: 'past' })
+    .eq('id', fpId);
+  if (error) throw error;
+  // Notify both dancers their coach declined the shared focus.
+  const { data: c } = await supabase
+    .from('couples').select('user_a_id, user_b_id').eq('id', coupleId).maybeSingle();
+  const ids = [c?.user_a_id, c?.user_b_id].filter(Boolean);
+  if (ids.length) {
+    const trimmed = (reason || '').trim();
+    await supabase.from('notifications').insert(ids.map((uid) => ({
+      user_id: uid,
+      type: 'couple_focus_rejected',
+      title: 'Couple focus declined by your coach',
+      body: trimmed ? `"${fpName}" — ${trimmed}` : `Your coach declined "${fpName}".`,
+      data: { couple_id: coupleId, focus_point_name: fpName, reason: trimmed || null },
+    }))).catch(() => {});
+  }
+}
+
+export async function approveAllPendingCoupleFocusPoints(coupleId) {
+  const { error } = await supabase
+    .from('couple_focus_points')
+    .update({ status: 'active', coach_review_deadline: null })
+    .eq('couple_id', coupleId)
+    .eq('status', 'pending_coach')
+    .eq('is_deleted', false);
+  if (error) throw error;
 }
 
 // A single couple focus point (full row) by id. The couple training session

@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { AppState } from 'react-native';
 import { getMyStudents, getCoachActivityFeed, getPendingCoachRequests, getCoachNotes, getPendingFocusPoints } from '../storage/coachStorage';
+import { getPendingCoupleFocusPoints } from '../storage/coupleStorage';
 import { getUser } from '../storage/storage';
 import { getNotifications } from '../storage/notificationsStorage';
 import { supabase } from '../services/supabase/client';
@@ -85,13 +86,14 @@ export function CoachDataProvider({ children }) {
         .eq('status', 'pending_coach')
         .then((res) => res)
         .catch(() => ({ count: 0, data: [] })),
-    ]).then(([ev, r, n, notifs, fps, mergesRes]) => {
+      getPendingCoupleFocusPoints().catch(() => []),
+    ]).then(([ev, r, n, notifs, fps, mergesRes, coupleFps]) => {
       setEvents((ev || []).slice(0, 12));
       setRequests(r || []);
       setNotes(n || []);
       setUnreadCount(computeUnread(notifs));
 
-      const focusCount = (fps || []).length;
+      const focusCount = (fps || []).length + (coupleFps || []).length;
       const mergeCount = mergesRes?.count || 0;
       const nameNotifs = (notifs || []).filter((x) => x.type === 'name_match_confirm');
       const nameCount = nameNotifs.length;

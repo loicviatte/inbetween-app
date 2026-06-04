@@ -430,6 +430,15 @@ export default function LogModal({ visible, onClose, onSubmitted, initialDraft }
     })
   ).current;
 
+  // Slide the sheet up on open (the Modal's "fade" handles the backdrop).
+  // translateY is otherwise driven by the drag-to-dismiss panResponder.
+  useEffect(() => {
+    if (visible) {
+      translateY.setValue(800);
+      Animated.timing(translateY, { toValue: 0, duration: 320, useNativeDriver: true }).start();
+    }
+  }, [visible]);
+
   const hasInput = class_summary.trim().length > 0 || practicePoint1.trim().length > 0 || practicePoint2.trim().length > 0;
 
   function reset() {
@@ -553,7 +562,7 @@ export default function LogModal({ visible, onClose, onSubmitted, initialDraft }
   }
 
   return (
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={handleClose}>
+    <Modal visible={visible} animationType="fade" transparent onRequestClose={handleClose}>
       <View style={styles.overlay}>
         <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.kvContainer}>
           <Animated.View style={[styles.sheet, { transform: [{ translateY }] }]}>

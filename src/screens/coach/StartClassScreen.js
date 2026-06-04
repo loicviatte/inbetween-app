@@ -31,7 +31,7 @@ import { Colors, Fonts, Spacing } from '../../theme';
 import { useCoachData } from '../../context/CoachDataContext';
 import { getStudentFocusPoints, getStudentQuestions, getStudentOpenQuestions, getStudentRecentActivity, getStartClassRoster, markQuestionCovered, linkCoveredQuestionsToClass } from '../../storage/coachStorage';
 import { getLessonReadiness } from '../../storage/storage';
-import { getMyCouples } from '../../storage/coupleStorage';
+import { getMyCouples, getCoupleReadiness, getCoupleFocusPoints, getCoupleActivity } from '../../storage/coupleStorage';
 import QuestionDetailSheet from '../../components/QuestionDetailSheet';
 import {
   getActiveCoachClass,
@@ -334,6 +334,8 @@ function MiniGauge({ value, label }) {
 // `st` is a roster entry from getStartClassRoster() with: id, name, photoUrl,
 // lastPrivateClassDate, lastPrivateDurationMin, readiness (0-100), briefings
 // (focus point summaries), status.
+const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
 function PrivateCard({ st, onPress }) {
   const isSilent = st.status === 'silent';
   const ringColor = isSilent ? '#E84545' : '#E8B530';
@@ -355,51 +357,25 @@ function PrivateCard({ st, onPress }) {
 
   return (
     <TouchableOpacity style={sc.card} onPress={onPress} activeOpacity={0.85}>
-      <View style={sc.cardHead}>
-        <View style={[sc.avRing, { borderColor: ringColor }]}>
-          {st.photoUrl ? (
-            <Image source={{ uri: st.photoUrl }} style={sc.avPhoto} />
-          ) : (
-            <View style={[sc.avFallback, { backgroundColor: avBg }]}>
-              <Text style={[sc.avText, { color: avTextColor }]}>{initial}</Text>
-            </View>
-          )}
-        </View>
-        <View style={{ flex: 1, minWidth: 0 }}>
-          <Text style={sc.cardName} numberOfLines={1}>{st.name}</Text>
-          <Text style={sc.cardMeta} numberOfLines={1}>{metaLine}</Text>
-        </View>
-        <View style={sc.readyWrap}>
-          <Text style={sc.readyN}>
-            {st.readiness}<Text style={sc.readyPct}>%</Text>
-          </Text>
-          <Text style={sc.readyLbl}>READY</Text>
-        </View>
+      <View style={[sc.avRing, { borderColor: ringColor }]}>
+        {st.photoUrl ? (
+          <Image source={{ uri: st.photoUrl }} style={sc.avPhoto} />
+        ) : (
+          <View style={[sc.avFallback, { backgroundColor: avBg }]}>
+            <Text style={[sc.avText, { color: avTextColor }]}>{initial}</Text>
+          </View>
+        )}
       </View>
-
-      {st.briefings.length > 0 ? (
-        <>
-          <View style={sc.cardDivider} />
-          {st.briefings.slice(0, 3).map((b) => {
-            const isStale = b.isStale;
-            return (
-              <View key={b.id} style={sc.fpRow}>
-                <View style={sc.fpBullet}>
-                  <View style={sc.fpBulletInner} />
-                </View>
-                <Text style={sc.fpName} numberOfLines={1}>{b.name}</Text>
-                {isStale ? (
-                  <Text style={sc.fpStale}>stale {b.staleDays || 0}d</Text>
-                ) : (
-                  <Text style={sc.fpSince}>
-                    {b.sessionsSince}<Text style={sc.fpSinceTarget}>/{b.target}</Text>
-                  </Text>
-                )}
-              </View>
-            );
-          })}
-        </>
-      ) : null}
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={sc.cardName} numberOfLines={1}>{st.name}</Text>
+        <Text style={sc.cardMeta} numberOfLines={1}>{metaLine}</Text>
+      </View>
+      <View style={sc.right}>
+        <View style={sc.readyWrap}>
+          <Text style={sc.readyN}>{st.readiness}<Text style={sc.readyPct}>%</Text></Text>
+        </View>
+        <Ionicons name="chevron-forward" size={16} color="rgba(10,10,10,0.4)" />
+      </View>
     </TouchableOpacity>
   );
 }
@@ -408,12 +384,37 @@ export default function StartClassScreen({ navigation }) {
   const { students, getOrFetch } = useCoachData();
 
   const [view, setView] = useState('select');
+  const [pickMode, setPickMode] = useState('solo'); // 'solo' | 'couple' — landing list toggle
+  const modeSlide = useRef(new Animated.Value(0)).current; // 0 = solo, 1 = couple (sliding pill)
+  const [toggleW, setToggleW] = useState(0);
+  const selectMode = (m) => {
+    setPickMode(m);
+    Animated.spring(modeSlide, {
+      toValue: m === 'couple' ? 1 : 0,
+      useNativeDriver: true,
+      friction: 9,
+      tension: 90,
+    }).start();
+  };
   const [selectedStudent, setSelectedStudent] = useState(null);
   const [selectedCouple, setSelectedCouple] = useState(null); // couple class context
   const [couples, setCouples] = useState([]);
   useEffect(() => {
     let alive = true;
-    getMyCouples().then((cs) => { if (alive) setCouples(cs); }).catch(() => {});
+    (async () => {
+      try {
+        const cs = await getMyCouples();
+        // Enrich with the same info as the solo roster: readiness % + last
+        // couple-private date (getMyCouples itself returns neither).
+        const enriched = await Promise.all((cs || []).map(async (c) => {
+          const r = await getCoupleReadiness(c.coupleId, null).catch(() => null);
+          return { ...c, readiness: r?.percent ?? null, lastPrivateClassDate: r?.lastClassDate ?? null };
+        }));
+        if (alive) setCouples(enriched);
+      } catch {
+        if (alive) setCouples([]);
+      }
+    })();
     return () => { alive = false; };
   }, []);
   const [searchQuery, setSearchQuery] = useState('');
@@ -1870,6 +1871,9 @@ export default function StartClassScreen({ navigation }) {
   const [viewingQuestion, setViewingQuestion] = useState(null);
   const [lastClass, setLastClass] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  // Couple detail (mirrors the solo briefing layout, driven by couple data).
+  const [coupleReadinessDetail, setCoupleReadinessDetail] = useState(null);
+  const [coupleFps, setCoupleFps] = useState([]);
   // Readiness pulled from the student's previous private (focuses + tiers).
   // Coach uses this as a "check during the lesson" list and a post-lesson
   // verdict capture (good / not yet).
@@ -1929,6 +1933,37 @@ export default function StartClassScreen({ navigation }) {
       } else {
         setLastClass(null);
       }
+    } catch {}
+    setDetailLoading(false);
+  }, []);
+
+  // Couple equivalent of loadStudentDetail — loads the same kinds of data so the
+  // couple briefing can mirror the solo layout. (Couples have no "class recap"
+  // or "questions" data, so those sections simply don't render.)
+  const loadCoupleDetail = useCallback(async (couple) => {
+    setSelectedCouple(couple);
+    setDetailLoading(true);
+    setView('couple-briefing');
+    try {
+      const ck = `couple:${couple.coupleId}`;
+      const [readiness, fps, activity] = await Promise.all([
+        getOrFetch(`${ck}:readiness`, () => getCoupleReadiness(couple.coupleId, null).catch(() => null)),
+        getOrFetch(`${ck}:fps`, () => getCoupleFocusPoints(couple.coupleId).catch(() => [])),
+        getOrFetch(`${ck}:activity`, () => getCoupleActivity(couple.coupleId, 80).catch(() => [])),
+      ]);
+      // Compute this-week practice counts per focus from the practice logs.
+      const weekAgo = Date.now() - 7 * 86400000;
+      const weekByName = {};
+      for (const ev of activity || []) {
+        if (ev.completedAt && new Date(ev.completedAt).getTime() >= weekAgo) {
+          weekByName[ev.focusName] = (weekByName[ev.focusName] || 0) + 1;
+        }
+      }
+      const enriched = (fps || []).map((fp) => ({ ...fp, weekCount: weekByName[fp.name] || 0 }));
+      setCoupleReadinessDetail(readiness);
+      setCoupleFps(enriched);
+      setReadinessVerdicts({});
+      setQuestionVerdicts({});
     } catch {}
     setDetailLoading(false);
   }, []);
@@ -2799,6 +2834,47 @@ export default function StartClassScreen({ navigation }) {
               Pick a student to see what they've worked on lately.
             </Text>
 
+            {/* Solo / Couple toggle — sliding pill */}
+            <View
+              style={sc.modeToggle}
+              onLayout={(e) => setToggleW(e.nativeEvent.layout.width)}
+            >
+              {toggleW > 0 && (
+                <Animated.View
+                  style={[
+                    sc.modeThumb,
+                    {
+                      width: (toggleW - 10) / 2,
+                      transform: [{
+                        translateX: modeSlide.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [0, (toggleW - 10) / 2],
+                        }),
+                      }],
+                    },
+                  ]}
+                />
+              )}
+              <TouchableOpacity
+                style={sc.modeTab}
+                onPress={() => selectMode('solo')}
+                activeOpacity={0.85}
+              >
+                <View style={[sc.modeDot, { backgroundColor: '#E8B530' }]} />
+                <Text style={[sc.modeTabTxt, pickMode === 'solo' && sc.modeTabTxtOn]}>Solo</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={sc.modeTab}
+                onPress={() => selectMode('couple')}
+                activeOpacity={0.85}
+              >
+                <View style={[sc.modeDot, { backgroundColor: '#2E4670' }]} />
+                <Text style={[sc.modeTabTxt, pickMode === 'couple' && sc.modeTabTxtOn]}>Couple</Text>
+              </TouchableOpacity>
+            </View>
+
+            {pickMode === 'solo' ? (
+              <>
             <View style={sc.eyebrowRow}>
               <View style={sc.eyebrowAccent} />
               <Text style={sc.eyebrowText}>PRIVATE WITH...</Text>
@@ -2822,6 +2898,61 @@ export default function StartClassScreen({ navigation }) {
                   onPress={() => loadStudentDetail(students.find(x => x.id === st.id) || st)}
                 />
               ))
+            )}
+              </>
+            ) : (
+              <>
+            <View style={sc.eyebrowRow}>
+              <View style={[sc.eyebrowAccent, { backgroundColor: '#2E4670' }]} />
+              <Text style={[sc.eyebrowText, { color: '#2E4670' }]}>COUPLES</Text>
+              <View style={sc.eyebrowRule} />
+            </View>
+
+            {couples.length === 0 ? (
+              <Text style={sc.emptyText}>
+                No couples yet — pair two students from their profiles.
+              </Text>
+            ) : (
+              couples.map((c) => {
+                const lp = c.lastPrivateClassDate ? new Date(c.lastPrivateClassDate) : null;
+                const meta = lp
+                  ? `Last private · ${MONTHS[lp.getMonth()]} ${lp.getDate()}`
+                  : 'No couple private yet';
+                return (
+                <TouchableOpacity
+                  key={c.coupleId}
+                  style={sc.card}
+                  activeOpacity={0.85}
+                  onPress={() => loadCoupleDetail(c)}
+                >
+                  <View style={sc.coupleAvWrap}>
+                    {[c.dancerA, c.dancerB].map((d, i) => (
+                      <View key={i} style={[sc.coupleAv, i === 1 && sc.coupleAv2]}>
+                        {d?.avatarUrl ? (
+                          <Image source={{ uri: d.avatarUrl }} style={sc.coupleAvPhoto} />
+                        ) : (
+                          <Text style={sc.coupleAvText}>{(d?.name || '?')[0]?.toUpperCase()}</Text>
+                        )}
+                      </View>
+                    ))}
+                  </View>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={sc.cardName} numberOfLines={1}>{c.name}</Text>
+                    <Text style={sc.cardMeta} numberOfLines={1}>{meta}</Text>
+                  </View>
+                  <View style={sc.right}>
+                    {c.readiness != null && (
+                      <View style={sc.readyWrap}>
+                        <Text style={sc.readyN}>{c.readiness}<Text style={sc.readyPct}>%</Text></Text>
+                      </View>
+                    )}
+                    <Ionicons name="chevron-forward" size={16} color="rgba(10,10,10,0.4)" />
+                  </View>
+                </TouchableOpacity>
+                );
+              })
+            )}
+              </>
             )}
 
             <View style={sc.orRow}>
@@ -2876,24 +3007,6 @@ export default function StartClassScreen({ navigation }) {
                 })}
               </View>
             </TouchableOpacity>
-
-            {couples.length > 0 && couples.map((c) => (
-              <TouchableOpacity
-                key={c.coupleId}
-                style={[sc.groupCard, { marginTop: 10 }]}
-                activeOpacity={0.88}
-                onPress={() => { setSelectedCouple(c); setView('couple-briefing'); }}
-              >
-                <View style={[sc.groupIconBtn, { backgroundColor: 'rgba(46,70,112,0.12)' }]}>
-                  <Ionicons name="heart" size={18} color="#2E4670" />
-                </View>
-                <View style={{ flex: 1, minWidth: 0 }}>
-                  <Text style={sc.groupTitle}>{c.name}</Text>
-                  <Text style={sc.groupSub}>Couple lesson</Text>
-                </View>
-                <Ionicons name="chevron-forward" size={18} color="#B0B0B0" />
-              </TouchableOpacity>
-            ))}
           </ScrollView>
         </SafeAreaView>
       </View>
@@ -3288,32 +3401,193 @@ export default function StartClassScreen({ navigation }) {
   // start/stop bottom bar + debrief; startClassNow/finishDebrief branch on
   // view === 'couple-briefing' + selectedCouple). ──────────────────────────
   if (view === 'couple-briefing' && selectedCouple) {
+    const c = selectedCouple;
+    const readiness = coupleReadinessDetail;
+    const readinessFocuses = readiness?.focuses || [];
+    const sessionsCount = readinessFocuses.reduce((a, f) => a + (f.done || 0), 0);
+    const focusTrained = readinessFocuses.filter((f) => (f.done || 0) > 0).length;
+    const trainedPoints = (coupleFps || []).filter((fp) => (fp.weekCount || 0) > 0);
+    const stuckPoints = (coupleFps || []).filter((fp) => (fp.weekCount || 0) === 0);
+    const totalFps = (coupleFps || []).length;
+    const alertLabel = readiness == null
+      ? 'No couple private yet'
+      : readiness.percent >= 100 ? 'Ready for this lesson' : 'Carryover to review';
+    const alertColor = readiness == null ? C.gray : readiness.percent >= 100 ? C.green : C.orange;
+    const seenLabel = readiness?.lastClassDate ? relativeShort(readiness.lastClassDate) : '—';
+    const dancers = [c.dancerA, c.dancerB];
+
     return (
       <SafeAreaView style={s.safe} edges={['top']}>
         <View style={{ flex: 1 }}>
-          <View style={s.headerRow}>
-            <TouchableOpacity onPress={() => { setView('select'); setSelectedCouple(null); }} style={s.backBtn} activeOpacity={0.7}>
-              <Ionicons name="chevron-back" size={22} color={C.text} />
-            </TouchableOpacity>
-            <Text style={sc.cbTitle} numberOfLines={1}>{selectedCouple.name}</Text>
-            <View style={{ width: 40 }} />
-          </View>
-          <ScrollView contentContainerStyle={{ paddingBottom: 140 }} showsVerticalScrollIndicator={false}>
-            <View style={sc.cbHero}>
-              <View style={sc.cbIcon}><Ionicons name="heart" size={26} color="#2E4670" /></View>
-              <Text style={sc.cbName}>{selectedCouple.name}</Text>
-              <Text style={sc.cbSub}>{selectedCouple.dancerA?.name} & {selectedCouple.dancerB?.name}</Text>
-              <Text style={sc.cbStyles}>
-                {[selectedCouple.doesLatin && 'Latin', selectedCouple.doesBallroom && 'Ballroom'].filter(Boolean).join(' · ') || 'Couple'}
-              </Text>
-              <Text style={sc.cbHint}>
-                Record the couple lesson. Shared corrections become couple focus points; individual ones go to each dancer.
+        <Animated.ScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={{ paddingTop: HERO_FULL + 76, paddingBottom: 120 }}
+          scrollEventThrottle={16}
+          onScroll={Animated.event(
+            [{ nativeEvent: { contentOffset: { y: pbScrollY } } }],
+            { useNativeDriver: false }
+          )}
+        >
+          {/* AI Debrief */}
+          {(trainedPoints.length > 0 || stuckPoints.length > 0) && (
+            <View style={pb.debriefWrap}>
+              <View style={pb.debriefEyebrow}>
+                <View style={pb.debriefEyebrowIcon}>
+                  <Ionicons name="flash" size={10} color={C.orange} />
+                </View>
+                <Text style={pb.debriefEyebrowText}>AI Debrief</Text>
+              </View>
+              <Text style={pb.debriefBody}>
+                {focusTrained > 0 ? (
+                  <Text>
+                    {c.name} completed{' '}
+                    <Text style={pb.debriefStrong}>{sessionsCount} couple session{sessionsCount > 1 ? 's' : ''}</Text>
+                    {' '}and practiced {focusTrained} of {readinessFocuses.length} carryover focus points.
+                  </Text>
+                ) : (
+                  <Text>No couple focus points practiced since the last lesson. </Text>
+                )}
+                {stuckPoints.length > 0 && (
+                  <Text>
+                    {' '}
+                    <Text style={pb.debriefEm}>"{stuckPoints[0].name}"</Text> has had zero practice despite being flagged.
+                  </Text>
+                )}
               </Text>
             </View>
-          </ScrollView>
-          {renderBottomBar()}
+          )}
+
+          {/* Carryover from last couple private — what to check this lesson */}
+          {!!readiness && readinessFocuses.length > 0 ? (
+            <View style={pb.checkCard}>
+              <View style={pb.checkHeader}>
+                <View style={pb.checkBadge}>
+                  <Text style={pb.checkBadgeText}>CHECK DURING THIS LESSON</Text>
+                </View>
+                <Text style={pb.checkPct}>{readiness.percent}%</Text>
+              </View>
+              <Text style={pb.checkHint}>
+                Carryover from the couple's last private. Validate each at the end.
+              </Text>
+              <View style={pb.checkRows}>
+                {readinessFocuses.map((f) => {
+                  const tierColor =
+                    f.tier === 'critical' ? C.red : f.tier === 'important' ? C.orange : C.gray;
+                  return (
+                    <View key={f.focusPointId} style={pb.checkRow}>
+                      <View style={[pb.checkDot, { backgroundColor: tierColor }]} />
+                      <Text style={pb.checkName} numberOfLines={1}>{f.name}</Text>
+                      <Text style={[pb.checkTier, { color: tierColor }]}>{f.tier}</Text>
+                      <View style={pb.checkProgress}>
+                        <Text style={pb.checkProgressText}>
+                          {f.done}<Text style={pb.checkProgressOf}>/{f.target}</Text>
+                        </Text>
+                      </View>
+                    </View>
+                  );
+                })}
+              </View>
+            </View>
+          ) : null}
+
+          {/* Focus points trained this week */}
+          {trainedPoints.length > 0 && (
+            <>
+              <Text style={pb.secLabel}>Focus points trained this week</Text>
+              <View style={pb.focusWrap}>
+                {trainedPoints.map((fp) => (
+                  <View key={fp.id} style={pb.fpRow}>
+                    <View style={pb.fpStatus}>
+                      <Ionicons name="checkmark" size={14} color={C.green} />
+                    </View>
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={pb.fpName} numberOfLines={1}>{fp.name}</Text>
+                    </View>
+                    <View style={pb.fpBadge}>
+                      <Text style={pb.fpBadgeText}>{fp.weekCount}x</Text>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            </>
+          )}
+        </Animated.ScrollView>
+
+        {/* Backdrop masking content as it scrolls up behind the hero */}
+        <Animated.View
+          pointerEvents="none"
+          style={[pb.stickyBackdrop, { height: Animated.add(heroAnimHeight, 70) }]}
+        />
+
+        {/* Floating back arrow */}
+        <TouchableOpacity
+          onPress={() => { setView('select'); setSelectedCouple(null); }}
+          style={pb.floatingBack}
+          activeOpacity={0.7}
+          hitSlop={12}
+        >
+          <Ionicons name="chevron-back" size={22} color={C.text} />
+        </TouchableOpacity>
+
+        {/* Sticky collapsing hero — pair avatars + couple readiness */}
+        <Animated.View
+          pointerEvents="box-none"
+          style={[pb.stickyHero, { height: heroAnimHeight }]}
+        >
+          <View style={pb.heroTop}>
+            <View style={sc.cbHeroPair}>
+              {dancers.map((d, i) => (
+                <View key={i} style={[sc.cbHeroAv, i === 1 && { marginLeft: -16 }]}>
+                  {d?.avatarUrl ? (
+                    <Image source={{ uri: d.avatarUrl }} style={sc.cbHeroAvImg} />
+                  ) : (
+                    <Text style={sc.cbHeroAvTxt}>{(d?.name || '?')[0]?.toUpperCase()}</Text>
+                  )}
+                </View>
+              ))}
+            </View>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={pb.heroName} numberOfLines={1}>{c.name}</Text>
+              <Text style={pb.heroSub}>
+                {readiness?.percent != null
+                  ? <><Text style={pb.heroSubStrong}>{readiness.percent}%</Text> ready for this lesson</>
+                  : <>No couple private logged yet</>}
+              </Text>
+            </View>
+          </View>
+
+          <Animated.View style={{ opacity: heroDetailsOpacity }} pointerEvents="none">
+            <View style={pb.statsRow}>
+              <View style={pb.stat}>
+                <Text style={pb.statVal}>{sessionsCount}</Text>
+                <Text style={pb.statLabel}>Sessions</Text>
+              </View>
+              <View style={pb.statDivider} />
+              <View style={pb.stat}>
+                <Text style={pb.statVal}>{focusTrained}</Text>
+                <Text style={pb.statLabel}>Focus trained</Text>
+              </View>
+              <View style={pb.statDivider} />
+              <View style={pb.stat}>
+                <Text style={pb.statVal}>{totalFps}</Text>
+                <Text style={pb.statLabel}>Focuses</Text>
+              </View>
+            </View>
+
+            <View style={pb.alert}>
+              <View style={[pb.alertDot, { backgroundColor: alertColor }]} />
+              <Text style={pb.alertText}>{alertLabel}</Text>
+              <Text style={pb.alertTime}>{seenLabel}</Text>
+            </View>
+          </Animated.View>
+        </Animated.View>
         </View>
+
+        {renderBottomBar()}
+        {renderAudioModal()}
         {renderDebriefModal()}
+        {renderRecStartConfirmPrompt()}
+        {renderRecStopConfirmPrompt()}
       </SafeAreaView>
     );
   }
@@ -5746,13 +6020,16 @@ const sc = StyleSheet.create({
 
   // Per-student card
   card: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
     backgroundColor: 'rgba(255,255,255,0.85)',
-    borderRadius: 18,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
     borderWidth: 1,
     borderColor: 'rgba(232,181,48,0.30)',
-    marginBottom: 14,
+    marginBottom: 10,
   },
   cardHead: {
     flexDirection: 'row',
@@ -5760,53 +6037,53 @@ const sc = StyleSheet.create({
     gap: 12,
   },
   avRing: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    borderWidth: 2.5,
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    borderWidth: 2,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#FFFFFF',
   },
-  avPhoto: { width: 42, height: 42, borderRadius: 21 },
+  avPhoto: { width: 38, height: 38, borderRadius: 19 },
   avFallback: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     alignItems: 'center',
     justifyContent: 'center',
   },
   avText: {
     fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 16,
+    fontSize: 15,
   },
   cardName: {
     fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 19,
+    fontSize: 17,
     color: '#0A0A0A',
-    letterSpacing: -0.4,
+    letterSpacing: -0.3,
   },
   cardMeta: {
     fontFamily: Fonts.jakartaMedium,
     fontSize: 12.5,
-    color: 'rgba(10,10,10,0.55)',
+    color: 'rgba(10,10,10,0.5)',
     marginTop: 2,
   },
   readyWrap: {
-    alignItems: 'flex-end',
+    flexDirection: 'row',
+    alignItems: 'baseline',
     flexShrink: 0,
   },
   readyN: {
     fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 26,
+    fontSize: 19,
     color: '#0A0A0A',
-    letterSpacing: -0.6,
-    lineHeight: 28,
+    letterSpacing: -0.5,
   },
   readyPct: {
     fontFamily: Fonts.jakartaSemiBold,
-    fontSize: 13,
-    color: 'rgba(10,10,10,0.55)',
+    fontSize: 11.5,
+    color: 'rgba(10,10,10,0.45)',
   },
   readyLbl: {
     fontFamily: Fonts.jakartaExtraBold,
@@ -5814,6 +6091,117 @@ const sc = StyleSheet.create({
     color: 'rgba(10,10,10,0.55)',
     letterSpacing: 1.4,
     marginTop: 1,
+  },
+  right: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flexShrink: 0,
+  },
+
+  // Solo / Couple toggle
+  modeToggle: {
+    flexDirection: 'row',
+    backgroundColor: 'rgba(255,255,255,0.55)',
+    borderRadius: 999,
+    padding: 5,
+    borderWidth: 1,
+    borderColor: 'rgba(10,10,10,0.06)',
+    marginTop: 2,
+    marginBottom: 20,
+  },
+  modeTab: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 11,
+    borderRadius: 999,
+  },
+  modeThumb: {
+    position: 'absolute',
+    top: 5,
+    bottom: 5,
+    left: 5,
+    borderRadius: 999,
+    backgroundColor: '#0A0A0A',
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowOffset: { width: 0, height: 3 },
+    shadowRadius: 8,
+    elevation: 2,
+  },
+
+  // Couple row — two dancers' avatars overlapping. Height matches the solo
+  // avatar (avRing, 46) so couple + solo cards are exactly the same height.
+  coupleAvWrap: {
+    height: 46,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  coupleAv: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+    backgroundColor: '#4E6A5C',
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  coupleAv2: {
+    marginLeft: -12,
+  },
+  coupleAvPhoto: {
+    width: '100%',
+    height: '100%',
+  },
+  coupleAvText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 13,
+    color: '#FFFFFF',
+  },
+
+  // Couple briefing hero — pair avatars
+  cbHeroPair: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  cbHeroAv: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    borderWidth: 2.5,
+    borderColor: '#FFFFFF',
+    backgroundColor: '#4E6A5C',
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cbHeroAvImg: {
+    width: '100%',
+    height: '100%',
+  },
+  cbHeroAvTxt: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 17,
+    color: '#FFFFFF',
+  },
+  modeDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+  },
+  modeTabTxt: {
+    fontFamily: Fonts.jakartaBold,
+    fontSize: 15,
+    color: 'rgba(10,10,10,0.5)',
+    letterSpacing: 0.2,
+  },
+  modeTabTxtOn: {
+    color: '#FFFFFF',
   },
 
   cardDivider: {

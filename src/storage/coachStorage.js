@@ -1312,20 +1312,32 @@ export async function getTotalCoachedMinutes() {
   const coachId = await getCoachId();
   const { data: classes } = await supabase
     .from('class_inputs')
-    .select('id')
+    .select('id, lesson_type')
     .eq('user_id', coachId)
     .eq('is_deleted', false);
-  const classIds = (classes || []).map(c => c.id);
-  if (classIds.length === 0) return 0;
+  const list = classes || [];
+  if (list.length === 0) return 0;
+
+  // Real recorded durations, when a class was captured with the recorder.
   const { data: recordings } = await supabase
     .from('class_recordings')
-    .select('duration_ms')
-    .in('class_input_id', classIds);
-  const totalMs = (recordings || []).reduce(
-    (sum, r) => sum + (r?.duration_ms || 0),
-    0,
-  );
-  return Math.round(totalMs / 60000);
+    .select('class_input_id, duration_ms')
+    .in('class_input_id', list.map((c) => c.id));
+  const recMsByClass = {};
+  for (const r of recordings || []) {
+    recMsByClass[r.class_input_id] = (recMsByClass[r.class_input_id] || 0) + (r?.duration_ms || 0);
+  }
+
+  // Manually-logged classes (no recording, or zero-length) still count toward
+  // coached hours — estimated at a typical lesson length per type. Hours were
+  // stuck at 0 for coaches who log classes without recording audio.
+  const DEFAULT_MIN = { private: 45, couple: 45, group: 60 };
+  let totalMin = 0;
+  for (const c of list) {
+    const ms = recMsByClass[c.id] || 0;
+    totalMin += ms > 0 ? ms / 60000 : (DEFAULT_MIN[c.lesson_type] ?? 45);
+  }
+  return Math.round(totalMin);
 }
 
 // Roster used by the StartClass landing screen — for each of the coach's

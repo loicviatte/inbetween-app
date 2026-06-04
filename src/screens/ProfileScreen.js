@@ -45,6 +45,7 @@ import { supabase } from '../services/supabase/client';
 import HeroCardGradient from '../components/HeroCardGradient';
 import QuestionDetailSheet from '../components/QuestionDetailSheet';
 import RadarChart, { RADAR_LABELS } from '../components/RadarChart';
+import BottomSheet from '../components/BottomSheet';
 import { useProfile } from '../context/ProfileContext';
 import { clearUserCaches } from '../storage/userCaches';
 import {
@@ -236,14 +237,39 @@ const PROFILE_TABS = [
   { key: 'settings', label: 'Settings' },
 ];
 function SubTabs({ active, onChange }) {
+  const [barW, setBarW] = useState(0);
+  const slide = useRef(new Animated.Value(0)).current;
+  const idx = Math.max(0, PROFILE_TABS.findIndex((t) => t.key === active));
+  useEffect(() => {
+    Animated.spring(slide, { toValue: idx, useNativeDriver: true, friction: 9, tension: 90 }).start();
+  }, [idx, slide]);
+  const n = PROFILE_TABS.length;
+  const thumbW = barW > 0 ? (barW - 8) / n : 0;
   return (
-    <View style={tab.bar}>
+    <View style={tab.bar} onLayout={(e) => setBarW(e.nativeEvent.layout.width)}>
+      {barW > 0 && (
+        <Animated.View
+          pointerEvents="none"
+          style={[
+            tab.thumb,
+            {
+              width: thumbW,
+              transform: [{
+                translateX: slide.interpolate({
+                  inputRange: PROFILE_TABS.map((_, i) => i),
+                  outputRange: PROFILE_TABS.map((_, i) => i * thumbW),
+                }),
+              }],
+            },
+          ]}
+        />
+      )}
       {PROFILE_TABS.map((t) => {
         const on = active === t.key;
         return (
           <TouchableOpacity
             key={t.key}
-            style={[tab.btn, on && tab.btnOn]}
+            style={tab.btn}
             onPress={() => onChange(t.key)}
             activeOpacity={0.8}
           >
@@ -691,20 +717,14 @@ function PartnerModal({
   }
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
-        <Pressable style={em.overlay} onPress={onClose}>
-          <Pressable style={em.sheet} onPress={() => {}}>
-            <View style={em.handle} />
-            <Text style={em.title}>Dance partner</Text>
-            {body}
-            <TouchableOpacity style={[em.cancelBtn, { marginTop: 16 }]} onPress={onClose} activeOpacity={0.7}>
-              <Text style={em.cancelBtnText}>Close</Text>
-            </TouchableOpacity>
-          </Pressable>
-        </Pressable>
-      </KeyboardAvoidingView>
-    </Modal>
+    <BottomSheet visible={visible} onClose={onClose} sheetStyle={em.sheet} avoidKeyboard>
+      <View style={em.handle} />
+      <Text style={em.title}>Dance partner</Text>
+      {body}
+      <TouchableOpacity style={[em.cancelBtn, { marginTop: 16 }]} onPress={onClose} activeOpacity={0.7}>
+        <Text style={em.cancelBtnText}>Close</Text>
+      </TouchableOpacity>
+    </BottomSheet>
   );
 }
 
@@ -714,7 +734,7 @@ export default function ProfileScreen({ navigation }) {
   const [isLoading, setIsLoading] = useState(true);
   const hasLoadedRef = useRef(false);
   const [user, setUser] = useState(null);
-  const [activeTab, setActiveTab] = useState('links'); // 'links' | 'stats' | 'settings'
+  const [activeTab, setActiveTab] = useState('stats'); // 'links' | 'stats' | 'settings' — default to Statistics on first mount
   const [stats, setStats] = useState({ totalClasses: 0, totalSessions: 0, activeFocusAreas: 0 });
   const [activityStats, setActivityStats] = useState({ bestStreakDays: 0, monthMinutes: 0 });
   const [radarScores, setRadarScores] = useState([0, 0, 0, 0, 0]);
@@ -1538,6 +1558,17 @@ export default function ProfileScreen({ navigation }) {
                   </View>
                 </View>
 
+                <View style={stat.miniCard}>
+                  <View style={stat.miniHalf}>
+                    <Text style={stat.miniLabel}>Best streak</Text>
+                    <Text style={stat.miniVal}>{streakLabel}</Text>
+                  </View>
+                  <View style={stat.miniHalfRight}>
+                    <Text style={stat.miniLabel}>This month</Text>
+                    <Text style={stat.miniVal}>{monthLabel}</Text>
+                  </View>
+                </View>
+
                 <SecLabel text="Get ready for next private lesson" plain />
 
                 {paired && (
@@ -1601,22 +1632,6 @@ export default function ProfileScreen({ navigation }) {
                     </>
                   )}
                 </View>
-
-                <SecLabel text="Strengths" right="Last 30 days" />
-                <View style={strengths.card}>
-                  <RadarChart scores={radarScores} strongestIndex={strongestIdx} />
-                </View>
-
-                <View style={stat.miniCard}>
-                  <View style={stat.miniHalf}>
-                    <Text style={stat.miniLabel}>Best streak</Text>
-                    <Text style={stat.miniVal}>{streakLabel}</Text>
-                  </View>
-                  <View style={stat.miniHalfRight}>
-                    <Text style={stat.miniLabel}>This month</Text>
-                    <Text style={stat.miniVal}>{monthLabel}</Text>
-                  </View>
-                </View>
               </View>
             )}
 
@@ -1660,10 +1675,7 @@ export default function ProfileScreen({ navigation }) {
           </ScrollView>
 
           {/* Account / Dance style / Dance studio — one sheet, focused per mode */}
-          <Modal visible={!!profileModal} transparent animationType="slide" onRequestClose={() => setProfileModal(null)}>
-            <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
-              <Pressable style={em.overlay} onPress={() => setProfileModal(null)}>
-                <Pressable style={em.sheet} onPress={() => {}}>
+          <BottomSheet visible={!!profileModal} onClose={() => setProfileModal(null)} sheetStyle={em.sheet} avoidKeyboard>
                   <View style={em.handle} />
 
                   {profileModal === 'account' && (
@@ -1752,16 +1764,10 @@ export default function ProfileScreen({ navigation }) {
                   <TouchableOpacity style={em.cancelBtn} onPress={() => setProfileModal(null)} activeOpacity={0.7}>
                     <Text style={em.cancelBtnText}>Cancel</Text>
                   </TouchableOpacity>
-                </Pressable>
-              </Pressable>
-            </KeyboardAvoidingView>
-          </Modal>
+          </BottomSheet>
 
           {/* Coach Linking Modal — opens when tapping a teacher slot */}
-          <Modal visible={!!coachModal} transparent animationType="slide" onRequestClose={() => setCoachModal(null)}>
-            <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
-              <Pressable style={em.overlay} onPress={() => setCoachModal(null)}>
-                <Pressable style={em.sheet} onPress={() => {}}>
+          <BottomSheet visible={!!coachModal} onClose={() => setCoachModal(null)} sheetStyle={em.sheet} avoidKeyboard>
                   <View style={em.handle} />
                   <Text style={em.title}>
                     {coachModal?.category === 'latin' ? 'Latin Teacher'
@@ -1804,16 +1810,10 @@ export default function ProfileScreen({ navigation }) {
                   <TouchableOpacity style={[em.cancelBtn, { marginTop: 16 }]} onPress={() => setCoachModal(null)} activeOpacity={0.7}>
                     <Text style={em.cancelBtnText}>Close</Text>
                   </TouchableOpacity>
-                </Pressable>
-              </Pressable>
-            </KeyboardAvoidingView>
-          </Modal>
+          </BottomSheet>
 
           {/* Couple-coach Modal — opens when tapping a couple-coach row */}
-          <Modal visible={!!coupleCoachModal} transparent animationType="slide" onRequestClose={() => setCoupleCoachModal(null)}>
-            <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
-              <Pressable style={em.overlay} onPress={() => setCoupleCoachModal(null)}>
-                <Pressable style={em.sheet} onPress={() => {}}>
+          <BottomSheet visible={!!coupleCoachModal} onClose={() => setCoupleCoachModal(null)} sheetStyle={em.sheet} avoidKeyboard>
                   <View style={em.handle} />
                   {coupleCoachModal && (
                     <CoupleCoachSheet
@@ -1826,16 +1826,10 @@ export default function ProfileScreen({ navigation }) {
                   <TouchableOpacity style={[em.cancelBtn, { marginTop: 16 }]} onPress={() => setCoupleCoachModal(null)} activeOpacity={0.7}>
                     <Text style={em.cancelBtnText}>Close</Text>
                   </TouchableOpacity>
-                </Pressable>
-              </Pressable>
-            </KeyboardAvoidingView>
-          </Modal>
+          </BottomSheet>
 
           {/* Couple change Modal — propose new dance types / leader (partner-approved) */}
-          <Modal visible={!!coupleEditModal} transparent animationType="slide" onRequestClose={() => setCoupleEditModal(null)}>
-            <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
-              <Pressable style={em.overlay} onPress={() => setCoupleEditModal(null)}>
-                <Pressable style={em.sheet} onPress={() => {}}>
+          <BottomSheet visible={!!coupleEditModal} onClose={() => setCoupleEditModal(null)} sheetStyle={em.sheet} avoidKeyboard>
                   <View style={em.handle} />
                   {coupleEditModal && couple && (
                     <CoupleEditSheet
@@ -1851,16 +1845,10 @@ export default function ProfileScreen({ navigation }) {
                   <TouchableOpacity style={[em.cancelBtn, { marginTop: 8 }]} onPress={() => setCoupleEditModal(null)} activeOpacity={0.7}>
                     <Text style={em.cancelBtnText}>Cancel</Text>
                   </TouchableOpacity>
-                </Pressable>
-              </Pressable>
-            </KeyboardAvoidingView>
-          </Modal>
+          </BottomSheet>
 
           {/* Couple change review Modal — partner approves / declines a staged change */}
-          <Modal visible={coupleReviewVisible} transparent animationType="slide" onRequestClose={() => setCoupleReviewVisible(false)}>
-            <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
-              <Pressable style={em.overlay} onPress={() => setCoupleReviewVisible(false)}>
-                <Pressable style={em.sheet} onPress={() => {}}>
+          <BottomSheet visible={coupleReviewVisible} onClose={() => setCoupleReviewVisible(false)} sheetStyle={em.sheet} avoidKeyboard>
                   <View style={em.handle} />
                   {coupleReviewVisible && couple?.pendingChange && (
                     <CoupleReviewSheet
@@ -1873,10 +1861,7 @@ export default function ProfileScreen({ navigation }) {
                   <TouchableOpacity style={[em.cancelBtn, { marginTop: 8 }]} onPress={() => setCoupleReviewVisible(false)} activeOpacity={0.7}>
                     <Text style={em.cancelBtnText}>Close</Text>
                   </TouchableOpacity>
-                </Pressable>
-              </Pressable>
-            </KeyboardAvoidingView>
-          </Modal>
+          </BottomSheet>
 
           {/* ── Partner pairing modal ── */}
           <PartnerModal
@@ -2072,7 +2057,6 @@ const styles = StyleSheet.create({
 const tab = StyleSheet.create({
   bar: {
     flexDirection: 'row',
-    gap: 4,
     backgroundColor: 'rgba(255,255,255,0.45)',
     borderWidth: 1,
     borderColor: 'rgba(10,10,10,0.09)',
@@ -2086,7 +2070,12 @@ const tab = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  btnOn: {
+  thumb: {
+    position: 'absolute',
+    top: 4,
+    bottom: 4,
+    left: 4,
+    borderRadius: 999,
     backgroundColor: '#0A0A0A',
     shadowColor: '#0A0A0A',
     shadowOpacity: 0.25,

@@ -49,6 +49,28 @@ type ExpiredFP = {
 async function sweep() {
   const now = new Date().toISOString()
 
+  // Couple focus points — same 18h auto-publish (no per-dancer attendance),
+  // run independently of the solo sweep below.
+  let couplePublished = 0
+  {
+    const { data: ec } = await supabase
+      .from('couple_focus_points')
+      .select('id')
+      .eq('status', 'pending_coach')
+      .eq('is_deleted', false)
+      .lte('coach_review_deadline', now)
+      .limit(MAX_PER_RUN)
+    if (ec && ec.length > 0) {
+      const ids = ec.map((r: any) => r.id)
+      const { error: ce } = await supabase
+        .from('couple_focus_points')
+        .update({ status: 'active', coach_review_deadline: null })
+        .in('id', ids)
+      if (ce) console.error('[publish-expired-fps] couple publish failed:', ce.message)
+      else couplePublished = ids.length
+    }
+  }
+
   const { data: expired, error } = await supabase
     .from('focus_points')
     .select('id, user_id, group_fp, source_class_input_id')
@@ -59,7 +81,7 @@ async function sweep() {
 
   if (error) throw new Error(`load expired FPs: ${error.message}`)
   if (!expired || expired.length === 0) {
-    return { published: 0, dropped: 0, total: 0 }
+    return { published: 0, dropped: 0, couplePublished, total: 0 }
   }
 
   // Pre-fetch attendance for the group FPs in one batch — avoids N+1 when
@@ -119,11 +141,12 @@ async function sweep() {
   }
 
   console.log(
-    `[publish-expired-fps] swept ${expired.length} (published ${toPublish.length}, dropped ${toDrop.length})`,
+    `[publish-expired-fps] swept ${expired.length} (published ${toPublish.length}, dropped ${toDrop.length}, couple ${couplePublished})`,
   )
   return {
     published: toPublish.length,
     dropped: toDrop.length,
+    couplePublished,
     total: expired.length,
   }
 }
