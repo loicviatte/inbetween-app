@@ -55,6 +55,7 @@ import HeroCardGradient from '../components/HeroCardGradient';
 const MIN_SESSION_SECONDS = 180; // 3 minutes
 import { getFocusPoints, getClassInputsForFocus, getClassInputs, getTrainingSessionsThisWeek, getTeacherContextForAI, askCoach } from '../storage/storage';
 import { callClaudeChat } from '../services/ai/anthropic';
+import { supabase } from '../services/supabase/client';
 import { completeTrainingSession, getSessionLabel } from '../utils/algorithm';
 import {
   setActiveSession,
@@ -68,18 +69,19 @@ import {
   endFocusPoint as laEndFocusPoint,
 } from 'live-activities';
 
-const OPENAI_API_KEY = process.env.EXPO_PUBLIC_OPENAI_API_KEY;
-
+// Whisper transcription via the server-side proxy at
+// supabase/functions/whisper-transcribe. The OpenAI key never ships in the
+// mobile bundle and every call gets logged into ai_call_logs for cost
+// tracking on the admin dashboard.
 async function transcribeAudio(uri) {
-  if (!OPENAI_API_KEY || OPENAI_API_KEY.startsWith('sk-ant-')) {
-    throw new Error('NO_OPENAI_KEY');
-  }
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session?.access_token) throw new Error('NO_AUTH_SESSION');
   const formData = new FormData();
   formData.append('file', { uri, type: 'audio/m4a', name: 'recording.m4a' });
-  formData.append('model', 'whisper-1');
-  const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+  const url = `${process.env.EXPO_PUBLIC_SUPABASE_URL}/functions/v1/whisper-transcribe`;
+  const res = await fetch(url, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
+    headers: { Authorization: `Bearer ${session.access_token}` },
     body: formData,
   });
   if (!res.ok) {
@@ -1716,8 +1718,8 @@ I don't have that in your data, but you can send the question to your coach if y
       const text = await transcribeAudio(uri);
       if (text) setAiQuestion(prev => (prev ? prev + ' ' : '') + text);
     } catch (e) {
-      if (e.message === 'NO_OPENAI_KEY') {
-        Alert.alert('OpenAI key missing', 'Add EXPO_PUBLIC_OPENAI_API_KEY to your .env and restart.');
+      if (e.message === 'NO_AUTH_SESSION') {
+        Alert.alert('Not signed in', 'Sign in to transcribe voice notes.');
       } else {
         Alert.alert('Transcription failed', e.message);
       }
