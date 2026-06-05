@@ -239,6 +239,21 @@ export async function getCoupleSlots(coupleId, category = null) {
     const list = (readiness?.focuses || [])
       .map((f) => byId.get(f.focusPointId))
       .filter((fp) => fp && focusMatchesCategory(fp, category));
+
+    // Once the couple's readiness checklist is done, surface held ("Not yet")
+    // couple focuses so they re-enter Train and can graduate after 15 min of
+    // cumulative practice (the archive_held_couple_fp trigger). Mirrors getSlots.
+    if (readiness && readiness.percent >= 100) {
+      const seen = new Set(list.filter(Boolean).map((p) => p.id));
+      for (const p of points) {
+        if (!p.is_held) continue;
+        if (p.status === 'past' || p.status === 'pending_coach') continue;
+        if (seen.has(p.id)) continue;
+        if (!focusMatchesCategory(p, category)) continue;
+        list.push(p);
+      }
+    }
+
     return {
       slot1: list[0] || null,
       slot2: list[1] || null,

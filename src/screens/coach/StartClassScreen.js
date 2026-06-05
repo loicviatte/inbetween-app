@@ -1702,12 +1702,15 @@ export default function StartClassScreen({ navigation }) {
     //               readiness checklist until the student finishes the
     //               new class's primary focuses (then it re-enters with
     //               a 15-minute training target)
+    // Couple debriefs write to couple_focus_points (the verdict ids are couple
+    // FP ids); the recording coach is the couple coach so RLS allows it.
+    const verdictTable = view === 'couple-briefing' ? 'couple_focus_points' : 'focus_points';
     const goodIds = Object.entries(readinessVerdicts)
       .filter(([, verdict]) => verdict === 'good')
       .map(([id]) => id);
     if (goodIds.length > 0) {
       supabase
-        .from('focus_points')
+        .from(verdictTable)
         .update({ status: 'past' })
         .in('id', goodIds)
         .then(() => {}, (err) => {
@@ -1719,7 +1722,7 @@ export default function StartClassScreen({ navigation }) {
       .map(([id]) => id);
     if (notYetIds.length > 0) {
       supabase
-        .from('focus_points')
+        .from(verdictTable)
         .update({ is_held: true })
         .in('id', notYetIds)
         .then(() => {}, (err) => {
@@ -2168,9 +2171,12 @@ export default function StartClassScreen({ navigation }) {
     // Focus-verdict gating: the coach must pick Good or Not yet for every
     // carryover focus before Done becomes enabled. The point is to force
     // a moment of reflection on each one — no autopilot Done.
-    const carryoverFocuses = (view === 'private-briefing' && studentReadiness)
-      ? (studentReadiness.focuses || [])
-      : [];
+    const carryoverFocuses =
+      view === 'couple-briefing'
+        ? (coupleReadinessDetail?.focuses || [])
+        : (view === 'private-briefing' && studentReadiness)
+          ? (studentReadiness.focuses || [])
+          : [];
     const allFocusesVerdicted = carryoverFocuses.length === 0
       || carryoverFocuses.every(f => !!readinessVerdicts[f.focusPointId]);
 
@@ -2230,15 +2236,13 @@ export default function StartClassScreen({ navigation }) {
               <Text style={db.noteHint}>Optional — visible to the student after the class.</Text>
             </View>
 
-            {/* Readiness verdicts: only on private lessons, only if the
-                 student had carryover focuses to validate. */}
-            {view === 'private-briefing'
-              && !!studentReadiness
-              && (studentReadiness.focuses || []).length > 0 && (
+            {/* Readiness verdicts — carryover focuses to validate. Solo and
+                 couple alike: good → archive, not yet → held (15-min target). */}
+            {carryoverFocuses.length > 0 && (
               <>
                 <Text style={db.secLabel}>How did it go?</Text>
                 <View style={db.verdictList}>
-                  {studentReadiness.focuses.map((f) => {
+                  {carryoverFocuses.map((f) => {
                     const verdict = readinessVerdicts[f.focusPointId];
                     return (
                       <View key={f.focusPointId} style={db.verdictRow}>
