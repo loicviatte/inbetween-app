@@ -538,22 +538,45 @@ export async function getPendingCoupleFocusPoints() {
   return (data || []).map((fp) => ({ ...fp, coupleName: byId.get(fp.couple_id)?.name || 'Couple' }));
 }
 
+// Clear the coach's "new couple focus points" bell notifications for a couple
+// once they've reviewed them (mirror of the solo markFocusAdded… helper; the
+// notif carries couple_id, not student_id).
+async function markCoupleFocusAddedRead(coupleId) {
+  if (!coupleId) return;
+  const coachId = await getUserId().catch(() => null);
+  if (!coachId) return;
+  await supabase
+    .from('notifications')
+    .update({ read: true })
+    .eq('user_id', coachId)
+    .eq('type', 'focus_points_added')
+    .eq('read', false)
+    .contains('data', { couple_id: coupleId })
+    .then(() => {}, () => {});
+}
+
 export async function approveCoupleFocusPoint(fpId) {
+  const { data: row } = await supabase
+    .from('couple_focus_points').select('couple_id').eq('id', fpId).maybeSingle();
   const { error } = await supabase
     .from('couple_focus_points')
     .update({ status: 'active', coach_review_deadline: null })
     .eq('id', fpId);
   if (error) throw error;
+  await markCoupleFocusAddedRead(row?.couple_id);
 }
 
 export async function editAndApproveCoupleFocusPoint(fpId, updates) {
   const allowed = ['name', 'subtitle', 'context', 'drill', 'tier'];
   const filtered = Object.fromEntries(Object.entries(updates || {}).filter(([k]) => allowed.includes(k)));
+  const { data: row } = await supabase
+    .from('couple_focus_points').select('couple_id').eq('id', fpId).maybeSingle();
   const { error } = await supabase
     .from('couple_focus_points')
     .update({ ...filtered, status: 'active', coach_review_deadline: null })
     .eq('id', fpId);
   if (error) throw error;
+  await markCoupleFocusAddedRead(row?.couple_id);
 }
 
 export async function rejectCoupleFocusPoint({ fpId, coupleId, fpName, reason }) {
@@ -576,6 +599,7 @@ export async function rejectCoupleFocusPoint({ fpId, coupleId, fpName, reason })
       data: { couple_id: coupleId, focus_point_name: fpName, reason: trimmed || null },
     }))).catch(() => {});
   }
+  await markCoupleFocusAddedRead(coupleId);
 }
 
 export async function approveAllPendingCoupleFocusPoints(coupleId) {
@@ -586,6 +610,7 @@ export async function approveAllPendingCoupleFocusPoints(coupleId) {
     .eq('status', 'pending_coach')
     .eq('is_deleted', false);
   if (error) throw error;
+  await markCoupleFocusAddedRead(coupleId);
 }
 
 // A single couple focus point (full row) by id. The couple training session
