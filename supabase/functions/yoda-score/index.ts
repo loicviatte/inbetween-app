@@ -195,10 +195,34 @@ async function processClassInput(supabase: any, payload: any): Promise<void> {
     for (const sfp of sharedFps) {
       const tier = (sfp.tier ?? 'supporting') as Tier
       const sharedDance = (sfp.dance && sfp.dance.length > 0) ? sfp.dance : classDance
+      const norm = normalizeFocusName(sfp.title)
+
+      // Dedup: if the couple already has a focus with this name (any non-past
+      // status), re-anchor + bump it instead of creating a duplicate row.
+      const { data: dup } = await supabase
+        .from('couple_focus_points')
+        .select('id, mention_count')
+        .eq('couple_id', classInput.couple_id)
+        .eq('normalized_name', norm)
+        .eq('is_other', false)
+        .neq('status', 'past')
+        .limit(1)
+        .maybeSingle()
+      if (dup) {
+        await supabase.from('couple_focus_points').update({
+          last_mentioned_at: now.toISOString(),
+          class_input_id: class_input_id,
+          mention_count: (dup.mention_count || 0) + (sfp.mention_count ?? 1),
+          lessons_since_mentioned: 0,
+        }).eq('id', dup.id)
+        console.log(`[yoda-score] Merged duplicate couple FP "${sfp.title}" into ${dup.id}`)
+        continue
+      }
+
       const { error: cErr } = await supabase.from('couple_focus_points').insert({
         couple_id: classInput.couple_id,
         name: sfp.title,
-        normalized_name: normalizeFocusName(sfp.title),
+        normalized_name: norm,
         subtitle: sfp.subtitle ?? null,
         context: sfp.context ?? null,
         dance: sharedDance,

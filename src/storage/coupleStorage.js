@@ -31,7 +31,8 @@ export async function getMyCouple() {
     .from('couples')
     .select('id, user_a_id, user_b_id, leader_user_id, does_latin, does_ballroom, latin_couple_coach_id, ballroom_couple_coach_id, pending_change, pending_change_by, created_at')
     .eq('id', me.couple_id)
-    .single();
+    .is('unpaired_at', null)
+    .maybeSingle();
   if (!c) return null;
 
   const partnerId = c.user_a_id === userId ? c.user_b_id : c.user_a_id;
@@ -191,7 +192,10 @@ export async function cancelPartnerRequest(reqId) {
 // Deletes the couple → CASCADE wipes couple FP/logs/locks; the users.couple_id
 // FK (ON DELETE SET NULL) clears it for both dancers. All progress is lost.
 export async function unpair(coupleId) {
-  const { error } = await supabase.from('couples').delete().eq('id', coupleId);
+  // Soft delete — keeps the couple's focus points + history for 30 days in
+  // case they re-form (handled by the unpair_couple RPC + the publish-expired
+  // sweep). The confirmation pop-up still tells the user it's deleted.
+  const { error } = await supabase.rpc('unpair_couple', { p_couple: coupleId });
   if (error) throw error;
 }
 
@@ -447,6 +451,7 @@ export async function getMyCouples() {
   const { data } = await supabase
     .from('couples')
     .select('id, user_a_id, user_b_id, does_latin, does_ballroom, latin_couple_coach_id, ballroom_couple_coach_id')
+    .is('unpaired_at', null)
     .or(`latin_couple_coach_id.eq.${coachId},ballroom_couple_coach_id.eq.${coachId}`);
   if (!data || data.length === 0) return [];
 

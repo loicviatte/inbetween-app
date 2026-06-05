@@ -71,6 +71,25 @@ async function sweep() {
     }
   }
 
+  // Hard-delete couples soft-unpaired more than 30 days ago (retention window).
+  // Cascade removes their focus points / practice logs / locks.
+  let coupleDeleted = 0
+  {
+    const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
+    const { data: stale } = await supabase
+      .from('couples')
+      .select('id')
+      .not('unpaired_at', 'is', null)
+      .lt('unpaired_at', cutoff)
+      .limit(MAX_PER_RUN)
+    if (stale && stale.length > 0) {
+      const ids = stale.map((r: any) => r.id)
+      const { error: de } = await supabase.from('couples').delete().in('id', ids)
+      if (de) console.error('[publish-expired-fps] stale couple delete failed:', de.message)
+      else coupleDeleted = ids.length
+    }
+  }
+
   const { data: expired, error } = await supabase
     .from('focus_points')
     .select('id, user_id, group_fp, source_class_input_id')
@@ -81,7 +100,7 @@ async function sweep() {
 
   if (error) throw new Error(`load expired FPs: ${error.message}`)
   if (!expired || expired.length === 0) {
-    return { published: 0, dropped: 0, couplePublished, total: 0 }
+    return { published: 0, dropped: 0, couplePublished, coupleDeleted, total: 0 }
   }
 
   // Pre-fetch attendance for the group FPs in one batch — avoids N+1 when
@@ -141,12 +160,13 @@ async function sweep() {
   }
 
   console.log(
-    `[publish-expired-fps] swept ${expired.length} (published ${toPublish.length}, dropped ${toDrop.length}, couple ${couplePublished})`,
+    `[publish-expired-fps] swept ${expired.length} (published ${toPublish.length}, dropped ${toDrop.length}, couple ${couplePublished}, coupleDeleted ${coupleDeleted})`,
   )
   return {
     published: toPublish.length,
     dropped: toDrop.length,
     couplePublished,
+    coupleDeleted,
     total: expired.length,
   }
 }
