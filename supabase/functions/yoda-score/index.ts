@@ -192,6 +192,7 @@ async function processClassInput(supabase: any, payload: any): Promise<void> {
   // already inserted above via processStudentFocusPoints (solo, unchanged).
   const isCoupleClass = classInput.lesson_type === 'couple'
   if (isCoupleClass && classInput.couple_id && sharedFps.length > 0) {
+    let coupleCreated = 0
     for (const sfp of sharedFps) {
       const tier = (sfp.tier ?? 'supporting') as Tier
       const sharedDance = (sfp.dance && sfp.dance.length > 0) ? sfp.dance : classDance
@@ -246,8 +247,29 @@ async function processClassInput(supabase: any, payload: any): Promise<void> {
       if (cErr) {
         console.error(`[yoda-score] couple_focus_points insert error:`, cErr.message)
       } else {
+        coupleCreated++
         console.log(`[yoda-score] Created couple focus point ${sfp.title} for couple ${classInput.couple_id}`)
       }
+    }
+    // Batched: notify the couple coach(es) once to review (parity with solo's
+    // focus_points_added). One push per class, not one per focus point.
+    if (coupleCreated > 0) {
+      const { data: cpl } = await supabase
+        .from('couples')
+        .select('latin_couple_coach_id, ballroom_couple_coach_id')
+        .eq('id', classInput.couple_id)
+        .single()
+      const coachIds = [...new Set([cpl?.latin_couple_coach_id, cpl?.ballroom_couple_coach_id].filter(Boolean))]
+      for (const cid of coachIds) {
+        await supabase.from('notifications').insert({
+          user_id: cid,
+          type: 'focus_points_added',
+          title: 'New couple focus points',
+          body: `Yoda added ${coupleCreated} couple focus point${coupleCreated > 1 ? 's' : ''}. Review before they publish.`,
+          data: { couple_id: classInput.couple_id, class_input_id: class_input_id },
+        })
+      }
+      console.log(`[yoda-score] Notified ${coachIds.length} couple coach(es) of ${coupleCreated} new couple FPs`)
     }
   }
 
