@@ -30,6 +30,7 @@ import {
   matchFilesToClasses,
   groupMicFilesIntoSessions,
   matchSessionsToClasses,
+  assignSessionsByDuration,
   MatchSession,
   MatchConfidence,
   MicFile,
@@ -581,31 +582,11 @@ export async function planAutoSync(
       });
     }
   } else if (result.status === 'count_mismatch') {
-    const sortedClasses = [...classesForMatcher].sort((a, b) => +a.startedAt - +b.startedAt);
-    const sortedSessions = [...sessions].sort((a, b) => +a.startTimestamp - +b.startTimestamp);
-    const used = new Set<number>();
-    for (const cls of sortedClasses) {
-      const expectedDurSec = cls.endedAt ? (+cls.endedAt - +cls.startedAt) / 1000 : 0;
-      let bestIdx = -1;
-      let bestScore = Infinity;
-      for (let i = 0; i < sortedSessions.length; i++) {
-        if (used.has(i)) continue;
-        let durScore = 0;
-        if (expectedDurSec > 0) {
-          const ratio = sortedSessions[i].durationSec / expectedDurSec;
-          if (ratio < 0.85) durScore = (0.85 - ratio) * 100;
-          else if (ratio > 1.15) durScore = (ratio - 1.15) * 100;
-        }
-        // Tie-break toward earlier sessions for stable chronological pairing.
-        const score = durScore + i * 0.001;
-        if (score < bestScore) {
-          bestScore = score;
-          bestIdx = i;
-        }
-      }
-      if (bestIdx === -1) continue;
-      used.add(bestIdx);
-      const session = sortedSessions[bestIdx];
+    // Different number of sessions vs classes: assign each class the
+    // closest-duration session (absolute wall-clock ignored — DJI RTC drift
+    // makes timestamps unreliable). The pure, unit-tested selection logic and
+    // its rationale live in assignSessionsByDuration.
+    for (const { class: cls, session } of assignSessionsByDuration(classesForMatcher, sessions)) {
       const scored = matchSessionsToClasses([cls], [session]);
       const m = scored.matches[0];
       if (!m) continue;
