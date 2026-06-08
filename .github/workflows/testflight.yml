@@ -81,9 +81,12 @@ jobs:
         env:
           EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
           EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
-          EXPO_PUBLIC_ANTHROPIC_API_KEY: ${{ secrets.EXPO_PUBLIC_ANTHROPIC_API_KEY }}
-          EXPO_PUBLIC_OPENAI_API_KEY: ${{ secrets.EXPO_PUBLIC_OPENAI_API_KEY }}
-          EXPO_PUBLIC_GOOGLE_PLACES_API_KEY: ${{ secrets.EXPO_PUBLIC_GOOGLE_PLACES_API_KEY }}
+          # AssemblyAI is still called client-side from StartClassScreen (coach
+          # uploads recording chunks directly). Anthropic + OpenAI used to be
+          # here too but moved server-side (ai-chat / whisper-transcribe edge
+          # functions), and Google Places was removed when studios switched to
+          # structured entities — so those three are intentionally NOT injected
+          # into the bundle anymore (avoids shipping the keys to the client).
           EXPO_PUBLIC_ASSEMBLYAI_API_KEY: ${{ secrets.EXPO_PUBLIC_ASSEMBLYAI_API_KEY }}
           # ASC API key lets EAS auto-provision App IDs + Provisioning Profiles
           # for new targets (e.g. widget extensions) without an interactive prompt.

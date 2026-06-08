@@ -296,6 +296,48 @@ public class LocalRecordingFilesModule: Module {
       promise.resolve(destURL.absoluteString)
     }
 
+    // ─── transcodeToM4A(inputUri) ────────────────────────────────────
+    // Compresses a (large, uncompressed) WAV into a small AAC/.m4a file in
+    // the app cache, returning its file:// URI. The DJI mic records 48 kHz /
+    // 24-bit WAV (~8.6 MB/min), which blows past Supabase's 50 MB free-tier
+    // per-object limit and is needlessly heavy to upload over mobile. AAC is
+    // plenty for speech transcription — AssemblyAI handles m4a natively, and
+    // it's the same format the live recording pipeline already uses.
+    //
+    // AVAssetExportSession + the AppleM4A preset: robust, Apple-maintained,
+    // runs off the main thread. A 30-min part lands ~25-30 MB, well under
+    // the 50 MB cap.
+    AsyncFunction("transcodeToM4A") { (inputUri: String, promise: Promise) in
+      let inputURL = URL(string: inputUri) ?? URL(fileURLWithPath: inputUri)
+      let asset = AVURLAsset(url: inputURL)
+      let outURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString)
+        .appendingPathExtension("m4a")
+      try? FileManager.default.removeItem(at: outURL)
+
+      guard let export = AVAssetExportSession(
+        asset: asset,
+        presetName: AVAssetExportPresetAppleM4A
+      ) else {
+        promise.reject("E_TRANSCODE", "Could not create export session")
+        return
+      }
+      export.outputURL = outURL
+      export.outputFileType = .m4a
+      export.exportAsynchronously {
+        switch export.status {
+        case .completed:
+          promise.resolve(outURL.absoluteString)
+        case .failed:
+          promise.reject("E_TRANSCODE", export.error?.localizedDescription ?? "transcode failed")
+        case .cancelled:
+          promise.reject("E_TRANSCODE", "transcode cancelled")
+        default:
+          promise.reject("E_TRANSCODE", "unexpected export status \(export.status.rawValue)")
+        }
+      }
+    }
+
     // ─── startAudioRouteMonitor() ────────────────────────────────────
     // Activates an `.ambient` AVAudioSession purely to listen for route
     // change notifications. When iOS reports a new device available
