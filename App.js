@@ -11,7 +11,7 @@
 // is skipped on a student cold start.
 
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Image } from 'react-native';
+import { View } from 'react-native';
 import { NavigationContainer, DefaultTheme, createNavigationContainerRef } from '@react-navigation/native';
 import * as Notifications from 'expo-notifications';
 import { useFonts } from 'expo-font';
@@ -24,6 +24,7 @@ import { readCachedRole, loadFreshRole } from './src/services/auth/role';
 import { getOrCreateInviteCode } from './src/storage/coachStorage';
 import AuthNavigator from './src/navigation/AuthNavigator';
 import StudentAppNavigator from './src/navigation/StudentAppNavigator';
+import InBetweenLoader from './src/components/InBetweenLoader';
 
 const navigationRef = createNavigationContainerRef();
 
@@ -169,12 +170,8 @@ export default function App() {
 
   if (isLoading) {
     return (
-      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#0E0E0E' }}>
-        <Image
-          source={require('./assets/icon.png')}
-          style={{ width: 120, height: 120 }}
-          resizeMode="contain"
-        />
+      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#000000' }}>
+        <InBetweenLoader size={120} />
       </View>
     );
   }
