@@ -57,7 +57,7 @@ const SOLO_OPTIONS = [
 
 const LESSONS_DEFAULT = 3;
 const LESSONS_MIN = 0;
-const LESSONS_MAX = 30;
+const LESSONS_MAX = 10; // capped — the top of the range reads "10+"
 
 // Light tactile feedback on selection. No-op on devices without a haptics
 // engine; never let it throw into the UI.
@@ -392,7 +392,9 @@ export default function RegisterScreen({ navigation }) {
       role === 'coach' ? 'Coach' : 'Student',
       danceLabel,
       studioName,
-      role === 'student' && lessonsPerMonth != null ? `${lessonsPerMonth} lessons / mo` : '',
+      role === 'student' && lessonsPerMonth != null
+        ? `${lessonsPerMonth >= LESSONS_MAX ? `${LESSONS_MAX}+` : lessonsPerMonth} lessons / mo`
+        : '',
       soloChip,
     ].filter(Boolean);
 
@@ -679,7 +681,6 @@ export default function RegisterScreen({ navigation }) {
     );
   } else if (step === 'lessons') {
     const shown = lessonsPerMonth ?? LESSONS_DEFAULT;
-    onSkip = () => { setLessonsPerMonth(null); goNext(); };
     onContinue = () => { setLessonsPerMonth(shown); goNext(); };
     body = (
       <>
@@ -694,7 +695,7 @@ export default function RegisterScreen({ navigation }) {
             >
               <Ionicons name="remove" size={22} color={Onboard.ink} />
             </TouchableOpacity>
-            <Text style={styles.stepperNum}>{shown}</Text>
+            <Text style={styles.stepperNum}>{shown >= LESSONS_MAX ? `${LESSONS_MAX}+` : shown}</Text>
             <TouchableOpacity
               style={styles.stepperBtn}
               onPress={() => { haptic(); setLessonsPerMonth(Math.min(LESSONS_MAX, shown + 1)); }}
@@ -712,9 +713,8 @@ export default function RegisterScreen({ navigation }) {
       </>
     );
   } else if (step === 'solo') {
-    onSkip = () => { setSoloFrequency(null); goNext(); };
     onContinue = () => {
-      if (!soloFrequency) { setError('Pick one, or tap Skip.'); return; }
+      if (!soloFrequency) { setError('Pick one to continue.'); return; }
       goNext();
     };
     body = (
