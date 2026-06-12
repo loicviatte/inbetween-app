@@ -34,6 +34,13 @@ export const Fonts = {
   ttDemiBold: 'TTTravelsNextTrl-DmBd',
   ttBold: 'TTTravelsNextTrl-Bd',
   ttExtraBold: 'TTTravelsNextTrl-XBd',
+  // TT Travels Next body weights — the onboarding / auth flow is set entirely
+  // in TT Travels (design spec), including light body copy. These map to the
+  // real TT Travels TTFs (registered in app.json), NOT Bricolage. Kept as
+  // separate aliases so the app-wide ttRegular/ttMedium (Bricolage) stay put.
+  travelsLight: 'TTTravelsNextTrl-Lt',
+  travelsRegular: 'TTTravelsNextTrl-Rg',
+  travelsMedium: 'TTTravelsNextTrl-Md',
   // Legacy aliases — body weights → Bricolage; title weights → TT Travels
   monument: 'TTTravelsNextTrl-XBd',     // logo only — keep heaviest
   jakartaLight: 'BricolageGrotesque-Light',
@@ -57,4 +64,24 @@ export const Typography = {
 export const Spacing = {
   side: 20,
   card: 16,
+};
+
+// Onboarding / auth palette — cream + gold design language used by the
+// Welcome, Login and Register screens. Kept separate from Colors so the
+// in-app palette stays untouched.
+export const Onboard = {
+  bg: '#FBFAF6',
+  ink: '#0A0A0A',
+  ink2: 'rgba(10,10,10,0.66)',
+  ink3: 'rgba(10,10,10,0.40)',
+  line: 'rgba(10,10,10,0.10)',
+  faint: 'rgba(10,10,10,0.05)',
+  card: '#FFFFFF',
+  gold: '#E8B530',
+  gold400: '#F0C24A',
+  gold300: '#F6D27A',
+  goldInk: '#A8801A',
+  goldTint: 'rgba(232,181,48,0.15)',
+  error: '#E84040',
+  success: '#2E9E5B',
 };

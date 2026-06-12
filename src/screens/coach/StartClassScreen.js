@@ -459,6 +459,15 @@ export default function StartClassScreen({ navigation }) {
   const [recStartConfirmOpen, setRecStartConfirmOpen] = useState(false);
   const [recStopConfirmOpen, setRecStopConfirmOpen] = useState(false);
 
+  // One-time recording-consent gate. The very first time a coach starts a
+  // class we make them acknowledge that they're responsible for having the
+  // consent of everyone they record (see Terms / Privacy). Once accepted it
+  // never shows again for that coach. We persist locally for an instant gate
+  // and best-effort stamp users.recording_consent_at as evidence.
+  const [consentOpen, setConsentOpen] = useState(false);
+  const [consentGiven, setConsentGiven] = useState(false);
+  const pendingPhoneMicRef = useRef(null);
+
   // Local-recording-mode gating (DJI mic on-device storage workflow).
   // When isLocalMode is true:
   //   - The phone NEVER captures audio during class (no setAudioModeAsync,
@@ -479,6 +488,15 @@ export default function StartClassScreen({ navigation }) {
       .catch(() => setAuthUser(null));
   }, []);
   const isLocalMode = isLocalRecordingMode(authUser);
+
+  // Hydrate the recording-consent flag once we know who the coach is, so an
+  // already-consented coach never sees the gate again.
+  useEffect(() => {
+    if (!authUser?.id) return;
+    AsyncStorage.getItem(`coach.recordingConsent:${authUser.id}`)
+      .then((v) => { if (v) setConsentGiven(true); })
+      .catch(() => {});
+  }, [authUser?.id]);
 
   // Microphone recording
   const recordingRef = useRef(null);
@@ -2558,18 +2576,46 @@ export default function StartClassScreen({ navigation }) {
             </View>
           </Pressable>
           {renderNoMicPrompt()}
+          {renderRecordingConsentPrompt()}
         </Pressable>
       </Modal>
     );
   }
 
   function handleStartTap(phoneMic) {
+    // First class ever for this coach → consent gate before anything else.
+    if (!consentGiven) {
+      pendingPhoneMicRef.current = phoneMic ?? null;
+      setConsentOpen(true);
+      return;
+    }
+    proceedStartTap(phoneMic);
+  }
+
+  function proceedStartTap(phoneMic) {
     if (selectedInputUid) {
       startClassNow();
       return;
     }
     phoneMicRef.current = phoneMic ?? null;
     setNoMicPromptOpen(true);
+  }
+
+  function acceptRecordingConsent() {
+    setConsentGiven(true);
+    setConsentOpen(false);
+    const uid = authUser?.id;
+    if (uid) {
+      const now = new Date().toISOString();
+      // Local flag = instant gate next time; DB stamp = evidence of consent.
+      // Both best-effort — neither blocks starting the class.
+      AsyncStorage.setItem(`coach.recordingConsent:${uid}`, now).catch(() => {});
+      supabase.from('users').update({ recording_consent_at: now }).eq('id', uid).then(
+        () => {},
+        () => {},
+      );
+    }
+    proceedStartTap(pendingPhoneMicRef.current);
   }
 
   async function confirmUsePhoneMic() {
@@ -2585,6 +2631,42 @@ export default function StartClassScreen({ navigation }) {
   function dismissNoMicPrompt() {
     setNoMicPromptOpen(false);
     refreshInputList().catch(() => {});
+  }
+
+  function renderRecordingConsentPrompt() {
+    if (!consentOpen) return null;
+    // Non-dismissible: the coach must explicitly accept or cancel.
+    return (
+      <Pressable style={ad.popupOverlay}>
+        <Pressable style={ad.popupCard} onPress={(e) => e.stopPropagation()}>
+          <View style={ad.popupIconWrap}>
+            <Ionicons name="mic" size={22} color={C.orange} />
+          </View>
+          <Text style={ad.popupTitle}>Before you record</Text>
+          <Text style={ad.popupBody}>
+            You're responsible for getting everyone's agreement before you record them,
+            including a parent or guardian for anyone under 18. InBetween stores the audio
+            and transcript securely and uses them only to generate focus points.
+          </Text>
+          <View style={ad.popupActions}>
+            <TouchableOpacity
+              style={ad.popupBtnGhost}
+              activeOpacity={0.8}
+              onPress={() => setConsentOpen(false)}
+            >
+              <Text style={ad.popupBtnGhostText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={ad.popupBtnPrimary}
+              activeOpacity={0.85}
+              onPress={acceptRecordingConsent}
+            >
+              <Text style={ad.popupBtnPrimaryText}>I have consent</Text>
+            </TouchableOpacity>
+          </View>
+        </Pressable>
+      </Pressable>
+    );
   }
 
   function renderNoMicPrompt() {

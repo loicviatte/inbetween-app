@@ -14,6 +14,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { View, Image } from 'react-native';
 import { NavigationContainer, DefaultTheme, createNavigationContainerRef } from '@react-navigation/native';
 import * as Notifications from 'expo-notifications';
+import { useFonts } from 'expo-font';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { supabase } from './src/services/supabase/client';
@@ -66,6 +67,20 @@ export default function App() {
   // Buffer for a notification tap that arrived before the navigator was
   // mounted (cold launch via push). Drained from NavigationContainer.onReady.
   const pendingNotifTapRef = useRef(null);
+
+  // TT Travels Next powers the onboarding / auth flow. In dev & production
+  // builds these are embedded natively (expo-font config plugin) so they
+  // paint on the first frame; in Expo Go the config-plugin fonts aren't
+  // available, so we also register them at runtime. We deliberately do NOT
+  // gate the first frame on this — text simply re-flows once they resolve.
+  useFonts({
+    'TTTravelsNextTrl-Lt': require('./assets/fonts/TTTravelsNext-Light.ttf'),
+    'TTTravelsNextTrl-Rg': require('./assets/fonts/TTTravelsNext-Regular.ttf'),
+    'TTTravelsNextTrl-Md': require('./assets/fonts/TTTravelsNext-Medium.ttf'),
+    'TTTravelsNextTrl-DmBd': require('./assets/fonts/TTTravelsNext-DemiBold.ttf'),
+    'TTTravelsNextTrl-Bd': require('./assets/fonts/TTTravelsNext-Bold.ttf'),
+    'TTTravelsNextTrl-XBd': require('./assets/fonts/TTTravelsNext-ExtraBold.ttf'),
+  });
 
   // Kick off the batched AsyncStorage hydration. Singleton promise so any
   // coach-side useEffect that awaits it later doesn't double the IO.
