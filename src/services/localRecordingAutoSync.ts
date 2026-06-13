@@ -30,6 +30,7 @@ import {
   matchFilesToClasses,
   groupMicFilesIntoSessions,
   matchSessionsToClasses,
+  assignSessionsByDuration,
   MatchSession,
   MatchConfidence,
   MicFile,
@@ -76,12 +77,29 @@ export interface SyncPair {
   adminReviewStatus: AdminReviewStatus;
 }
 
+/** A recording on the mic that matched no pending class (safety-net upload). */
+export interface OrphanSessionRef {
+  index: number;
+  startTimestamp: Date;
+  durationSec: number;
+  parts: SyncPartRef[];
+}
+
 export interface AutoSyncResult {
   pairs: SyncPair[];
   status: MatchSession['status'] | 'no_folder' | 'no_candidates';
   totalFilesInFolder: number;
   errors: Array<{ classId: string; error: string }>;
   importedCount: number;
+  /**
+   * Safety net: recent recordings on the mic that couldn't be paired to a
+   * pending class. Uploaded (transcoded) into `unmatched_recordings` so they
+   * get OFF the mic and can be attached / troubleshot server-side without
+   * recovering the physical mic from the coach.
+   */
+  unmatchedSessions?: OrphanSessionRef[];
+  /** How many unmatched sessions were uploaded this run. */
+  unmatchedUploaded?: number;
 }
 
 export interface AutoSyncCallbacks {
@@ -91,8 +109,12 @@ export interface AutoSyncCallbacks {
   onPairStart?: (pair: SyncPair, idx: number, total: number) => void;
   /** Called after each pair finishes (success OR error). */
   onPairDone?: (pair: SyncPair, idx: number, total: number, err?: Error) => void;
-  /** Human-readable live status (copy/upload phase + byte %) for a UI label. */
-  onProgress?: (status: string) => void;
+  /**
+   * Human-readable live status (copy/upload phase + byte %) for a UI label,
+   * plus an optional overall 0..1 fraction across every part of every session
+   * (matched pairs + unmatched uploads) to drive a progress bar.
+   */
+  onProgress?: (status: string, fraction?: number) => void;
 }
 
 export interface AutoSyncOptions extends AutoSyncCallbacks {
@@ -103,6 +125,14 @@ export interface AutoSyncOptions extends AutoSyncCallbacks {
    * acknowledgement). When false (default), every pair is uploaded.
    */
   onlyHighConfidence?: boolean;
+  /**
+   * Safety net: after importing matched pairs, also upload any recent mic
+   * recording that matched NO class into `unmatched_recordings` (transcoded,
+   * not transcribed). Only enabled for the foreground flow (UploadFlowModal)
+   * where the coach sees a progress bar — kept off for the silent background
+   * trigger to avoid surprise on-device transcoding.
+   */
+  uploadUnmatched?: boolean;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────
@@ -140,6 +170,11 @@ function approximateWavDurationSec(sizeBytes: number): number {
  * LocalUploadScreen, which bypasses this filter.
  */
 const MIN_VALID_DURATION_SEC = 60;
+
+// Safety-net window: how recent (by mic timestamp) a file must be to be
+// uploaded as an "unmatched" recording when it can't be paired. Bounds the
+// net to recent failed imports rather than vacuuming the mic's whole history.
+const ORPHAN_RECENCY_DAYS = 14;
 
 // After upload, the small m4a is kept on-device for a few days as a local
 // backup (the big WAV is deleted right away — its original lives on the DJI
@@ -231,6 +266,22 @@ async function fetchImportedFilenames(userId: string): Promise<Set<string>> {
     const partNames = r.meta?.mic_file_names;
     if (Array.isArray(partNames)) {
       for (const n of partNames) if (typeof n === 'string') names.add(n);
+    }
+  }
+  // Also dedup against files already uploaded via the unmatched safety net,
+  // so they're never re-offered or re-uploaded on a later sync. (Table may
+  // not exist on older deployments — the optional chain + null guard keep
+  // this a no-op rather than throwing in that case.)
+  const { data: orphans } = await supabase
+    .from('unmatched_recordings')
+    .select('part_filenames')
+    .eq('user_id', userId)
+    .neq('status', 'discarded')
+    .limit(500);
+  for (const r of (orphans ?? []) as any[]) {
+    const parts = r.part_filenames;
+    if (Array.isArray(parts)) {
+      for (const n of parts) if (typeof n === 'string') names.add(n);
     }
   }
   return names;
@@ -581,31 +632,11 @@ export async function planAutoSync(
       });
     }
   } else if (result.status === 'count_mismatch') {
-    const sortedClasses = [...classesForMatcher].sort((a, b) => +a.startedAt - +b.startedAt);
-    const sortedSessions = [...sessions].sort((a, b) => +a.startTimestamp - +b.startTimestamp);
-    const used = new Set<number>();
-    for (const cls of sortedClasses) {
-      const expectedDurSec = cls.endedAt ? (+cls.endedAt - +cls.startedAt) / 1000 : 0;
-      let bestIdx = -1;
-      let bestScore = Infinity;
-      for (let i = 0; i < sortedSessions.length; i++) {
-        if (used.has(i)) continue;
-        let durScore = 0;
-        if (expectedDurSec > 0) {
-          const ratio = sortedSessions[i].durationSec / expectedDurSec;
-          if (ratio < 0.85) durScore = (0.85 - ratio) * 100;
-          else if (ratio > 1.15) durScore = (ratio - 1.15) * 100;
-        }
-        // Tie-break toward earlier sessions for stable chronological pairing.
-        const score = durScore + i * 0.001;
-        if (score < bestScore) {
-          bestScore = score;
-          bestIdx = i;
-        }
-      }
-      if (bestIdx === -1) continue;
-      used.add(bestIdx);
-      const session = sortedSessions[bestIdx];
+    // Different number of sessions vs classes: assign each class the
+    // closest-duration session (absolute wall-clock ignored — DJI RTC drift
+    // makes timestamps unreliable). The pure, unit-tested selection logic and
+    // its rationale live in assignSessionsByDuration.
+    for (const { class: cls, session } of assignSessionsByDuration(classesForMatcher, sessions)) {
       const scored = matchSessionsToClasses([cls], [session]);
       const m = scored.matches[0];
       if (!m) continue;
@@ -633,6 +664,119 @@ export async function planAutoSync(
   };
 }
 
+// ─── Safety net: unmatched recordings ────────────────────────────────────
+
+/**
+ * Find recent (≤ ORPHAN_RECENCY_DAYS) DJI recordings on the mic that aren't
+ * already imported (as a class chunk or a prior unmatched upload) and aren't
+ * in `excludeFilenames` (files about to be imported as matched pairs this
+ * run). Grouped into sessions (split parts stitched) and filtered to
+ * ≥ MIN_VALID_DURATION_SEC. These are the "couldn't pair it to a class"
+ * leftovers we still want off the mic.
+ */
+export async function scanUnmatchedSessions(
+  userId: string,
+  excludeFilenames: Set<string> = new Set(),
+): Promise<OrphanSessionRef[]> {
+  if (!DjiFiles.hasFolder?.()) return [];
+  const allEntries = await DjiFiles.listFiles();
+  const imported = await fetchImportedFilenames(userId);
+  const cutoffMs = Date.now() - ORPHAN_RECENCY_DAYS * 24 * 60 * 60 * 1000;
+
+  const relPathByName = new Map<string, string>();
+  const micFiles: MicFile[] = [];
+  for (const entry of allEntries as any[]) {
+    const meta = parseDjiFileName(entry.name);
+    if (!meta) continue;
+    if (imported.has(entry.name)) continue;
+    if (excludeFilenames.has(entry.name)) continue;
+    if (+meta.timestamp < cutoffMs) continue;
+    relPathByName.set(entry.name as string, (entry.relativePath ?? entry.name) as string);
+    micFiles.push({
+      fileName: entry.name as string,
+      index: meta.index,
+      timestamp: meta.timestamp,
+      durationSec: approximateWavDurationSec(entry.sizeBytes),
+      sizeBytes: entry.sizeBytes as number,
+      uri: '',
+    });
+  }
+
+  return groupMicFilesIntoSessions(micFiles)
+    .filter((s) => s.durationSec >= MIN_VALID_DURATION_SEC)
+    .map((s) => ({
+      index: s.index,
+      startTimestamp: s.startTimestamp,
+      durationSec: s.durationSec,
+      parts: s.parts.map((p) => ({
+        fileName: p.fileName,
+        relativePath: relPathByName.get(p.fileName) ?? p.fileName,
+        sizeBytes: p.sizeBytes,
+      })),
+    }));
+}
+
+/**
+ * Transcode + upload one unmatched session's parts as m4a chunks and record
+ * it in `unmatched_recordings`. NO class link and NO transcription kicked off
+ * — it just gets the audio off the mic + into storage/DB for a later attach.
+ */
+export async function uploadUnmatchedSession(args: {
+  userId: string;
+  session: OrphanSessionRef;
+  /** Ordered parts, already copied to the app cache. */
+  parts: Array<{ uri: string; name: string; size: number }>;
+  onPartProgress?: (
+    partIndex: number,
+    partCount: number,
+    fraction: number,
+    phase: 'compressing' | 'uploading',
+  ) => void;
+}): Promise<void> {
+  const { userId, session, parts, onPartProgress } = args;
+  if (parts.length === 0) throw new Error('uploadUnmatchedSession: no parts');
+
+  const tsCompact = session.startTimestamp
+    .toISOString()
+    .replace(/[-:.TZ]/g, '')
+    .slice(0, 14);
+  const folder = `unmatched/${session.index}_${tsCompact}`;
+  const storagePaths: string[] = [];
+
+  for (let idx = 0; idx < parts.length; idx++) {
+    onPartProgress?.(idx + 1, parts.length, 0, 'compressing');
+    const m4aUri = await DjiFiles.transcodeToM4A(parts[idx].uri);
+    const storagePath = `${userId}/${folder}/${idx}.m4a`;
+    await uploadFileToStorage(
+      m4aUri,
+      storagePath,
+      (frac) => onPartProgress?.(idx + 1, parts.length, frac, 'uploading'),
+      'audio/mp4',
+    );
+    storagePaths.push(storagePath);
+    try { await FileSystem.deleteAsync(parts[idx].uri, { idempotent: true }); } catch {}
+    try {
+      await FileSystem.makeDirectoryAsync(M4A_BACKUP_DIR, { intermediates: true });
+      await FileSystem.moveAsync({
+        from: m4aUri,
+        to: `${M4A_BACKUP_DIR}unmatched_${session.index}_${idx}.m4a`,
+      });
+    } catch { /* leave it in tmp */ }
+  }
+
+  const { error } = await supabase.from('unmatched_recordings').insert({
+    user_id: userId,
+    dji_index: session.index,
+    mic_timestamp: session.startTimestamp.toISOString(),
+    duration_sec: session.durationSec,
+    size_bytes: parts.reduce((n, p) => n + (p.size || 0), 0),
+    part_filenames: parts.map((p) => p.name),
+    storage_paths: storagePaths,
+    status: 'uploaded',
+  });
+  if (error) throw error;
+}
+
 // ─── Execute: upload the planned pairs ──────────────────────────────────
 
 export async function executeAutoSync(
@@ -646,9 +790,37 @@ export async function executeAutoSync(
 
   opts.onPlanned?.(pairsToImport);
 
+  // Safety net (foreground only): recordings on the mic that matched no class.
+  // Exclude EVERY matched filename — even pairs skipped under onlyHighConfidence
+  // belong to a class and must not also be orphaned.
+  let orphanSessions: OrphanSessionRef[] = [];
+  if (opts.uploadUnmatched) {
+    const matchedNames = new Set<string>(
+      plan.pairs.flatMap((p) => p.parts.map((x) => x.fileName)),
+    );
+    try {
+      orphanSessions = await scanUnmatchedSessions(userId, matchedNames);
+    } catch (err: any) {
+      console.warn('[autoSync] orphan scan failed:', err?.message ?? err);
+    }
+  }
+
   const errors: Array<{ classId: string; error: string }> = [];
   let imported = 0;
+  let unmatchedUploaded = 0;
   const total = pairsToImport.length;
+
+  // Overall progress across every part of every session (pairs + orphans), so
+  // the coach sees one continuous 0→100% bar.
+  const totalParts =
+    pairsToImport.reduce((n, p) => n + p.parts.length, 0) +
+    orphanSessions.reduce((n, s) => n + s.parts.length, 0);
+  let basePartsDone = 0;
+  const emit = (label: string, withinFrac: number) =>
+    opts.onProgress?.(
+      label,
+      totalParts > 0 ? Math.min(1, (basePartsDone + withinFrac) / totalParts) : 0,
+    );
 
   for (let i = 0; i < pairsToImport.length; i++) {
     const pair = pairsToImport[i];
@@ -659,7 +831,7 @@ export async function executeAutoSync(
       // app cache, preserving order, then upload them as ordered chunks.
       const fileParts: Array<{ uri: string; name: string; size: number }> = [];
       for (let p = 0; p < pair.parts.length; p++) {
-        opts.onProgress?.(`Recording ${ci}/${total} · reading part ${p + 1}/${pair.parts.length}…`);
+        emit(`Recording ${ci}/${total} · reading part ${p + 1}/${pair.parts.length}…`, p);
         const cacheUri = await DjiFiles.copyFileToCache(pair.parts[p].relativePath);
         fileParts.push({ uri: cacheUri, name: pair.parts[p].fileName, size: pair.parts[p].sizeBytes });
       }
@@ -673,10 +845,11 @@ export async function executeAutoSync(
         },
         adminReviewStatus: pair.adminReviewStatus,
         onUploadProgress: (partIndex, partCount, frac, phase) =>
-          opts.onProgress?.(
+          emit(
             phase === 'compressing'
               ? `Recording ${ci}/${total} · compressing part ${partIndex}/${partCount}…`
               : `Recording ${ci}/${total} · uploading part ${partIndex}/${partCount} · ${Math.round(frac * 100)}%`,
+            (partIndex - 1) + (phase === 'uploading' ? frac : 0),
           ),
       });
       imported += 1;
@@ -687,6 +860,40 @@ export async function executeAutoSync(
       errors.push({ classId: pair.classId, error: msg });
       opts.onPairDone?.(pair, i, total, err instanceof Error ? err : new Error(msg));
     }
+    basePartsDone += pair.parts.length;
+  }
+
+  // Safety-net uploads (couldn't pair → still get them off the mic).
+  for (let j = 0; j < orphanSessions.length; j++) {
+    const session = orphanSessions[j];
+    const oc = j + 1;
+    const oTotal = orphanSessions.length;
+    try {
+      const fileParts: Array<{ uri: string; name: string; size: number }> = [];
+      for (let p = 0; p < session.parts.length; p++) {
+        emit(`Unmatched ${oc}/${oTotal} · reading part ${p + 1}/${session.parts.length}…`, p);
+        const cacheUri = await DjiFiles.copyFileToCache(session.parts[p].relativePath);
+        fileParts.push({ uri: cacheUri, name: session.parts[p].fileName, size: session.parts[p].sizeBytes });
+      }
+      await uploadUnmatchedSession({
+        userId,
+        session,
+        parts: fileParts,
+        onPartProgress: (partIndex, partCount, frac, phase) =>
+          emit(
+            phase === 'compressing'
+              ? `Saving unmatched ${oc}/${oTotal} · part ${partIndex}/${partCount}…`
+              : `Saving unmatched ${oc}/${oTotal} · part ${partIndex}/${partCount} · ${Math.round(frac * 100)}%`,
+            (partIndex - 1) + (phase === 'uploading' ? frac : 0),
+          ),
+      });
+      unmatchedUploaded += 1;
+    } catch (err: any) {
+      const msg = err?.message ?? String(err);
+      console.warn(`[autoSync] unmatched upload failed (idx ${session.index}): ${msg}`);
+      errors.push({ classId: `unmatched:${session.index}`, error: msg });
+    }
+    basePartsDone += session.parts.length;
   }
 
   return {
@@ -694,6 +901,8 @@ export async function executeAutoSync(
     pairs: pairsToImport,
     errors,
     importedCount: imported,
+    unmatchedSessions: orphanSessions,
+    unmatchedUploaded,
   };
 }
 

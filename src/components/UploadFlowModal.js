@@ -26,7 +26,6 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   StyleSheet,
-  Alert,
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Fonts, Spacing } from '../theme';
@@ -35,6 +34,7 @@ import {
   fetchPendingUploads,
   planAutoSync,
   executeAutoSync,
+  scanUnmatchedSessions,
 } from '../services/localRecordingAutoSync';
 import * as DjiFiles from 'local-recording-files';
 
@@ -54,6 +54,9 @@ export default function UploadFlowModal({
   const [total, setTotal] = useState(0);
   const [imported, setImported] = useState(0);
   const [pendingReview, setPendingReview] = useState(0);
+  const [unmatched, setUnmatched] = useState(0);
+  const [progress, setProgress] = useState(0);
+  const [statusText, setStatusText] = useState('');
   const [errorMessage, setErrorMessage] = useState(null);
 
   const syncRunningRef = useRef(false);
@@ -71,6 +74,9 @@ export default function UploadFlowModal({
     setTotal(0);
     setImported(0);
     setPendingReview(0);
+    setUnmatched(0);
+    setProgress(0);
+    setStatusText('');
     setErrorMessage(null);
 
     return () => {
@@ -110,31 +116,18 @@ export default function UploadFlowModal({
         if (cancelledRef.current) return;
         const plan = await planAutoSync(userId, pending);
         if (cancelledRef.current) return;
+        // If nothing matched a pending class, fall back to the safety net:
+        // are there recent recordings on the mic we can still upload (so the
+        // coach doesn't have to bring the mic back to troubleshoot)? Only
+        // proceed when there's actually something to do, so we don't flash
+        // "Connected" for a mic with no new files.
         if (plan.pairs.length === 0) {
-          // TEMP DEBUG: surface why nothing matched so we can diagnose
-          // what's actually on the mic vs. what's expected.
+          let orphanCount = 0;
           try {
-            const lines = entries.map((e) => {
-              const meta = parseDjiFileName(e.name);
-              const sz = e.sizeBytes || 0;
-              const dur = Math.max(0, Math.round((sz - 44) / 144000));
-              return meta
-                ? `${e.name} | idx=${meta.index} | dur~${dur}s | date=${meta.timestamp.toISOString().slice(0,10)}`
-                : `${e.name} (not DJI)`;
-            }).join('\n');
-            const pendingLines = pending.map((p) =>
-              `${p.studentName ?? p.lessonType ?? 'class'} | ${p.durationSec}s | ${p.startedAt.toISOString().slice(0,10)}`
-            ).join('\n') || '(no pending)';
-            Alert.alert(
-              'DEBUG: Why no pairs?',
-              `Files on mic (${entries.length}):\n${lines}\n\nPending classes (${pending.length}):\n${pendingLines}`,
-            );
+            orphanCount = (await scanUnmatchedSessions(userId)).length;
           } catch {}
-          setImported(0);
-          setTotal(0);
-          setPendingReview(0);
-          setPhase('done');
-          return;
+          if (cancelledRef.current) return;
+          if (orphanCount === 0) return;
         }
         runSyncFromPlan(plan);
       } catch {
@@ -172,13 +165,23 @@ export default function UploadFlowModal({
     setPhase('syncing');
     setTotal(plan.pairs.length);
     setCurrentIdx(0);
+    setProgress(0);
+    setStatusText('Preparing…');
 
     try {
       const result = await executeAutoSync(userId, plan, {
+        // Safety net: also upload anything that matched no class, with a
+        // live progress bar so the coach knows where it's at.
+        uploadUnmatched: true,
         onPairStart: (_pair, idx, t) => {
           if (cancelledRef.current) return;
           setCurrentIdx(idx + 1);
           setTotal(t);
+        },
+        onProgress: (status, fraction) => {
+          if (cancelledRef.current) return;
+          if (status) setStatusText(status);
+          if (typeof fraction === 'number') setProgress(fraction);
         },
       });
       if (cancelledRef.current) return;
@@ -186,13 +189,17 @@ export default function UploadFlowModal({
       const pendingReviewCount = result.pairs.filter(
         (p) => p.adminReviewStatus === 'pending',
       ).length;
+      const unmatchedCount = result.unmatchedUploaded ?? 0;
+      const didSomething = result.importedCount > 0 || unmatchedCount > 0;
 
-      if (result.errors.length > 0 && result.importedCount === 0) {
+      if (result.errors.length > 0 && !didSomething) {
         setErrorMessage(result.errors[0]?.error ?? 'Sync failed');
         setPhase('error');
       } else {
+        setProgress(1);
         setImported(result.importedCount);
         setPendingReview(pendingReviewCount);
+        setUnmatched(unmatchedCount);
         setTotal(result.pairs.length);
         setPhase('done');
       }
@@ -233,12 +240,18 @@ export default function UploadFlowModal({
         <Pressable style={s.card} onPress={(e) => e.stopPropagation()}>
           {phase === 'waiting' && <PhaseWaiting onCancel={onClose} />}
           {phase === 'syncing' && (
-            <PhaseSyncing currentIdx={currentIdx} total={total} />
+            <PhaseSyncing
+              currentIdx={currentIdx}
+              total={total}
+              progress={progress}
+              statusText={statusText}
+            />
           )}
           {phase === 'done' && (
             <PhaseDone
               imported={imported}
               pendingReview={pendingReview}
+              unmatched={unmatched}
               total={total}
               onClose={onDone ?? onClose}
             />
@@ -280,19 +293,21 @@ function PhaseWaiting({ onCancel }) {
   );
 }
 
-function PhaseSyncing({ currentIdx, total }) {
-  const label = total > 0 ? `Importing ${currentIdx} of ${total}…` : 'Importing…';
+function PhaseSyncing({ currentIdx, total, progress, statusText }) {
+  const pct = Math.max(0, Math.min(100, Math.round((progress ?? 0) * 100)));
+  const label =
+    statusText || (total > 0 ? `Importing ${currentIdx} of ${total}…` : 'Importing…');
   return (
     <>
       <View style={[s.iconRing, s.iconRingSuccess]}>
-        <Ionicons name="checkmark" size={32} color="#2D8A4A" />
+        <Ionicons name="cloud-upload-outline" size={30} color="#2D8A4A" />
       </View>
-      <Text style={s.title}>Connected</Text>
-      <Text style={s.body}>{label}</Text>
-      <View style={s.spinnerRow}>
-        <ActivityIndicator size="small" color={INK_950} />
-        <Text style={s.spinnerText}>Syncing…</Text>
+      <Text style={s.title}>Importing your recordings</Text>
+      <Text style={s.body} numberOfLines={2}>{label}</Text>
+      <View style={s.progressTrack}>
+        <View style={[s.progressFill, { width: `${Math.max(4, pct)}%` }]} />
       </View>
+      <Text style={s.progressPct}>{pct}%</Text>
       <Text style={s.footnote}>
         Keep the mic plugged in until this finishes.
       </Text>
@@ -300,24 +315,28 @@ function PhaseSyncing({ currentIdx, total }) {
   );
 }
 
-function PhaseDone({ imported, pendingReview, total, onClose }) {
-  const importedLabel = imported === 0
-    ? 'Nothing new to sync'
-    : imported === 1
-      ? '1 recording synced'
-      : `${imported} recordings synced`;
-  const reviewLabel = pendingReview > 0
-    ? `${pendingReview} flagged for admin review`
-    : 'All auto-approved';
-  const showReview = imported > 0;
+function PhaseDone({ imported, pendingReview, unmatched, total, onClose }) {
+  const segs = [];
+  if (imported > 0) segs.push(imported === 1 ? '1 recording synced' : `${imported} recordings synced`);
+  if (unmatched > 0) segs.push(unmatched === 1 ? '1 saved for review' : `${unmatched} saved for review`);
+  const titleLabel = segs.length ? segs.join(' · ') : 'Nothing new to sync';
+  const didSomething = imported > 0 || unmatched > 0;
+  const reviewLabel = pendingReview > 0 ? `${pendingReview} flagged for admin review` : 'All auto-approved';
   return (
     <>
       <View style={[s.iconRing, s.iconRingSuccess]}>
         <Ionicons name="checkmark-circle" size={36} color="#2D8A4A" />
       </View>
-      <Text style={s.title}>{importedLabel}</Text>
-      {showReview && <Text style={s.body}>{reviewLabel}</Text>}
-      {!showReview && imported === 0 && (
+      <Text style={s.title}>{titleLabel}</Text>
+      {unmatched > 0 ? (
+        <Text style={s.body}>
+          {unmatched === 1
+            ? "1 recording couldn't be matched to a class — it's uploaded anyway so it can be sorted out without your mic."
+            : `${unmatched} recordings couldn't be matched — uploaded anyway so they can be sorted out without your mic.`}
+        </Text>
+      ) : imported > 0 ? (
+        <Text style={s.body}>{reviewLabel}</Text>
+      ) : (
         <Text style={s.body}>
           Looks like everything's already imported, or your mic doesn't
           have new files yet.
@@ -419,6 +438,26 @@ const s = StyleSheet.create({
     color: '#888',
     textAlign: 'center',
     lineHeight: 16,
+  },
+  progressTrack: {
+    width: '100%',
+    height: 8,
+    borderRadius: 6,
+    backgroundColor: 'rgba(13, 13, 18, 0.08)',
+    overflow: 'hidden',
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: 6,
+    backgroundColor: '#2D8A4A',
+  },
+  progressPct: {
+    fontFamily: Fonts.jakartaBold,
+    fontSize: 12,
+    color: '#2D8A4A',
+    marginBottom: 14,
   },
   actionRow: {
     flexDirection: 'row',

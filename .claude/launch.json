@@ -24,6 +24,12 @@
       "runtimeExecutable": "npx",
       "runtimeArgs": ["expo", "start", "--web", "--port", "8083"],
       "port": 8083
+    },
+    {
+      "name": "inbetween-admin",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["-c", "cd /Users/loicp/inbetween-admin && npx next dev --port 3100"],
+      "port": 3100
     }
   ]
 }

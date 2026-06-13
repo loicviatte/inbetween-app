@@ -99,6 +99,7 @@ function TrainingDetail({ session }) {
 }
 
 function ClassDetail({ cls }) {
+  const pendingApproval = !cls.admin_approved_at;
   return (
     <>
       <Section title="CLASS">
@@ -106,44 +107,55 @@ function ClassDetail({ cls }) {
         {cls.title ? <Row label="Title" value={cls.title} /> : null}
       </Section>
 
-      {cls.class_summary ? (
-        <Section title="CLASS SUMMARY">
-          <Text style={s.noteText}>{cls.class_summary}</Text>
+      {pendingApproval ? (
+        <Section title="PENDING APPROVAL">
+          <Text style={s.noteText}>
+            This class is awaiting admin review. Class summary, practice points,
+            and focus areas will appear here once it's approved.
+          </Text>
         </Section>
-      ) : null}
+      ) : (
+        <>
+          {cls.class_summary ? (
+            <Section title="CLASS SUMMARY">
+              <Text style={s.noteText}>{cls.class_summary}</Text>
+            </Section>
+          ) : null}
 
-      {(cls.practice_point_1 || cls.practice_point_2) && (
-        <Section title="PRACTICE POINTS">
-          {cls.practice_point_1 && (
-            <View style={s.practiceRow}>
-              <View style={[s.focusDot, { backgroundColor: Colors.activeLog }]} />
-              <Text style={s.practiceText}>{cls.practice_point_1}</Text>
-            </View>
+          {(cls.practice_point_1 || cls.practice_point_2) && (
+            <Section title="PRACTICE POINTS">
+              {cls.practice_point_1 && (
+                <View style={s.practiceRow}>
+                  <View style={[s.focusDot, { backgroundColor: Colors.activeLog }]} />
+                  <Text style={s.practiceText}>{cls.practice_point_1}</Text>
+                </View>
+              )}
+              {cls.practice_point_2 && (
+                <View style={s.practiceRow}>
+                  <View style={[s.focusDot, { backgroundColor: Colors.activeLog }]} />
+                  <Text style={s.practiceText}>{cls.practice_point_2}</Text>
+                </View>
+              )}
+            </Section>
           )}
-          {cls.practice_point_2 && (
-            <View style={s.practiceRow}>
-              <View style={[s.focusDot, { backgroundColor: Colors.activeLog }]} />
-              <Text style={s.practiceText}>{cls.practice_point_2}</Text>
-            </View>
-          )}
-        </Section>
-      )}
 
-      {(cls.ai_primary_focus || cls.ai_secondary_focus) && (
-        <Section title="FOCUS AREAS">
-          {cls.ai_primary_focus && (
-            <View style={s.focusChip}>
-              <View style={[s.focusDot, { backgroundColor: Colors.activeFocus }]} />
-              <Text style={s.focusName}>{cls.ai_primary_focus}</Text>
-            </View>
+          {(cls.ai_primary_focus || cls.ai_secondary_focus) && (
+            <Section title="FOCUS AREAS">
+              {cls.ai_primary_focus && (
+                <View style={s.focusChip}>
+                  <View style={[s.focusDot, { backgroundColor: Colors.activeFocus }]} />
+                  <Text style={s.focusName}>{cls.ai_primary_focus}</Text>
+                </View>
+              )}
+              {cls.ai_secondary_focus && (
+                <View style={s.focusChip}>
+                  <View style={[s.focusDot, { backgroundColor: Colors.activeHome }]} />
+                  <Text style={s.focusName}>{cls.ai_secondary_focus}</Text>
+                </View>
+              )}
+            </Section>
           )}
-          {cls.ai_secondary_focus && (
-            <View style={s.focusChip}>
-              <View style={[s.focusDot, { backgroundColor: Colors.activeHome }]} />
-              <Text style={s.focusName}>{cls.ai_secondary_focus}</Text>
-            </View>
-          )}
-        </Section>
+        </>
       )}
     </>
   );

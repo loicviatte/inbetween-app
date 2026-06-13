@@ -420,3 +420,51 @@ export function matchSessionsToClasses(
 
   return { status: 'matched', matches, unmatchedClasses: [], unmatchedSessions: [] };
 }
+
+/**
+ * Greedy 1-class→1-session assignment by CLOSEST DURATION, for the
+ * count_mismatch case (different number of sessions vs classes). For each
+ * class (oldest first), pick the still-unused session whose duration is
+ * nearest the class's expected duration.
+ *
+ * Absolute wall-clock time is deliberately NOT used: the DJI mic's RTC
+ * frequently drifts (by hours, sometimes a full day), so a file's timestamp
+ * can land on a neighbouring date. Duration is the only trustworthy signal.
+ *
+ * Scoring is the continuous distance |ratio − 1|, so the closest match wins
+ * outright. (The earlier banded score treated everything within ±15% as a
+ * 0 tie, which let the earliest-by-time session win and mis-assigned a class
+ * to an adjacent-day recording.) The tiny `+ i * 0.001` only breaks genuine
+ * duration ties, favouring the earlier session.
+ */
+export function assignSessionsByDuration(
+  classes: ClassRecording[],
+  sessions: MicSession[],
+): Array<{ class: ClassRecording; session: MicSession }> {
+  const sortedClasses = [...classes].sort((a, b) => +a.startedAt - +b.startedAt);
+  const sortedSessions = [...sessions].sort((a, b) => +a.startTimestamp - +b.startTimestamp);
+  const used = new Set<number>();
+  const out: Array<{ class: ClassRecording; session: MicSession }> = [];
+  for (const cls of sortedClasses) {
+    const expectedDurSec = cls.endedAt ? (+cls.endedAt - +cls.startedAt) / 1000 : 0;
+    let bestIdx = -1;
+    let bestScore = Infinity;
+    for (let i = 0; i < sortedSessions.length; i++) {
+      if (used.has(i)) continue;
+      let durScore = 0;
+      if (expectedDurSec > 0) {
+        const ratio = sortedSessions[i].durationSec / expectedDurSec;
+        durScore = Math.abs(ratio - 1) * 100;
+      }
+      const score = durScore + i * 0.001;
+      if (score < bestScore) {
+        bestScore = score;
+        bestIdx = i;
+      }
+    }
+    if (bestIdx === -1) continue;
+    used.add(bestIdx);
+    out.push({ class: cls, session: sortedSessions[bestIdx] });
+  }
+  return out;
+}

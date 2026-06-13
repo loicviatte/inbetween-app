@@ -11,9 +11,10 @@
 // is skipped on a student cold start.
 
 import React, { useEffect, useRef, useState } from 'react';
-import { View, StyleSheet, Animated } from 'react-native';
+import { View, AppState, StyleSheet, Animated } from 'react-native';
 import { NavigationContainer, DefaultTheme, createNavigationContainerRef } from '@react-navigation/native';
 import * as Notifications from 'expo-notifications';
+import { useFonts } from 'expo-font';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { supabase } from './src/services/supabase/client';
@@ -21,6 +22,12 @@ import { reconcileAuthUser } from './src/storage/userCaches';
 import { hydrateAllFromCold } from './src/storage/hydrate';
 import { readCachedRole, loadFreshRole } from './src/services/auth/role';
 import { getOrCreateInviteCode } from './src/storage/coachStorage';
+import {
+  trackAppOpen,
+  trackAppClose,
+  trackScreenView,
+  resetAnalyticsUser,
+} from './src/services/analytics';
 import AuthNavigator from './src/navigation/AuthNavigator';
 import StudentAppNavigator from './src/navigation/StudentAppNavigator';
 import { isFirstScreenReady, onFirstScreenReady } from './src/utils/firstPaint';
@@ -137,10 +144,38 @@ export default function App() {
   // mounted (cold launch via push). Drained from NavigationContainer.onReady.
   const pendingNotifTapRef = useRef(null);
 
+  // TT Travels Next powers the onboarding / auth flow. In dev & production
+  // builds these are embedded natively (expo-font config plugin) so they
+  // paint on the first frame; in Expo Go the config-plugin fonts aren't
+  // available, so we also register them at runtime. We deliberately do NOT
+  // gate the first frame on this — text simply re-flows once they resolve.
+  useFonts({
+    'TTTravelsNextTrl-Lt': require('./assets/fonts/TTTravelsNext-Light.ttf'),
+    'TTTravelsNextTrl-Rg': require('./assets/fonts/TTTravelsNext-Regular.ttf'),
+    'TTTravelsNextTrl-Md': require('./assets/fonts/TTTravelsNext-Medium.ttf'),
+    'TTTravelsNextTrl-DmBd': require('./assets/fonts/TTTravelsNext-DemiBold.ttf'),
+    'TTTravelsNextTrl-Bd': require('./assets/fonts/TTTravelsNext-Bold.ttf'),
+    'TTTravelsNextTrl-XBd': require('./assets/fonts/TTTravelsNext-ExtraBold.ttf'),
+  });
+
   // Kick off the batched AsyncStorage hydration. Singleton promise so any
   // coach-side useEffect that awaits it later doesn't double the IO.
   useEffect(() => {
     hydrateAllFromCold();
+  }, []);
+
+  // App-open / app-close analytics. AppState only fires on transitions —
+  // the very first 'active' frame is lost without an explicit call here.
+  useEffect(() => {
+    trackAppOpen();
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        trackAppOpen();
+      } else if (state === 'background' || state === 'inactive') {
+        trackAppClose();
+      }
+    });
+    return () => sub.remove();
   }, []);
 
   // Role resolution with cache-first strategy. Reads session metadata +
@@ -151,6 +186,9 @@ export default function App() {
   async function loadRoleFor(s) {
     if (!s?.user?.id) {
       setUserRole(null);
+      // Drop the cached user_id so the next signed-in user doesn't inherit
+      // any buffered events from the previous session.
+      resetAnalyticsUser();
       return;
     }
     const cached = await readCachedRole(s);
@@ -244,7 +282,25 @@ export default function App() {
   return (
     <SafeAreaProvider>
       <View style={{ flex: 1 }}>
-        <NavigationContainer theme={AppTheme} ref={navigationRef} onReady={drainPendingNotifTap}>
+        <NavigationContainer
+          theme={AppTheme}
+          ref={navigationRef}
+          onReady={() => {
+            drainPendingNotifTap();
+            // Capture the landing screen on cold start — onStateChange
+            // doesn't fire for the initial route.
+            try {
+              const route = navigationRef.getCurrentRoute();
+              if (route?.name) trackScreenView(route.name);
+            } catch {}
+          }}
+          onStateChange={() => {
+            try {
+              const route = navigationRef.getCurrentRoute();
+              if (route?.name) trackScreenView(route.name);
+            } catch {}
+          }}
+        >
           <StatusBar style="dark" />
           {activeNavigator}
         </NavigationContainer>

@@ -829,7 +829,7 @@ export async function getTrainingSessionDetail(sessionId) {
 export async function getClassDetail(classId) {
   const { data } = await supabase
     .from('class_inputs')
-    .select('id, created_at, title, class_summary, practice_point_1, practice_point_2, ai_primary_focus, ai_secondary_focus')
+    .select('id, created_at, title, class_summary, practice_point_1, practice_point_2, ai_primary_focus, ai_secondary_focus, admin_approved_at')
     .eq('id', classId)
     .single();
   return data || null;
@@ -837,13 +837,41 @@ export async function getClassDetail(classId) {
 
 // ─── Focus Point Validation ───────────────────────────────────────────────────
 
+// A group focus point can only become `active` if the student has explicitly
+// confirmed attendance for the source class (attendance_responses.attended =
+// true). A pending response (student hasn't tapped yes/no) or a missing row
+// counts as "not attended" — focus points are dropped instead of published.
+// Returns a Set of `${classId}:${studentId}` keys for FPs that should NOT be
+// activated.
+async function loadAttendedKeys(focusPoints) {
+  const tuples = focusPoints
+    .filter(fp => fp.group_fp && fp.source_class_input_id && fp.user_id)
+    .map(fp => ({ classId: fp.source_class_input_id, studentId: fp.user_id }));
+  if (tuples.length === 0) return new Set();
+  const classIds = [...new Set(tuples.map(t => t.classId))];
+  const studentIds = [...new Set(tuples.map(t => t.studentId))];
+  const { data } = await supabase
+    .from('attendance_responses')
+    .select('class_input_id, student_id')
+    .in('class_input_id', classIds)
+    .in('student_id', studentIds)
+    .eq('attended', true);
+  return new Set((data ?? []).map(r => `${r.class_input_id}:${r.student_id}`));
+}
+
+function fpAttendanceMissing(fp, attendedKeys) {
+  if (!fp.group_fp || !fp.source_class_input_id) return false;
+  return !attendedKeys.has(`${fp.source_class_input_id}:${fp.user_id}`);
+}
+
 export async function getPendingFocusPoints(studentId) {
   const selectStr =
     'id, name, subtitle, context, drill, tier, coach_review_deadline, group_fp, shared_group_id, source_class_input_id, created_at, user_id, dance, mention_count, ' +
     'source_class_input:source_class_input_id(title, created_at, class_summary, practice_point_1, practice_point_2, ai_primary_focus, ai_secondary_focus, lesson_type, teacher_name, dance)';
 
+  let data;
   if (studentId) {
-    const { data, error } = await supabase
+    const res = await supabase
       .from('focus_points')
       .select(selectStr)
       .eq('user_id', studentId)
@@ -851,30 +879,35 @@ export async function getPendingFocusPoints(studentId) {
       .eq('is_other', false)
       .eq('is_deleted', false)
       .order('created_at', { ascending: true });
-    if (error) throw error;
-    return data ?? [];
+    if (res.error) throw res.error;
+    data = res.data ?? [];
+  } else {
+    // No studentId — load all pending FPs for all coach's students
+    const coachId = await getCoachId();
+    const { data: requests } = await supabase
+      .from('coach_requests')
+      .select('student_id')
+      .eq('coach_id', coachId)
+      .eq('status', 'accepted');
+    const studentIds = (requests ?? []).map(r => r.student_id);
+    if (studentIds.length === 0) return [];
+
+    const res = await supabase
+      .from('focus_points')
+      .select(selectStr)
+      .in('user_id', studentIds)
+      .eq('status', 'pending_coach')
+      .eq('is_other', false)
+      .eq('is_deleted', false)
+      .order('created_at', { ascending: true });
+    if (res.error) throw res.error;
+    data = res.data ?? [];
   }
 
-  // No studentId — load all pending FPs for all coach's students
-  const coachId = await getCoachId();
-  const { data: requests } = await supabase
-    .from('coach_requests')
-    .select('student_id')
-    .eq('coach_id', coachId)
-    .eq('status', 'accepted');
-  const studentIds = (requests ?? []).map(r => r.student_id);
-  if (studentIds.length === 0) return [];
-
-  const { data, error } = await supabase
-    .from('focus_points')
-    .select(selectStr)
-    .in('user_id', studentIds)
-    .eq('status', 'pending_coach')
-    .eq('is_other', false)
-    .eq('is_deleted', false)
-    .order('created_at', { ascending: true });
-  if (error) throw error;
-  return data ?? [];
+  // Hide group focus points whose student hasn't confirmed attendance yet.
+  // Coach shouldn't be able to validate FPs for a student who wasn't there.
+  const attendedKeys = await loadAttendedKeys(data);
+  return data.filter(fp => !fpAttendanceMissing(fp, attendedKeys));
 }
 
 export async function getPendingFocusPointsCount() {
@@ -901,12 +934,21 @@ export async function approveFocusPoint(fpId) {
   // Capture the student before mutating so we can clear related coach notifs.
   const { data: fpRow } = await supabase
     .from('focus_points')
-    .select('user_id')
+    .select('user_id, group_fp, source_class_input_id')
     .eq('id', fpId)
     .maybeSingle();
+
+  // Group FP: drop instead of publishing if the student hasn't confirmed
+  // attendance. The validation screen filters these out, but this is the
+  // last-line guard for stale UI state or race conditions.
+  const attendedKeys = fpRow ? await loadAttendedKeys([fpRow]) : new Set();
+  const update = fpRow && fpAttendanceMissing(fpRow, attendedKeys)
+    ? { is_deleted: true, status: 'past', coach_review_deadline: null }
+    : { status: 'active', coach_review_deadline: null };
+
   const { error } = await supabase
     .from('focus_points')
-    .update({ status: 'active', coach_review_deadline: null })
+    .update(update)
     .eq('id', fpId);
   if (error) throw error;
   // Coach has acted on the pending FPs for this student → clear any
@@ -940,12 +982,20 @@ export async function editAndApproveFocusPoint(fpId, updates) {
   }
   const { data: fpRow } = await supabase
     .from('focus_points')
-    .select('user_id')
+    .select('user_id, group_fp, source_class_input_id')
     .eq('id', fpId)
     .maybeSingle();
+
+  // Same attendance guard as approveFocusPoint — if the coach edits a group
+  // FP for a student who hasn't confirmed attendance, drop instead of publish.
+  const attendedKeys = fpRow ? await loadAttendedKeys([fpRow]) : new Set();
+  const statusUpdate = fpRow && fpAttendanceMissing(fpRow, attendedKeys)
+    ? { is_deleted: true, status: 'past', coach_review_deadline: null }
+    : { status: 'active', coach_review_deadline: null };
+
   const { error } = await supabase
     .from('focus_points')
-    .update({ ...filtered, status: 'active', coach_review_deadline: null })
+    .update({ ...filtered, ...statusUpdate })
     .eq('id', fpId);
   if (error) throw error;
   await markFocusAddedNotificationsReadForStudent(fpRow?.user_id).catch(() => {});
@@ -989,13 +1039,37 @@ export async function rejectPendingFocusPoint({ fpId, studentId, fpName, reason 
 }
 
 export async function approveAllPendingForStudent(studentId) {
-  const { error } = await supabase
+  // Load pending FPs to partition by attendance — group FPs for a class the
+  // student didn't confirm should be dropped, not published.
+  const { data: pending } = await supabase
     .from('focus_points')
-    .update({ status: 'active', coach_review_deadline: null })
+    .select('id, user_id, group_fp, source_class_input_id')
     .eq('user_id', studentId)
     .eq('status', 'pending_coach')
     .eq('is_deleted', false);
-  if (error) throw error;
+  if (!pending || pending.length === 0) {
+    await markFocusAddedNotificationsReadForStudent(studentId).catch(() => {});
+    return;
+  }
+
+  const attendedKeys = await loadAttendedKeys(pending);
+  const toDrop = pending.filter(fp => fpAttendanceMissing(fp, attendedKeys)).map(fp => fp.id);
+  const toPublish = pending.filter(fp => !fpAttendanceMissing(fp, attendedKeys)).map(fp => fp.id);
+
+  if (toPublish.length > 0) {
+    const { error } = await supabase
+      .from('focus_points')
+      .update({ status: 'active', coach_review_deadline: null })
+      .in('id', toPublish);
+    if (error) throw error;
+  }
+  if (toDrop.length > 0) {
+    const { error } = await supabase
+      .from('focus_points')
+      .update({ is_deleted: true, status: 'past', coach_review_deadline: null })
+      .in('id', toDrop);
+    if (error) throw error;
+  }
   await markFocusAddedNotificationsReadForStudent(studentId).catch(() => {});
 }
 
@@ -1019,18 +1093,10 @@ export async function autoPublishExpiredFPs() {
       .lte('coach_review_deadline', now)
       .in('user_id', studentIds);
 
+    const attendedKeys = await loadAttendedKeys(expired ?? []);
     for (const fp of expired ?? []) {
-      if (fp.group_fp && fp.source_class_input_id) {
-        const { data: cis } = await supabase
-          .from('class_input_students')
-          .select('student_id, attendance')
-          .eq('class_input_id', fp.source_class_input_id);
-        const excluded = new Set((cis ?? []).filter(r => r.attendance === 'no').map(r => r.student_id));
-        if (excluded.has(fp.user_id)) {
-          await supabase.from('focus_points').update({ is_deleted: true, status: 'past' }).eq('id', fp.id);
-        } else {
-          await supabase.from('focus_points').update({ status: 'active', coach_review_deadline: null }).eq('id', fp.id);
-        }
+      if (fpAttendanceMissing(fp, attendedKeys)) {
+        await supabase.from('focus_points').update({ is_deleted: true, status: 'past', coach_review_deadline: null }).eq('id', fp.id);
       } else {
         await supabase.from('focus_points').update({ status: 'active', coach_review_deadline: null }).eq('id', fp.id);
       }

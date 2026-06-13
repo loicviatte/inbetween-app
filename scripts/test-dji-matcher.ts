@@ -11,6 +11,7 @@ import {
   parseDjiFileName,
   groupMicFilesIntoSessions,
   matchSessionsToClasses,
+  assignSessionsByDuration,
   type MicFile,
   type ClassRecording,
 } from '../src/services/localRecordingMatcher';
@@ -72,4 +73,48 @@ const ok =
   result.matches.find((m) => m.class.id === 'GROUP')?.session.index === 3;
 
 console.log(`\n${ok ? '✅ PASS' : '❌ FAIL'} — multi-part grouping + session match`);
-process.exit(ok ? 0 : 1);
+
+// ── Scenario 2: count_mismatch + DJI clock drift (Tanya's "Why no pairs?") ──
+// Mic holds 3 real sessions across 06-03 and 06-05 (the mic RTC is ~+8h off,
+// so the 04-June class was stamped 05-June). Only ONE class is pending. The
+// banded scorer used to tie idx3 (3729s, ratio 0.85) with idx6 (4270s, ratio
+// 0.97) and pick the *earlier* one (idx3, wrong day). assignSessionsByDuration
+// must pick idx6 — the closest duration — instead.
+const RAW2: Array<[string, number]> = [
+  ['DJI_01_20260530_223203.WAV', mb(2)],       // 14s false start
+  ['DJI_02_20260603_015249.WAV', mb(266.4)],   // idx2 part 1 (1850s)
+  ['DJI_02_20260603_022338.WAV', mb(157.1)],   // idx2 part 2 (1091s)  -> 2941s
+  ['DJI_03_20260603_025139.WAV', mb(266.4)],   // idx3 part 1 (1850s)
+  ['DJI_03_20260603_032229.WAV', mb(266.4)],   // idx3 part 2 (1850s)
+  ['DJI_03_20260603_035318.WAV', mb(4.1)],     // idx3 part 3 (29s)    -> 3729s
+  ['DJI_04_20260603_035531.WAV', kb(845)],     // 6s false start
+  ['DJI_05_20260603_035827.WAV', kb(531)],     // 4s false start
+  ['DJI_06_20260605_022249.WAV', mb(266.4)],   // idx6 part 1 (1850s)
+  ['DJI_06_20260605_025339.WAV', mb(266.4)],   // idx6 part 2 (1850s)
+  ['DJI_06_20260605_032428.WAV', mb(82.08)],   // idx6 part 3 (570s)   -> 4270s
+];
+
+const files2: MicFile[] = [];
+for (const [name, size] of RAW2) {
+  const meta = parseDjiFileName(name);
+  if (!meta) continue;
+  files2.push({ fileName: name, index: meta.index, timestamp: meta.timestamp, durationSec: dur(size), sizeBytes: size, uri: '' });
+}
+const sessions2 = groupMicFilesIntoSessions(files2).filter((s) => s.durationSec >= 60);
+
+// One pending class on 06-04, ~73 min. Its real audio is idx6 (stamped 06-05).
+const classes2: ClassRecording[] = [
+  { id: 'ESTHER', startedAt: new Date('2026-06-04T18:24:15Z'), endedAt: new Date('2026-06-04T19:37:14Z'), studentName: 'Esther' },
+];
+
+const status2 = matchSessionsToClasses(classes2, sessions2).status;
+const assigned = assignSessionsByDuration(classes2, sessions2);
+const pickedIdx = assigned.find((a) => a.class.id === 'ESTHER')?.session.index;
+console.log(`\n=== scenario 2: ${sessions2.length} sessions vs 1 class — status ${status2} ===`);
+for (const s of sessions2) console.log(`  idx ${s.index} | ${s.durationSec}s`);
+console.log(`  ESTHER <- idx ${pickedIdx} (expected idx 6, the closest duration)`);
+
+const ok2 = status2 === 'count_mismatch' && sessions2.length === 3 && pickedIdx === 6;
+console.log(`${ok2 ? '✅ PASS' : '❌ FAIL'} — closest-duration assignment beats clock drift`);
+
+process.exit(ok && ok2 ? 0 : 1);

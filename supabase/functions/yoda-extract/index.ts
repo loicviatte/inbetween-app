@@ -781,6 +781,34 @@ async function loadTrainerFeedback(supabase: ReturnType<typeof createClient>): P
     }
   }
 
+  // Also load class-level admin edits (title, class_summary, practice_point_*,
+  // ai_primary_focus, ai_secondary_focus, priority_score_*). These are not
+  // tied to ai_training_candidates so they live in class_input_edits — pull
+  // the 30 most recent so the model sees the patterns of "AI said X, admin
+  // corrected to Y" for class-level fields too.
+  const { data: classEdits } = await supabase
+    .from('class_input_edits')
+    .select('field_name, ai_value, human_value, edited_at')
+    .order('edited_at', { ascending: false })
+    .limit(30)
+
+  if (classEdits && classEdits.length > 0) {
+    const editLines: string[] = []
+    for (const row of classEdits as Array<{
+      field_name: string
+      ai_value: string | null
+      human_value: string | null
+    }>) {
+      const ai = (row.ai_value ?? '').trim().slice(0, 120)
+      const human = (row.human_value ?? '').trim().slice(0, 120)
+      if (!ai && !human) continue
+      editLines.push(`[CLASS-LEVEL EDIT] field: ${row.field_name}, AI: "${ai}", admin corrected to: "${human}"`)
+    }
+    if (editLines.length > 0) {
+      result += `\n\n## CLASS-LEVEL CORRECTIONS — admin's corrections on class fields:\n${editLines.join('\n')}`
+    }
+  }
+
   return result
 }
 
@@ -925,6 +953,7 @@ async function processRecord(record: ClassInputRecord): Promise<void> {
 
     const anthropicData = await anthropicRes.json()
     const rawText: string = anthropicData.content?.[0]?.text ?? ''
+    const stopReason: string | undefined = anthropicData.stop_reason
 
     // Strip markdown code fences if Claude wrapped the JSON
     const jsonText = rawText
@@ -936,7 +965,9 @@ async function processRecord(record: ClassInputRecord): Promise<void> {
     try {
       parsed = JSON.parse(jsonText)
     } catch {
-      throw new Error(`JSON parse failed. Raw output:\n${rawText.slice(0, 500)}`)
+      throw new Error(
+        `JSON parse failed (stop_reason=${stopReason}). Raw output:\n${rawText.slice(0, 500)}`,
+      )
     }
     // Belt-and-suspenders: the prompt forbids hyphens, but strip any that
     // slipped through from every string field before we write anything.

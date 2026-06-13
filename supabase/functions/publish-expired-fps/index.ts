@@ -6,9 +6,18 @@
 // independently so coaches who haven't recorded a new class don't end up
 // with their students' FPs frozen forever.
 //
+// Admin gate: a FP is only eligible for auto-publish once its parent
+// class_input has been admin-approved (admin_approved_at IS NOT NULL).
+// Before admin review, the 18h coach window doesn't even start ticking
+// against the coach — when admin approves, approveClass resets the
+// deadline so the coach gets a fresh 18h window.
+//
 // Behaviour per row:
-//   - Group FP with a source class: if the student answered 'no' to
-//     attendance, soft-delete the FP. Otherwise publish (status='active').
+//   - class_input not yet admin-approved → skip (stay pending_coach)
+//   - Group FP with a source class where the student has NOT confirmed
+//     attendance (attendance_responses.attended = true) → soft-delete.
+//     A pending answer or a missing row counts as "not attended" — the
+//     student has to explicitly say "yes" to receive focus points.
 //   - Otherwise: publish (status='active').
 //
 // Triggered by pg_cron every 5 minutes. Safe to invoke manually too —
@@ -44,55 +53,15 @@ type ExpiredFP = {
   user_id: string
   group_fp: boolean | null
   source_class_input_id: string | null
+  class_input_id: string | null
 }
 
 async function sweep() {
   const now = new Date().toISOString()
 
-  // Couple focus points — same 18h auto-publish (no per-dancer attendance),
-  // run independently of the solo sweep below.
-  let couplePublished = 0
-  {
-    const { data: ec } = await supabase
-      .from('couple_focus_points')
-      .select('id')
-      .eq('status', 'pending_coach')
-      .eq('is_deleted', false)
-      .lte('coach_review_deadline', now)
-      .limit(MAX_PER_RUN)
-    if (ec && ec.length > 0) {
-      const ids = ec.map((r: any) => r.id)
-      const { error: ce } = await supabase
-        .from('couple_focus_points')
-        .update({ status: 'active', coach_review_deadline: null })
-        .in('id', ids)
-      if (ce) console.error('[publish-expired-fps] couple publish failed:', ce.message)
-      else couplePublished = ids.length
-    }
-  }
-
-  // Hard-delete couples soft-unpaired more than 30 days ago (retention window).
-  // Cascade removes their focus points / practice logs / locks.
-  let coupleDeleted = 0
-  {
-    const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
-    const { data: stale } = await supabase
-      .from('couples')
-      .select('id')
-      .not('unpaired_at', 'is', null)
-      .lt('unpaired_at', cutoff)
-      .limit(MAX_PER_RUN)
-    if (stale && stale.length > 0) {
-      const ids = stale.map((r: any) => r.id)
-      const { error: de } = await supabase.from('couples').delete().in('id', ids)
-      if (de) console.error('[publish-expired-fps] stale couple delete failed:', de.message)
-      else coupleDeleted = ids.length
-    }
-  }
-
   const { data: expired, error } = await supabase
     .from('focus_points')
-    .select('id, user_id, group_fp, source_class_input_id')
+    .select('id, user_id, group_fp, source_class_input_id, class_input_id')
     .eq('status', 'pending_coach')
     .eq('is_deleted', false)
     .lte('coach_review_deadline', now)
@@ -100,42 +69,72 @@ async function sweep() {
 
   if (error) throw new Error(`load expired FPs: ${error.message}`)
   if (!expired || expired.length === 0) {
-    return { published: 0, dropped: 0, couplePublished, coupleDeleted, total: 0 }
+    return { published: 0, dropped: 0, gated: 0, total: 0 }
   }
 
-  // Pre-fetch attendance for the group FPs in one batch — avoids N+1 when
-  // the backlog is large (e.g. after a long downtime of this sweep).
-  const groupClassIds = [
+  // Admin gate: only auto-publish FPs whose parent class_input has been
+  // admin-approved. Orphan FPs (class_input_id IS NULL) flow through as
+  // before.
+  const classIds = [
     ...new Set(
-      expired
-        .filter((fp: ExpiredFP) => fp.group_fp && fp.source_class_input_id)
-        .map((fp: ExpiredFP) => fp.source_class_input_id as string),
+      (expired as ExpiredFP[])
+        .map((fp) => fp.class_input_id)
+        .filter((v): v is string => !!v),
     ),
   ]
+  const approvedSet = new Set<string>()
+  if (classIds.length > 0) {
+    const { data: approvedClasses } = await supabase
+      .from('class_inputs')
+      .select('id')
+      .in('id', classIds)
+      .not('admin_approved_at', 'is', null)
+    for (const c of (approvedClasses ?? []) as { id: string }[]) {
+      approvedSet.add(c.id)
+    }
+  }
+  const gated: ExpiredFP[] = []
+  const eligible: ExpiredFP[] = []
+  for (const fp of expired as ExpiredFP[]) {
+    if (fp.class_input_id == null || approvedSet.has(fp.class_input_id)) {
+      eligible.push(fp)
+    } else {
+      gated.push(fp)
+    }
+  }
 
-  const excludedByClass: Record<string, Set<string>> = {}
-  if (groupClassIds.length > 0) {
-    const { data: cisRows } = await supabase
-      .from('class_input_students')
-      .select('class_input_id, student_id, attendance')
+  // Pre-fetch attendance confirmations for the group FPs in one batch — only
+  // students who explicitly answered "yes" via attendance_responses are
+  // eligible. Pending or missing responses count as "not attended" and get
+  // soft-deleted. Source of truth is attendance_responses.attended, NOT
+  // class_input_students.attendance (which is never updated past 'pending').
+  const groupFPs = eligible.filter((fp) => fp.group_fp && fp.source_class_input_id)
+  const groupClassIds = [
+    ...new Set(groupFPs.map((fp) => fp.source_class_input_id as string)),
+  ]
+  const groupStudentIds = [...new Set(groupFPs.map((fp) => fp.user_id))]
+
+  const attendedKeys = new Set<string>()
+  if (groupClassIds.length > 0 && groupStudentIds.length > 0) {
+    const { data: attendedRows } = await supabase
+      .from('attendance_responses')
+      .select('class_input_id, student_id')
       .in('class_input_id', groupClassIds)
-      .eq('attendance', 'no')
-    for (const r of cisRows || []) {
-      const cid = r.class_input_id as string
-      const sid = r.student_id as string
-      if (!excludedByClass[cid]) excludedByClass[cid] = new Set<string>()
-      excludedByClass[cid].add(sid)
+      .in('student_id', groupStudentIds)
+      .eq('attended', true)
+    for (const r of attendedRows || []) {
+      attendedKeys.add(`${r.class_input_id}:${r.student_id}`)
     }
   }
 
   const toPublish: string[] = []
   const toDrop: string[] = []
-  for (const fp of expired as ExpiredFP[]) {
+  for (const fp of eligible) {
     const isGroup = !!(fp.group_fp && fp.source_class_input_id)
-    const excluded =
-      isGroup &&
-      excludedByClass[fp.source_class_input_id as string]?.has(fp.user_id)
-    if (excluded) toDrop.push(fp.id)
+    const attended =
+      !isGroup ||
+      attendedKeys.has(`${fp.source_class_input_id}:${fp.user_id}`)
+    if (!attended) toDrop.push(fp.id)
     else toPublish.push(fp.id)
   }
 
@@ -160,13 +159,12 @@ async function sweep() {
   }
 
   console.log(
-    `[publish-expired-fps] swept ${expired.length} (published ${toPublish.length}, dropped ${toDrop.length}, couple ${couplePublished}, coupleDeleted ${coupleDeleted})`,
+    `[publish-expired-fps] swept ${expired.length} (published ${toPublish.length}, dropped ${toDrop.length}, gated ${gated.length})`,
   )
   return {
     published: toPublish.length,
     dropped: toDrop.length,
-    couplePublished,
-    coupleDeleted,
+    gated: gated.length,
     total: expired.length,
   }
 }
