@@ -29,8 +29,9 @@ import * as Notifications from 'expo-notifications';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Colors, Fonts, Spacing } from '../../theme';
 import { useCoachData } from '../../context/CoachDataContext';
-import { getStudentFocusPoints, getStudentQuestions, getStudentOpenQuestions, getStudentRecentActivity, getStartClassRoster, markQuestionCovered } from '../../storage/coachStorage';
+import { getStudentFocusPoints, getStudentQuestions, getStudentOpenQuestions, getStudentRecentActivity, getStartClassRoster, markQuestionCovered, linkCoveredQuestionsToClass } from '../../storage/coachStorage';
 import { getLessonReadiness } from '../../storage/storage';
+import { getMyCouples, getCoupleReadiness, getCoupleFocusPoints, getCoupleActivity } from '../../storage/coupleStorage';
 import QuestionDetailSheet from '../../components/QuestionDetailSheet';
 import {
   getActiveCoachClass,
@@ -333,6 +334,8 @@ function MiniGauge({ value, label }) {
 // `st` is a roster entry from getStartClassRoster() with: id, name, photoUrl,
 // lastPrivateClassDate, lastPrivateDurationMin, readiness (0-100), briefings
 // (focus point summaries), status.
+const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
 function PrivateCard({ st, onPress }) {
   const isSilent = st.status === 'silent';
   const ringColor = isSilent ? '#E84545' : '#E8B530';
@@ -354,51 +357,25 @@ function PrivateCard({ st, onPress }) {
 
   return (
     <TouchableOpacity style={sc.card} onPress={onPress} activeOpacity={0.85}>
-      <View style={sc.cardHead}>
-        <View style={[sc.avRing, { borderColor: ringColor }]}>
-          {st.photoUrl ? (
-            <Image source={{ uri: st.photoUrl }} style={sc.avPhoto} />
-          ) : (
-            <View style={[sc.avFallback, { backgroundColor: avBg }]}>
-              <Text style={[sc.avText, { color: avTextColor }]}>{initial}</Text>
-            </View>
-          )}
-        </View>
-        <View style={{ flex: 1, minWidth: 0 }}>
-          <Text style={sc.cardName} numberOfLines={1}>{st.name}</Text>
-          <Text style={sc.cardMeta} numberOfLines={1}>{metaLine}</Text>
-        </View>
-        <View style={sc.readyWrap}>
-          <Text style={sc.readyN}>
-            {st.readiness}<Text style={sc.readyPct}>%</Text>
-          </Text>
-          <Text style={sc.readyLbl}>READY</Text>
-        </View>
+      <View style={[sc.avRing, { borderColor: ringColor }]}>
+        {st.photoUrl ? (
+          <Image source={{ uri: st.photoUrl }} style={sc.avPhoto} />
+        ) : (
+          <View style={[sc.avFallback, { backgroundColor: avBg }]}>
+            <Text style={[sc.avText, { color: avTextColor }]}>{initial}</Text>
+          </View>
+        )}
       </View>
-
-      {st.briefings.length > 0 ? (
-        <>
-          <View style={sc.cardDivider} />
-          {st.briefings.slice(0, 3).map((b) => {
-            const isStale = b.isStale;
-            return (
-              <View key={b.id} style={sc.fpRow}>
-                <View style={sc.fpBullet}>
-                  <View style={sc.fpBulletInner} />
-                </View>
-                <Text style={sc.fpName} numberOfLines={1}>{b.name}</Text>
-                {isStale ? (
-                  <Text style={sc.fpStale}>stale {b.staleDays || 0}d</Text>
-                ) : (
-                  <Text style={sc.fpSince}>
-                    {b.sessionsSince}<Text style={sc.fpSinceTarget}>/{b.target}</Text>
-                  </Text>
-                )}
-              </View>
-            );
-          })}
-        </>
-      ) : null}
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={sc.cardName} numberOfLines={1}>{st.name}</Text>
+        <Text style={sc.cardMeta} numberOfLines={1}>{metaLine}</Text>
+      </View>
+      <View style={sc.right}>
+        <View style={sc.readyWrap}>
+          <Text style={sc.readyN}>{st.readiness}<Text style={sc.readyPct}>%</Text></Text>
+        </View>
+        <Ionicons name="chevron-forward" size={16} color="rgba(10,10,10,0.4)" />
+      </View>
     </TouchableOpacity>
   );
 }
@@ -407,7 +384,39 @@ export default function StartClassScreen({ navigation }) {
   const { students, getOrFetch } = useCoachData();
 
   const [view, setView] = useState('select');
+  const [pickMode, setPickMode] = useState('solo'); // 'solo' | 'couple' — landing list toggle
+  const modeSlide = useRef(new Animated.Value(0)).current; // 0 = solo, 1 = couple (sliding pill)
+  const [toggleW, setToggleW] = useState(0);
+  const selectMode = (m) => {
+    setPickMode(m);
+    Animated.spring(modeSlide, {
+      toValue: m === 'couple' ? 1 : 0,
+      useNativeDriver: true,
+      friction: 9,
+      tension: 90,
+    }).start();
+  };
   const [selectedStudent, setSelectedStudent] = useState(null);
+  const [selectedCouple, setSelectedCouple] = useState(null); // couple class context
+  const [couples, setCouples] = useState([]);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const cs = await getMyCouples();
+        // Enrich with the same info as the solo roster: readiness % + last
+        // couple-private date (getMyCouples itself returns neither).
+        const enriched = await Promise.all((cs || []).map(async (c) => {
+          const r = await getCoupleReadiness(c.coupleId, null).catch(() => null);
+          return { ...c, readiness: r?.percent ?? null, lastPrivateClassDate: r?.lastClassDate ?? null };
+        }));
+        if (alive) setCouples(enriched);
+      } catch {
+        if (alive) setCouples([]);
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
   const [searchQuery, setSearchQuery] = useState('');
   // Per-student readiness + focus briefings, loaded for the select view.
   const [roster, setRoster] = useState([]);
@@ -1335,12 +1344,14 @@ export default function StartClassScreen({ navigation }) {
       localMode = isLocalRecordingMode(user);
       if (user && isNewRecordingPipelineEnabled(user)) {
         const isPrivate = view === 'private-briefing';
+        const isCouple = view === 'couple-briefing';
         const { data: rec, error: insertErr } = await supabase
           .from('class_recordings')
           .insert({
             user_id: user.id,
-            lesson_type: isPrivate ? 'private' : 'group',
+            lesson_type: isCouple ? 'couple' : (isPrivate ? 'private' : 'group'),
             student_id: isPrivate ? (selectedStudent?.id ?? null) : null,
+            couple_id: isCouple ? (selectedCouple?.coupleId ?? null) : null,
             status: 'recording',
             audio_folder: null, // filled in below once we have the row id
             // Local-recording-mode metadata: phone records nothing during
@@ -1357,7 +1368,14 @@ export default function StartClassScreen({ navigation }) {
           .from('class_recordings')
           .update({ audio_folder: `${user.id}/${recordingId}/` })
           .eq('id', recordingId);
-        if (!isPrivate && Array.isArray(students) && students.length > 0) {
+        if (isCouple && selectedCouple) {
+          await supabase
+            .from('class_recording_students')
+            .insert([
+              { recording_id: recordingId, student_id: selectedCouple.dancerA.id },
+              { recording_id: recordingId, student_id: selectedCouple.dancerB.id },
+            ]);
+        } else if (!isPrivate && Array.isArray(students) && students.length > 0) {
           await supabase
             .from('class_recording_students')
             .insert(students.map((s) => ({ recording_id: recordingId, student_id: s.id })));
@@ -1611,7 +1629,7 @@ export default function StartClassScreen({ navigation }) {
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
     );
   }
-  function transcribeAndSubmit(uris, isPrivate, studentId, allStudents) {
+  function transcribeAndSubmit(uris, isPrivate, studentId, allStudents, coveredQuestionIds = [], coupleCtx = null) {
     const list = Array.isArray(uris) ? uris.filter(Boolean) : (uris ? [uris] : []);
     const run = async () => {
       try {
@@ -1656,17 +1674,28 @@ export default function StartClassScreen({ navigation }) {
           .insert({
             user_id: userId,
             transcript,
-            lesson_type: isPrivate ? 'private' : 'group',
+            lesson_type: coupleCtx ? 'couple' : (isPrivate ? 'private' : 'group'),
             student_id: isPrivate ? (studentId ?? null) : null,
+            couple_id: coupleCtx?.coupleId ?? null,
             status: 'pending',
           })
           .select('id')
           .single();
         if (insertErr) throw insertErr;
-        if (!isPrivate && classInput?.id && allStudents.length > 0) {
+        if (coupleCtx && classInput?.id && coupleCtx.dancerIds?.length > 0) {
+          await supabase.from('class_input_students').insert(
+            coupleCtx.dancerIds.map((sid) => ({ class_input_id: classInput.id, student_id: sid }))
+          );
+        } else if (!isPrivate && classInput?.id && allStudents.length > 0) {
           await supabase.from('class_input_students').insert(
             allStudents.map((s) => ({ class_input_id: classInput.id, student_id: s.id }))
           );
+        }
+        // Backfill the covered_class_input_id on the questions the coach
+        // ticked off during the briefing — now that the class_input row
+        // exists, ClassDetailScreen can list them under the summary.
+        if (classInput?.id && coveredQuestionIds.length > 0) {
+          await linkCoveredQuestionsToClass(coveredQuestionIds, classInput.id).catch(() => {});
         }
       } catch (err) {
         console.warn('[StartClass] Background transcription failed:', err);
@@ -1691,12 +1720,15 @@ export default function StartClassScreen({ navigation }) {
     //               readiness checklist until the student finishes the
     //               new class's primary focuses (then it re-enters with
     //               a 15-minute training target)
+    // Couple debriefs write to couple_focus_points (the verdict ids are couple
+    // FP ids); the recording coach is the couple coach so RLS allows it.
+    const verdictTable = view === 'couple-briefing' ? 'couple_focus_points' : 'focus_points';
     const goodIds = Object.entries(readinessVerdicts)
       .filter(([, verdict]) => verdict === 'good')
       .map(([id]) => id);
     if (goodIds.length > 0) {
       supabase
-        .from('focus_points')
+        .from(verdictTable)
         .update({ status: 'past' })
         .in('id', goodIds)
         .then(() => {}, (err) => {
@@ -1708,7 +1740,7 @@ export default function StartClassScreen({ navigation }) {
       .map(([id]) => id);
     if (notYetIds.length > 0) {
       supabase
-        .from('focus_points')
+        .from(verdictTable)
         .update({ is_held: true })
         .in('id', notYetIds)
         .then(() => {}, (err) => {
@@ -1737,6 +1769,11 @@ export default function StartClassScreen({ navigation }) {
     // Persist question verdicts (fire-and-forget). "covered" → mark replied
     // with an auto-text so the student sees positive closure. "not_yet" is
     // left as-is (still pending or still in_class for the next session).
+    // The covered_class_input_id link is set later by transcribeAndSubmit
+    // once the class_input row exists (legacy pipeline). NEW PIPELINE TODO:
+    // finalize-class needs to receive coveredQIds (via class_recordings or
+    // request body) and apply the same link server-side after creating the
+    // class_input row.
     const coveredQIds = Object.entries(questionVerdicts)
       .filter(([, v]) => v === 'covered')
       .map(([id]) => id);
@@ -1792,7 +1829,12 @@ export default function StartClassScreen({ navigation }) {
         });
       } else {
         // Legacy path: client-side AssemblyAI per chunk.
-        transcribeAndSubmit(uris, isPrivate, selectedStudent?.id, students);
+        transcribeAndSubmit(
+          uris, isPrivate, selectedStudent?.id, students, coveredQIds,
+          view === 'couple-briefing' && selectedCouple
+            ? { coupleId: selectedCouple.coupleId, dancerIds: [selectedCouple.dancerA?.id, selectedCouple.dancerB?.id].filter(Boolean) }
+            : null,
+        );
       }
       setClassRecorded(true);
       if (popToTopTimerRef.current) clearTimeout(popToTopTimerRef.current);
@@ -1850,6 +1892,9 @@ export default function StartClassScreen({ navigation }) {
   const [viewingQuestion, setViewingQuestion] = useState(null);
   const [lastClass, setLastClass] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  // Couple detail (mirrors the solo briefing layout, driven by couple data).
+  const [coupleReadinessDetail, setCoupleReadinessDetail] = useState(null);
+  const [coupleFps, setCoupleFps] = useState([]);
   // Readiness pulled from the student's previous private (focuses + tiers).
   // Coach uses this as a "check during the lesson" list and a post-lesson
   // verdict capture (good / not yet).
@@ -1909,6 +1954,37 @@ export default function StartClassScreen({ navigation }) {
       } else {
         setLastClass(null);
       }
+    } catch {}
+    setDetailLoading(false);
+  }, []);
+
+  // Couple equivalent of loadStudentDetail — loads the same kinds of data so the
+  // couple briefing can mirror the solo layout. (Couples have no "class recap"
+  // or "questions" data, so those sections simply don't render.)
+  const loadCoupleDetail = useCallback(async (couple) => {
+    setSelectedCouple(couple);
+    setDetailLoading(true);
+    setView('couple-briefing');
+    try {
+      const ck = `couple:${couple.coupleId}`;
+      const [readiness, fps, activity] = await Promise.all([
+        getOrFetch(`${ck}:readiness`, () => getCoupleReadiness(couple.coupleId, null).catch(() => null)),
+        getOrFetch(`${ck}:fps`, () => getCoupleFocusPoints(couple.coupleId).catch(() => [])),
+        getOrFetch(`${ck}:activity`, () => getCoupleActivity(couple.coupleId, 80).catch(() => [])),
+      ]);
+      // Compute this-week practice counts per focus from the practice logs.
+      const weekAgo = Date.now() - 7 * 86400000;
+      const weekByName = {};
+      for (const ev of activity || []) {
+        if (ev.completedAt && new Date(ev.completedAt).getTime() >= weekAgo) {
+          weekByName[ev.focusName] = (weekByName[ev.focusName] || 0) + 1;
+        }
+      }
+      const enriched = (fps || []).map((fp) => ({ ...fp, weekCount: weekByName[fp.name] || 0 }));
+      setCoupleReadinessDetail(readiness);
+      setCoupleFps(enriched);
+      setReadinessVerdicts({});
+      setQuestionVerdicts({});
     } catch {}
     setDetailLoading(false);
   }, []);
@@ -2113,9 +2189,12 @@ export default function StartClassScreen({ navigation }) {
     // Focus-verdict gating: the coach must pick Good or Not yet for every
     // carryover focus before Done becomes enabled. The point is to force
     // a moment of reflection on each one — no autopilot Done.
-    const carryoverFocuses = (view === 'private-briefing' && studentReadiness)
-      ? (studentReadiness.focuses || [])
-      : [];
+    const carryoverFocuses =
+      view === 'couple-briefing'
+        ? (coupleReadinessDetail?.focuses || [])
+        : (view === 'private-briefing' && studentReadiness)
+          ? (studentReadiness.focuses || [])
+          : [];
     const allFocusesVerdicted = carryoverFocuses.length === 0
       || carryoverFocuses.every(f => !!readinessVerdicts[f.focusPointId]);
 
@@ -2175,15 +2254,13 @@ export default function StartClassScreen({ navigation }) {
               <Text style={db.noteHint}>Optional — visible to the student after the class.</Text>
             </View>
 
-            {/* Readiness verdicts: only on private lessons, only if the
-                 student had carryover focuses to validate. */}
-            {view === 'private-briefing'
-              && !!studentReadiness
-              && (studentReadiness.focuses || []).length > 0 && (
+            {/* Readiness verdicts — carryover focuses to validate. Solo and
+                 couple alike: good → archive, not yet → held (15-min target). */}
+            {carryoverFocuses.length > 0 && (
               <>
                 <Text style={db.secLabel}>How did it go?</Text>
                 <View style={db.verdictList}>
-                  {studentReadiness.focuses.map((f) => {
+                  {carryoverFocuses.map((f) => {
                     const verdict = readinessVerdicts[f.focusPointId];
                     return (
                       <View key={f.focusPointId} style={db.verdictRow}>
@@ -2843,6 +2920,47 @@ export default function StartClassScreen({ navigation }) {
               Pick a student to see what they've worked on lately.
             </Text>
 
+            {/* Solo / Couple toggle — sliding pill */}
+            <View
+              style={sc.modeToggle}
+              onLayout={(e) => setToggleW(e.nativeEvent.layout.width)}
+            >
+              {toggleW > 0 && (
+                <Animated.View
+                  style={[
+                    sc.modeThumb,
+                    {
+                      width: (toggleW - 10) / 2,
+                      transform: [{
+                        translateX: modeSlide.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [0, (toggleW - 10) / 2],
+                        }),
+                      }],
+                    },
+                  ]}
+                />
+              )}
+              <TouchableOpacity
+                style={sc.modeTab}
+                onPress={() => selectMode('solo')}
+                activeOpacity={0.85}
+              >
+                <View style={[sc.modeDot, { backgroundColor: '#E8B530' }]} />
+                <Text style={[sc.modeTabTxt, pickMode === 'solo' && sc.modeTabTxtOn]}>Solo</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={sc.modeTab}
+                onPress={() => selectMode('couple')}
+                activeOpacity={0.85}
+              >
+                <View style={[sc.modeDot, { backgroundColor: '#2E4670' }]} />
+                <Text style={[sc.modeTabTxt, pickMode === 'couple' && sc.modeTabTxtOn]}>Couple</Text>
+              </TouchableOpacity>
+            </View>
+
+            {pickMode === 'solo' ? (
+              <>
             <View style={sc.eyebrowRow}>
               <View style={sc.eyebrowAccent} />
               <Text style={sc.eyebrowText}>PRIVATE WITH...</Text>
@@ -2866,6 +2984,61 @@ export default function StartClassScreen({ navigation }) {
                   onPress={() => loadStudentDetail(students.find(x => x.id === st.id) || st)}
                 />
               ))
+            )}
+              </>
+            ) : (
+              <>
+            <View style={sc.eyebrowRow}>
+              <View style={[sc.eyebrowAccent, { backgroundColor: '#2E4670' }]} />
+              <Text style={[sc.eyebrowText, { color: '#2E4670' }]}>COUPLES</Text>
+              <View style={sc.eyebrowRule} />
+            </View>
+
+            {couples.length === 0 ? (
+              <Text style={sc.emptyText}>
+                No couples yet — pair two students from their profiles.
+              </Text>
+            ) : (
+              couples.map((c) => {
+                const lp = c.lastPrivateClassDate ? new Date(c.lastPrivateClassDate) : null;
+                const meta = lp
+                  ? `Last private · ${MONTHS[lp.getMonth()]} ${lp.getDate()}`
+                  : 'No couple private yet';
+                return (
+                <TouchableOpacity
+                  key={c.coupleId}
+                  style={sc.card}
+                  activeOpacity={0.85}
+                  onPress={() => loadCoupleDetail(c)}
+                >
+                  <View style={sc.coupleAvWrap}>
+                    {[c.dancerA, c.dancerB].map((d, i) => (
+                      <View key={i} style={[sc.coupleAv, i === 1 && sc.coupleAv2]}>
+                        {d?.avatarUrl ? (
+                          <Image source={{ uri: d.avatarUrl }} style={sc.coupleAvPhoto} />
+                        ) : (
+                          <Text style={sc.coupleAvText}>{(d?.name || '?')[0]?.toUpperCase()}</Text>
+                        )}
+                      </View>
+                    ))}
+                  </View>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={sc.cardName} numberOfLines={1}>{c.name}</Text>
+                    <Text style={sc.cardMeta} numberOfLines={1}>{meta}</Text>
+                  </View>
+                  <View style={sc.right}>
+                    {c.readiness != null && (
+                      <View style={sc.readyWrap}>
+                        <Text style={sc.readyN}>{c.readiness}<Text style={sc.readyPct}>%</Text></Text>
+                      </View>
+                    )}
+                    <Ionicons name="chevron-forward" size={16} color="rgba(10,10,10,0.4)" />
+                  </View>
+                </TouchableOpacity>
+                );
+              })
+            )}
+              </>
             )}
 
             <View style={sc.orRow}>
@@ -3310,6 +3483,201 @@ export default function StartClassScreen({ navigation }) {
   }
 
   // ── VIEW 4: Group briefing ─────────────────────────────────────────────
+  // ── Couple briefing — record a couple lesson (reuses the shared
+  // start/stop bottom bar + debrief; startClassNow/finishDebrief branch on
+  // view === 'couple-briefing' + selectedCouple). ──────────────────────────
+  if (view === 'couple-briefing' && selectedCouple) {
+    const c = selectedCouple;
+    const readiness = coupleReadinessDetail;
+    const readinessFocuses = readiness?.focuses || [];
+    const sessionsCount = readinessFocuses.reduce((a, f) => a + (f.done || 0), 0);
+    const focusTrained = readinessFocuses.filter((f) => (f.done || 0) > 0).length;
+    const trainedPoints = (coupleFps || []).filter((fp) => (fp.weekCount || 0) > 0);
+    const stuckPoints = (coupleFps || []).filter((fp) => (fp.weekCount || 0) === 0);
+    const totalFps = (coupleFps || []).length;
+    const alertLabel = readiness == null
+      ? 'No couple private yet'
+      : readiness.percent >= 100 ? 'Ready for this lesson' : 'Carryover to review';
+    const alertColor = readiness == null ? C.gray : readiness.percent >= 100 ? C.green : C.orange;
+    const seenLabel = readiness?.lastClassDate ? relativeShort(readiness.lastClassDate) : '—';
+    const dancers = [c.dancerA, c.dancerB];
+
+    return (
+      <SafeAreaView style={s.safe} edges={['top']}>
+        <View style={{ flex: 1 }}>
+        <Animated.ScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={{ paddingTop: HERO_FULL + 76, paddingBottom: 120 }}
+          scrollEventThrottle={16}
+          onScroll={Animated.event(
+            [{ nativeEvent: { contentOffset: { y: pbScrollY } } }],
+            { useNativeDriver: false }
+          )}
+        >
+          {/* AI Debrief */}
+          {(trainedPoints.length > 0 || stuckPoints.length > 0) && (
+            <View style={pb.debriefWrap}>
+              <View style={pb.debriefEyebrow}>
+                <View style={pb.debriefEyebrowIcon}>
+                  <Ionicons name="flash" size={10} color={C.orange} />
+                </View>
+                <Text style={pb.debriefEyebrowText}>AI Debrief</Text>
+              </View>
+              <Text style={pb.debriefBody}>
+                {focusTrained > 0 ? (
+                  <Text>
+                    {c.name} completed{' '}
+                    <Text style={pb.debriefStrong}>{sessionsCount} couple session{sessionsCount > 1 ? 's' : ''}</Text>
+                    {' '}and practiced {focusTrained} of {readinessFocuses.length} carryover focus points.
+                  </Text>
+                ) : (
+                  <Text>No couple focus points practiced since the last lesson. </Text>
+                )}
+                {stuckPoints.length > 0 && (
+                  <Text>
+                    {' '}
+                    <Text style={pb.debriefEm}>"{stuckPoints[0].name}"</Text> has had zero practice despite being flagged.
+                  </Text>
+                )}
+              </Text>
+            </View>
+          )}
+
+          {/* Carryover from last couple private — what to check this lesson */}
+          {!!readiness && readinessFocuses.length > 0 ? (
+            <View style={pb.checkCard}>
+              <View style={pb.checkHeader}>
+                <View style={pb.checkBadge}>
+                  <Text style={pb.checkBadgeText}>CHECK DURING THIS LESSON</Text>
+                </View>
+                <Text style={pb.checkPct}>{readiness.percent}%</Text>
+              </View>
+              <Text style={pb.checkHint}>
+                Carryover from the couple's last private. Validate each at the end.
+              </Text>
+              <View style={pb.checkRows}>
+                {readinessFocuses.map((f) => {
+                  const tierColor =
+                    f.tier === 'critical' ? C.red : f.tier === 'important' ? C.orange : C.gray;
+                  return (
+                    <View key={f.focusPointId} style={pb.checkRow}>
+                      <View style={[pb.checkDot, { backgroundColor: tierColor }]} />
+                      <Text style={pb.checkName} numberOfLines={1}>{f.name}</Text>
+                      <Text style={[pb.checkTier, { color: tierColor }]}>{f.tier}</Text>
+                      <View style={pb.checkProgress}>
+                        <Text style={pb.checkProgressText}>
+                          {f.done}<Text style={pb.checkProgressOf}>/{f.target}</Text>
+                        </Text>
+                      </View>
+                    </View>
+                  );
+                })}
+              </View>
+            </View>
+          ) : null}
+
+          {/* Focus points trained this week */}
+          {trainedPoints.length > 0 && (
+            <>
+              <Text style={pb.secLabel}>Focus points trained this week</Text>
+              <View style={pb.focusWrap}>
+                {trainedPoints.map((fp) => (
+                  <View key={fp.id} style={pb.fpRow}>
+                    <View style={pb.fpStatus}>
+                      <Ionicons name="checkmark" size={14} color={C.green} />
+                    </View>
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={pb.fpName} numberOfLines={1}>{fp.name}</Text>
+                    </View>
+                    <View style={pb.fpBadge}>
+                      <Text style={pb.fpBadgeText}>{fp.weekCount}x</Text>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            </>
+          )}
+        </Animated.ScrollView>
+
+        {/* Backdrop masking content as it scrolls up behind the hero */}
+        <Animated.View
+          pointerEvents="none"
+          style={[pb.stickyBackdrop, { height: Animated.add(heroAnimHeight, 70) }]}
+        />
+
+        {/* Floating back arrow */}
+        <TouchableOpacity
+          onPress={() => { setView('select'); setSelectedCouple(null); }}
+          style={pb.floatingBack}
+          activeOpacity={0.7}
+          hitSlop={12}
+        >
+          <Ionicons name="chevron-back" size={22} color={C.text} />
+        </TouchableOpacity>
+
+        {/* Sticky collapsing hero — pair avatars + couple readiness */}
+        <Animated.View
+          pointerEvents="box-none"
+          style={[pb.stickyHero, { height: heroAnimHeight }]}
+        >
+          <View style={pb.heroTop}>
+            <View style={sc.cbHeroPair}>
+              {dancers.map((d, i) => (
+                <View key={i} style={[sc.cbHeroAv, i === 1 && { marginLeft: -16 }]}>
+                  {d?.avatarUrl ? (
+                    <Image source={{ uri: d.avatarUrl }} style={sc.cbHeroAvImg} />
+                  ) : (
+                    <Text style={sc.cbHeroAvTxt}>{(d?.name || '?')[0]?.toUpperCase()}</Text>
+                  )}
+                </View>
+              ))}
+            </View>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={pb.heroName} numberOfLines={1}>{c.name}</Text>
+              <Text style={pb.heroSub}>
+                {readiness?.percent != null
+                  ? <><Text style={pb.heroSubStrong}>{readiness.percent}%</Text> ready for this lesson</>
+                  : <>No couple private logged yet</>}
+              </Text>
+            </View>
+          </View>
+
+          <Animated.View style={{ opacity: heroDetailsOpacity }} pointerEvents="none">
+            <View style={pb.statsRow}>
+              <View style={pb.stat}>
+                <Text style={pb.statVal}>{sessionsCount}</Text>
+                <Text style={pb.statLabel}>Sessions</Text>
+              </View>
+              <View style={pb.statDivider} />
+              <View style={pb.stat}>
+                <Text style={pb.statVal}>{focusTrained}</Text>
+                <Text style={pb.statLabel}>Focus trained</Text>
+              </View>
+              <View style={pb.statDivider} />
+              <View style={pb.stat}>
+                <Text style={pb.statVal}>{totalFps}</Text>
+                <Text style={pb.statLabel}>Focuses</Text>
+              </View>
+            </View>
+
+            <View style={pb.alert}>
+              <View style={[pb.alertDot, { backgroundColor: alertColor }]} />
+              <Text style={pb.alertText}>{alertLabel}</Text>
+              <Text style={pb.alertTime}>{seenLabel}</Text>
+            </View>
+          </Animated.View>
+        </Animated.View>
+        </View>
+
+        {renderBottomBar()}
+        {renderAudioModal()}
+        {renderDebriefModal()}
+        {renderRecStartConfirmPrompt()}
+        {renderRecStopConfirmPrompt()}
+      </SafeAreaView>
+    );
+  }
+
   if (view === 'group-briefing') {
     const totalStudents = students.length;
     const topFocus = groupFPs[0] || null;
@@ -5738,13 +6106,16 @@ const sc = StyleSheet.create({
 
   // Per-student card
   card: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
     backgroundColor: 'rgba(255,255,255,0.85)',
-    borderRadius: 18,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
     borderWidth: 1,
     borderColor: 'rgba(232,181,48,0.30)',
-    marginBottom: 14,
+    marginBottom: 10,
   },
   cardHead: {
     flexDirection: 'row',
@@ -5752,53 +6123,53 @@ const sc = StyleSheet.create({
     gap: 12,
   },
   avRing: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    borderWidth: 2.5,
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    borderWidth: 2,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#FFFFFF',
   },
-  avPhoto: { width: 42, height: 42, borderRadius: 21 },
+  avPhoto: { width: 38, height: 38, borderRadius: 19 },
   avFallback: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     alignItems: 'center',
     justifyContent: 'center',
   },
   avText: {
     fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 16,
+    fontSize: 15,
   },
   cardName: {
     fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 19,
+    fontSize: 17,
     color: '#0A0A0A',
-    letterSpacing: -0.4,
+    letterSpacing: -0.3,
   },
   cardMeta: {
     fontFamily: Fonts.jakartaMedium,
     fontSize: 12.5,
-    color: 'rgba(10,10,10,0.55)',
+    color: 'rgba(10,10,10,0.5)',
     marginTop: 2,
   },
   readyWrap: {
-    alignItems: 'flex-end',
+    flexDirection: 'row',
+    alignItems: 'baseline',
     flexShrink: 0,
   },
   readyN: {
     fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 26,
+    fontSize: 19,
     color: '#0A0A0A',
-    letterSpacing: -0.6,
-    lineHeight: 28,
+    letterSpacing: -0.5,
   },
   readyPct: {
     fontFamily: Fonts.jakartaSemiBold,
-    fontSize: 13,
-    color: 'rgba(10,10,10,0.55)',
+    fontSize: 11.5,
+    color: 'rgba(10,10,10,0.45)',
   },
   readyLbl: {
     fontFamily: Fonts.jakartaExtraBold,
@@ -5806,6 +6177,117 @@ const sc = StyleSheet.create({
     color: 'rgba(10,10,10,0.55)',
     letterSpacing: 1.4,
     marginTop: 1,
+  },
+  right: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flexShrink: 0,
+  },
+
+  // Solo / Couple toggle
+  modeToggle: {
+    flexDirection: 'row',
+    backgroundColor: 'rgba(255,255,255,0.55)',
+    borderRadius: 999,
+    padding: 5,
+    borderWidth: 1,
+    borderColor: 'rgba(10,10,10,0.06)',
+    marginTop: 2,
+    marginBottom: 20,
+  },
+  modeTab: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 11,
+    borderRadius: 999,
+  },
+  modeThumb: {
+    position: 'absolute',
+    top: 5,
+    bottom: 5,
+    left: 5,
+    borderRadius: 999,
+    backgroundColor: '#0A0A0A',
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowOffset: { width: 0, height: 3 },
+    shadowRadius: 8,
+    elevation: 2,
+  },
+
+  // Couple row — two dancers' avatars overlapping. Height matches the solo
+  // avatar (avRing, 46) so couple + solo cards are exactly the same height.
+  coupleAvWrap: {
+    height: 46,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  coupleAv: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+    backgroundColor: '#4E6A5C',
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  coupleAv2: {
+    marginLeft: -12,
+  },
+  coupleAvPhoto: {
+    width: '100%',
+    height: '100%',
+  },
+  coupleAvText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 13,
+    color: '#FFFFFF',
+  },
+
+  // Couple briefing hero — pair avatars
+  cbHeroPair: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  cbHeroAv: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    borderWidth: 2.5,
+    borderColor: '#FFFFFF',
+    backgroundColor: '#4E6A5C',
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cbHeroAvImg: {
+    width: '100%',
+    height: '100%',
+  },
+  cbHeroAvTxt: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 17,
+    color: '#FFFFFF',
+  },
+  modeDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+  },
+  modeTabTxt: {
+    fontFamily: Fonts.jakartaBold,
+    fontSize: 15,
+    color: 'rgba(10,10,10,0.5)',
+    letterSpacing: 0.2,
+  },
+  modeTabTxtOn: {
+    color: '#FFFFFF',
   },
 
   cardDivider: {
@@ -5884,6 +6366,13 @@ const sc = StyleSheet.create({
   },
 
   // Group class card (dark)
+  cbTitle: { flex: 1, textAlign: 'center', fontFamily: Fonts.jakartaBold, fontSize: 17, color: '#0E0E0E' },
+  cbHero: { alignItems: 'center', paddingTop: 24, paddingHorizontal: 28 },
+  cbIcon: { width: 60, height: 60, borderRadius: 30, backgroundColor: 'rgba(46,70,112,0.12)', alignItems: 'center', justifyContent: 'center', marginBottom: 14 },
+  cbName: { fontFamily: Fonts.jakartaExtraBold, fontSize: 26, color: '#0E0E0E', letterSpacing: -0.6 },
+  cbSub: { fontFamily: Fonts.jakartaSemiBold, fontSize: 15, color: '#444', marginTop: 6 },
+  cbStyles: { fontFamily: Fonts.jakartaRegular, fontSize: 13, color: '#8A8A8A', marginTop: 4 },
+  cbHint: { fontFamily: Fonts.jakartaRegular, fontSize: 13.5, color: '#6B6B6B', textAlign: 'center', lineHeight: 19, marginTop: 18 },
   groupCard: {
     flexDirection: 'row',
     alignItems: 'center',

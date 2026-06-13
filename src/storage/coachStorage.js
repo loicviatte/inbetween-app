@@ -395,6 +395,15 @@ export async function getMyStudents() {
 
 // ─── Student Detail ───────────────────────────────────────────────────────────
 
+// One round-trip for the StudentDetail core (profile + focusPoints + lastClass
+// + questions + pendingFps + readiness) instead of 6 serialized queries. The
+// heavier analytics (activity, metrics) + coach-global (notifications, merges)
+// stay separate. See supabase/migrations/20260612f_coach_student_detail_bundle.sql.
+export async function getCoachStudentDetail(studentId) {
+  const { data } = await supabase.rpc('get_coach_student_detail', { p_student: studentId });
+  return data || null;
+}
+
 export async function getStudentProfile(studentId) {
   const { data } = await supabase
     .from('users')
@@ -747,12 +756,42 @@ export async function dismissQuestion(messageId) {
 // Mark a question as addressed verbally during the class — sets status to
 // 'replied' with an auto-generated reply so the student sees a positive
 // closure ("Covered in your last class.") instead of the question lingering
-// forever in their open-questions list.
-export async function markQuestionCovered(messageId) {
+// forever in their open-questions list. When classInputId is provided the
+// link is persisted too, so the class detail screen can list every
+// question addressed in that lesson under the summary.
+export async function markQuestionCovered(messageId, classInputId = null) {
+  const update = { status: 'replied', reply: 'Covered in your last class.' };
+  if (classInputId) update.covered_class_input_id = classInputId;
   await supabase
     .from('coach_messages')
-    .update({ status: 'replied', reply: 'Covered in your last class.' })
+    .update(update)
     .eq('id', messageId);
+}
+
+// After a class_input row is created, retroactively link a batch of
+// already-covered questions to it. Used by the recording-upload flow:
+// finishDebrief marks the questions covered up-front (so the student gets
+// closure even if the recording is abandoned), then we set the FK once
+// the class_input id exists.
+export async function linkCoveredQuestionsToClass(messageIds, classInputId) {
+  if (!classInputId || !messageIds?.length) return;
+  await supabase
+    .from('coach_messages')
+    .update({ covered_class_input_id: classInputId })
+    .in('id', messageIds);
+}
+
+// Returns questions addressed verbally during a given class — ordered
+// chronologically by when the student asked them so the class detail
+// screen can render them as a "questions covered" block under the summary.
+export async function getQuestionsCoveredInClass(classInputId) {
+  if (!classInputId) return [];
+  const { data } = await supabase
+    .from('coach_messages')
+    .select('id, message, reply, status, created_at, replied_at')
+    .eq('covered_class_input_id', classInputId)
+    .order('created_at', { ascending: true });
+  return data || [];
 }
 
 
@@ -1348,20 +1387,32 @@ export async function getTotalCoachedMinutes() {
   const coachId = await getCoachId();
   const { data: classes } = await supabase
     .from('class_inputs')
-    .select('id')
+    .select('id, lesson_type')
     .eq('user_id', coachId)
     .eq('is_deleted', false);
-  const classIds = (classes || []).map(c => c.id);
-  if (classIds.length === 0) return 0;
+  const list = classes || [];
+  if (list.length === 0) return 0;
+
+  // Real recorded durations, when a class was captured with the recorder.
   const { data: recordings } = await supabase
     .from('class_recordings')
-    .select('duration_ms')
-    .in('class_input_id', classIds);
-  const totalMs = (recordings || []).reduce(
-    (sum, r) => sum + (r?.duration_ms || 0),
-    0,
-  );
-  return Math.round(totalMs / 60000);
+    .select('class_input_id, duration_ms')
+    .in('class_input_id', list.map((c) => c.id));
+  const recMsByClass = {};
+  for (const r of recordings || []) {
+    recMsByClass[r.class_input_id] = (recMsByClass[r.class_input_id] || 0) + (r?.duration_ms || 0);
+  }
+
+  // Manually-logged classes (no recording, or zero-length) still count toward
+  // coached hours — estimated at a typical lesson length per type. Hours were
+  // stuck at 0 for coaches who log classes without recording audio.
+  const DEFAULT_MIN = { private: 45, couple: 45, group: 60 };
+  let totalMin = 0;
+  for (const c of list) {
+    const ms = recMsByClass[c.id] || 0;
+    totalMin += ms > 0 ? ms / 60000 : (DEFAULT_MIN[c.lesson_type] ?? 45);
+  }
+  return Math.round(totalMin);
 }
 
 // Roster used by the StartClass landing screen — for each of the coach's

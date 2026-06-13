@@ -9,15 +9,18 @@ import {
   Pressable,
   Animated,
   Dimensions,
+  Alert,
 } from 'react-native';
+import { supabase } from '../../services/supabase/client';
 import { Image } from 'expo-image';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import Svg, { Circle } from 'react-native-svg';
 import { Fonts, Spacing } from '../../theme';
 import { respondToCoachRequest } from '../../storage/coachStorage';
+import { getMyCouples, getPendingCoupleCoachRequests, respondToCoupleCoachRequest, getCoupleReadiness } from '../../storage/coupleStorage';
 import { CoachHomeScreenSkeleton } from '../../components/Skeleton';
 import { useCoachData } from '../../context/CoachDataContext';
-import { getLessonReadiness } from '../../storage/storage';
+import { getStudentsReadiness } from '../../storage/storage';
 
 // ── Palette ─────────────────────────────────────────────────────────────────
 const C = {
@@ -290,8 +293,51 @@ function RequestRow({ student, onAccept, onReject }) {
   );
 }
 
+// ── Couple roster card (Couples view) ───────────────────────────────────────
+function CoupleRosterCard({ couple, onPress, isLast }) {
+  // Mirror the solo OnTrackRow: readiness shown as a ring around the avatars
+  // (no % number), relative "Xd ago" meta, flat row.
+  const meta = couple.lastClassDate ? `${shortRelative(couple.lastClassDate)} ago` : 'No private lesson yet';
+  const dancers = [couple.dancerA, couple.dancerB];
+  return (
+    <Pressable style={[styles.onTrackRow, !isLast && styles.onTrackRowDivider]} onPress={onPress}>
+      <View style={styles.ccPair}>
+        {dancers.map((d, i) => (
+          <View key={i} style={[styles.ccPairAv, i === 1 && { marginLeft: -10 }]}>
+            <AvatarBadge student={{ id: d.id, name: d.name, photoUrl: d.avatarUrl }} size={26} fontSize={11} />
+          </View>
+        ))}
+      </View>
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={styles.onTrackName} numberOfLines={1}>{couple.name}</Text>
+        <Text style={styles.onTrackMeta}>{meta}</Text>
+      </View>
+      <Ionicons name="chevron-forward" size={16} color={C.muted} />
+    </Pressable>
+  );
+}
+
+// ── Pending couple-coach request row (Couples view) ─────────────────────────
+function CoupleRequestRow({ request, onAccept, onReject }) {
+  return (
+    <View style={styles.requestRow}>
+      <View style={styles.ccReqAv}><Ionicons name="people" size={16} color="#fff" /></View>
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={styles.onTrackName} numberOfLines={1}>{request.coupleName}</Text>
+        <Text style={styles.requestSub}>Wants you as their {request.category} couple coach</Text>
+      </View>
+      <TouchableOpacity style={styles.rejectBtn} onPress={onReject} activeOpacity={0.8}>
+        <Ionicons name="close" size={16} color={C.sub} />
+      </TouchableOpacity>
+      <TouchableOpacity style={styles.acceptBtn} onPress={onAccept} activeOpacity={0.85}>
+        <Ionicons name="checkmark" size={16} color={C.white} />
+      </TouchableOpacity>
+    </View>
+  );
+}
+
 // ── Screen ──────────────────────────────────────────────────────────────────
-export default function CoachHomeScreen({ navigation }) {
+export default function CoachHomeScreen({ navigation, route }) {
   const { students, requests, initialLoading: loading, refresh, updateRequests } = useCoachData();
 
   // Lesson readiness % per student — drives the ring around each avatar.
@@ -310,13 +356,15 @@ export default function CoachHomeScreen({ navigation }) {
     let alive = true;
     (async () => {
       try {
-        const readinesses = await Promise.all(
-          students.map((s) => getLessonReadiness(s.id).catch(() => null)),
-        );
+        // One round-trip for the whole roster instead of N serialized calls.
+        const map = await getStudentsReadiness(students.map((s) => s.id));
         if (!alive) return;
         const byStudent = {};
-        for (let i = 0; i < students.length; i++) {
-          byStudent[students[i].id] = readinesses[i]?.percent ?? 0;
+        for (const s of students) {
+          const r = map[s.id];
+          // No private lesson yet → null readiness → ring shows 100% (nothing to
+          // get ready for). Otherwise the % against this student's focus points.
+          byStudent[s.id] = r ? (r.percent ?? 0) : 100;
         }
         setReadinessByStudent(byStudent);
       } catch {
@@ -327,6 +375,10 @@ export default function CoachHomeScreen({ navigation }) {
   }, [students]);
 
   const [filter, setFilter] = useState('all'); // 'all' | 'last_private'
+  // ── Students | Couples roster toggle ──
+  const [view, setView] = useState('students'); // 'students' | 'couples'
+  const [couples, setCouples] = useState([]);
+  const [coupleReqs, setCoupleReqs] = useState([]);
 
   // Horizontal pager — synced with filter state, drives a moving underline.
   const screenWidth = Dimensions.get('window').width;
@@ -339,6 +391,12 @@ export default function CoachHomeScreen({ navigation }) {
   useEffect(() => {
     if (!screenWidth) return;
     const targetX = tabIndex * screenWidth;
+    // Couples view is a tap-only list (no swipe pager), so animate the shared
+    // underline value directly instead of scrolling a pager.
+    if (view === 'couples') {
+      Animated.timing(horizontalScrollX, { toValue: targetX, duration: 220, useNativeDriver: true }).start();
+      return;
+    }
     if (firstMount.current) {
       horizontalScrollX.setValue(targetX);
       pagerRef.current?.scrollTo({ x: targetX, animated: false });
@@ -346,7 +404,7 @@ export default function CoachHomeScreen({ navigation }) {
     } else {
       pagerRef.current?.scrollTo({ x: targetX, animated: true });
     }
-  }, [tabIndex, screenWidth]);
+  }, [tabIndex, screenWidth, view]);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -358,6 +416,104 @@ export default function CoachHomeScreen({ navigation }) {
   async function handleReject(requestId) {
     await respondToCoachRequest(requestId, false);
     updateRequests((prev) => prev.filter((r) => r.id !== requestId));
+  }
+
+  // Pop an Accept/Decline modal for a new student request. Shared by the
+  // notification-tap deep link AND the live realtime subscription below, so the
+  // coach can say yes/no immediately either way. shownReqRef dedupes when both
+  // fire for the same request.
+  const shownReqRef = useRef(null);
+  async function showCoachRequestModal(reqId, studentId) {
+    if (!reqId || shownReqRef.current === reqId) return;
+    shownReqRef.current = reqId;
+    let name = requests.find((r) => r.id === reqId)?.name;
+    if (!name && studentId) {
+      const { data } = await supabase.from('users').select('name').eq('id', studentId).maybeSingle();
+      name = data?.name;
+    }
+    Alert.alert(
+      'New student request',
+      `${name || 'A student'} wants to add you as their coach.`,
+      [
+        { text: 'Later', style: 'cancel' },
+        { text: 'Decline', style: 'destructive', onPress: () => handleReject(reqId).catch(() => {}) },
+        { text: 'Accept', onPress: () => handleAccept(reqId).catch(() => {}) },
+      ],
+    );
+  }
+  const showModalRef = useRef(showCoachRequestModal);
+  showModalRef.current = showCoachRequestModal;
+
+  // Notification tap → deep link with the request id → modal.
+  useEffect(() => {
+    const reqId = route?.params?.coachRequestId;
+    if (!reqId) return;
+    const studentId = route?.params?.coachRequestStudentId;
+    navigation.setParams({ coachRequestId: undefined, coachRequestStudentId: undefined });
+    refresh(); // surface it in the list under the modal
+    showCoachRequestModal(reqId, studentId);
+  }, [route?.params?.coachRequestId]);
+
+  // Realtime: a student linking while the coach sits on this screen → the row
+  // appears live + the modal pops, with no push needed (push delivery is
+  // unreliable on dev builds and is suppressed/queued in the foreground).
+  useEffect(() => {
+    let ch;
+    (async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      const myId = session?.user?.id;
+      if (!myId) return;
+      ch = supabase
+        .channel(`coach-requests-${myId}`)
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'coach_requests', filter: `coach_id=eq.${myId}` },
+          (payload) => {
+            refresh();
+            showModalRef.current(payload.new?.id, payload.new?.student_id);
+          })
+        .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'coach_requests', filter: `coach_id=eq.${myId}` },
+          () => { refresh(); })
+        .subscribe();
+    })();
+    return () => { if (ch) supabase.removeChannel(ch); };
+  }, []);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const [cs, crs] = await Promise.all([
+        getMyCouples().catch(() => []),
+        getPendingCoupleCoachRequests().catch(() => []),
+      ]);
+      if (!alive) return;
+      setCoupleReqs(crs);
+      setCouples(cs); // show fast, then enrich with last-private below
+      // Enrich each couple with days since its last couple-private, for the
+      // "Last private lesson" sort (mirrors the students view).
+      const enriched = await Promise.all((cs || []).map(async (c) => {
+        const r = await getCoupleReadiness(c.coupleId, null).catch(() => null);
+        const days = r?.lastClassDate
+          ? Math.floor((Date.now() - new Date(r.lastClassDate).getTime()) / 86400000)
+          : null;
+        return {
+          ...c,
+          lastPrivateDays: days,
+          lastClassDate: r?.lastClassDate ?? null,
+          readiness: r?.percent ?? null,
+        };
+      }));
+      if (alive) setCouples(enriched);
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  async function handleAcceptCoupleCoach(reqId) {
+    await respondToCoupleCoachRequest(reqId, true);
+    setCoupleReqs((prev) => prev.filter((r) => r.id !== reqId));
+    setCouples(await getMyCouples().catch(() => []));
+  }
+  async function handleRejectCoupleCoach(reqId) {
+    await respondToCoupleCoachRequest(reqId, false);
+    setCoupleReqs((prev) => prev.filter((r) => r.id !== reqId));
   }
 
   const filteredStudents = useMemo(() => {
@@ -377,6 +533,14 @@ export default function CoachHomeScreen({ navigation }) {
     });
   }, [filteredStudents]);
 
+  const couplesByLastPrivate = useMemo(() => {
+    return [...couples].sort((a, b) => {
+      const da = a.lastPrivateDays == null ? 99999 : a.lastPrivateDays;
+      const db = b.lastPrivateDays == null ? 99999 : b.lastPrivateDays;
+      return db - da; // oldest first
+    });
+  }, [couples]);
+
   const openStudent = (s) =>
     navigation.navigate('StudentDetail', { studentId: s.id, studentName: s.name });
 
@@ -388,17 +552,26 @@ export default function CoachHomeScreen({ navigation }) {
       <View>
         {/* ── Title + search toggle ── */}
         <View style={styles.titleRow}>
-          <Text style={styles.title}>Students</Text>
-          <TouchableOpacity
-            onPress={() => {
-              setSearchOpen((v) => !v);
-              if (searchOpen) setSearchQuery('');
-            }}
-            style={styles.searchBtn}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="search" size={18} color={C.muted} />
-          </TouchableOpacity>
+          <View style={styles.rosterToggle}>
+            <TouchableOpacity onPress={() => setView('students')} activeOpacity={0.7}>
+              <Text style={[styles.title, view !== 'students' && styles.titleInactive]}>Students</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setView('couples')} activeOpacity={0.7}>
+              <Text style={[styles.title, view !== 'couples' && styles.titleInactive]}>Couples</Text>
+            </TouchableOpacity>
+          </View>
+          {view === 'students' && (
+            <TouchableOpacity
+              onPress={() => {
+                setSearchOpen((v) => !v);
+                if (searchOpen) setSearchQuery('');
+              }}
+              style={styles.searchBtn}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="search" size={18} color={C.muted} />
+            </TouchableOpacity>
+          )}
         </View>
 
         {searchOpen && (
@@ -416,7 +589,7 @@ export default function CoachHomeScreen({ navigation }) {
           </View>
         )}
 
-        {/* ── Filter tabs (tap OR swipe) ── */}
+        {/* ── Filter tabs (tap OR swipe) — shown for students AND couples ── */}
         <View style={styles.filterWrap}>
           <View style={styles.filterRow}>
             {[
@@ -467,7 +640,7 @@ export default function CoachHomeScreen({ navigation }) {
         </View>
 
         {/* ── Pending coach requests ── */}
-        {requests.length > 0 && (
+        {view === 'students' && requests.length > 0 && (
           <View style={styles.requestsWrap}>
             <Text style={styles.sectionLabel}>PENDING REQUESTS</Text>
             {requests.map((r) => (
@@ -480,9 +653,23 @@ export default function CoachHomeScreen({ navigation }) {
             ))}
           </View>
         )}
+        {view === 'couples' && coupleReqs.length > 0 && (
+          <View style={styles.requestsWrap}>
+            <Text style={styles.sectionLabel}>PENDING COUPLE REQUESTS</Text>
+            {coupleReqs.map((r) => (
+              <CoupleRequestRow
+                key={r.id}
+                request={r}
+                onAccept={() => handleAcceptCoupleCoach(r.id)}
+                onReject={() => handleRejectCoupleCoach(r.id)}
+              />
+            ))}
+          </View>
+        )}
       </View>
 
-      {/* ── Horizontal pager: finger-follows swipe between the 2 views ── */}
+      {/* ── Body: students pager OR couples list ── */}
+      {view === 'students' ? (
       <Animated.ScrollView
         ref={pagerRef}
         horizontal
@@ -584,6 +771,30 @@ export default function CoachHomeScreen({ navigation }) {
           </View>
         </ScrollView>
       </Animated.ScrollView>
+      ) : (
+        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 110 }} showsVerticalScrollIndicator={false}>
+          <View style={styles.content}>
+            {couples.length === 0 ? (
+              <View style={styles.empty}>
+                <Ionicons name="people-outline" size={40} color={C.muted} />
+                <Text style={styles.emptyTitle}>No couples yet</Text>
+                <Text style={styles.emptyText}>When a couple picks you as their couple coach, they'll appear here.</Text>
+              </View>
+            ) : (
+              <View>
+                {(filter === 'last_private' ? couplesByLastPrivate : couples).map((c, i, arr) => (
+                  <CoupleRosterCard
+                    key={c.coupleId}
+                    couple={c}
+                    isLast={i === arr.length - 1}
+                    onPress={() => navigation.navigate('CoupleDetail', { coupleId: c.coupleId, coupleName: c.name })}
+                  />
+                ))}
+              </View>
+            )}
+          </View>
+        </ScrollView>
+      )}
     </View>
   );
 }
@@ -650,6 +861,13 @@ const styles = StyleSheet.create({
     color: C.text,
     letterSpacing: -1.2,
   },
+  titleInactive: { color: C.muted },
+  rosterToggle: { flexDirection: 'row', gap: 16, alignItems: 'baseline' },
+  ccCard: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: C.surface, borderRadius: 16, paddingHorizontal: 14, paddingVertical: 12 },
+  ccAvatars: { flexDirection: 'row', alignItems: 'center' },
+  ccPair: { flexDirection: 'row', alignItems: 'center' },
+  ccPairAv: { borderRadius: 100, borderWidth: 1.5, borderColor: '#F7F6F3', overflow: 'hidden' },
+  ccReqAv: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#2E4670', alignItems: 'center', justifyContent: 'center' },
   searchBtn: {
     width: 38,
     height: 38,

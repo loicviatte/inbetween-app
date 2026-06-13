@@ -131,6 +131,21 @@ async function publishExpiredFocusPoints(supabase: any): Promise<void> {
   if (eligible.length > 0) {
     console.log(`[yoda-score] Auto-published ${eligible.length} expired pending_coach FPs (${expired.length - eligible.length} gated by admin)`)
   }
+
+  // Couple focus points — same 18h auto-publish (no per-dancer attendance).
+  const { data: expiredCouple } = await supabase
+    .from('couple_focus_points')
+    .select('id')
+    .eq('status', 'pending_coach')
+    .lte('coach_review_deadline', now)
+  for (const cfp of expiredCouple ?? []) {
+    await supabase.from('couple_focus_points')
+      .update({ status: 'active', coach_review_deadline: null })
+      .eq('id', cfp.id)
+  }
+  if ((expiredCouple ?? []).length > 0) {
+    console.log(`[yoda-score] Auto-published ${expiredCouple!.length} expired pending_coach couple FPs`)
+  }
 }
 
 // ─── class_input event ────────────────────────────────────────────────────────
@@ -144,7 +159,7 @@ async function processClassInput(supabase: any, payload: any): Promise<void> {
   // 1. Load class input (also fetch dance to determine coach category)
   const { data: classInput, error: ciError } = await supabase
     .from('class_inputs')
-    .select('id, raw_ai_json, status, dance, lesson_type')
+    .select('id, raw_ai_json, status, dance, lesson_type, couple_id')
     .eq('id', class_input_id)
     .single()
 
@@ -209,6 +224,92 @@ async function processClassInput(supabase: any, payload: any): Promise<void> {
       } else {
         console.log(`[yoda-score] Created shared focus point ${sfp.title} (group ${sharedGroupId}) for ${studentIds.length} students`)
       }
+    }
+  }
+
+  // 2c. Couple lesson — shared_focus_points belong to the COUPLE (one row in
+  // couple_focus_points, keyed by couple_id). Per-dancer focus_points were
+  // already inserted above via processStudentFocusPoints (solo, unchanged).
+  const isCoupleClass = classInput.lesson_type === 'couple'
+  if (isCoupleClass && classInput.couple_id && sharedFps.length > 0) {
+    let coupleCreated = 0
+    for (const sfp of sharedFps) {
+      const tier = (sfp.tier ?? 'supporting') as Tier
+      const sharedDance = (sfp.dance && sfp.dance.length > 0) ? sfp.dance : classDance
+      const norm = normalizeFocusName(sfp.title)
+
+      // Dedup: if the couple already has a focus with this name (any non-past
+      // status), re-anchor + bump it instead of creating a duplicate row.
+      const { data: dup } = await supabase
+        .from('couple_focus_points')
+        .select('id, mention_count')
+        .eq('couple_id', classInput.couple_id)
+        .eq('normalized_name', norm)
+        .eq('is_other', false)
+        .neq('status', 'past')
+        .limit(1)
+        .maybeSingle()
+      if (dup) {
+        await supabase.from('couple_focus_points').update({
+          last_mentioned_at: now.toISOString(),
+          class_input_id: class_input_id,
+          mention_count: (dup.mention_count || 0) + (sfp.mention_count ?? 1),
+          lessons_since_mentioned: 0,
+        }).eq('id', dup.id)
+        console.log(`[yoda-score] Merged duplicate couple FP "${sfp.title}" into ${dup.id}`)
+        continue
+      }
+
+      const { error: cErr } = await supabase.from('couple_focus_points').insert({
+        couple_id: classInput.couple_id,
+        name: sfp.title,
+        normalized_name: norm,
+        subtitle: sfp.subtitle ?? null,
+        context: sfp.context ?? null,
+        dance: sharedDance,
+        drill: sfp.drill ?? null,
+        tier,
+        category: sfp.category ?? null,
+        base_score: STARTING_SCORES[tier],
+        mention_count: sfp.mention_count ?? 0,
+        explicit_priority: sfp.explicit_priority ?? false,
+        first_timestamp: sfp.timestamp ?? null,
+        last_mentioned_at: now.toISOString(),
+        class_input_id: class_input_id,
+        source_class_input_id: class_input_id,
+        // Couple FP go through coach review like solo: pending_coach until the
+        // couple-coach approves (or the 18h deadline auto-publishes them).
+        status: 'pending_coach',
+        coach_review_deadline: new Date(now.getTime() + 18 * 60 * 60 * 1000).toISOString(),
+        is_deleted: false,
+        is_other: false,
+      })
+      if (cErr) {
+        console.error(`[yoda-score] couple_focus_points insert error:`, cErr.message)
+      } else {
+        coupleCreated++
+        console.log(`[yoda-score] Created couple focus point ${sfp.title} for couple ${classInput.couple_id}`)
+      }
+    }
+    // Batched: notify the couple coach(es) once to review (parity with solo's
+    // focus_points_added). One push per class, not one per focus point.
+    if (coupleCreated > 0) {
+      const { data: cpl } = await supabase
+        .from('couples')
+        .select('latin_couple_coach_id, ballroom_couple_coach_id')
+        .eq('id', classInput.couple_id)
+        .single()
+      const coachIds = [...new Set([cpl?.latin_couple_coach_id, cpl?.ballroom_couple_coach_id].filter(Boolean))]
+      for (const cid of coachIds) {
+        await supabase.from('notifications').insert({
+          user_id: cid,
+          type: 'focus_points_added',
+          title: 'New couple focus points',
+          body: `Yoda added ${coupleCreated} couple focus point${coupleCreated > 1 ? 's' : ''}. Review before they publish.`,
+          data: { couple_id: classInput.couple_id, class_input_id: class_input_id },
+        })
+      }
+      console.log(`[yoda-score] Notified ${coachIds.length} couple coach(es) of ${coupleCreated} new couple FPs`)
     }
   }
 
@@ -320,13 +421,23 @@ async function processStudentFocusPoints(
       // Auto-merge: update existing focus point
       const existing = existingFPs.find(f => f.id === fpJson.existing_focus_point_id)
       if (existing) {
+        const existingRow = rows?.find(r => r.id === existing.id)
         const updated = applyMerge(existing)
+        // Re-anchor class_input_id to the class that just re-addressed this
+        // focus so the readiness card sees it as belonging to the current
+        // private. source_class_input_id preserves the original creation
+        // class (initialised on first auto-merge for legacy rows where it
+        // was never set).
+        const preservedSource =
+          existingRow?.source_class_input_id ?? existingRow?.class_input_id ?? classInputId
         await supabase
           .from('focus_points')
           .update({
             ...focusPointToDbUpdate(updated),
             last_mentioned_at: now.toISOString(),
             merge_action: 'auto_merge',
+            source_class_input_id: preservedSource,
+            class_input_id: classInputId,
           })
           .eq('id', existing.id)
         mentionedFPIds.add(existing.id)
@@ -362,6 +473,7 @@ async function processStudentFocusPoints(
             first_timestamp: fpJson.timestamp ?? null,
             last_mentioned_at: now.toISOString(),
             class_input_id: classInputId,
+            source_class_input_id: classInputId,
             status: 'pending_coach',
             coach_review_deadline: new Date(now.getTime() + 18 * 60 * 60 * 1000).toISOString(),
             count: 0,

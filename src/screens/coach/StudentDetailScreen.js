@@ -31,6 +31,7 @@ import { Colors, Fonts, Spacing } from '../../theme';
 import { supabase } from '../../services/supabase/client';
 import {
   getStudentProfile,
+  getCoachStudentDetail,
   getStudentFocusPoints,
   getStudentRecentActivity,
   getStudentQuestions,
@@ -503,13 +504,13 @@ export default function StudentDetailScreen({ route, navigation }) {
           // this screen call invalidateCache(`student:${studentId}:`) to
           // force a re-fetch on the next visit.
           const sk = `student:${studentId}`;
-          const [p, fp, act, qs, pfp, lcd, m, notifs, mergesRes, rd] = await Promise.all([
-            getOrFetch(`${sk}:profile`, () => getStudentProfile(studentId)),
-            getOrFetch(`${sk}:fps`, () => getStudentFocusPoints(studentId)),
+          // Core 6 pieces (profile, focusPoints, questions, pendingFps, lastClass,
+          // readiness) come from ONE bundled RPC instead of 6 serialized queries.
+          // Heavier analytics (activity, metrics) + coach-global (notifications,
+          // merges) stay separate. invalidateCache(`${sk}:`) covers `${sk}:bundle`.
+          const [bundle, act, m, notifs, mergesRes] = await Promise.all([
+            getOrFetch(`${sk}:bundle`, () => getCoachStudentDetail(studentId)),
             getOrFetch(`${sk}:activity:30`, () => getStudentRecentActivity(studentId, 30)),
-            getOrFetch(`${sk}:questions`, () => getStudentQuestions(studentId)),
-            getOrFetch(`${sk}:pendingFps`, () => getPendingFocusPoints(studentId)),
-            getOrFetch(`${sk}:lastClass`, () => getStudentLastClassDate(studentId)),
             getOrFetch(`${sk}:metrics:${cat || 'all'}`, () => getAllStudentMetrics(studentId, cat)),
             getOrFetch('coach:notifications', () => getNotifications().catch(() => [])),
             getOrFetch(`${sk}:merges`, () =>
@@ -520,8 +521,14 @@ export default function StudentDetailScreen({ route, navigation }) {
                 .eq('status', 'pending_coach')
                 .order('created_at', { ascending: false })
             ),
-            getOrFetch(`${sk}:readiness`, () => getLessonReadiness(studentId).catch(() => null)),
           ]);
+          const b = bundle || {};
+          const p = b.profile ?? null;
+          const fp = b.focusPoints ?? [];
+          const qs = b.questions ?? [];
+          const pfp = b.pendingFps ?? [];
+          const lcd = b.lastClassDate ?? null;
+          const rd = b.readiness ?? null;
           const { data: merges } = mergesRes || {};
           if (active) {
             setProfile(p);
@@ -550,7 +557,7 @@ export default function StudentDetailScreen({ route, navigation }) {
               const fpIds = [...new Set(mrList.flatMap(mr => [mr.focus_a, mr.focus_b]))];
               const { data: fpRows } = await supabase
                 .from('focus_points')
-                .select('id, name, user_id, subtitle, context, dance, drill, tier, category, created_at')
+                .select('id, name, user_id, subtitle, context, dance, drill, tier, category, created_at, class_input_id, source_class_input_id')
                 .in('id', fpIds);
               const fpMap = {};
               for (const f of fpRows || []) fpMap[f.id] = f;
@@ -1370,6 +1377,22 @@ export default function StudentDetailScreen({ route, navigation }) {
                         mr={mr}
                         studentName={null}
                         onMerge={async () => {
+                          // Re-anchor focus_a to focus_b's class so the
+                          // readiness card sees the merge in the current
+                          // private. Preserve focus_a's source as the
+                          // original creation class (backfill for legacy
+                          // rows). Mirrors ActionNeededScreen.handleMerge.
+                          const a = mr.focusA;
+                          const b = mr.focusB;
+                          if (a && b?.class_input_id) {
+                            await supabase
+                              .from('focus_points')
+                              .update({
+                                class_input_id: b.class_input_id,
+                                source_class_input_id: a.source_class_input_id ?? a.class_input_id ?? b.class_input_id,
+                              })
+                              .eq('id', mr.focus_a);
+                          }
                           await supabase.from('focus_points').update({ is_deleted: true, status: 'past' }).eq('id', mr.focus_b);
                           await supabase.from('merge_requests').update({ status: 'merged', resolved_at: new Date().toISOString(), resolved_by: 'coach' }).eq('id', mr.id);
                           setMergeRequests(prev => prev.filter(m => m.id !== mr.id));

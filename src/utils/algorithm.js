@@ -1,6 +1,7 @@
 import { supabase } from '../services/supabase/client';
 import { focusMatchesCategory } from './danceCategory';
 import { getLessonReadiness } from '../storage/storage';
+import { getCoupleReadiness } from '../storage/coupleStorage';
 
 async function getUserId() {
   const { data: { session } } = await supabase.auth.getSession();
@@ -121,7 +122,7 @@ export async function getAllFocusPointsRanked(category = null) {
 
 // ─── Top-3 slot selection ─────────────────────────────────────────────────────
 
-export async function getSlots(category = null) {
+export async function getSlots(category = null, readinessOnly = false) {
   try {
     const userId = await getUserId();
     const now    = new Date();
@@ -138,12 +139,23 @@ export async function getSlots(category = null) {
         .eq('is_deleted', false)
         .eq('is_other', false)
         .is('alias_of', null),
-      getLessonReadiness().catch(() => null),
+      getLessonReadiness(null, category).catch(() => null),
     ]);
     const points = pointsRes.data;
 
     if (!points || points.length === 0) {
-      return { slot1: null, slot2: null, slot3: null };
+      return { slot1: null, slot2: null, slot3: null, readiness };
+    }
+
+    // Train carousel (readinessOnly): show ONLY the current lesson's readiness
+    // focuses (the "get ready" checklist), in readiness order — no extra
+    // priority-ranked focuses. Other callers keep the full ranked behavior.
+    if (readinessOnly) {
+      const byId = new Map(points.map((p) => [p.id, p]));
+      const list = (readiness?.focuses || [])
+        .map((f) => byId.get(f.focusPointId))
+        .filter((fp) => fp && focusMatchesCategory(fp, category));
+      return { slot1: list[0] || null, slot2: list[1] || null, slot3: list[2] || null, readiness };
     }
 
     // Only consider active/cooling_down/past_candidate focuses, and within
@@ -195,10 +207,65 @@ export async function getSlots(category = null) {
       slot1: finalList[0] || null,
       slot2: finalList[1] || null,
       slot3: finalList[2] || null,
+      readiness,
     };
   } catch (e) {
     console.error('getSlots error:', e);
-    return { slot1: null, slot2: null, slot3: null };
+    // `error: true` lets callers tell a genuine "no focuses" ({slot1:null}) apart
+    // from a transient failure (timeout / pooler saturation), so a hiccup never
+    // blanks focus points already on screen. See HomeScreen load() guards.
+    return { slot1: null, slot2: null, slot3: null, readiness: null, error: true };
+  }
+}
+
+// ─── Couple top-3 slots ───────────────────────────────────────────────────────
+// Mirror of getSlots for the couple's shared focus points (couple_focus_points),
+// pinned by the couple's readiness. `coupleId` comes from getMyCouple().
+export async function getCoupleSlots(coupleId, category = null) {
+  try {
+    if (!coupleId) return { slot1: null, slot2: null, slot3: null, readiness: null };
+
+    const [pointsRes, readiness] = await Promise.all([
+      supabase
+        .from('couple_focus_points')
+        .select('*')
+        .eq('couple_id', coupleId)
+        .eq('is_deleted', false)
+        .eq('is_other', false),
+      getCoupleReadiness(coupleId, category).catch(() => null),
+    ]);
+    const points = pointsRes.data || [];
+
+    // Couple Train carousel: only the couple's readiness focuses (their shared
+    // lesson checklist), in readiness order — same rule as the solo card.
+    const byId = new Map(points.map((p) => [p.id, p]));
+    const list = (readiness?.focuses || [])
+      .map((f) => byId.get(f.focusPointId))
+      .filter((fp) => fp && focusMatchesCategory(fp, category));
+
+    // Once the couple's readiness checklist is done, surface held ("Not yet")
+    // couple focuses so they re-enter Train and can graduate after 15 min of
+    // cumulative practice (the archive_held_couple_fp trigger). Mirrors getSlots.
+    if (readiness && readiness.percent >= 100) {
+      const seen = new Set(list.filter(Boolean).map((p) => p.id));
+      for (const p of points) {
+        if (!p.is_held) continue;
+        if (p.status === 'past' || p.status === 'pending_coach') continue;
+        if (seen.has(p.id)) continue;
+        if (!focusMatchesCategory(p, category)) continue;
+        list.push(p);
+      }
+    }
+
+    return {
+      slot1: list[0] || null,
+      slot2: list[1] || null,
+      slot3: list[2] || null,
+      readiness,
+    };
+  } catch (e) {
+    console.error('getCoupleSlots error:', e);
+    return { slot1: null, slot2: null, slot3: null, readiness: null, error: true };
   }
 }
 

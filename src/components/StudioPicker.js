@@ -15,6 +15,7 @@ import {
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Colors, Fonts } from '../theme';
 import { listStudios, createStudio } from '../storage/studioStorage';
+import BottomSheet from './BottomSheet';
 import { filterStudios, hasExactMatch } from '../utils/studioMatch';
 
 // A type-to-search studio picker. Tapping the field opens a sheet with a
@@ -95,10 +96,7 @@ export default function StudioPicker({
         <Ionicons name="chevron-down" size={16} color={Colors.secondary} />
       </TouchableOpacity>
 
-      <Modal visible={open} transparent animationType="slide" onRequestClose={() => setOpen(false)}>
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
-          <Pressable style={s.overlay} onPress={() => setOpen(false)}>
-            <Pressable style={s.sheet} onPress={() => {}}>
+      <BottomSheet visible={open} onClose={() => setOpen(false)} sheetStyle={s.sheet} avoidKeyboard>
               <View style={s.handle} />
               <Text style={s.sheetTitle}>Choose your studio</Text>
 
@@ -178,10 +176,7 @@ export default function StudioPicker({
               <TouchableOpacity style={s.close} onPress={() => setOpen(false)} activeOpacity={0.7}>
                 <Text style={s.closeText}>Close</Text>
               </TouchableOpacity>
-            </Pressable>
-          </Pressable>
-        </KeyboardAvoidingView>
-      </Modal>
+      </BottomSheet>
     </View>
   );
 }

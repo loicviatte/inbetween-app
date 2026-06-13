@@ -11,7 +11,7 @@
 // is skipped on a student cold start.
 
 import React, { useEffect, useRef, useState } from 'react';
-import { View, AppState } from 'react-native';
+import { View, AppState, StyleSheet, Animated } from 'react-native';
 import { NavigationContainer, DefaultTheme, createNavigationContainerRef } from '@react-navigation/native';
 import * as Notifications from 'expo-notifications';
 import { useFonts } from 'expo-font';
@@ -30,9 +30,44 @@ import {
 } from './src/services/analytics';
 import AuthNavigator from './src/navigation/AuthNavigator';
 import StudentAppNavigator from './src/navigation/StudentAppNavigator';
+import { isFirstScreenReady, onFirstScreenReady } from './src/utils/firstPaint';
 import InBetweenLoader from './src/components/InBetweenLoader';
 
 const navigationRef = createNavigationContainerRef();
+
+// Brand logo on the cold-start background. Same visual whether shown alone
+// (while session/role resolve) or as the overlay (while the first page loads),
+// so the logo stays put across the whole launch instead of swapping/flashing.
+function LogoLoader() {
+  return (
+    <View style={styles.loader}>
+      <InBetweenLoader size={200} />
+    </View>
+  );
+}
+
+// Sits on TOP of the (already mounted, still-loading) navigator and fades out
+// the moment the first screen signals it has painted — so a kill→reopen shows
+// the logo continuously until real content is ready. Never mounts on a warm
+// start (firstScreenReady already true) or when there's no signalling screen.
+function ColdStartOverlay({ done }) {
+  const [mounted, setMounted] = useState(!done);
+  const opacity = useRef(new Animated.Value(1)).current;
+  useEffect(() => {
+    if (!done || !mounted) return;
+    Animated.timing(opacity, { toValue: 0, duration: 280, useNativeDriver: true })
+      .start(() => setMounted(false));
+  }, [done, mounted, opacity]);
+  if (!mounted) return null;
+  return (
+    <Animated.View
+      style={[StyleSheet.absoluteFill, styles.loader, { opacity }]}
+      pointerEvents={done ? 'none' : 'auto'}
+    >
+      <InBetweenLoader size={200} />
+    </Animated.View>
+  );
+}
 
 const TRAINER_EMAIL = 'loic@danceuniteduk.com';
 
@@ -56,7 +91,21 @@ function handleNotificationTap(data) {
     return;
   }
   if (type === 'coach_request_received') {
-    navigationRef.navigate('CoachMainTabs', { screen: 'STUDENTS' });
+    // Carry the request id so the Students screen pops an Accept/Decline modal
+    // right away (payload uses snake_case; older pushes used camelCase).
+    navigationRef.navigate('CoachMainTabs', {
+      screen: 'STUDENTS',
+      params: {
+        coachRequestId: data.request_id || data.requestId || null,
+        coachRequestStudentId: data.student_id || data.studentId || null,
+      },
+    });
+    return;
+  }
+  // Partner-linking notifications (dancer↔dancer) → Profile ▸ Links, where the
+  // partnership row + handshake lives. These only ever target students.
+  if (type === 'couple_request_received' || type === 'couple_request_accepted' || type === 'couple_paired') {
+    navigationRef.navigate('MainTabs', { screen: 'PROFILE', params: { tab: 'links' } });
     return;
   }
   if (type && COACH_ACTION_TYPES.has(type)) {
@@ -70,6 +119,26 @@ export default function App() {
   const [session, setSession] = useState(undefined);
   const [userRole, setUserRole] = useState(null);
   const [userEmail, setUserEmail] = useState(null);
+  // Cold-start: hold the logo until the first screen has painted (Home /
+  // Dashboard call markFirstScreenReady). The 6s timeout is a pure hang-guard —
+  // a wired screen normally signals well before it.
+  const [firstReady, setFirstReady] = useState(isFirstScreenReady());
+  useEffect(() => {
+    if (firstReady) return;
+    const off = onFirstScreenReady(() => setFirstReady(true));
+    const t = setTimeout(() => setFirstReady(true), 6000);
+    return () => { off(); clearTimeout(t); };
+  }, []);
+  // Minimum on-screen time for the cold-start logo, counted from launch. With a
+  // warm cache the first screen is ready in ~100ms, which would flash the logo
+  // for a fraction of a second — hold it ~2s so the brand glint actually lands.
+  // Already-ready (warm foreground) → starts true so the overlay never shows.
+  const [minElapsed, setMinElapsed] = useState(isFirstScreenReady());
+  useEffect(() => {
+    if (minElapsed) return;
+    const t = setTimeout(() => setMinElapsed(true), 2000);
+    return () => clearTimeout(t);
+  }, []);
 
   // Buffer for a notification tap that arrived before the navigator was
   // mounted (cold launch via push). Drained from NavigationContainer.onReady.
@@ -192,11 +261,9 @@ export default function App() {
   const isLoading = session === undefined || (session !== null && userRole === null);
 
   if (isLoading) {
-    return (
-      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#000000' }}>
-        <InBetweenLoader size={120} />
-      </View>
-    );
+    // Session/role not resolved yet — no navigator to mount, so the logo is all
+    // there is. It carries straight over to the overlay below once we render.
+    return <LogoLoader />;
   }
 
   let activeNavigator;
@@ -214,28 +281,45 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <NavigationContainer
-        theme={AppTheme}
-        ref={navigationRef}
-        onReady={() => {
-          drainPendingNotifTap();
-          // Capture the landing screen on cold start — onStateChange
-          // doesn't fire for the initial route.
-          try {
-            const route = navigationRef.getCurrentRoute();
-            if (route?.name) trackScreenView(route.name);
-          } catch {}
-        }}
-        onStateChange={() => {
-          try {
-            const route = navigationRef.getCurrentRoute();
-            if (route?.name) trackScreenView(route.name);
-          } catch {}
-        }}
-      >
-        <StatusBar style="dark" />
-        {activeNavigator}
-      </NavigationContainer>
+      <View style={{ flex: 1 }}>
+        <NavigationContainer
+          theme={AppTheme}
+          ref={navigationRef}
+          onReady={() => {
+            drainPendingNotifTap();
+            // Capture the landing screen on cold start — onStateChange
+            // doesn't fire for the initial route.
+            try {
+              const route = navigationRef.getCurrentRoute();
+              if (route?.name) trackScreenView(route.name);
+            } catch {}
+          }}
+          onStateChange={() => {
+            try {
+              const route = navigationRef.getCurrentRoute();
+              if (route?.name) trackScreenView(route.name);
+            } catch {}
+          }}
+        >
+          <StatusBar style="dark" />
+          {activeNavigator}
+        </NavigationContainer>
+        {/* The navigator mounts + loads underneath; the logo overlay covers it
+            until the first screen paints. `!session` (logged-out → Auth) has no
+            signalling screen, so it resolves done=true and never shows. */}
+        <ColdStartOverlay done={(firstReady && minElapsed) || !session} />
+      </View>
     </SafeAreaProvider>
   );
 }
+
+const styles = StyleSheet.create({
+  loader: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    // Matches the native splash backgroundColor (app.json) + the splash-icon
+    // mark InBetweenLoader draws, so native splash → JS loader is seamless.
+    backgroundColor: '#000000',
+  },
+});

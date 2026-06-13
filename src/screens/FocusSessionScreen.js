@@ -57,6 +57,7 @@ import { getFocusPoints, getClassInputsForFocus, getClassInputs, getTrainingSess
 import { callClaudeChat } from '../services/ai/anthropic';
 import { supabase } from '../services/supabase/client';
 import { completeTrainingSession, getSessionLabel } from '../utils/algorithm';
+import { acquireCoupleLock, heartbeatCoupleLock, releaseCoupleLock, completeCoupleTrainingSession, getCoupleFocusPointById, getCoupleLock } from '../storage/coupleStorage';
 import {
   setActiveSession,
   getActiveSession,
@@ -1084,7 +1085,9 @@ function DurationPicker({ value, onChange }) {
 // ─── Main Screen ──────────────────────────────────────────────────────────────
 
 export default function FocusSessionScreen({ route, navigation }) {
-  const { focusPointId, sessionId, rank = 0, sessionCount = 0 } = route.params;
+  const { focusPointId, sessionId, rank = 0, sessionCount = 0, couple = false, coupleId = null,
+    partnerView = false, partnerStartedAt = null, partnerDuration = null,
+    focusPointData = null } = route.params || {};
   const [focusPoint, setFocusPoint] = useState(null);
   const [classInputs, setClassInputs] = useState([]);
   const [notesLoading, setNotesLoading] = useState(true);
@@ -1134,6 +1137,35 @@ export default function FocusSessionScreen({ route, navigation }) {
     Animated.timing(beatAnim, { toValue: 0, duration: 200, useNativeDriver: false }).start();
   }
   const [timeLeft, setTimeLeft] = useState(15 * 60);
+  // Partner-view: show the EXACT same in-progress screen as the partner who
+  // started it — flip sessionActive on with their timing and mirror the chrono.
+  // No acquire / heartbeat / completion (no _startInterval); just a read-only
+  // countdown. release_couple_lock only deletes the caller's own lock, so this
+  // can never touch the partner's lock.
+  useEffect(() => {
+    if (!partnerView || !partnerStartedAt) return;
+    setDuration(partnerDuration || 7);
+    setSessionActive(true);
+    setSessionDone(false);
+    const end = partnerStartedAt + (partnerDuration || 7) * 60000;
+    const tick = () => setTimeLeft(Math.max(0, Math.round((end - Date.now()) / 1000)));
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [partnerView, partnerStartedAt, partnerDuration]);
+
+  // Spectator: the partner who started this can cancel/finish anytime. Poll
+  // their lock — the moment it's gone, the live session is over, so leave (the
+  // chrono is a local mirror and wouldn't otherwise know). null = no lock;
+  // undefined = fetch failed → keep waiting rather than closing on a blip.
+  useEffect(() => {
+    if (!partnerView || !coupleId) return;
+    const id = setInterval(async () => {
+      const lock = await getCoupleLock(coupleId).catch(() => undefined);
+      if (lock === null) navigation.goBack();
+    }, 4000);
+    return () => clearInterval(id);
+  }, [partnerView, coupleId]);
   const [overTime, setOverTime] = useState(0);
   const overTimeRef = useRef(0);
 
@@ -1165,8 +1197,16 @@ export default function FocusSessionScreen({ route, navigation }) {
 
   useEffect(() => {
     async function loadData() {
-      const points = await getFocusPoints();
-      const fp = points.find(p => p.id === focusPointId) || null;
+      // The starter already has the full focus row in hand (HomeScreen passes it
+      // through params), so use it directly and skip the round-trip entirely.
+      // Couple sessions otherwise carry a couple_focus_points id (not a solo
+      // focus_points one), so load it from the couple table; solo stays on
+      // getFocusPoints().
+      const fp = focusPointData
+        ? focusPointData
+        : (couple && coupleId)
+          ? await getCoupleFocusPointById(focusPointId).catch(() => null)
+          : ((await getFocusPoints()).find(p => p.id === focusPointId) || null);
       if (fp) {
         // Smooth height transition from skeleton → real content
         LayoutAnimation.configureNext({
@@ -1178,8 +1218,12 @@ export default function FocusSessionScreen({ route, navigation }) {
         contentFade.setValue(0);
         setFocusPoint(fp);
         Animated.timing(contentFade, { toValue: 1, duration: 300, useNativeDriver: true }).start();
-        const inputs = await getClassInputsForFocus(fp.name);
-        setClassInputs(inputs);
+        // Coach-notes feed is solo-scoped (queries the student's class_inputs),
+        // so skip it for couple to avoid showing mismatched notes.
+        if (!couple) {
+          const inputs = await getClassInputsForFocus(fp.name);
+          setClassInputs(inputs);
+        }
       }
       setNotesLoading(false);
     }
@@ -1235,6 +1279,8 @@ export default function FocusSessionScreen({ route, navigation }) {
       if (remaining > 0) {
         setTimeLeft(Math.floor(remaining));
         setOverTime(0);
+        // Couple lock heartbeat (~every 30s) so the partner sees it stay live.
+        if (couple && coupleId && Math.floor(elapsed) % 30 === 0) heartbeatCoupleLock(coupleId);
       } else {
         setTimeLeft(0);
         const over = Math.floor(-remaining);
@@ -1269,7 +1315,7 @@ export default function FocusSessionScreen({ route, navigation }) {
     } catch (err) {
       console.warn('[FocusSession] Could not start live activity:', err);
     }
-    setActiveSession({ sessionId, focusPointId, focusPointName: focusPoint?.name, rank, sessionCount, duration, startedAt, liveActivityId });
+    setActiveSession({ sessionId, focusPointId, focusPointName: focusPoint?.name, rank, sessionCount, duration, startedAt, liveActivityId, couple, coupleId });
     setSessionActive(true);
     setSessionDone(false);
     setTimeLeft(duration * 60);
@@ -1280,6 +1326,37 @@ export default function FocusSessionScreen({ route, navigation }) {
     overrunModalOpenRef.current = false;
     setOverrunModalOpen(false);
     _startInterval(startedAt, duration);
+
+    // Couple: reserve the couple-wide lock in the BACKGROUND so the chrono starts
+    // the instant you tap (no network on the critical path). The partnerLock guard
+    // on Train already blocks the known-busy case, so this only catches a rare
+    // realtime-lag race — start optimistically and roll the session back if the
+    // partner actually won the lock. acquireCoupleLock is the atomic gate.
+    if (couple && coupleId) {
+      acquireCoupleLock(coupleId, focusPointId, duration)
+        .then((res) => {
+          if (res?.ok) {
+            // Won the lock. But if training was already cancelled/finished while
+            // this acquire was in flight (fast start→cancel), the row we just
+            // inserted is an orphan with a fresh heartbeat — nothing left to
+            // release it, so the partner would see "In Progress" until the 90s
+            // staleness. Release it now so their mirror clears within the poll.
+            if (getActiveSession()?.sessionId !== sessionId) releaseCoupleLock(coupleId);
+            return;
+          }
+          if (!res) return;
+          Alert.alert('In use', 'Your partner is training this couple focus right now — try again in a moment.');
+          stopSession();        // releaseCoupleLock here is caller-scoped → no-op on the partner's lock
+          navigation.goBack();
+        })
+        .catch(() => {
+          // Offline allowed per spec (with a warning) — keep training optimistically.
+          Alert.alert(
+            'No connection',
+            "Couldn't reserve the couple session — you may be offline. Make sure your partner isn't training the same focus at the same time.",
+          );
+        });
+    }
   }
 
   function cancelOverrunAutoStop() {
@@ -1329,14 +1406,18 @@ export default function FocusSessionScreen({ route, navigation }) {
     // the elapsed math in completeTrainingSession lands on capMinutes.
     const capMinutes = duration + Math.round(overrunTriggerSecRef.current / 60);
     const fakeStartedAt = Date.now() - capMinutes * 60_000;
-    await completeTrainingSession(
-      sessionId,
-      null,
-      'Auto stopped after no response to overtime check.',
-      focusPointId,
-      fakeStartedAt,
-      null,
-    );
+    if (couple && coupleId) {
+      await completeCoupleTrainingSession(coupleId, focusPointId, null, 'Auto stopped after no response to overtime check.', fakeStartedAt);
+    } else {
+      await completeTrainingSession(
+        sessionId,
+        null,
+        'Auto stopped after no response to overtime check.',
+        focusPointId,
+        fakeStartedAt,
+        null,
+      );
+    }
     const active = getActiveSession();
     if (active?.liveActivityId) {
       laEndFocusPoint(active.liveActivityId, false).catch(() => {});
@@ -1381,6 +1462,7 @@ export default function FocusSessionScreen({ route, navigation }) {
     if (existing?.liveActivityId) {
       laEndFocusPoint(existing.liveActivityId, false).catch(() => {});
     }
+    if (couple && coupleId) releaseCoupleLock(coupleId);
     clearActiveSession();
   }
 
@@ -1755,6 +1837,13 @@ I don't have that in your data, but you can send the question to your coach if y
     setOverrunModalOpen(false);
     setSessionActive(false);
     setSessionPaused(false);
+    // Free the couple lock the instant training stops — the partner's "In
+    // Progress" mirror shouldn't linger for ~a minute while this dancer sits on
+    // the feeling modal (which has no "resume"; it only leads to save/skip).
+    // completeCoupleTrainingSession re-releases later (caller-scoped DELETE →
+    // harmless no-op). The <3min short-session branch above returns early, so
+    // "Keep training" there still holds the lock.
+    if (couple && coupleId) releaseCoupleLock(coupleId);
     setShowFeelingModal(true);
   }
 
@@ -1770,6 +1859,7 @@ I don't have that in your data, but you can send the question to your coach if y
     if (active?.liveActivityId) {
       laEndFocusPoint(active.liveActivityId, false).catch(() => {});
     }
+    if (couple && coupleId) releaseCoupleLock(coupleId);
     clearActiveSession();
     navigation.goBack();
   }
@@ -1785,7 +1875,11 @@ I don't have that in your data, but you can send the question to your coach if y
     sessionCompletedRef.current = true;
     const active = getActiveSession();
     const startedAtMs = active?.startedAt ?? null;
-    await completeTrainingSession(sessionId, feeling, note, focusPointId, startedAtMs);
+    if (couple && coupleId) {
+      await completeCoupleTrainingSession(coupleId, focusPointId, feeling, note, startedAtMs);
+    } else {
+      await completeTrainingSession(sessionId, feeling, note, focusPointId, startedAtMs);
+    }
     if (active?.liveActivityId) {
       laEndFocusPoint(active.liveActivityId, true).catch(() => {});
     }
@@ -1799,7 +1893,11 @@ I don't have that in your data, but you can send the question to your coach if y
     sessionCompletedRef.current = true;
     const active = getActiveSession();
     const startedAtMs = active?.startedAt ?? null;
-    await completeTrainingSession(sessionId, null, null, focusPointId, startedAtMs, null);
+    if (couple && coupleId) {
+      await completeCoupleTrainingSession(coupleId, focusPointId, null, null, startedAtMs, null);
+    } else {
+      await completeTrainingSession(sessionId, null, null, focusPointId, startedAtMs, null);
+    }
     if (active?.liveActivityId) {
       laEndFocusPoint(active.liveActivityId, false).catch(() => {});
     }
@@ -1838,10 +1936,12 @@ I don't have that in your data, but you can send the question to your coach if y
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
 
           {/* Focus Card — expands downward to include AI chat, same as "read more" */}
-          <View style={styles.focusCard}>
-            {/* Gold accent — concentrated top-right (offset from Home's bottom-right) */}
+          <View style={[styles.focusCard, couple && { backgroundColor: '#2E4670' }]}>
+            {/* Accent glow top-right — gold for solo, blue for couple */}
             <LinearGradient
-              colors={['rgba(242,185,64,0.22)', 'transparent', 'transparent']}
+              colors={couple
+                ? ['rgba(143,176,221,0.20)', 'transparent', 'transparent']
+                : ['rgba(242,185,64,0.22)', 'transparent', 'transparent']}
               locations={[0, 0.55, 1]}
               start={{ x: 1, y: 0 }}
               end={{ x: 0, y: 1 }}
@@ -2099,7 +2199,7 @@ I don't have that in your data, but you can send the question to your coach if y
             </TouchableOpacity>
           )}
 
-          {sessionActive && !sessionPaused && (
+          {sessionActive && !sessionPaused && !partnerView && (
             <TouchableOpacity style={styles.pauseBtn} onPress={pauseSession} activeOpacity={0.85}>
               <View style={styles.pauseIcon}>
                 <View style={styles.pauseBar} />
@@ -2109,7 +2209,7 @@ I don't have that in your data, but you can send the question to your coach if y
             </TouchableOpacity>
           )}
 
-          {sessionActive && sessionPaused && (
+          {sessionActive && sessionPaused && !partnerView && (
             <View style={styles.pausedRow}>
               <TouchableOpacity style={styles.resumeBtn} onPress={resumeSession} activeOpacity={0.88}>
                 <Ionicons name="play" size={14} color="#000" />
@@ -2122,7 +2222,7 @@ I don't have that in your data, but you can send the question to your coach if y
             </View>
           )}
 
-          {sessionActive && (
+          {sessionActive && !partnerView && (
             <Pressable
               style={styles.validateBtn}
               onPressIn={() => {

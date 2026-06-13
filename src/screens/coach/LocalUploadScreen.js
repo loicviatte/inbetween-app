@@ -40,13 +40,15 @@ import { Colors as C, Fonts, Spacing } from '../../theme';
 import { supabase } from '../../services/supabase/client';
 import {
   parseDjiFileName,
-  matchFilesToClasses,
+  groupMicFilesIntoSessions,
+  matchSessionsToClasses,
 } from '../../services/localRecordingMatcher';
 import {
   fetchPendingUploads,
   planAutoSync,
   executeAutoSync,
-  attachFileToClass,
+  attachSessionToClass,
+  purgeExpiredM4aBackups,
 } from '../../services/localRecordingAutoSync';
 import * as DjiFiles from 'local-recording-files';
 
@@ -68,21 +70,22 @@ function fmtDuration(seconds) {
 
 // ─── File picker + parsing ───────────────────────────────────────────────
 
-async function pickAudioFile() {
+async function pickAudioFiles() {
+  // multiple:true so the coach can select every part of a split recording
+  // (DJI caps each file at ~30:50) — and even all parts of several classes
+  // at once. We stitch them back into sessions below.
   const result = await DocumentPicker.getDocumentAsync({
     type: 'audio/*',
     copyToCacheDirectory: true,
-    multiple: false,
+    multiple: true,
   });
-  if (result.canceled) return null;
-  const asset = result.assets?.[0];
-  if (!asset) return null;
-  return {
+  if (result.canceled) return [];
+  return (result.assets ?? []).map((asset) => ({
     uri: asset.uri,
     name: asset.name,
     size: asset.size ?? 0,
     mimeType: asset.mimeType ?? 'audio/wav',
-  };
+  }));
 }
 
 // Approximate WAV duration from file size (works only for known sample
@@ -101,6 +104,7 @@ export default function LocalUploadScreen({ navigation }) {
   const [pending, setPending] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [syncStatus, setSyncStatus] = useState(null);
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -122,6 +126,10 @@ export default function LocalUploadScreen({ navigation }) {
   }, []);
 
   useEffect(() => { reload(); }, [reload]);
+
+  // Sweep stale on-device m4a backups (kept ~3 days, then dropped — the
+  // uploaded audio lives in Supabase Storage). Fire-and-forget on mount.
+  useEffect(() => { purgeExpiredM4aBackups(); }, []);
 
   // ─── Auto-sync via the native folder picker ───────────────────────────
   // Preferred path: if the native module is built into this binary AND
@@ -202,7 +210,7 @@ export default function LocalUploadScreen({ navigation }) {
             text: 'Import',
             onPress: async () => {
               try {
-                const result = await executeAutoSync(userId, plan);
+                const result = await executeAutoSync(userId, plan, { onProgress: setSyncStatus });
                 const pendingReview = result.pairs.filter(
                   (p) => p.adminReviewStatus === 'pending',
                 ).length;
@@ -212,16 +220,26 @@ export default function LocalUploadScreen({ navigation }) {
                 const importedLabel = result.importedCount === 1
                   ? '1 recording imported'
                   : `${result.importedCount} recordings imported`;
-                Alert.alert(
-                  'Done',
-                  `${importedLabel}${reviewTail}. Transcription continues in the background.`,
-                );
+                if (result.errors.length > 0) {
+                  // Surface the real reason instead of a silent "0 imported".
+                  console.warn('[LocalUpload] sync errors:', JSON.stringify(result.errors));
+                  Alert.alert(
+                    result.importedCount > 0 ? 'Partly done' : 'Import failed',
+                    `${importedLabel}.\n\n${result.errors.length} failed:\n${result.errors[0].error}`,
+                  );
+                } else {
+                  Alert.alert(
+                    'Done',
+                    `${importedLabel}${reviewTail}. Transcription continues in the background.`,
+                  );
+                }
                 await reload();
               } catch (err) {
                 console.warn('[LocalUpload] auto-sync attach failed:', err);
                 Alert.alert('Sync failed', err?.message ?? 'Unknown error.');
               } finally {
                 setBusy(false);
+                setSyncStatus(null);
               }
             },
           },
@@ -243,30 +261,41 @@ export default function LocalUploadScreen({ navigation }) {
     }
   }
 
-  // ─── Fallback: manual file picker ──────────────────────────────────────
-  // Used when the native module isn't built into the binary yet (e.g.
-  // first build after merging the local-recording feature). Coach has
-  // to navigate to the file each time.
+  // ─── Manual file picker (multi-select, multi-part aware) ───────────────
+  // The robust fallback when auto-sync can't disambiguate. The coach can
+  // select every part of a split recording (DJI caps each file at ~30:50)
+  // — and even all parts of several classes at once. We stitch the picked
+  // files into sessions, map each session to a pending class, and upload
+  // each session as ordered chunks.
   async function handleManualPick() {
     if (busy) return;
     setBusy(true);
     try {
-      const file = await pickAudioFile();
-      if (!file) {
+      const files = await pickAudioFiles();
+      if (!files.length) {
         setBusy(false);
         return;
       }
 
-      const djiMeta = parseDjiFileName(file.name);
-      const durationSec = approximateWavDurationSec(file.size);
-      const micFile = {
-        fileName: file.name,
-        index: djiMeta?.index ?? 0,
-        timestamp: djiMeta?.timestamp ?? new Date(),
-        durationSec,
-        sizeBytes: file.size,
-        uri: file.uri,
-      };
+      // Build MicFiles (DJI name → index/timestamp; duration from size) and
+      // a lookup back to each picked file's cache uri + size for upload.
+      const assetByName = new Map();
+      const micFiles = files.map((f, i) => {
+        assetByName.set(f.name, { uri: f.uri, size: f.size });
+        const meta = parseDjiFileName(f.name);
+        return {
+          fileName: f.name,
+          // Non-DJI names get a unique negative index + selection-order
+          // timestamp so they never group together by accident.
+          index: meta?.index ?? -(i + 1),
+          timestamp: meta?.timestamp ?? new Date(2000, 0, 1, 0, 0, i),
+          durationSec: approximateWavDurationSec(f.size),
+          sizeBytes: f.size,
+          uri: f.uri,
+        };
+      });
+
+      const sessions = groupMicFilesIntoSessions(micFiles);
 
       const classes = pending.map((p) => ({
         id: p.id,
@@ -275,72 +304,88 @@ export default function LocalUploadScreen({ navigation }) {
         studentName: p.studentName,
       }));
 
-      const session = matchFilesToClasses(classes, [micFile]);
-
-      let matched = null;
-      let chosenClass = null;
-
-      if (session.status === 'matched' && session.matches.length === 1) {
-        matched = session.matches[0];
-        chosenClass = pending.find((p) => p.id === matched.class.id);
-      } else if (session.status === 'count_mismatch') {
-        const ranked = pending.map((p) => ({
-          p,
-          deltaMs: Math.abs(+p.startedAt - +micFile.timestamp),
-        })).sort((a, b) => a.deltaMs - b.deltaMs);
-        if (ranked.length > 0) {
-          chosenClass = ranked[0].p;
-          const single = matchFilesToClasses(
-            [{
-              id: chosenClass.id,
-              startedAt: chosenClass.startedAt,
-              endedAt: chosenClass.endedAt,
-              studentName: chosenClass.studentName,
-            }],
-            [micFile],
+      // Assign sessions → classes: prefer the clean 1:1 chronological match,
+      // otherwise greedily give each session its best class by duration.
+      const assignments = []; // { cls, session, confidence, actualDurationSec }
+      const matchResult = matchSessionsToClasses(classes, sessions);
+      if (matchResult.status === 'matched') {
+        for (const m of matchResult.matches) {
+          const row = pending.find((p) => p.id === m.class.id);
+          if (row) {
+            assignments.push({
+              cls: row,
+              session: m.session,
+              confidence: m.confidence,
+              actualDurationSec: m.actualDurationSec,
+            });
+          }
+        }
+      } else {
+        const usedClassIds = new Set();
+        const sortedSessions = [...sessions].sort((a, b) => +a.startTimestamp - +b.startTimestamp);
+        for (const session of sortedSessions) {
+          let best = null;
+          let bestScore = Infinity;
+          for (const row of pending) {
+            if (usedClassIds.has(row.id)) continue;
+            const expected = row.durationSec || 0;
+            const score = expected > 0 ? Math.abs(1 - session.durationSec / expected) : 1;
+            if (score < bestScore) { bestScore = score; best = row; }
+          }
+          if (!best) continue;
+          usedClassIds.add(best.id);
+          const scored = matchSessionsToClasses(
+            [{ id: best.id, startedAt: best.startedAt, endedAt: best.endedAt, studentName: best.studentName }],
+            [session],
           );
-          if (single.matches[0]) matched = single.matches[0];
+          const m = scored.matches[0];
+          assignments.push({
+            cls: best,
+            session,
+            confidence: m?.confidence ?? 'low',
+            actualDurationSec: m?.actualDurationSec ?? session.durationSec,
+          });
         }
       }
 
-      if (!chosenClass || !matched) {
-        Alert.alert(
-          'No match',
-          'Could not match this file to any pending class.',
-        );
+      if (assignments.length === 0) {
+        Alert.alert('No match', 'Could not match the selected file(s) to any pending class.');
         setBusy(false);
         return;
       }
 
+      const summary = assignments
+        .map((a) => {
+          const partLabel = a.session.parts.length === 1 ? '1 part' : `${a.session.parts.length} parts`;
+          const name = a.cls.studentName ?? (a.cls.lessonType === 'group' ? 'Group class' : 'Private class');
+          return `• ${name} ← ${partLabel}, ~${fmtDuration(a.actualDurationSec)} (${a.confidence})`;
+        })
+        .join('\n');
+
       Alert.alert(
-        `Match found (${matched.confidence})`,
-        `Class: ${chosenClass.studentName ?? chosenClass.lessonType}\n` +
-        `Duration: ${fmtDuration(chosenClass.durationSec)}\n` +
-        `File duration: ~${fmtDuration(matched.actualDurationSec)}\n\nUpload?`,
+        `Attach ${assignments.length} recording(s)?`,
+        summary,
         [
           { text: 'Cancel', style: 'cancel', onPress: () => setBusy(false) },
           {
             text: 'Upload',
             onPress: async () => {
               try {
-                // Manual picks always go through admin review — even
-                // when the matcher scores 'high', the coach was already
-                // forced into the manual path which implies the auto
-                // flow didn't disambiguate cleanly. Be conservative.
-                await attachFileToClass({
-                  classId: chosenClass.id,
-                  userId,
-                  file: {
-                    uri: file.uri,
-                    name: file.name,
-                    size: file.size,
-                  },
-                  matched: {
-                    confidence: matched.confidence,
-                    actualDurationSec: matched.actualDurationSec,
-                  },
-                  adminReviewStatus: 'pending',
-                });
+                for (const a of assignments) {
+                  const parts = a.session.parts.map((p) => {
+                    const asset = assetByName.get(p.fileName) ?? {};
+                    return { uri: asset.uri, name: p.fileName, size: asset.size ?? p.sizeBytes };
+                  });
+                  // Manual picks always go through admin review — the coach
+                  // landed here because auto-sync didn't disambiguate cleanly.
+                  await attachSessionToClass({
+                    classId: a.cls.id,
+                    userId,
+                    parts,
+                    matched: { confidence: a.confidence, actualDurationSec: a.actualDurationSec },
+                    adminReviewStatus: 'pending',
+                  });
+                }
                 Alert.alert('Uploaded', 'Transcription will start shortly.');
                 await reload();
               } catch (err) {
@@ -478,6 +523,13 @@ export default function LocalUploadScreen({ navigation }) {
               </TouchableOpacity>
             )}
 
+            {busy && syncStatus ? (
+              <View style={s.statusRow}>
+                <ActivityIndicator size="small" color={C.orange} />
+                <Text style={s.statusText}>{syncStatus}</Text>
+              </View>
+            ) : null}
+
             <Text style={s.hint}>
               {hasAutoSync
                 ? 'Plug your DJI mic via USB-C, then tap Sync. The first time, iOS will ask you to grant access to the DJI_Audio folder — only needed once.'
@@ -582,6 +634,21 @@ const s = StyleSheet.create({
     fontSize: 14,
     color: C.secondary,
     textDecorationLine: 'underline',
+  },
+  statusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: 18,
+    paddingHorizontal: Spacing.side,
+  },
+  statusText: {
+    flexShrink: 1,
+    fontFamily: Fonts.ttDemiBold,
+    fontSize: 13,
+    color: C.black,
+    textAlign: 'center',
   },
   hint: {
     marginTop: 16,

@@ -266,7 +266,7 @@ export async function getWeekActivity() {
         .not('completed_at', 'is', null),
       supabase
         .from('class_inputs')
-        .select('id, created_at, title, practice_point_1, ai_primary_focus')
+        .select('id, created_at, title, practice_point_1, ai_primary_focus, lesson_type')
         .or(`user_id.eq.${userId},student_id.eq.${userId}`)
         .not('is_deleted', 'is', true)
         .gte('created_at', mondayISO),
@@ -442,92 +442,99 @@ export async function getDayStreak() {
   return streak;
 }
 
+// ─── Profile statistics mini-card ────────────────────────────────────────────
+// All-time best daily streak + total minutes trained this calendar month, in a
+// single query. Best streak = the longest run of consecutive calendar days
+// that each have ≥1 completed practice_log (DST-safe via UTC day ordinals).
+export async function getProfileActivityStats() {
+  try {
+    const userId = await getUserId();
+    const { data } = await supabase
+      .from('practice_logs')
+      .select('started_at, duration_minutes')
+      .eq('student_id', userId)
+      .not('completed_at', 'is', null);
+    const logs = data || [];
+
+    const now = new Date();
+    const firstOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    let monthMinutes = 0;
+    const dayKeys = new Set();
+    for (const l of logs) {
+      const d = new Date(l.started_at);
+      if (d >= firstOfMonth) monthMinutes += l.duration_minutes || 0;
+      dayKeys.add(`${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`);
+    }
+
+    const dayNums = [...dayKeys]
+      .map((k) => {
+        const [y, m, d] = k.split('-').map(Number);
+        return Math.floor(Date.UTC(y, m, d) / 86400000);
+      })
+      .sort((a, b) => a - b);
+    let bestStreakDays = 0;
+    let run = 0;
+    let prev = null;
+    for (const n of dayNums) {
+      run = prev !== null && n - prev === 1 ? run + 1 : 1;
+      if (run > bestStreakDays) bestStreakDays = run;
+      prev = n;
+    }
+
+    return { bestStreakDays, monthMinutes };
+  } catch {
+    return { bestStreakDays: 0, monthMinutes: 0 };
+  }
+}
+
 // ─── Lesson readiness ────────────────────────────────────────────────────────
 // "How ready you are for your next private" — measured against the focus
 // points extracted from your most recent private. Critical focuses need 3
 // sessions, everything else needs 2. A session = ~7 min of training.
-const SESSION_MINUTES = 7;
-const TIER_ORDER = { critical: 0, important: 1, supporting: 2 };
-function targetForTier(tier) {
-  return tier === 'critical' ? 3 : 2;
-}
+// The computation lives server-side in the get_lesson_readiness RPC (see the
+// migration); the tier targets / SESSION_MINUTES constants moved there too.
 
 // Pass `targetUserId` to inspect another student's readiness (coach view).
 // Omit it to read the readiness of the currently authenticated user.
-export async function getLessonReadiness(targetUserId = null) {
+// `category` ('latin' | 'ballroom' | null) restricts to one style — the style
+// is derived from each focus's `dance` array (danceCategory.focusMatchesCategory);
+// null keeps the legacy all-styles behaviour. Untagged focuses match any style.
+export async function getLessonReadiness(targetUserId = null, category = null) {
   const userId = targetUserId || (await getUserId());
+  // One server-side round-trip instead of the old 4-query waterfall. Same
+  // result shape { lastClassDate, focuses[], percent, minutesRemaining } | null.
+  // SECURITY INVOKER → identical RLS to the inline queries it replaced (incl.
+  // the coach-viewing-a-student case). See migration 20260612b_lesson_readiness_rpc.sql.
+  const { data } = await supabase.rpc('get_lesson_readiness', {
+    p_user: userId,
+    p_category: category,
+  });
+  return data || null;
+}
 
-  // Source of truth = the focus_points the AI extracted for this student,
-  // tagged with their originating class. We start there (rather than from
-  // class_inputs) so a freshly logged class that hasn't been processed yet
-  // doesn't blank out the dashboard — we fall back to the most recent
-  // private that actually has focus_points.
-  const { data: fpClassRefs } = await supabase
-    .from('focus_points')
-    .select('class_input_id')
-    .eq('user_id', userId)
-    .eq('is_other', false)
-    .not('is_deleted', 'is', true)
-    .neq('status', 'past')
-    .not('class_input_id', 'is', null);
-  const distinctClassIds = Array.from(
-    new Set((fpClassRefs ?? []).map(r => r.class_input_id))
-  );
-  if (distinctClassIds.length === 0) return null;
+// Batch readiness for a list of students (coach roster) — one round-trip
+// instead of N. Returns { [studentId]: readiness|null }.
+// See supabase/migrations/20260612e_students_readiness_batch.sql.
+export async function getStudentsReadiness(userIds, category = null) {
+  if (!userIds || userIds.length === 0) return {};
+  const { data } = await supabase.rpc('get_students_readiness', {
+    p_users: userIds,
+    p_category: category,
+  });
+  return data || {};
+}
 
-  // Most recent private among those classes (legacy rows with null
-  // lesson_type still count as private).
-  const { data: classes } = await supabase
-    .from('class_inputs')
-    .select('id, created_at')
-    .in('id', distinctClassIds)
-    .or('lesson_type.eq.private,lesson_type.is.null')
-    .not('is_deleted', 'is', true)
-    .order('created_at', { ascending: false })
-    .limit(1);
-  const lastClass = classes?.[0];
-  if (!lastClass) return null;
-
-  // Primary focuses = those produced by the anchor class AND not currently
-  // held (a held focus is one the coach marked "Not yet" in a prior debrief
-  // — it waits until the primary list is done before re-entering).
-  const { data: fps } = await supabase
-    .from('focus_points')
-    .select('id, name, tier')
-    .eq('user_id', userId)
-    .eq('class_input_id', lastClass.id)
-    .eq('is_other', false)
-    .not('is_deleted', 'is', true)
-    .neq('status', 'past')
-    .or('is_held.is.null,is_held.eq.false');
-  if (!fps || fps.length === 0) return null;
-
-  // Sessions completed against those focus points since the class
-  const ids = fps.map(f => f.id);
-  const counts = {};
-  const { data: logs } = await supabase
-    .from('practice_logs')
-    .select('focus_point_id')
-    .eq('student_id', userId)
-    .in('focus_point_id', ids)
-    .gte('completed_at', lastClass.created_at)
-    .not('completed_at', 'is', null);
-  for (const l of logs || []) counts[l.focus_point_id] = (counts[l.focus_point_id] || 0) + 1;
-
-  const focuses = fps
-    .map(fp => {
-      const target = targetForTier(fp.tier);
-      const done = Math.min(target, counts[fp.id] || 0);
-      return { focusPointId: fp.id, name: fp.name, tier: fp.tier, target, done };
-    })
-    .sort((a, b) => (TIER_ORDER[a.tier] ?? 99) - (TIER_ORDER[b.tier] ?? 99));
-
-  const totalTarget = focuses.reduce((sum, f) => sum + f.target, 0);
-  const totalDone = focuses.reduce((sum, f) => sum + f.done, 0);
-  const percent = totalTarget > 0 ? Math.round((totalDone / totalTarget) * 100) : 0;
-  const minutesRemaining = Math.max(0, totalTarget - totalDone) * SESSION_MINUTES;
-
-  return { lastClassDate: lastClass.created_at, focuses, percent, minutesRemaining };
+// ─── Student profile bundle ───────────────────────────────────────────────────
+// One round-trip for the whole Profile screen — replaces ~15 parallel queries
+// the free-tier pooler was serializing (measured 2→10s staircase). Returns
+// { user, coachDefault/Latin/Ballroom, couple, incomingRequest, outgoingRequest,
+//   inviteCode, readiness, coupleReadiness, coachQuestions, focusPoints,
+//   classInputsCount, totalSessions, activityStats } | null.
+// See supabase/migrations/20260612d_student_profile_bundle.sql.
+export async function getStudentProfileBundle(targetUserId = null) {
+  const userId = targetUserId || (await getUserId());
+  const { data } = await supabase.rpc('get_student_profile', { p_user: userId });
+  return data || null;
 }
 
 // ─── Notes ───────────────────────────────────────────────────────────────────

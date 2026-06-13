@@ -697,7 +697,12 @@ export default function LogScreen({ navigation }) {
   useFocusEffect(useCallback(() => {
     const isFirst = !hasLoadedRef.current;
     if (isFirst) setIsLoading(true);
+    const reveal = () => {
+      fadeAnim.setValue(0);
+      Animated.timing(fadeAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
+    };
     async function init() {
+      let revealed = false;
       if (isFirst) {
         try {
           const raw = await AsyncStorage.getItem(LOG_CACHE_KEY);
@@ -706,6 +711,8 @@ export default function LogScreen({ navigation }) {
             setInputs(ci || []);
             setNotes(cn || []);
             setIsLoading(false);
+            reveal(); // fade cached content in NOW — don't wait on the network
+            revealed = true;
           }
         } catch {}
       }
@@ -713,8 +720,7 @@ export default function LogScreen({ navigation }) {
       hasLoadedRef.current = true;
       setIsLoading(false);
       if (isFirst) {
-        fadeAnim.setValue(0);
-        Animated.timing(fadeAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
+        if (!revealed) reveal(); // no cache: skeleton was showing, fade in after load
         try {
           const orphans = await getPendingClasses();
           orphans.filter((d) => !d._failed && !processingIdsRef.current.has(d._pendingId))
