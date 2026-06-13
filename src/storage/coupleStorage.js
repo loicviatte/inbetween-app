@@ -5,7 +5,6 @@
 
 import { supabase } from '../services/supabase/client';
 import { getOrCreateInviteCode } from './coachStorage';
-import { focusMatchesCategory } from '../utils/danceCategory';
 
 async function getUserId() {
   // getSession() is local (no network round-trip); getUser() hits the auth server.
@@ -106,13 +105,17 @@ export async function requestPartnerByCode(code) {
 }
 
 // A request awaiting MY acceptance (I'm the target).
+// Incoming request where I'm the target: 'pending' (my turn to configure +
+// accept) or 'awaiting_validation' (I already accepted — now waiting for the
+// requester to confirm). Both are returned so B always sees where the
+// handshake stands instead of the row silently reverting to "Add partner".
 export async function getIncomingPartnerRequest() {
   const userId = await getUserId();
   const { data } = await supabase
     .from('couple_requests')
-    .select('id, requester_id, status, created_at, users!couple_requests_requester_id_fkey(name, avatar_url)')
+    .select('id, requester_id, status, proposed_does_latin, proposed_does_ballroom, proposed_leader_id, created_at, users!couple_requests_requester_id_fkey(name, avatar_url)')
     .eq('target_id', userId)
-    .eq('status', 'pending')
+    .in('status', ['pending', 'awaiting_validation'])
     .order('created_at', { ascending: false })
     .limit(1);
   const r = data?.[0];
@@ -122,6 +125,10 @@ export async function getIncomingPartnerRequest() {
     requesterId: r.requester_id,
     requesterName: r.users?.name || 'A dancer',
     requesterAvatar: r.users?.avatar_url || null,
+    status: r.status,
+    proposedDoesLatin: r.proposed_does_latin,
+    proposedDoesBallroom: r.proposed_does_ballroom,
+    proposedLeaderId: r.proposed_leader_id,
     createdAt: r.created_at,
   };
 }
@@ -201,80 +208,19 @@ export async function unpair(coupleId) {
 
 // ─── Couple readiness ──────────────────────────────────────────────────────────
 // Mirror of storage.getLessonReadiness, but for the couple: anchored to the
-// couple's most recent couple lesson and counting couple_practice_logs. Style is
-// derived from each focus's `dance` array (null category = all styles).
-const SESSION_MINUTES = 7;
-const TIER_ORDER = { critical: 0, important: 1, supporting: 2 };
-function targetForTier(tier) { return tier === 'critical' ? 3 : 2; }
-
+// couple's most recent couple lesson and counting couple_practice_logs.
+// One server-side round-trip (RPC) instead of the old 4-query waterfall — the
+// couple card is non-blocking + uncached, so the slow chain was leaving the
+// couple focus invisible on cold launches. Same result shape | null.
+// SECURITY INVOKER → identical RLS (couple members + couple-coach).
+// See supabase/migrations/20260612c_couple_readiness_rpc.sql.
 export async function getCoupleReadiness(coupleId, category = null) {
   if (!coupleId) return null;
-
-  const { data: fpRefs } = await supabase
-    .from('couple_focus_points')
-    .select('class_input_id, dance')
-    .eq('couple_id', coupleId)
-    .eq('is_other', false)
-    .not('is_deleted', 'is', true)
-    .neq('status', 'past')
-    .neq('status', 'pending_coach')
-    .not('class_input_id', 'is', null);
-  const distinctClassIds = Array.from(
-    new Set((fpRefs ?? [])
-      .filter(r => focusMatchesCategory(r, category))
-      .map(r => r.class_input_id))
-  );
-  if (distinctClassIds.length === 0) return null;
-
-  const { data: classes } = await supabase
-    .from('class_inputs')
-    .select('id, created_at')
-    .in('id', distinctClassIds)
-    .eq('lesson_type', 'couple')
-    .not('is_deleted', 'is', true)
-    .order('created_at', { ascending: false })
-    .limit(1);
-  const lastClass = classes?.[0];
-  if (!lastClass) return null;
-
-  const { data: fpsRaw } = await supabase
-    .from('couple_focus_points')
-    .select('id, name, tier, dance')
-    .eq('couple_id', coupleId)
-    .eq('class_input_id', lastClass.id)
-    .eq('is_other', false)
-    .not('is_deleted', 'is', true)
-    .neq('status', 'past')
-    .neq('status', 'pending_coach')
-    .or('is_held.is.null,is_held.eq.false');
-  const fps = (fpsRaw ?? []).filter(f => focusMatchesCategory(f, category));
-  if (fps.length === 0) return null;
-
-  const ids = fps.map(f => f.id);
-  const counts = {};
-  const { data: logs } = await supabase
-    .from('couple_practice_logs')
-    .select('couple_focus_point_id')
-    .eq('couple_id', coupleId)
-    .in('couple_focus_point_id', ids)
-    .gte('completed_at', lastClass.created_at)
-    .not('completed_at', 'is', null);
-  for (const l of logs || []) counts[l.couple_focus_point_id] = (counts[l.couple_focus_point_id] || 0) + 1;
-
-  const focuses = fps
-    .map(fp => {
-      const target = targetForTier(fp.tier);
-      const done = Math.min(target, counts[fp.id] || 0);
-      return { focusPointId: fp.id, name: fp.name, tier: fp.tier, target, done };
-    })
-    .sort((a, b) => (TIER_ORDER[a.tier] ?? 99) - (TIER_ORDER[b.tier] ?? 99));
-
-  const totalTarget = focuses.reduce((s, f) => s + f.target, 0);
-  const totalDone = focuses.reduce((s, f) => s + f.done, 0);
-  const percent = totalTarget > 0 ? Math.round((totalDone / totalTarget) * 100) : 0;
-  const minutesRemaining = Math.max(0, totalTarget - totalDone) * SESSION_MINUTES;
-
-  return { lastClassDate: lastClass.created_at, focuses, percent, minutesRemaining };
+  const { data } = await supabase.rpc('get_couple_readiness', {
+    p_couple: coupleId,
+    p_category: category,
+  });
+  return data || null;
 }
 
 // ─── Which Train card is primary (most trained over the last 14 days) ──────────

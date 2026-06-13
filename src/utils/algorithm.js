@@ -211,7 +211,10 @@ export async function getSlots(category = null, readinessOnly = false) {
     };
   } catch (e) {
     console.error('getSlots error:', e);
-    return { slot1: null, slot2: null, slot3: null, readiness: null };
+    // `error: true` lets callers tell a genuine "no focuses" ({slot1:null}) apart
+    // from a transient failure (timeout / pooler saturation), so a hiccup never
+    // blanks focus points already on screen. See HomeScreen load() guards.
+    return { slot1: null, slot2: null, slot3: null, readiness: null, error: true };
   }
 }
 
@@ -262,7 +265,7 @@ export async function getCoupleSlots(coupleId, category = null) {
     };
   } catch (e) {
     console.error('getCoupleSlots error:', e);
-    return { slot1: null, slot2: null, slot3: null, readiness: null };
+    return { slot1: null, slot2: null, slot3: null, readiness: null, error: true };
   }
 }
 

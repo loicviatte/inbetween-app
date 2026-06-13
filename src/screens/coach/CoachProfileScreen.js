@@ -281,7 +281,8 @@ export default function CoachProfileScreen({ navigation }) {
 
   async function handleLogout() {
     await clearUserCaches();
-    await supabase.auth.signOut();
+    // scope:'local' → instant on-device sign-out, no network token-revoke wait.
+    await supabase.auth.signOut({ scope: 'local' });
   }
 
   if (isLoading) {

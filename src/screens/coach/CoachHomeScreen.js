@@ -9,7 +9,9 @@ import {
   Pressable,
   Animated,
   Dimensions,
+  Alert,
 } from 'react-native';
+import { supabase } from '../../services/supabase/client';
 import { Image } from 'expo-image';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import Svg, { Circle } from 'react-native-svg';
@@ -18,7 +20,7 @@ import { respondToCoachRequest } from '../../storage/coachStorage';
 import { getMyCouples, getPendingCoupleCoachRequests, respondToCoupleCoachRequest, getCoupleReadiness } from '../../storage/coupleStorage';
 import { CoachHomeScreenSkeleton } from '../../components/Skeleton';
 import { useCoachData } from '../../context/CoachDataContext';
-import { getLessonReadiness } from '../../storage/storage';
+import { getStudentsReadiness } from '../../storage/storage';
 
 // ── Palette ─────────────────────────────────────────────────────────────────
 const C = {
@@ -335,7 +337,7 @@ function CoupleRequestRow({ request, onAccept, onReject }) {
 }
 
 // ── Screen ──────────────────────────────────────────────────────────────────
-export default function CoachHomeScreen({ navigation }) {
+export default function CoachHomeScreen({ navigation, route }) {
   const { students, requests, initialLoading: loading, refresh, updateRequests } = useCoachData();
 
   // Lesson readiness % per student — drives the ring around each avatar.
@@ -354,13 +356,15 @@ export default function CoachHomeScreen({ navigation }) {
     let alive = true;
     (async () => {
       try {
-        const readinesses = await Promise.all(
-          students.map((s) => getLessonReadiness(s.id).catch(() => null)),
-        );
+        // One round-trip for the whole roster instead of N serialized calls.
+        const map = await getStudentsReadiness(students.map((s) => s.id));
         if (!alive) return;
         const byStudent = {};
-        for (let i = 0; i < students.length; i++) {
-          byStudent[students[i].id] = readinesses[i]?.percent ?? 0;
+        for (const s of students) {
+          const r = map[s.id];
+          // No private lesson yet → null readiness → ring shows 100% (nothing to
+          // get ready for). Otherwise the % against this student's focus points.
+          byStudent[s.id] = r ? (r.percent ?? 0) : 100;
         }
         setReadinessByStudent(byStudent);
       } catch {
@@ -413,6 +417,65 @@ export default function CoachHomeScreen({ navigation }) {
     await respondToCoachRequest(requestId, false);
     updateRequests((prev) => prev.filter((r) => r.id !== requestId));
   }
+
+  // Pop an Accept/Decline modal for a new student request. Shared by the
+  // notification-tap deep link AND the live realtime subscription below, so the
+  // coach can say yes/no immediately either way. shownReqRef dedupes when both
+  // fire for the same request.
+  const shownReqRef = useRef(null);
+  async function showCoachRequestModal(reqId, studentId) {
+    if (!reqId || shownReqRef.current === reqId) return;
+    shownReqRef.current = reqId;
+    let name = requests.find((r) => r.id === reqId)?.name;
+    if (!name && studentId) {
+      const { data } = await supabase.from('users').select('name').eq('id', studentId).maybeSingle();
+      name = data?.name;
+    }
+    Alert.alert(
+      'New student request',
+      `${name || 'A student'} wants to add you as their coach.`,
+      [
+        { text: 'Later', style: 'cancel' },
+        { text: 'Decline', style: 'destructive', onPress: () => handleReject(reqId).catch(() => {}) },
+        { text: 'Accept', onPress: () => handleAccept(reqId).catch(() => {}) },
+      ],
+    );
+  }
+  const showModalRef = useRef(showCoachRequestModal);
+  showModalRef.current = showCoachRequestModal;
+
+  // Notification tap → deep link with the request id → modal.
+  useEffect(() => {
+    const reqId = route?.params?.coachRequestId;
+    if (!reqId) return;
+    const studentId = route?.params?.coachRequestStudentId;
+    navigation.setParams({ coachRequestId: undefined, coachRequestStudentId: undefined });
+    refresh(); // surface it in the list under the modal
+    showCoachRequestModal(reqId, studentId);
+  }, [route?.params?.coachRequestId]);
+
+  // Realtime: a student linking while the coach sits on this screen → the row
+  // appears live + the modal pops, with no push needed (push delivery is
+  // unreliable on dev builds and is suppressed/queued in the foreground).
+  useEffect(() => {
+    let ch;
+    (async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      const myId = session?.user?.id;
+      if (!myId) return;
+      ch = supabase
+        .channel(`coach-requests-${myId}`)
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'coach_requests', filter: `coach_id=eq.${myId}` },
+          (payload) => {
+            refresh();
+            showModalRef.current(payload.new?.id, payload.new?.student_id);
+          })
+        .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'coach_requests', filter: `coach_id=eq.${myId}` },
+          () => { refresh(); })
+        .subscribe();
+    })();
+    return () => { if (ch) supabase.removeChannel(ch); };
+  }, []);
 
   useEffect(() => {
     let alive = true;

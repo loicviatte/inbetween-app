@@ -13,6 +13,7 @@ import {
   Platform,
   UIManager,
   PanResponder,
+  Dimensions,
 } from 'react-native';
 import { Image } from 'expo-image';
 import Svg, { Circle } from 'react-native-svg';
@@ -36,6 +37,7 @@ import {
   getTeacherContextForAI,
 } from '../storage/storage';
 import { getSlots, getCoupleSlots, getSessionCountForFocus, startTrainingSession } from '../utils/algorithm';
+import { markFirstScreenReady } from '../utils/firstPaint';
 import { getMyCouple, getCoupleReadiness, mostTrainedMode, getCoupleLock } from '../storage/coupleStorage';
 import { supabase } from '../services/supabase/client';
 import {
@@ -69,6 +71,10 @@ function animateAccordionSwap() {
 
 const SHARE_LOADING_MSGS = ['Gathering your notes...', 'Writing summary...', 'Almost ready...'];
 const HOME_CACHE_KEY = '@cache_home';
+// Couple card is fetched non-blocking (separate from the solo HOME_CACHE), so it
+// gets its own cache slice — lets the couple focus paint instantly on reopen
+// instead of waiting on the cold-start couple fetch.
+const COUPLE_CACHE_KEY = '@cache_home_couple';
 const CATEGORY_STORAGE_KEY = 'train_category_filter';
 
 function formatTime(seconds) {
@@ -392,6 +398,7 @@ function ProgRing({ done = 0, target = 0, color = '#E8B530', size = 17, sw = 2.6
 function FocusCard({
   theme, expanded, focus, count, idx, onDot, pill, sub, progress, headerAvatar,
   onStart, starting, onExpand, sessionActive, onResume, timerNode, emptyText, lockedLabel,
+  locked, compact, onViewPartner,
 }) {
   const isCouple = theme === 'couple';
   const empty = !focus;
@@ -400,15 +407,15 @@ function FocusCard({
   // Latest idx/count/onDot live in a ref so the once-created PanResponder reads
   // current values; only claim clearly-horizontal drags so taps on the Start
   // button + dots still pass through.
-  const swipeRef = useRef({ idx, count, onDot });
-  swipeRef.current = { idx, count, onDot };
+  const swipeRef = useRef({ idx, count, onDot, locked });
+  swipeRef.current = { idx, count, onDot, locked };
   const pan = useRef(
     PanResponder.create({
       onMoveShouldSetPanResponder: (_, g) =>
-        Math.abs(g.dx) > 12 && Math.abs(g.dx) > Math.abs(g.dy) * 1.5,
+        !swipeRef.current.locked && Math.abs(g.dx) > 12 && Math.abs(g.dx) > Math.abs(g.dy) * 1.5,
       onPanResponderRelease: (_, g) => {
         const s = swipeRef.current;
-        if (!s.count || s.count <= 1) return;
+        if (s.locked || !s.count || s.count <= 1) return;
         if (g.dx <= -40) s.onDot(Math.min(s.idx + 1, s.count - 1));
         else if (g.dx >= 40) s.onDot(Math.max(s.idx - 1, 0));
       },
@@ -451,7 +458,7 @@ function FocusCard({
       )}
 
       {!expanded ? (
-        <TouchableOpacity activeOpacity={0.85} onPress={onExpand} style={cc.colPad}>
+        <TouchableOpacity activeOpacity={locked ? 1 : 0.85} onPress={onExpand} disabled={locked} style={cc.colPad}>
           <View style={cc.collapsedRow}>
             {headerAvatar}
             <View style={cc.collapsedMid}>
@@ -464,7 +471,7 @@ function FocusCard({
           </View>
         </TouchableOpacity>
       ) : (
-        <View style={cc.expPad} {...pan.panHandlers}>
+        <View style={[cc.expPad, compact && cc.expPadSmall]} {...pan.panHandlers}>
           <View style={cc.expTopRow}>
             <View style={cc.expTopLeft}>
               <View style={[cc.pill, isCouple ? cc.pillCouple : cc.pillSolo]}>
@@ -480,30 +487,36 @@ function FocusCard({
           ) : (
             <View>
               <Animated.View style={{ opacity: infoT, transform: [{ translateX: infoT.interpolate({ inputRange: [0, 1], outputRange: [14, 0] }) }] }}>
-                <Text style={cc.expTitle} numberOfLines={2}>{twoWordTitle(focus.name)}</Text>
-                <View style={cc.expBodyBox}>
+                <Text
+                  style={[cc.expTitle, compact && cc.expTitleSmall]}
+                  numberOfLines={compact ? 1 : 2}
+                  adjustsFontSizeToFit={compact}
+                  minimumFontScale={0.5}
+                >{compact ? (focus.name || '').trim() : twoWordTitle(focus.name)}</Text>
+                <View style={[cc.expBodyBox, compact && cc.expBodyBoxSmall]}>
                   {!!focus.subtitle && <Text style={cc.expDesc} numberOfLines={2}>{focus.subtitle}</Text>}
                 </View>
               </Animated.View>
-              <View style={cc.expNavRow}>
-                <SwipeDots count={count} active={idx} onDot={onDot} theme={theme} />
-                {count > 1 && idx < count - 1 ? <Text style={cc.swipeHint}>SWIPE ›</Text> : null}
+              <View style={[cc.expNavRow, compact && cc.expNavRowSmall]}>
+                <SwipeDots count={count} active={idx} onDot={locked ? () => {} : onDot} theme={theme} />
+                {!locked && count > 1 && idx < count - 1 ? <Text style={cc.swipeHint}>SWIPE ›</Text> : null}
               </View>
               {lockedLabel ? (
-                <View style={cc.lockBanner}>
+                <TouchableOpacity style={cc.lockBanner} onPress={onViewPartner} activeOpacity={0.8} disabled={!onViewPartner}>
                   <Ionicons name="lock-closed" size={14} color="rgba(255,255,255,0.85)" />
-                  <Text style={cc.lockTxt}>{lockedLabel}</Text>
-                </View>
+                  <Text style={[cc.lockTxt, { flex: 1 }]} numberOfLines={1}>{lockedLabel}</Text>
+                  {onViewPartner ? <Ionicons name="chevron-forward" size={15} color="rgba(255,255,255,0.6)" /> : null}
+                </TouchableOpacity>
               ) : sessionActive ? (
                 <TouchableOpacity style={cc.inProgBtn} onPress={onResume} activeOpacity={0.8}>
                   <View style={cc.inProgLeft}><View style={cc.inProgDot} /><Text style={cc.inProgTxt}>In Progress</Text></View>
                   {timerNode}
                 </TouchableOpacity>
               ) : (
-                <TouchableOpacity style={[cc.startBtnSolo, starting && { opacity: 0.6 }]}
-                  onPress={onStart} disabled={starting} activeOpacity={0.88}>
-                  <Text style={cc.startTxt}>{starting ? 'Starting…' : 'Start Now'}</Text>
-                  {!starting ? <Text style={cc.startArrow}>→</Text> : null}
+                <TouchableOpacity style={[cc.startBtnSolo, (starting || locked) && { opacity: 0.5 }]}
+                  onPress={onStart} disabled={starting || locked} activeOpacity={0.88}>
+                  <Text style={cc.startTxt}>{starting ? 'Starting…' : locked ? 'Finish current session first' : 'Start Now'}</Text>
+                  {!starting && !locked ? <Text style={cc.startArrow}>→</Text> : null}
                 </TouchableOpacity>
               )}
             </View>
@@ -515,6 +528,12 @@ function FocusCard({
 }
 
 export default function HomeScreen({ navigation }) {
+  // Computed per-render (not a module const) so it survives Fast Refresh and
+  // reacts to the actual window — drives the compact Train layout on short phones.
+  // < 890 covers the standard iPhones (SE 667, mini 812, 13/14/15 + Pro 844-852)
+  // whose Train layout overflows; the larger 11/XR (896) and Plus/Max (926+)
+  // have room and keep the full-size layout.
+  const SMALL_SCREEN = Dimensions.get('window').height < 890;
   // Pre-mount sibling tabs (LOG + PROFILE) shortly after TRAIN settles, so
   // a tap on either feels instant instead of paying parse + first-fetch
   // cost. Idempotent: subsequent calls are no-ops once the screen renders.
@@ -522,6 +541,12 @@ export default function HomeScreen({ navigation }) {
     const t = setTimeout(() => {
       try { navigation.preload?.('LOG'); } catch {}
       try { navigation.preload?.('PROFILE'); } catch {}
+      // Warm the (lazy, heavy) FocusSession screen so the first "Start" tap
+      // doesn't pay its dev-time module-resolution + first-render cost (~seconds
+      // in dev with Metro; free in a release bundle). require() loads the
+      // module; preload() also pre-mounts it off-screen so the render is paid.
+      try { require('../screens/FocusSessionScreen'); } catch {}
+      try { navigation.preload?.('FocusSession'); } catch {}
     }, 600);
     return () => clearTimeout(t);
   }, [navigation]);
@@ -590,6 +615,10 @@ export default function HomeScreen({ navigation }) {
   const shareMsgRef = useRef(null);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const [isLoading, setIsLoading] = useState(true);
+  // True once the first load cycle has resolved the focus slots. Until then, an
+  // empty focus area means "still loading" (show skeleton), not "no focus points"
+  // (show the empty card) — avoids the misleading "log your next class" flash.
+  const [initialLoadDone, setInitialLoadDone] = useState(false);
   const hasLoadedRef = useRef(false);
   // Throttle background refreshes: if the user pops back to TRAIN within
   // FRESH_TTL ms of the last successful load, skip the network round-trip.
@@ -626,6 +655,9 @@ export default function HomeScreen({ navigation }) {
         : { slot1: null, slot2: null, slot3: null },
       coupleReadiness: coupleData?.readiness ?? null,
       sessionCount: c1, slot2Count: c2,
+      // Propagated so the toggle/prefetch paths never cache or apply a failed
+      // fetch (which would blank the cards on style switch).
+      error: !!slots.error || !!coupleData?.error,
     };
   }
 
@@ -695,14 +727,20 @@ export default function HomeScreen({ navigation }) {
     const readinessValue = slots.readiness ?? null;
     setUser(u);
     setCouple(coupleV);
-    setSlot1(slots.slot1);
-    setSlot2(slots.slot2);
-    setSlot3(slots.slot3);
+    // A transient getSlots failure (timeout / free-tier pooler saturation)
+    // returns { error:true } with null slots — DON'T apply it, or focus points
+    // already on screen vanish into the "log your next class" empty state. Keep
+    // the current (cached) slots + readiness until a clean fetch lands.
+    if (!slots.error) {
+      setSlot1(slots.slot1);
+      setSlot2(slots.slot2);
+      setSlot3(slots.slot3);
+      setReadiness(readinessValue);
+    }
     setSessionsThisWeek(sessions);
     setClassesThisWeek(classes);
     setFocusTrainedThisWeek(focusTrained);
     setWeekActivity(wa || {});
-    setReadiness(readinessValue);
     setPhotoUri(savedPhoto || null);
     lastLoadRef.current = Date.now();
 
@@ -714,9 +752,21 @@ export default function HomeScreen({ navigation }) {
         getCoupleSlots(coupleId, cat),
         mostTrainedMode(coupleId).catch(() => 'solo'),
       ]).then(([cs, primary]) => {
-        setCoupleSlots(cs || { slot1: null, slot2: null, slot3: null });
-        setCoupleReadiness(cs?.readiness ?? null);
+        // Same guard as the solo card: a failed couple fetch keeps the current
+        // couple focuses instead of blanking them.
+        if (!cs?.error) {
+          setCoupleSlots(cs || { slot1: null, slot2: null, slot3: null });
+          setCoupleReadiness(cs?.readiness ?? null);
+        }
         setPrimaryMode(primary);
+        // Cache the couple slice for instant paint on reopen — but only when
+        // there's a focus to show (don't poison the next launch with an empty
+        // couple from a cold-start failure). Mirrors the solo #3 guard.
+        if (cs?.slot1) {
+          AsyncStorage.setItem(COUPLE_CACHE_KEY, JSON.stringify({
+            couple: coupleV, coupleSlots: cs, coupleReadiness: cs?.readiness ?? null, primaryMode: primary, category: cat,
+          })).catch(() => {});
+        }
       }).catch(() => {});
       getCoupleLock(coupleId).then(setCoupleLock).catch(() => setCoupleLock(null));
     } else {
@@ -724,6 +774,7 @@ export default function HomeScreen({ navigation }) {
       setCoupleReadiness(null);
       setPrimaryMode('solo');
       setCoupleLock(null);
+      AsyncStorage.removeItem(COUPLE_CACHE_KEY).catch(() => {}); // unpaired → drop stale couple
     }
 
     // ─── Wave 2 (non-blocking): session counts + metrics fill in after ──
@@ -734,20 +785,28 @@ export default function HomeScreen({ navigation }) {
       slots.slot2?.id ? getSessionCountForFocus(slots.slot2.id) : Promise.resolve(0),
       u?.id ? getAllStudentMetrics(u.id, cat).catch(() => null) : Promise.resolve(null),
     ]).then(([c1, c2, m]) => {
-      setSessionCount(c1);
-      setSlot2Count(c2);
+      // Counts track slot1/slot2; on a getSlots error we kept the old slots, so
+      // keep their counts too rather than zeroing them.
+      if (!slots.error) {
+        setSessionCount(c1);
+        setSlot2Count(c2);
+      }
       const metricsFinal = m || { progression: 0, retention: 100, global: 0 };
       if (m) setMetrics(metricsFinal);
-      // Persist the FULL snapshot (with timestamp) once everything is in.
-      AsyncStorage.setItem(HOME_CACHE_KEY, JSON.stringify({
-        ts: Date.now(),
-        user: u, slot1: slots.slot1, slot2: slots.slot2, slot3: slots.slot3,
-        sessionCount: c1, slot2Count: c2,
-        sessionsThisWeek: sessions, classesThisWeek: classes,
-        focusTrainedThisWeek: focusTrained, weekActivity: wa || {}, metrics: metricsFinal,
-        readiness: readinessValue,
-        category: cat,
-      })).catch(() => {});
+      // Persist the FULL snapshot (with timestamp) once everything is in — but
+      // only when there's actually a focus to show. Caching an empty/failed
+      // load would poison the next launch into the "log your next class" flash.
+      if (slots.slot1) {
+        AsyncStorage.setItem(HOME_CACHE_KEY, JSON.stringify({
+          ts: Date.now(),
+          user: u, slot1: slots.slot1, slot2: slots.slot2, slot3: slots.slot3,
+          sessionCount: c1, slot2Count: c2,
+          sessionsThisWeek: sessions, classesThisWeek: classes,
+          focusTrainedThisWeek: focusTrained, weekActivity: wa || {}, metrics: metricsFinal,
+          readiness: readinessValue,
+          category: cat,
+        })).catch(() => {});
+      }
     }).catch(() => {});
   }
 
@@ -778,6 +837,7 @@ export default function HomeScreen({ navigation }) {
       // Instant swap from cache, then refresh in the background.
       applyCategoryData(cached, hasCouple);
       fetchCategoryData(next).then((d) => {
+        if (d.error) return; // keep the cached view rather than blanking it
         categoryCacheRef.current[next] = d;
         if (switchSeqRef.current === seq) applyCategoryData(d, hasCouple);
       }).catch(() => {});
@@ -788,8 +848,10 @@ export default function HomeScreen({ navigation }) {
     setCategorySwitching(true);
     try {
       const d = await fetchCategoryData(next);
-      categoryCacheRef.current[next] = d;
-      if (switchSeqRef.current === seq) applyCategoryData(d, hasCouple);
+      if (!d.error) {
+        categoryCacheRef.current[next] = d;
+        if (switchSeqRef.current === seq) applyCategoryData(d, hasCouple);
+      }
     } catch {}
     if (switchSeqRef.current === seq) setCategorySwitching(false);
   }
@@ -806,7 +868,7 @@ export default function HomeScreen({ navigation }) {
     // waves (session counts, metrics, AI pre-warm) on slow connections.
     const t = setTimeout(() => {
       fetchCategoryData(other, couple?.coupleId || null)
-        .then((d) => { if (!cancelled) categoryCacheRef.current[other] = d; })
+        .then((d) => { if (!cancelled && !d.error) categoryCacheRef.current[other] = d; })
         .catch(() => {});
     }, 1200);
     return () => { cancelled = true; clearTimeout(t); };
@@ -820,6 +882,8 @@ export default function HomeScreen({ navigation }) {
     const reveal = () => {
       fadeAnim.setValue(0);
       Animated.timing(fadeAnim, { toValue: 1, duration: 200, useNativeDriver: true }).start();
+      // First real content is on screen — let App.js drop the cold-start logo.
+      markFirstScreenReady();
     };
     async function init() {
       let hadCache = false;
@@ -853,6 +917,17 @@ export default function HomeScreen({ navigation }) {
             reveal(); // fade cached content in NOW, even while the refresh runs
             revealed = true;
           }
+          // Couple slice — separate cache key, applied even if the solo cache
+          // was empty, so the couple focus paints instantly on reopen instead
+          // of waiting on the cold-start couple fetch.
+          const rawC = await AsyncStorage.getItem(COUPLE_CACHE_KEY);
+          if (rawC) {
+            const cc = JSON.parse(rawC);
+            if (cc.couple) setCouple(cc.couple);
+            if (cc.coupleSlots) setCoupleSlots(cc.coupleSlots);
+            setCoupleReadiness(cc.coupleReadiness ?? null);
+            if (cc.primaryMode) setPrimaryMode(cc.primaryMode);
+          }
         } catch {}
       }
       // Skip the network refresh entirely if cache is fresh (< FRESH_TTL).
@@ -865,6 +940,7 @@ export default function HomeScreen({ navigation }) {
       }
       hasLoadedRef.current = true;
       setIsLoading(false);
+      setInitialLoadDone(true);
       // No cache → the skeleton was showing; fade the real content in now.
       if (isFirst && !revealed) reveal();
     }
@@ -949,12 +1025,20 @@ export default function HomeScreen({ navigation }) {
   // points exist via a couple class).
   async function handleStartCoupleSession(focusPoint) {
     if (starting || !focusPoint?.id || !couple?.coupleId) return;
-    if (getActiveSession()) return;
+    if (getActiveSession() || partnerLock) return;
+    // Navigate immediately, exactly like the solo path — no pre-nav network so
+    // the screen opens instantly instead of stalling on a serialized-pooler
+    // round-trip. The partnerLock guard above already blocks the known-busy
+    // case, and acquireCoupleLock inside the session is the atomic gate that
+    // bounces a genuine race (alert + goBack). We pass the full focus row
+    // (getCoupleSlots already select('*')-ed it) so FocusSession skips its own
+    // getCoupleFocusPointById fetch and paints from params.
     setStarting(true);
     const sessionId = await startTrainingSession(focusPoint.id, null);
     setStarting(false);
     navigation.navigate('FocusSession', {
       focusPointId: focusPoint.id,
+      focusPointData: focusPoint,
       sessionId,
       rank: 0,
       sessionCount: 0,
@@ -964,6 +1048,10 @@ export default function HomeScreen({ navigation }) {
   }
 
   const isSessionActive = !!activeSession;
+  // Which card is actually training — the chrono + lock must land on the right
+  // one. activeSession carries `couple` (set by FocusSessionScreen on start).
+  const coupleSessionActive = isSessionActive && activeSession.couple === true;
+  const soloSessionActive = isSessionActive && !activeSession.couple;
   const paired = !!couple;
 
   // Global Latin/Ballroom filter. A card is shown only if its owner actually
@@ -974,26 +1062,40 @@ export default function HomeScreen({ navigation }) {
   const soloDoesBallroom = (user?.dance_style || '').includes('Ballroom');
   const soloInStyle = !category || (category === 'latin' ? soloDoesLatin : soloDoesBallroom);
   const coupleInStyle = !category || (category === 'latin' ? !!couple?.doesLatin : !!couple?.doesBallroom);
-  // An active solo session always keeps the solo card visible (can't hide a
-  // running session behind a filter).
-  const soloVisible = soloInStyle || isSessionActive;
-  const coupleVisible = paired && coupleInStyle;
-
-  // Couple lock — live mirror: when the partner holds the lock, show their
-  // training in progress on the couple card and block starting.
+  // Couple lock — live mirror: when the partner holds the lock, the couple card
+  // shows their training EXACTLY like training it yourself (primary + "In
+  // Progress" pill + both cards locked).
   const partnerLock = (coupleLock && myUserId && coupleLock.lockedByUserId !== myUserId) ? coupleLock : null;
+  const coupleInProgress = coupleSessionActive || !!partnerLock;
+  const anyInProgress = isSessionActive || !!partnerLock;
+  // The card that's actually training stays visible regardless of the style
+  // filter (can't hide a running session behind a filter); the idle card still
+  // follows the filter.
+  const soloVisible = soloInStyle || soloSessionActive;
+  const coupleVisible = paired && (coupleInStyle || coupleInProgress);
 
   useEffect(() => {
     const cid = couple?.coupleId;
     if (!cid) return;
+    const refetchLock = () => getCoupleLock(cid).then(setCoupleLock).catch(() => {});
     const ch = supabase
       .channel(`home-couple-${cid}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'couple_focus_locks', filter: `couple_id=eq.${cid}` },
-        () => { getCoupleLock(cid).then(setCoupleLock).catch(() => {}); })
+        (payload) => {
+          // DELETE = partner cancelled / finished → clear instantly (skip the
+          // re-fetch round-trip). INSERT/UPDATE → re-fetch for the focus name.
+          if (payload.eventType === 'DELETE') setCoupleLock(null);
+          else refetchLock();
+        })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'couple_practice_logs', filter: `couple_id=eq.${cid}` },
         () => { getCoupleReadiness(cid, category).then(setCoupleReadiness).catch(() => {}); })
       .subscribe();
-    return () => { supabase.removeChannel(ch); };
+    // Always-on fallback poll (not just while a lock is shown): on free-tier,
+    // realtime can drop the INSERT (partner starts → "X is training" never
+    // appears) OR the DELETE (partner cancels/restarts → never clears). A light
+    // 4s re-check guarantees BOTH directions reflect within a few seconds.
+    const poll = setInterval(refetchLock, 4000);
+    return () => { supabase.removeChannel(ch); clearInterval(poll); };
   }, [couple?.coupleId, category]);
 
   useEffect(() => {
@@ -1004,11 +1106,10 @@ export default function HomeScreen({ navigation }) {
     };
     compute();
     const id = setInterval(compute, 1000);
-    return () => clearInterval(id);
+    // (Lock refresh is handled by the always-on poll in the subscription effect.)
+    return () => { clearInterval(id); };
   }, [partnerLock?.coupleFocusPointId, partnerLock?.startedAt]);
-  const activeFocusName = isSessionActive
-    ? (activeSession.focusPointName ?? slot1?.name)
-    : slot1?.name;
+  const activeFocusName = activeSession?.focusPointName ?? null;
 
   const heroMessage = slot1?.subtitle || null;
 
@@ -1039,8 +1140,8 @@ export default function HomeScreen({ navigation }) {
       />
 
       {/* ── This Week — anchored at the top, right under the header ── */}
-      <View style={w.card}>
-        <View style={w.head}>
+      <View style={[w.card, SMALL_SCREEN && w.cardSmall]}>
+        <View style={[w.head, SMALL_SCREEN && w.headSmall]}>
           <Text style={w.title}>This week</Text>
           <Text style={w.date}>{currentWeekRange()}</Text>
         </View>
@@ -1060,7 +1161,7 @@ export default function HomeScreen({ navigation }) {
                 activeOpacity={hasActivity ? 0.6 : 1}
                 onPress={() => hasActivity && setDayModal(i)}
               >
-                <Text style={[w.dayLetter, isToday && w.dayLetterToday]}>{label}</Text>
+                <Text style={[w.dayLetter, isToday && w.dayLetterToday, SMALL_SCREEN && w.dayLetterSmall]}>{label}</Text>
                 <View style={w.pillRow}>
                   {hasTraining ? <View style={[w.pill, w.pillTraining]} /> : null}
                   {hasClass ? <View style={[w.pill, w.pillClass]} /> : null}
@@ -1077,10 +1178,12 @@ export default function HomeScreen({ navigation }) {
         </View>
       </View>
 
-      {/* While a not-yet-prefetched style loads after a toggle, swap the focus
-          cards + "Get ready" dock for a skeleton. The This-week card above is
-          style-agnostic, so it stays put. */}
-      {categorySwitching ? (
+      {/* Swap the focus cards + "Get ready" dock for a skeleton while they load
+          — either a not-yet-prefetched style toggle, or the very first load
+          before the slots resolve. The This-week card above is style-agnostic,
+          so it stays put. After the first load resolves, an empty focus area is
+          the genuine "no focus points" state (the empty card), not loading. */}
+      {(categorySwitching || (!initialLoadDone && !slot1 && !coupleSlots?.slot1)) ? (
         <TrainSwitchSkeleton paired={paired} />
       ) : (
        <>
@@ -1092,11 +1195,14 @@ export default function HomeScreen({ navigation }) {
         {(() => {
           const soloFocuses = [slot1, slot2, slot3].filter(Boolean);
           const sIdx = Math.min(soloIdx, Math.max(0, soloFocuses.length - 1));
-          const curSolo = isSessionActive
-            ? { name: activeFocusName, subtitle: heroMessage }
+          const curSolo = soloSessionActive
+            ? { name: activeFocusName ?? soloFocuses[sIdx]?.name ?? slot1?.name, subtitle: heroMessage }
             : (soloFocuses[sIdx] || null);
-          // An active session forces the solo card to stay expanded.
-          const soloIsPrimary = isSessionActive ? true : (primaryMode === 'solo');
+          // The training card is forced primary/expanded; a couple session
+          // forces the couple card primary instead.
+          const soloIsPrimary = soloSessionActive ? true
+            : coupleInProgress ? false
+            : (primaryMode === 'solo');
 
           const timerNode = (
             <View style={s.inProgressRight}>
@@ -1105,6 +1211,14 @@ export default function HomeScreen({ navigation }) {
               ) : (
                 <Text style={[s.inProgressTimer, { color: Colors.orange }]}>+ {formatTime(homeOverTime)}</Text>
               )}
+              <Text style={s.inProgressArrow}>›</Text>
+            </View>
+          );
+
+          // Partner training: same "In Progress" pill, counting down THEIR time.
+          const partnerTimerNode = (
+            <View style={s.inProgressRight}>
+              <Text style={s.inProgressTimer}>{formatTime(lockRemaining)}</Text>
               <Text style={s.inProgressArrow}>›</Text>
             </View>
           );
@@ -1130,7 +1244,7 @@ export default function HomeScreen({ navigation }) {
               onStart={() => handleStartSession(soloFocuses[sIdx], sIdx, sessionCount)}
               starting={starting}
               onExpand={() => swapPrimary('solo')}
-              sessionActive={isSessionActive}
+              sessionActive={soloSessionActive}
               onResume={() => navigation.navigate('FocusSession', {
                 focusPointId: activeSession?.focusPointId,
                 sessionId: activeSession?.sessionId,
@@ -1138,6 +1252,8 @@ export default function HomeScreen({ navigation }) {
                 sessionCount: activeSession?.sessionCount,
               })}
               timerNode={timerNode}
+              locked={anyInProgress}
+              compact={SMALL_SCREEN}
               emptyText="Log your next class to see your focus points appear."
             />
           );
@@ -1147,8 +1263,15 @@ export default function HomeScreen({ navigation }) {
           const coupleFocuses = [coupleSlots.slot1, coupleSlots.slot2, coupleSlots.slot3].filter(Boolean);
           const cIdx = Math.min(coupleIdx, Math.max(0, coupleFocuses.length - 1));
           const partnerFirst = (couple?.partner?.name || 'Partner').split(' ')[0];
-          const lockedLabel = partnerLock ? `${partnerFirst} is training · ${formatTime(lockRemaining)}` : null;
-          const coupleFocus = partnerLock ? { name: partnerLock.focusName } : (coupleFocuses[cIdx] || null);
+          const lockedLabel = partnerLock ? `Focus point started · ${formatTime(lockRemaining)}` : null;
+          // The in-progress focus the partner holds — look up its subtitle from
+          // our own couple focuses (same shared points) so B sees the same
+          // little description line under the title as A.
+          const partnerFocusObj = partnerLock ? (coupleFocuses.find((f) => f.id === partnerLock.coupleFocusPointId) || null) : null;
+          const coupleFocus = coupleSessionActive
+            ? { name: activeFocusName ?? coupleFocuses[cIdx]?.name, subtitle: coupleFocuses[cIdx]?.subtitle }
+            : partnerLock ? { name: partnerLock.focusName, subtitle: partnerFocusObj?.subtitle ?? null }
+            : (coupleFocuses[cIdx] || null);
           const coupleProgress = (() => {
             const fp = coupleFocuses[cIdx];
             const r = fp && coupleReadiness?.focuses?.find((f) => f.focusPointId === fp.id);
@@ -1170,8 +1293,29 @@ export default function HomeScreen({ navigation }) {
               onStart={() => handleStartCoupleSession(coupleFocuses[cIdx])}
               starting={starting}
               onExpand={() => swapPrimary('couple')}
+              sessionActive={coupleInProgress}
+              onResume={() => partnerLock
+                ? navigation.navigate('FocusSession', {
+                    focusPointId: partnerLock.coupleFocusPointId,
+                    focusPointData: partnerFocusObj || undefined,
+                    couple: true,
+                    coupleId: couple.coupleId,
+                    partnerView: true,
+                    partnerStartedAt: new Date(partnerLock.startedAt).getTime(),
+                    partnerDuration: partnerLock.durationMinutes || 7,
+                  })
+                : navigation.navigate('FocusSession', {
+                    focusPointId: activeSession?.focusPointId,
+                    sessionId: activeSession?.sessionId,
+                    rank: activeSession?.rank,
+                    sessionCount: activeSession?.sessionCount,
+                    couple: true,
+                    coupleId: activeSession?.coupleId,
+                  })}
+              timerNode={partnerLock ? partnerTimerNode : timerNode}
+              locked={anyInProgress}
+              compact={SMALL_SCREEN}
               emptyText="Attend your couple private lesson to get shared focus points."
-              lockedLabel={lockedLabel}
             />
           );
 
@@ -1191,7 +1335,7 @@ export default function HomeScreen({ navigation }) {
 
         {/* See all focus points */}
         <TouchableOpacity
-          style={cc.allLink}
+          style={[cc.allLink, SMALL_SCREEN && { paddingVertical: 6 }]}
           onPress={() => navigation.navigate('AllFocusPoints')}
           activeOpacity={0.7}
         >
@@ -1201,7 +1345,7 @@ export default function HomeScreen({ navigation }) {
       </View>
 
       {/* ── Bottom dock ── */}
-      <View style={s.bottomDock}>
+      <View style={[s.bottomDock, SMALL_SCREEN && { paddingTop: 8 }]}>
         {/* Get ready — the PRIMARY card's focuses as a list (gold solo / blue couple);
             the SECONDARY shrinks to a column of rings (couple→right, solo→left). */}
         {(() => {
@@ -1209,13 +1353,17 @@ export default function HomeScreen({ navigation }) {
           const coupleF = coupleReadiness?.focuses ?? [];
           // Respect the global style filter: a hidden card's readiness drops too.
           const bothVisible = soloVisible && coupleVisible;
-          const primaryCouple = paired && (
-            (coupleVisible && !soloVisible) ? true
-            : (soloVisible && !coupleVisible) ? false
-            : rdlPrimary === 'couple'
-          );
+          // An active session pins "Get ready" to the card that's training and
+          // drops the swap-to-other side, so it mirrors the locked focus cards.
+          const primaryCouple = coupleSessionActive ? true
+            : soloSessionActive ? false
+            : paired && (
+              (coupleVisible && !soloVisible) ? true
+              : (soloVisible && !coupleVisible) ? false
+              : rdlPrimary === 'couple'
+            );
           const mainF = primaryCouple ? coupleF : soloF;
-          const sideF = (paired && bothVisible) ? (primaryCouple ? soloF : coupleF) : [];
+          const sideF = (!isSessionActive && paired && bothVisible) ? (primaryCouple ? soloF : coupleF) : [];
           const mainColor = primaryCouple ? CBLUE : '#E8B530';
           const sideColor = primaryCouple ? '#E8B530' : CBLUE;
           const sideOnLeft = primaryCouple; // solo (secondary) shrinks left; couple shrinks right
@@ -1238,10 +1386,12 @@ export default function HomeScreen({ navigation }) {
             </TouchableOpacity>
           ) : null;
           return (
-            <TouchableOpacity style={rdl.card} activeOpacity={0.85} onPress={() => navigation.navigate('PROFILE')}>
+            <TouchableOpacity style={rdl.card} activeOpacity={isSessionActive ? 1 : 0.85}
+              disabled={isSessionActive} onPress={() => navigation.navigate('PROFILE')}>
               <View style={rdl.topRow}>
                 <Text style={rdl.eye}>Get ready · next private</Text>
                 <View style={rdl.hd}>
+                  {isSessionActive ? <Ionicons name="lock-closed" size={11} color={labelColor} /> : null}
                   <Text style={[rdl.lab, { color: labelColor }]}>{primaryCouple ? 'Couple' : 'Solo'}</Text>
                   <Text style={rdl.cnt}>{completed}/{mainF.length}</Text>
                 </View>
@@ -1989,6 +2139,11 @@ const cc = StyleSheet.create({
   expBodyBox: { minHeight: 38, marginTop: 9 },
   expDesc: { fontFamily: Fonts.jakartaRegular, fontSize: 13, color: 'rgba(255,255,255,0.8)', lineHeight: 19 },
   expNavRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 12, marginBottom: 12, minHeight: 18 },
+  // Compact overrides for short screens (saves ~55px on the expanded card).
+  expPadSmall: { padding: 14, paddingBottom: 12 },
+  expTitleSmall: { fontSize: 24, lineHeight: 27, marginTop: 18, minHeight: 30 },
+  expBodyBoxSmall: { minHeight: 30, marginTop: 6 },
+  expNavRowSmall: { marginTop: 8, marginBottom: 8 },
   swipeHint: { fontFamily: Fonts.jakartaBold, fontSize: 9.5, letterSpacing: 1.4, color: 'rgba(255,255,255,0.45)' },
   emptyTxt: { fontFamily: Fonts.jakartaRegular, fontSize: 14, color: 'rgba(255,255,255,0.72)', lineHeight: 20, marginTop: 14, marginBottom: 6 },
 
@@ -2059,6 +2214,10 @@ const w = StyleSheet.create({
   dayCol: { flex: 1, alignItems: 'center' },
   dayLetter: { fontFamily: Fonts.jakartaExtraBold, fontSize: 20, color: 'rgba(13,13,18,0.3)', letterSpacing: 0.5 },
   dayLetterToday: { color: Colors.orange },
+  // Compact overrides for short screens (saves ~25px of header height).
+  cardSmall: { paddingTop: 2, paddingBottom: 8 },
+  headSmall: { marginBottom: 8 },
+  dayLetterSmall: { fontSize: 15 },
   pillRow: { flexDirection: 'row', gap: 3, marginTop: 7, height: 4 },
   pill: { width: 9, height: 4, borderRadius: 2 },
   pillTraining: { backgroundColor: Colors.orange },

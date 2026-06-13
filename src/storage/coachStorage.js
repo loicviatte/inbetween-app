@@ -395,6 +395,15 @@ export async function getMyStudents() {
 
 // ─── Student Detail ───────────────────────────────────────────────────────────
 
+// One round-trip for the StudentDetail core (profile + focusPoints + lastClass
+// + questions + pendingFps + readiness) instead of 6 serialized queries. The
+// heavier analytics (activity, metrics) + coach-global (notifications, merges)
+// stay separate. See supabase/migrations/20260612f_coach_student_detail_bundle.sql.
+export async function getCoachStudentDetail(studentId) {
+  const { data } = await supabase.rpc('get_coach_student_detail', { p_student: studentId });
+  return data || null;
+}
+
 export async function getStudentProfile(studentId) {
   const { data } = await supabase
     .from('users')

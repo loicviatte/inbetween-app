@@ -38,6 +38,7 @@ import {
   unlinkCoachForCategory,
   getMyCoachForCategory,
   getLessonReadiness,
+  getStudentProfileBundle,
   getMyCoachQuestions,
   getProfileActivityStats,
 } from '../storage/storage';
@@ -60,7 +61,6 @@ import {
   cancelPartnerRequest,
   unpair,
   requestCoupleCoachByCode,
-  getCoupleReadiness,
   proposeCoupleChange,
   respondCoupleChange,
   cancelCoupleChange,
@@ -68,6 +68,19 @@ import {
 
 const AVATAR_KEY = '@profile_photo';
 const PROFILE_CACHE_KEY = '@cache_profile';
+
+// Hardening: never let a hung Supabase call wedge load() forever. On the
+// free-tier pooler a saturated/cold backend can leave a request pending
+// indefinitely — without this, Promise.all never settles, the skeleton never
+// clears, and we keep holding the connection (which worsens the saturation).
+// Resolves to `fallback` after `ms` so every fetch settles no matter what.
+const FETCH_TIMEOUT = 10000;
+function withTimeout(promise, fallback, ms = FETCH_TIMEOUT) {
+  return Promise.race([
+    Promise.resolve(promise).catch(() => fallback),
+    new Promise((resolve) => setTimeout(() => resolve(fallback), ms)),
+  ]);
+}
 const HOME_CACHE_KEY = '@cache_home';
 
 const RADAR_CATEGORIES = ['Stability', 'Technicality', 'Strength', 'Creativity', 'Musicality'];
@@ -368,20 +381,48 @@ function CoachSlot({ label, coach, code, onCodeChange, linking, linkError, onAdd
 }
 
 // ─── Partner row inside the Coaches tab (tappable → partner modal) ────────────
-function PartnerListRow({ couple, hasRequest, onPress }) {
+// While a request is in flight, the row reads as clearly *pending* (clock, not a
+// "+"), with a label that names the exact stage — so a dancer can't mistake it
+// for an "Add partner" affordance and kick off a second link. `actionNeeded`
+// (someone asked you / your request was accepted and awaits your confirm) gets
+// an accent dot since it's your move.
+function PartnerListRow({ couple, incoming, outgoing, onPress }) {
+  const paired = !!couple;
   const partnerName = couple?.partner?.name;
-  const muted = !couple;
-  const initials = partnerName?.split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase() || '+';
-  const name = couple ? (partnerName || 'Partner') : (hasRequest ? 'Pending…' : 'Add partner');
+  const pending = !paired && (!!incoming || !!outgoing);
+  // Your move = someone asked you (incoming pending) or your request was
+  // accepted and awaits your confirm (outgoing awaiting_validation). Passive =
+  // you already acted and are waiting on the other dancer.
+  const actionNeeded = !paired && (incoming?.status === 'pending' || outgoing?.status === 'awaiting_validation');
+
+  let name;
+  if (paired) name = partnerName || 'Partner';
+  else if (incoming?.status === 'awaiting_validation') name = `Waiting for ${(incoming.requesterName || 'partner').split(' ')[0]} to confirm…`;
+  else if (incoming) name = `${(incoming.requesterName || 'Someone').split(' ')[0]} wants to pair`;
+  else if (outgoing?.status === 'awaiting_validation') name = 'Confirm to pair';
+  else if (outgoing) name = `Waiting for ${(outgoing.targetName || 'partner').split(' ')[0]}…`;
+  else name = 'Add partner';
+
+  const initials = paired
+    ? (partnerName?.split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase() || 'P')
+    : null;
+
   return (
     <TouchableOpacity style={row.card} onPress={onPress} activeOpacity={0.75}>
-      <View style={[row.init, muted && row.initAdd]}>
-        <Text style={[row.initTxt, muted && row.initTxtAdd]}>{initials}</Text>
+      <View style={[row.init, !paired && row.initAdd]}>
+        {paired ? (
+          <Text style={row.initTxt}>{initials}</Text>
+        ) : pending ? (
+          <Ionicons name="time-outline" size={18} color="rgba(10,10,10,0.55)" />
+        ) : (
+          <Text style={[row.initTxt, row.initTxtAdd]}>+</Text>
+        )}
       </View>
       <View style={{ flex: 1, minWidth: 0 }}>
-        <Text style={row.role}>Partner</Text>
-        <Text style={[row.name, muted && row.nameMuted]} numberOfLines={1}>{name}</Text>
+        <Text style={row.role}>{pending ? (actionNeeded ? 'Partner · your turn' : 'Partner · pending') : 'Partner'}</Text>
+        <Text style={[row.name, !paired && row.nameMuted]} numberOfLines={1}>{name}</Text>
       </View>
+      {actionNeeded ? <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: '#E8B530', marginRight: 8 }} /> : null}
       <Ionicons name="chevron-forward" size={16} color="rgba(10,10,10,0.3)" />
     </TouchableOpacity>
   );
@@ -648,6 +689,23 @@ function PartnerModal({
         <Text style={pm.note}>Unpairing erases all couple progress for both of you.</Text>
       </View>
     );
+  } else if (incoming && incoming.status === 'awaiting_validation') {
+    // B already accepted + configured; now waiting on the requester (A) to
+    // confirm. Without this branch B would see nothing once they've accepted.
+    const pFirst = (incoming.requesterName || 'Partner').split(' ')[0];
+    const styles = [incoming.proposedDoesLatin && 'Latin', incoming.proposedDoesBallroom && 'Ballroom'].filter(Boolean).join(' · ') || '—';
+    const leads = incoming.proposedLeaderId === myUserId ? (myName || 'You') : pFirst;
+    body = (
+      <View>
+        <Text style={pm.lead}>You accepted — waiting for <Text style={pm.bold}>{incoming.requesterName}</Text> to confirm.</Text>
+        <Text style={pm.pMeta}>{styles}  ·  {leads} leads</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 16 }}>
+          <ActivityIndicator size="small" />
+          <Text style={[pm.pMeta, { marginLeft: 8 }]}>Waiting for {pFirst}’s confirmation…</Text>
+        </View>
+        <TouchableOpacity style={pm.linkBtn} onPress={onDecline} activeOpacity={0.7}><Text style={pm.linkTxt}>Cancel</Text></TouchableOpacity>
+      </View>
+    );
   } else if (incoming) {
     const pFirst = (incoming.requesterName || 'Partner').split(' ')[0];
     body = (
@@ -674,18 +732,47 @@ function PartnerModal({
       </View>
     );
   } else if (outgoing && outgoing.status === 'awaiting_validation') {
+    // Final stage A sees: partner accepted + configured → A reviews and pairs.
     const pFirst = (outgoing.targetName || 'Partner').split(' ')[0];
-    const leads = outgoing.proposedLeaderId === myUserId ? (myName || 'You') : pFirst;
-    const styles = [outgoing.proposedDoesLatin && 'Latin', outgoing.proposedDoesBallroom && 'Ballroom'].filter(Boolean).join(' · ') || '—';
+    const iLead = outgoing.proposedLeaderId === myUserId;
+    const styleList = [outgoing.proposedDoesLatin && 'Latin', outgoing.proposedDoesBallroom && 'Ballroom'].filter(Boolean);
+    const pInitials = (outgoing.targetName || 'P').split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase();
     body = (
       <View>
-        <Text style={pm.lead}><Text style={pm.bold}>{outgoing.targetName}</Text> accepted and set things up:</Text>
-        <Text style={pm.pMeta}>{styles}  ·  {leads} leads</Text>
+        <View style={pm.confirmHero}>
+          <View style={pm.confirmAvatar}>
+            {outgoing.targetAvatar
+              ? <Image source={{ uri: outgoing.targetAvatar }} style={pm.confirmAvatarImg} />
+              : <Text style={pm.pAvatarTxt}>{pInitials}</Text>}
+          </View>
+          <Text style={pm.confirmName} numberOfLines={1}>{outgoing.targetName}</Text>
+          <Text style={pm.confirmSub}>accepted — review &amp; pair up</Text>
+        </View>
+
+        <View style={pm.summaryCard}>
+          <View style={pm.summaryRow}>
+            <Text style={pm.summaryLabel}>Styles</Text>
+            <View style={pm.pillWrap}>
+              {styleList.length ? styleList.map((s) => (
+                <View key={s} style={pm.roPill}><Text style={pm.roPillTxt}>{s}</Text></View>
+              )) : <Text style={pm.summaryVal}>—</Text>}
+            </View>
+          </View>
+          <View style={pm.summaryDiv} />
+          <View style={pm.summaryRow}>
+            <Text style={pm.summaryLabel}>Lead</Text>
+            <View style={pm.leadBadge}>
+              <Ionicons name="star" size={11} color="#A8801A" />
+              <Text style={pm.leadTxt}>{iLead ? 'You lead' : `${pFirst} leads`}</Text>
+            </View>
+          </View>
+        </View>
+
         {!!error && <Text style={pm.err}>{error}</Text>}
         <TouchableOpacity style={[pm.primaryBtn, linking && { opacity: 0.6 }]} disabled={linking} onPress={onValidate} activeOpacity={0.85}>
           {linking ? <ActivityIndicator color="#fff" size="small" /> : <Text style={pm.primaryTxt}>Confirm &amp; pair</Text>}
         </TouchableOpacity>
-        <TouchableOpacity style={pm.linkBtn} onPress={onCancel} activeOpacity={0.7}><Text style={pm.linkTxt}>Cancel</Text></TouchableOpacity>
+        <TouchableOpacity style={pm.linkBtn} onPress={onCancel} activeOpacity={0.7}><Text style={pm.linkTxt}>Not now</Text></TouchableOpacity>
       </View>
     );
   } else if (outgoing) {
@@ -728,13 +815,22 @@ function PartnerModal({
   );
 }
 
-export default function ProfileScreen({ navigation }) {
-  const { setAvatarUri, setInitials } = useProfile();
+export default function ProfileScreen({ navigation, route }) {
+  const { avatarUri, setAvatarUri, setInitials } = useProfile();
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const [isLoading, setIsLoading] = useState(true);
   const hasLoadedRef = useRef(false);
   const [user, setUser] = useState(null);
   const [activeTab, setActiveTab] = useState('stats'); // 'links' | 'stats' | 'settings' — default to Statistics on first mount
+  // A partner-linking notification deep-links here with { tab: 'links' }; honor
+  // it, then clear the param so a later manual subtab switch isn't overridden.
+  useEffect(() => {
+    const t = route?.params?.tab;
+    if (t) {
+      setActiveTab(t);
+      navigation.setParams({ tab: undefined });
+    }
+  }, [route?.params?.tab]);
   const [stats, setStats] = useState({ totalClasses: 0, totalSessions: 0, activeFocusAreas: 0 });
   const [activityStats, setActivityStats] = useState({ bestStreakDays: 0, monthMinutes: 0 });
   const [radarScores, setRadarScores] = useState([0, 0, 0, 0, 0]);
@@ -781,54 +877,33 @@ export default function ProfileScreen({ navigation }) {
   const [myPartnerCode, setMyPartnerCode] = useState('');
 
   async function load() {
-    const [
-      userData,
-      classInputs,
-      activeFocusPoints,
-      { data: { session } },
-      savedPhoto,
-      coachData,
-      latinCoachData,
-      ballroomCoachData,
-      readinessValue,
-      coachQs,
-      coupleData,
-      incomingReq,
-      outgoingReq,
-      myCode,
-      activity,
-    ] = await Promise.all([
-      // Every fetch is individually caught so one failure (e.g. a transient
-      // "Not authenticated" from getUserId during a token refresh) can't reject
-      // the whole Promise.all and abort load() before we apply the partnership.
-      // couple / partner requests use `undefined` as a "fetch failed — keep what
-      // we have" sentinel, distinct from `null` ("definitively no partner").
-      getUser().catch(() => null),
-      getClassInputs().catch(() => []),
-      getFocusPoints().catch(() => []),
-      supabase.auth.getSession(),
-      AsyncStorage.getItem(AVATAR_KEY).catch(() => null),
-      getMyCoach().catch(() => null),
-      getMyCoachForCategory('latin').catch(() => null),
-      getMyCoachForCategory('ballroom').catch(() => null),
-      getLessonReadiness().catch(() => null),
-      getMyCoachQuestions().catch(() => []),
-      getMyCouple().catch(() => undefined),
-      getIncomingPartnerRequest().catch(() => undefined),
-      getOutgoingPartnerRequest().catch(() => undefined),
-      getMyPartnerCode().catch(() => ''),
-      getProfileActivityStats().catch(() => ({ bestStreakDays: 0, monthMinutes: 0 })),
+    // ONE bundled RPC (get_student_profile) replaces ~15 parallel queries that
+    // the free-tier pooler was serializing (measured 2→10s staircase). session
+    // + avatar stay local. couple / partner requests keep the `undefined` =
+    // "bundle failed, keep what we have" sentinel so a transient failure never
+    // blanks the partnership.
+    const [bundle, { data: { session } }, savedPhoto] = await Promise.all([
+      withTimeout(getStudentProfileBundle(), null),
+      supabase.auth.getSession(),                          // local — no network hang
+      AsyncStorage.getItem(AVATAR_KEY).catch(() => null),  // local
     ]);
-
-    let totalSessions = 0;
-    if (session?.user?.id) {
-      const { count } = await supabase
-        .from('practice_logs')
-        .select('id', { count: 'exact' })
-        .eq('student_id', session.user.id)
-        .not('completed_at', 'is', null);
-      totalSessions = count ?? 0;
-    }
+    const ok = !!bundle;
+    const b = bundle || {};
+    const userData = b.user ?? null;
+    const activeFocusPoints = b.focusPoints ?? [];      // [{ category }] — radar + count
+    const coachData = b.coachDefault ?? null;
+    const latinCoachData = b.coachLatin ?? null;
+    const ballroomCoachData = b.coachBallroom ?? null;
+    const readinessValue = b.readiness ?? null;
+    const coachQs = b.coachQuestions ?? [];
+    const coupleData = ok ? (b.couple ?? null) : undefined;
+    const incomingReq = ok ? (b.incomingRequest ?? null) : undefined;
+    const outgoingReq = ok ? (b.outgoingRequest ?? null) : undefined;
+    const myCode = b.inviteCode ?? '';
+    const activity = b.activityStats ?? { bestStreakDays: 0, monthMinutes: 0 };
+    const coupleReadinessValue = b.coupleReadiness ?? null;
+    const totalSessions = b.totalSessions ?? 0;
+    const totalClasses = b.classInputsCount ?? 0;
 
     // Trainer-only: count pending reviews
     const trainerEmail = session?.user?.email;
@@ -855,40 +930,58 @@ export default function ProfileScreen({ navigation }) {
     const scores = RADAR_CATEGORIES.map((cat) => 1 - catCounts[cat] / maxCat);
 
     const s = {
-      totalClasses: classInputs?.length ?? 0,
+      totalClasses,
       totalSessions,
       activeFocusAreas: activeFocusPoints?.length ?? 0,
     };
-    if (userData) setUser(userData); // don't blank a cached user on a failed fetch
-    setStats(s);
-    setActivityStats(activity || { bestStreakDays: 0, monthMinutes: 0 });
-    setRadarScores(scores);
-    setReadiness(readinessValue);
-    setCoachQuestions(coachQs || []);
-    if (userData?.name) {
-      const ini = userData.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
-      setInitials(ini);
-      AsyncStorage.setItem('@profile_name', userData.name).catch(() => {});
+    // A cold/slow backend can return null on the very first load (before any
+    // cache exists) → the hero would show "Your Name". Retry getUser once
+    // before settling for the placeholder.
+    let resolvedUser = userData;
+    if (!resolvedUser && !user) {
+      resolvedUser = await withTimeout(getUser(), null);
     }
-    const remoteAvatar = userData?.avatar_url
-      ? `${userData.avatar_url}?t=${Math.floor(Date.now() / 60000)}`
+    if (resolvedUser) setUser(resolvedUser); // don't blank a cached user on a failed fetch
+    // Bundle failed/timed out → ok=false. Keep the stats / readiness / coach
+    // questions already on screen rather than zeroing them into the empty
+    // "log your next class" state. (user / couple / requests below already use
+    // their own keep-on-failure sentinels.)
+    if (ok) {
+      setStats(s);
+      setActivityStats(activity || { bestStreakDays: 0, monthMinutes: 0 });
+      setRadarScores(scores);
+      setReadiness(readinessValue);
+      setCoachQuestions(coachQs || []);
+    }
+    if (resolvedUser?.name) {
+      const ini = resolvedUser.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+      setInitials(ini);
+      AsyncStorage.setItem('@profile_name', resolvedUser.name).catch(() => {});
+    }
+    const remoteAvatar = resolvedUser?.avatar_url
+      ? `${resolvedUser.avatar_url}?t=${Math.floor(Date.now() / 60000)}`
       : null;
     const avatarToShow = remoteAvatar || savedPhoto || null;
     if (avatarToShow) {
       setPhotoUri(avatarToShow);
       if (remoteAvatar) await AsyncStorage.setItem(AVATAR_KEY, remoteAvatar).catch(() => {});
     }
-    setMyCoach(coachData);
-    setLatinCoach(latinCoachData);
-    setBallroomCoach(ballroomCoachData);
+    if (ok) {
+      setMyCoach(coachData);
+      setLatinCoach(latinCoachData);
+      setBallroomCoach(ballroomCoachData);
+    }
     // `undefined` = the fetch failed → keep whatever partnership we already
     // show (cache / prior load). Only `null` means "definitively unpaired".
     if (coupleData !== undefined) setCouple(coupleData);
     if (incomingReq !== undefined) setPartnerIncoming(incomingReq);
     if (outgoingReq !== undefined) setPartnerOutgoing(outgoingReq);
     setMyPartnerCode(myCode || '');
+    // The bundle returns the raw invite_code; if it's never been generated,
+    // lazily create it (the one write side-effect we kept out of the RPC).
+    if (!myCode) getMyPartnerCode().then((c) => c && setMyPartnerCode(c)).catch(() => {});
     if (coupleData?.coupleId) {
-      getCoupleReadiness(coupleData.coupleId, null).then(setCoupleReadinessP).catch(() => setCoupleReadinessP(null));
+      setCoupleReadinessP(coupleReadinessValue); // from the bundle — no extra round-trip
     } else if (coupleData === null) {
       setCoupleReadinessP(null);
       setReadinessMode('solo');
@@ -896,17 +989,28 @@ export default function ProfileScreen({ navigation }) {
     // Persist a stale-while-revalidate snapshot. Partnership is preserved across
     // a failed couple fetch so it shows instantly and never regresses to
     // "Add partner" on a transient blip.
-    let prevCache = {};
-    try { prevCache = JSON.parse((await AsyncStorage.getItem(PROFILE_CACHE_KEY)) || '{}') || {}; } catch {}
-    AsyncStorage.setItem(PROFILE_CACHE_KEY, JSON.stringify({
-      user: userData ?? prevCache.user ?? null,
-      stats: s,
-      activityStats: activity,
-      radarScores: scores,
-      myCoach: coachData ?? prevCache.myCoach ?? null,
-      readiness: readinessValue,
-      couple: coupleData !== undefined ? coupleData : (prevCache.couple ?? null),
-    })).catch(() => {});
+    // Only persist a snapshot from a SUCCESSFUL bundle — writing the empty
+    // stats/readiness/radar from a failed fetch would poison the next cold
+    // reopen into the "log your next class" flash. On failure the prior cache
+    // (already good) is left untouched.
+    if (ok) {
+      let prevCache = {};
+      try { prevCache = JSON.parse((await AsyncStorage.getItem(PROFILE_CACHE_KEY)) || '{}') || {}; } catch {}
+      AsyncStorage.setItem(PROFILE_CACHE_KEY, JSON.stringify({
+        user: resolvedUser ?? prevCache.user ?? null,
+        stats: s,
+        activityStats: activity,
+        radarScores: scores,
+        myCoach: coachData ?? prevCache.myCoach ?? null,
+        readiness: readinessValue,
+        couple: coupleData !== undefined ? coupleData : (prevCache.couple ?? null),
+        // Couple % + avatar cached too, so a cold reopen paints them instantly
+        // instead of waiting on the (cold-start-slow) bundle. Preserve across a
+        // failed bundle, same as the partnership.
+        coupleReadiness: coupleData !== undefined ? coupleReadinessValue : (prevCache.coupleReadiness ?? null),
+        avatar: avatarToShow ?? prevCache.avatar ?? null,
+      })).catch(() => {});
+    }
   }
 
   useFocusEffect(useCallback(() => {
@@ -929,6 +1033,8 @@ export default function ProfileScreen({ navigation }) {
             setRadarScores(c.radarScores || [0, 0, 0, 0, 0]);
             setMyCoach(c.myCoach ?? null);
             setReadiness(c.readiness || null);
+            setCoupleReadinessP(c.coupleReadiness ?? null); // couple % instantly from cache
+            if (c.avatar) setPhotoUri(c.avatar);            // photo instantly — don't wait on load()
             if (c.couple !== undefined) setCouple(c.couple); // show partnership instantly from cache
             setIsLoading(false);
             reveal(); // fade cached content in NOW — don't wait on the network
@@ -936,7 +1042,10 @@ export default function ProfileScreen({ navigation }) {
           }
         } catch {}
       }
-      try { await load(); } catch {}
+      // Backstop: even if load() somehow hangs past the per-fetch timeouts,
+      // never trap the user on the skeleton — reveal whatever loaded (cache or
+      // empty) after 15s and let load() finish updating state in the background.
+      try { await Promise.race([load(), new Promise((r) => setTimeout(r, 15000))]); } catch {}
       hasLoadedRef.current = true;
       setIsLoading(false);
       // No cache → the skeleton was showing; fade the real content in now.
@@ -1094,7 +1203,10 @@ export default function ProfileScreen({ navigation }) {
     setAvatarUri(null);
     setInitials(null);
     await clearUserCaches();
-    await supabase.auth.signOut();
+    // scope:'local' drops the session on-device immediately (no network token
+    // revoke round-trip), so the UI flips to the login screen instantly instead
+    // of hanging ~5s on a slow connection. The refresh token expires on its own.
+    await supabase.auth.signOut({ scope: 'local' });
   }
 
   async function handleLinkCoach() {
@@ -1407,8 +1519,8 @@ export default function ProfileScreen({ navigation }) {
                 activeOpacity={0.85}
               >
                 <View style={styles.heroAvatarRing}>
-                  {photoUri ? (
-                    <Image source={{ uri: photoUri }} style={styles.heroAvatarPhoto} />
+                  {(photoUri || avatarUri) ? (
+                    <Image source={{ uri: photoUri || avatarUri }} style={styles.heroAvatarPhoto} />
                   ) : (
                     <View style={styles.heroAvatarFallback}>
                       <Text style={styles.heroAvatarInitials}>{initials}</Text>
@@ -1470,7 +1582,8 @@ export default function ProfileScreen({ navigation }) {
                 <SecLabel text="Partnership" />
                 <PartnerListRow
                   couple={couple}
-                  hasRequest={!!partnerIncoming || !!partnerOutgoing}
+                  incoming={partnerIncoming}
+                  outgoing={partnerOutgoing}
                   onPress={() => { setPartnerError(''); setPartnerModalVisible(true); }}
                 />
 
@@ -2782,4 +2895,20 @@ const pm = StyleSheet.create({
   readyTabOn: { backgroundColor: Colors.black },
   readyTabTxt: { fontFamily: Fonts.jakartaSemiBold, fontSize: 13, color: 'rgba(13,13,18,0.6)' },
   readyTabTxtOn: { color: '#fff' },
+  // Final-validation ("Confirm & pair") hero + setup summary card.
+  confirmHero: { alignItems: 'center', marginBottom: 18, marginTop: 2 },
+  confirmAvatar: { width: 64, height: 64, borderRadius: 32, backgroundColor: '#2E4670', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', marginBottom: 10 },
+  confirmAvatarImg: { width: 64, height: 64, borderRadius: 32 },
+  confirmName: { fontFamily: Fonts.jakartaExtraBold, fontSize: 19, color: Colors.black, maxWidth: '90%' },
+  confirmSub: { fontFamily: Fonts.jakartaRegular, fontSize: 13, color: 'rgba(13,13,18,0.55)', marginTop: 3 },
+  summaryCard: { backgroundColor: 'rgba(13,13,18,0.035)', borderRadius: 14, paddingHorizontal: 16, paddingVertical: 2, marginBottom: 16 },
+  summaryRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 13 },
+  summaryLabel: { fontFamily: Fonts.jakartaBold, fontSize: 11, letterSpacing: 0.5, textTransform: 'uppercase', color: 'rgba(13,13,18,0.45)' },
+  summaryVal: { fontFamily: Fonts.jakartaSemiBold, fontSize: 14, color: Colors.black },
+  summaryDiv: { height: 1, backgroundColor: 'rgba(13,13,18,0.07)' },
+  pillWrap: { flexDirection: 'row', gap: 6 },
+  roPill: { paddingHorizontal: 12, paddingVertical: 5, borderRadius: 999, backgroundColor: 'rgba(46,70,112,0.1)' },
+  roPillTxt: { fontFamily: Fonts.jakartaSemiBold, fontSize: 13, color: '#2E4670' },
+  leadBadge: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 12, paddingVertical: 5, borderRadius: 999, backgroundColor: 'rgba(232,181,48,0.14)' },
+  leadTxt: { fontFamily: Fonts.jakartaSemiBold, fontSize: 13, color: '#A8801A' },
 });

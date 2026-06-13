@@ -16,7 +16,8 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Colors, Fonts, Spacing } from '../../theme';
 import DashboardSkeleton from '../../components/DashboardSkeleton';
 import { useCoachData } from '../../context/CoachDataContext';
-import { getLessonReadiness } from '../../storage/storage';
+import { markFirstScreenReady } from '../../utils/firstPaint';
+import { getStudentsReadiness } from '../../storage/storage';
 import {
   getActiveCoachClass,
   subscribeToActiveCoachClass,
@@ -40,10 +41,10 @@ const INK_50 = '#F7F6F3';
 // Hero (dark) — radial-gradient base ink with warm depth in the corner.
 // We can't do a real radial in RN without extra deps, so we layer a
 // solid base + a subtle warm overlay via the border + shadow.
-const HERO_BG = '#1A1410';
+const HERO_BG = '#000000';
 // Slim golden hairline framing the dark card — more present than the
 // previous 22% so the trait reads as deliberate trim, not a soft glow.
-const HERO_BORDER = 'rgba(232,181,48,0.55)';
+const HERO_BORDER = 'rgba(255,255,255,0.08)';
 
 // Status colors — reused in donut, legend indicators, student rings.
 const SUCCESS = '#7FB77E';
@@ -108,95 +109,6 @@ function ringForReadiness(percent) {
   return { color, progress };
 }
 
-// ── Donut (pie with hole) ───────────────────────────────────────────────────
-// Three segments with gaps, rendered via stroke-dashoffset rotations
-function OverviewDonut({ practiced, forgetting, silent, total }) {
-  const size = 88;
-  const r = 35;
-  const strokeWidth = 9;
-  const C = 2 * Math.PI * r;
-
-  const totalVal = Math.max(total, 1);
-  const gP = practiced / totalVal;
-  const gF = forgetting / totalVal;
-  const gS = silent / totalVal;
-
-  // Starting offsets (cumulative) — circle starts at 3 o'clock; rotate -90° to start at top
-  const startP = 0;
-  const startF = practiced / totalVal;
-  const startS = (practiced + forgetting) / totalVal;
-
-  function segProps(startFrac, lenFrac) {
-    const dash = lenFrac * C;
-    const rot = startFrac * 360 - 90;
-    return {
-      strokeDasharray: `${dash} ${C}`,
-      strokeDashoffset: 0,
-      transform: `rotate(${rot} ${size / 2} ${size / 2})`,
-    };
-  }
-
-  return (
-    <View style={{ width: size, height: size }}>
-      <Svg width={size} height={size}>
-        {/* Background track */}
-        <Circle
-          cx={size / 2}
-          cy={size / 2}
-          r={r}
-          stroke="rgba(255,255,255,0.06)"
-          strokeWidth={strokeWidth}
-          fill="none"
-        />
-        {gP > 0 && (
-          <Circle
-            cx={size / 2}
-            cy={size / 2}
-            r={r}
-            stroke={GN}
-            strokeWidth={strokeWidth}
-            strokeLinecap="butt"
-            fill="none"
-            {...segProps(startP, gP)}
-          />
-        )}
-        {gF > 0 && (
-          <Circle
-            cx={size / 2}
-            cy={size / 2}
-            r={r}
-            stroke={OR}
-            strokeWidth={strokeWidth}
-            strokeLinecap="butt"
-            fill="none"
-            {...segProps(startF, gF)}
-          />
-        )}
-        {gS > 0 && (
-          <Circle
-            cx={size / 2}
-            cy={size / 2}
-            r={r}
-            stroke={RD}
-            strokeWidth={strokeWidth}
-            strokeLinecap="butt"
-            fill="none"
-            {...segProps(startS, gS)}
-          />
-        )}
-      </Svg>
-      <View style={StyleSheet.absoluteFillObject}>
-        <View style={styles.donutCenter}>
-          <View style={styles.donutNumRow}>
-            <Text style={styles.donutNum}>{practiced}</Text>
-            <Text style={styles.donutNumOf}>/{total}</Text>
-          </View>
-          <Text style={styles.donutLabel}>ACTIVE</Text>
-        </View>
-      </View>
-    </View>
-  );
-}
 
 // ── Mini ring for a single student ──────────────────────────────────────────
 function StudentRing({ student, readinessPercent = 0, actionCount = 0, onPress }) {
@@ -374,6 +286,12 @@ function renderSyncPill(autoSync) {
 export default function DashboardScreen({ navigation }) {
   const { students, events, actionCounts, studentActionCounts, initialLoading: loading } = useCoachData();
 
+  // Cold-start: once the coach dashboard's initial data has loaded, let App.js
+  // drop the logo overlay (mirrors HomeScreen's reveal() on the student side).
+  useEffect(() => {
+    if (!loading) markFirstScreenReady();
+  }, [loading]);
+
   // Pre-mount sibling tabs (STUDENTS + CLASS) shortly after DASHBOARD
   // settles, so a tap on either feels instant.
   useEffect(() => {
@@ -521,7 +439,7 @@ export default function DashboardScreen({ navigation }) {
   //     progression/retention/regularity health score).
   // Students with no readiness data count as 0% in the average so newly
   // added students don't disappear from the denominator.
-  const [readiestStudent, setReadiestStudent] = useState(null);
+  const [topReady, setTopReady] = useState([]); // up to 2 students, highest readiness first
   const [readiestLoading, setReadiestLoading] = useState(false);
   const [globalReadinessAvg, setGlobalReadinessAvg] = useState(0);
   const [readinessByStudent, setReadinessByStudent] = useState({});
@@ -529,7 +447,7 @@ export default function DashboardScreen({ navigation }) {
 
   useEffect(() => {
     if (!students || students.length === 0) {
-      setReadiestStudent(null);
+      setTopReady([]);
       setGlobalReadinessAvg(0);
       setReadinessByStudent({});
       return;
@@ -542,30 +460,30 @@ export default function DashboardScreen({ navigation }) {
     async function run() {
       setReadiestLoading(true);
       try {
-        const readinesses = await Promise.all(
-          students.map((s) => getLessonReadiness(s.id).catch(() => null)),
-        );
+        // One round-trip for the whole roster instead of N serialized calls.
+        const map = await getStudentsReadiness(students.map((s) => s.id));
         if (!alive) return;
-        let best = null;
-        let bestPct = -1;
         let sum = 0;
         const byStudent = {};
-        for (let i = 0; i < students.length; i++) {
-          const r = readinesses[i];
+        const ready = [];
+        for (const s of students) {
+          const r = map[s.id] ?? null;
           const pct = r?.percent ?? 0;
-          byStudent[students[i].id] = pct;
+          // Ring shows 100% when there's no private lesson yet (nothing to get
+          // ready for); the average keeps using the real % (no-class = 0).
+          byStudent[s.id] = r ? pct : 100;
           sum += pct;
-          if (r && pct > bestPct) {
-            bestPct = pct;
-            best = { student: students[i], readiness: r };
-          }
+          // "Most ready for next private" only ranks students who actually have
+          // a private to be ready for.
+          if (r) ready.push({ student: s, readiness: r, pct });
         }
-        setReadiestStudent(best);
-        setGlobalReadinessAvg(Math.round(sum / students.length));
+        ready.sort((a, b) => b.pct - a.pct);
+        setTopReady(ready.slice(0, 2));
+        setGlobalReadinessAvg(students.length ? Math.round(sum / students.length) : 0);
         setReadinessByStudent(byStudent);
       } catch {
         if (alive) {
-          setReadiestStudent(null);
+          setTopReady([]);
           setGlobalReadinessAvg(0);
           setReadinessByStudent({});
         }
@@ -579,10 +497,29 @@ export default function DashboardScreen({ navigation }) {
     };
   }, [students]);
 
+  // Buckets driven by each student's lesson-readiness %:
+  //   practiced = ready (100%) · in progress = 1–99% · silent = 0%
+  // (readinessByStudent already reports 100% for students with no private yet —
+  // nothing to get ready for — so they count as ready, matching their ring.)
   const stats = useMemo(() => {
-    const practicedList = students.filter((s) => s.status === 'on_track');
-    const inProgressList = students.filter((s) => s.status === 'attention');
-    const silentList = students.filter((s) => s.status === 'silent');
+    const practicedList = [];
+    const inProgressList = [];
+    const silentList = [];
+    // Readiness loads a beat after the roster; until it's in, fall back to the
+    // student's status so the card doesn't flash "everyone silent" then jump.
+    const hasReadiness = Object.keys(readinessByStudent).length > 0;
+    for (const s of students) {
+      let bucket;
+      if (hasReadiness) {
+        const pct = readinessByStudent[s.id] ?? 0;
+        bucket = pct >= 100 ? practicedList : pct <= 0 ? silentList : inProgressList;
+      } else {
+        bucket = s.status === 'on_track' ? practicedList
+          : s.status === 'silent' ? silentList
+          : inProgressList;
+      }
+      bucket.push(s);
+    }
     const practiced = practicedList.length;
     const inProgress = inProgressList.length;
     const silent = silentList.length;
@@ -592,30 +529,8 @@ export default function DashboardScreen({ navigation }) {
       practiced, inProgress, silent, total, actions,
       practicedList, inProgressList, silentList,
     };
-  }, [students]);
+  }, [students, readinessByStudent]);
 
-  // Hero "since last class" — relative time of the most recent class event,
-  // shown top-right of the hero card. Falls back to empty string if none.
-  const lastClassRelative = useMemo(() => {
-    const latest = students.reduce((acc, s) => {
-      const d = s.lastClassDate || s.lastPrivateClassDate;
-      if (!d) return acc;
-      const t = new Date(d).getTime();
-      return t > acc ? t : acc;
-    }, 0);
-    if (!latest) return '';
-    const diffMs = Date.now() - latest;
-    const days = Math.floor(diffMs / 86400000);
-    if (days < 1) {
-      const hours = Math.floor(diffMs / 3600000);
-      if (hours < 1) return 'JUST NOW';
-      return `${hours}H AGO`;
-    }
-    if (days === 1) return 'YESTERDAY';
-    if (days < 7) return `${days} DAYS AGO`;
-    if (days < 30) return `${Math.floor(days / 7)}W AGO`;
-    return `${Math.floor(days / 30)}MO AGO`;
-  }, [students]);
 
 
   if (loading) return <DashboardSkeleton />;
@@ -667,18 +582,17 @@ export default function DashboardScreen({ navigation }) {
               <View style={styles.heroHeadLine} />
               <Text style={styles.heroHeadLabel}>SINCE LAST CLASS</Text>
             </View>
-            {!!lastClassRelative && (
-              <Text style={styles.heroHeadTime}>{lastClassRelative}</Text>
-            )}
           </View>
 
           <View style={styles.donutRow}>
-            <OverviewDonut
-              practiced={stats.practiced}
-              forgetting={stats.inProgress}
-              silent={stats.silent}
-              total={stats.total}
-            />
+            <View style={styles.activeStat}>
+              <View style={styles.activeNumRow}>
+                <Text style={styles.activeNum}>{stats.practiced + stats.inProgress}</Text>
+                <Text style={styles.activeNumOf}>/{stats.total}</Text>
+              </View>
+              <Text style={styles.activeLabel}>ACTIVE</Text>
+            </View>
+            <View style={styles.heroDivider} />
             <View style={styles.heroLegend}>
               <LegendRow color={SUCCESS} num={stats.practiced} label="Practiced" />
               <LegendRow color={WARNING} num={stats.inProgress} label="In progress" />
@@ -819,49 +733,56 @@ export default function DashboardScreen({ navigation }) {
           </View>
         </View>
 
-        {/* ── Most-ready student for next private ── */}
+        {/* ── Top students ready for their next private ── */}
         <Text style={styles.sectionLabelLow}>MOST READY FOR NEXT PRIVATE</Text>
-        <TouchableOpacity
-          style={styles.focusCard}
-          activeOpacity={readiestStudent ? 0.85 : 1}
-          disabled={!readiestStudent}
-          onPress={() => {
-            if (!readiestStudent) return;
-            navigation.navigate('StudentDetail', {
-              studentId: readiestStudent.student.id,
-              studentName: readiestStudent.student.name,
-            });
-          }}
-        >
-          <View style={{ flex: 1 }}>
-            <Text style={styles.focusTitle}>
-              {readiestLoading
-                ? 'Checking readiness…'
-                : readiestStudent?.student?.name || 'No student ready yet'}
-            </Text>
-            <Text style={styles.focusSub}>
-              {readiestLoading
-                ? 'Looking at what each student has trained'
-                : readiestStudent
-                  ? `${readiestStudent.readiness.percent}% ready · ${readiestStudent.readiness.focuses.length} focus point${readiestStudent.readiness.focuses.length > 1 ? 's' : ''} from last private`
-                  : (students.length > 0 ? 'Log a private with one of your students to start tracking' : '')}
-            </Text>
-          </View>
-          {readiestStudent && (
-            <View style={styles.focusAvatars}>
-              <View style={[styles.focusAvatar, { marginLeft: 0 }]}>
-                {(readiestStudent.student.photoUrl || readiestStudent.student.photo_url) ? (
-                  <Image
-                    source={{ uri: readiestStudent.student.photoUrl || readiestStudent.student.photo_url }}
-                    style={styles.focusAvatarImg}
-                  />
-                ) : (
-                  <Text style={styles.focusAvatarText}>{initials(readiestStudent.student.name)}</Text>
-                )}
-              </View>
+        <View style={styles.readyCard}>
+          {readiestLoading && topReady.length === 0 ? (
+            <View style={styles.readyEmpty}>
+              <Text style={styles.readyEmptyText}>Checking readiness…</Text>
             </View>
+          ) : topReady.length === 0 ? (
+            <View style={styles.readyEmpty}>
+              <Text style={styles.readyEmptyText}>
+                {students.length > 0
+                  ? 'Log a private with a student to start tracking'
+                  : 'No students yet'}
+              </Text>
+            </View>
+          ) : (
+            topReady.map((item, i) => {
+              const photo = item.student.photoUrl || item.student.photo_url;
+              return (
+                <TouchableOpacity
+                  key={item.student.id}
+                  style={[styles.readyRow, i > 0 && styles.readyRowDivider]}
+                  activeOpacity={0.85}
+                  onPress={() =>
+                    navigation.navigate('StudentDetail', {
+                      studentId: item.student.id,
+                      studentName: item.student.name,
+                    })
+                  }
+                >
+                  <View style={styles.readyAvatar}>
+                    {photo ? (
+                      <Image source={{ uri: photo }} style={styles.readyAvatarImg} />
+                    ) : (
+                      <Text style={styles.readyAvatarText}>{initials(item.student.name)}</Text>
+                    )}
+                  </View>
+                  <Text style={styles.readyName} numberOfLines={1}>
+                    {item.student.name}
+                  </Text>
+                  <View style={styles.readyPctRow}>
+                    <Text style={styles.readyPct}>{item.readiness.percent}</Text>
+                    <Text style={styles.readyPctSign}>%</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={18} color="rgba(10,10,10,0.25)" />
+                </TouchableOpacity>
+              );
+            })
           )}
-        </TouchableOpacity>
+        </View>
 
         {/* ── Recent activity label (fixed) ── */}
         <Text style={styles.sectionLabelLow}>RECENT ACTIVITY</Text>
@@ -1047,10 +968,10 @@ const styles = StyleSheet.create({
   hero: {
     marginHorizontal: 18,
     backgroundColor: HERO_BG,
-    borderRadius: 20,
-    paddingTop: 14,
-    paddingHorizontal: 16,
-    paddingBottom: 12,
+    borderRadius: 22,
+    paddingTop: 18,
+    paddingHorizontal: 18,
+    paddingBottom: 16,
     borderWidth: 1,
     borderColor: HERO_BORDER,
     shadowColor: '#000',
@@ -1197,6 +1118,48 @@ const styles = StyleSheet.create({
     lineHeight: 9,
     includeFontPadding: false,
   },
+  // ── "X/X ACTIVE" stat (replaces the donut ring) ──
+  activeStat: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 6,
+  },
+  activeNumRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+  },
+  activeNum: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 40,
+    color: '#fff',
+    letterSpacing: -1,
+    lineHeight: 46,
+    includeFontPadding: false,
+  },
+  activeNumOf: {
+    fontFamily: Fonts.jakartaSemiBold,
+    fontSize: 18,
+    color: 'rgba(255,255,255,0.40)',
+    letterSpacing: -0.3,
+    marginLeft: 2,
+    lineHeight: 26,
+    includeFontPadding: false,
+  },
+  activeLabel: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 9,
+    color: GOLD_300,
+    letterSpacing: 1.6,
+    marginTop: -2,
+    lineHeight: 12,
+    includeFontPadding: false,
+  },
+  heroDivider: {
+    width: StyleSheet.hairlineWidth,
+    alignSelf: 'stretch',
+    marginVertical: 4,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+  },
 
   // Global avg readiness — discrete progress block, tappable to STUDENTS.
   avgBlock: {
@@ -1255,7 +1218,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    paddingVertical: 10,
+    paddingVertical: 17,
     paddingHorizontal: 16,
     backgroundColor: GOLD_500,
     borderRadius: 10,
@@ -1412,6 +1375,83 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.jakartaExtraBold,
     fontSize: 9,
     color: '#8A6A2E',
+  },
+  // ── "Most ready" top-2 list ──
+  readyCard: {
+    marginHorizontal: Spacing.side,
+    backgroundColor: '#FFF',
+    borderRadius: 16,
+    shadowColor: '#000',
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 1,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(0,0,0,0.05)',
+    overflow: 'hidden',
+  },
+  readyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+  },
+  readyRowDivider: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(0,0,0,0.07)',
+  },
+  readyAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#F5E6C8',
+    borderWidth: 2,
+    borderColor: GOLD_400,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  readyAvatarImg: {
+    width: '100%',
+    height: '100%',
+  },
+  readyAvatarText: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 14,
+    color: '#8A6A2E',
+  },
+  readyName: {
+    flex: 1,
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 16,
+    color: T1,
+    letterSpacing: -0.3,
+  },
+  readyPctRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+  },
+  readyPct: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 17,
+    color: T1,
+    letterSpacing: -0.3,
+  },
+  readyPctSign: {
+    fontFamily: Fonts.jakartaSemiBold,
+    fontSize: 10,
+    color: T2,
+    marginLeft: 1,
+  },
+  readyEmpty: {
+    paddingVertical: 16,
+    paddingHorizontal: 16,
+  },
+  readyEmptyText: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 12,
+    color: T2,
   },
 
   // Timeline (scrollable region — flex:1 takes remaining space above CTA)

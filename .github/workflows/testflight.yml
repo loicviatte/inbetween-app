@@ -77,6 +77,30 @@ jobs:
           fi
           echo "✓ AuthKey_${ASC_KEY_ID}.p8 ready ($(wc -c < "$KEY_PATH") bytes)."
 
+      - name: Patch CocoaPods xcodeproj for Xcode 26 (objectVersion 70)
+        # Expo SDK 54 + Xcode 26 emit an iOS project at objectVersion 70
+        # (PBXFileSystemSynchronizedRootGroup). The latest published xcodeproj
+        # gem (1.27.0, bundled by CocoaPods) has no mapping for 70 → pod install
+        # dies with "compatibility version string for object version 70". Teach
+        # it 70 = Xcode 16.0. Idempotent + no-op if the runner already knows 70.
+        run: |
+          set -uo pipefail
+          patched=0
+          patch_file() {
+            f="$1"
+            [ -f "$f" ] || return 0
+            if grep -q "70 => " "$f"; then patched=1; return 0; fi
+            perl -0777 -i -pe "s/(77 => 'Xcode 16\.0',\n)/\${1}      70 => 'Xcode 16.0',\n/" "$f"
+            if grep -q "70 => " "$f"; then echo "patched $f"; patched=1; fi
+          }
+          active=$(ruby -rxcodeproj -e "puts File.join(Gem.loaded_specs['xcodeproj'].full_gem_path,'lib/xcodeproj/constants.rb')" 2>/dev/null || true)
+          [ -n "$active" ] && patch_file "$active"
+          for d in "$(gem env gemdir 2>/dev/null)" /usr/local/lib/ruby/gems /opt/homebrew/lib/ruby/gems "$HOME/.gem/ruby" /Library/Ruby/Gems; do
+            [ -d "$d" ] || continue
+            while IFS= read -r f; do patch_file "$f"; done < <(find "$d" -path '*/xcodeproj-*/lib/xcodeproj/constants.rb' 2>/dev/null)
+          done
+          if [ "$patched" = "1" ]; then echo "xcodeproj supports objectVersion 70"; else echo "::warning::no xcodeproj constants.rb patched (already supports 70, or not found yet)"; fi
+
       - name: Build iOS locally (no cloud credits)
         env:
           EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}

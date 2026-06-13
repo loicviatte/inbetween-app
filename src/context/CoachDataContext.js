@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { AppState } from 'react-native';
+import * as Notifications from 'expo-notifications';
 import { getMyStudents, getCoachActivityFeed, getPendingCoachRequests, getCoachNotes, getPendingFocusPoints } from '../storage/coachStorage';
 import { getPendingCoupleFocusPoints } from '../storage/coupleStorage';
 import { getUser } from '../storage/storage';
@@ -133,6 +134,20 @@ export function CoachDataProvider({ children }) {
   useEffect(() => {
     const sub = AppState.addEventListener('change', (state) => {
       if (state === 'active') {
+        cacheRef.current.clear();
+        loadAll();
+      }
+    });
+    return () => sub.remove();
+  }, [loadAll]);
+
+  // The AppState refresh above only fires on background→foreground. When a
+  // student sends a coach request (or any push) while the coach is ALREADY
+  // foregrounded, pull fresh so the pending row / action badge appears live —
+  // so tapping the notification lands on a Students tab that actually shows it.
+  useEffect(() => {
+    const sub = Notifications.addNotificationReceivedListener((notification) => {
+      if (notification?.request?.content?.data?.type) {
         cacheRef.current.clear();
         loadAll();
       }
