@@ -32,6 +32,7 @@ import AuthNavigator from './src/navigation/AuthNavigator';
 import StudentAppNavigator from './src/navigation/StudentAppNavigator';
 import { isFirstScreenReady, onFirstScreenReady } from './src/utils/firstPaint';
 import InBetweenLoader from './src/components/InBetweenLoader';
+import RootErrorBoundary from './src/components/RootErrorBoundary';
 
 const navigationRef = createNavigationContainerRef();
 
@@ -281,6 +282,7 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
+      <RootErrorBoundary>
       <View style={{ flex: 1 }}>
         <NavigationContainer
           theme={AppTheme}
@@ -309,6 +311,7 @@ export default function App() {
             signalling screen, so it resolves done=true and never shows. */}
         <ColdStartOverlay done={(firstReady && minElapsed) || !session} />
       </View>
+      </RootErrorBoundary>
     </SafeAreaProvider>
   );
 }
