@@ -1,3 +1,5 @@
+import { Platform } from 'react-native';
+
 // ─── Feature flags ───────────────────────────────────────────────────────
 // Lightweight gate for incrementally rolling out the new recording pipeline.
 //
@@ -56,6 +58,12 @@ const LOCAL_RECORDING_BETA_EMAILS = new Set([
 ]);
 
 export function isLocalRecordingMode(user) {
+  // iOS-only: the DJI import flow (folder picker, file copy, WAV→m4a
+  // transcode) is backed by the local-recording-files native module, which
+  // is iOS-only and throws off-iOS. Gating here disables the entire DJI UI
+  // (auto-sync hook, setup banner, upload screen) on Android so a beta coach
+  // signing in on Android never reaches a crashing native call.
+  if (Platform.OS !== 'ios') return false;
   if (!user?.email) return false;
   return LOCAL_RECORDING_BETA_EMAILS.has(user.email.toLowerCase());
 }
