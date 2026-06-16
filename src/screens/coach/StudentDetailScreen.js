@@ -45,9 +45,12 @@ import {
   editAndApproveFocusPoint,
   rejectPendingFocusPoint,
   updateFocusPoint,
+  getReconcileNeeded,
+  applyReconcile,
 } from '../../storage/coachStorage';
 import PendingFocusCard from '../../components/coach/PendingFocusCard';
 import RejectFocusSheet from '../../components/coach/RejectFocusSheet';
+import ReconcileFocusSheet from '../../components/coach/ReconcileFocusSheet';
 import QuestionCard from '../../components/coach/QuestionCard';
 import MergeCompareCard from '../../components/coach/MergeCompareCard';
 import NameMatchCard from '../../components/coach/NameMatchCard';
@@ -425,6 +428,8 @@ export default function StudentDetailScreen({ route, navigation }) {
   const [activity, setActivity] = useState([]);
   const [questions, setQuestions] = useState([]);
   const [pendingFPs, setPendingFPs] = useState([]);
+  const [reconcileGroup, setReconcileGroup] = useState(null);
+  const [showReconcile, setShowReconcile] = useState(false);
   const [mergeRequests, setMergeRequests] = useState([]);
   const [nameMatches, setNameMatches] = useState([]);
   const [lastClassDate, setLastClassDate] = useState(null);
@@ -536,6 +541,7 @@ export default function StudentDetailScreen({ route, navigation }) {
             setActivity(act);
             setQuestions(qs);
             setPendingFPs(pfp);
+            getReconcileNeeded([studentId]).then((g) => { if (active) setReconcileGroup(g[0] || null); }).catch(() => {});
             // Prefer the readiness reference (most recent private with active
             // focus points) so the activity timeline filter matches the
             // "LAST CLASS WITH YOU" recap card. Falls back to the raw
@@ -743,8 +749,9 @@ export default function StudentDetailScreen({ route, navigation }) {
     nameMatches.forEach((nm) => {
       list.push({ kind: 'name', id: `name_${nm.id}`, notif: nm });
     });
+    if (reconcileGroup) list.push({ kind: 'reconcile', id: 'reconcile' });
     return list;
-  }, [pendingFPs, questions, mergeRequests, nameMatches]);
+  }, [pendingFPs, questions, mergeRequests, nameMatches, reconcileGroup]);
 
   const hasUrgent = questions.length > 0;
   const badgeColor = hasUrgent ? C.red : C.orange;
@@ -1305,6 +1312,25 @@ export default function StudentDetailScreen({ route, navigation }) {
               </View>
             ) : (
               <>
+                {/* 0. Too many focus points — pick one to drop (max 3) */}
+                {reconcileGroup && (
+                  <>
+                    <Text style={styles.actionsSectionLabel}>TOO MANY FOCUS POINTS</Text>
+                    <TouchableOpacity
+                      activeOpacity={0.85}
+                      onPress={() => setShowReconcile(true)}
+                      style={{ flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#fff', borderWidth: 1, borderColor: C.red, borderRadius: 14, padding: 14, marginBottom: 8 }}
+                    >
+                      <Ionicons name="alert-circle" size={20} color={C.red} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ fontFamily: Fonts.jakartaExtraBold, fontSize: 15, color: C.text }}>{1 + reconcileGroup.candidates.length} focus points · keep 3</Text>
+                        <Text style={{ fontFamily: Fonts.travelsRegular, fontSize: 12.5, color: Colors.secondary, marginTop: 2 }}>Pick one to drop</Text>
+                      </View>
+                      <Ionicons name="chevron-forward" size={18} color={Colors.secondary} />
+                    </TouchableOpacity>
+                  </>
+                )}
+
                 {/* 1. Focus points pending validation after a class */}
                 {pendingFPs.length > 0 && (
                   <>
@@ -1707,6 +1733,22 @@ export default function StudentDetailScreen({ route, navigation }) {
             fp={rejectingPendingFp}
             onConfirm={handleConfirmRejectPendingFp}
             onClose={() => setRejectingPendingFp(null)}
+          />
+        )}
+      </Modal>
+
+      <Modal visible={showReconcile} transparent animationType="slide" onRequestClose={() => setShowReconcile(false)}>
+        {reconcileGroup && (
+          <ReconcileFocusSheet
+            student={{ name: displayName, initials: (displayName || '?').split(' ').map((w) => w[0]).slice(0, 2).join('').toUpperCase() }}
+            kept={reconcileGroup.kept}
+            candidates={reconcileGroup.candidates}
+            onConfirm={async (removedId) => {
+              await applyReconcile(removedId);
+              setShowReconcile(false);
+              getReconcileNeeded([studentId]).then((g) => setReconcileGroup(g[0] || null)).catch(() => {});
+            }}
+            onClose={() => setShowReconcile(false)}
           />
         )}
       </Modal>

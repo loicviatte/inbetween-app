@@ -18,6 +18,7 @@ const ACTIONABLE_TYPES = new Set(['attendance_check', 'group_class_attendance', 
 const COACH_ACTION_TYPES = new Set([
   'focus_points_added',
   'focus_point_added',
+  'focus_reconcile_needed',
   'merge_request',
   'name_match_confirm',
 ]);
@@ -38,6 +39,7 @@ const TYPE_CONFIG = {
   group_class_attendance:  { label: 'Attendance',  color: Colors.orange, cta: 'Confirm attendance' },
   focus_points_added:      { label: 'Review',      color: Colors.orange },
   focus_point_added:       { label: 'Review',      color: Colors.orange },
+  focus_reconcile_needed:  { label: 'Reconcile',   color: '#FF3B30', cta: 'Pick which to keep' },
   focus_point_rejected:    { label: 'Declined',    color: '#FF3B30' },
   merge_request:           { label: 'Merge',       color: '#5788E6' },
   merge_request_student:   { label: 'Merge',       color: '#5788E6', cta: 'Review' },

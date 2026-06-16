@@ -1,8 +1,8 @@
 import { supabase } from '../services/supabase/client';
 import { computeAllStudentMetricsBatch } from '../utils/studentMetrics';
-import { categoryFromStyle } from '../utils/danceCategory';
+import { categoryFromStyle, focusMatchesCategory } from '../utils/danceCategory';
 import { normalizeFocusName } from '../utils/normalizeFocusName';
-import { getLessonReadiness } from './storage';
+import { getStudentsReadiness } from './storage';
 
 async function getCoachId() {
   const { data: { user } } = await supabase.auth.getUser();
@@ -147,11 +147,19 @@ export async function getMyStudents() {
   const wantedIds = [...new Set(wantedReqs.map((r) => r.student_id).filter(Boolean))];
   if (wantedIds.length === 0) return [];
 
+  // Which styles THIS coach coaches each student in (latin/ballroom), from their
+  // accepted requests' categories. Drives the "Latin or Ballroom?" picker when a
+  // coach teaches the same student both styles. Null-category (legacy) adds none.
+  const catsByStudent = {};
+  for (const r of wantedReqs) {
+    if (r.student_id && r.category) (catsByStudent[r.student_id] ||= new Set()).add(r.category);
+  }
+
   // Step 2 — fetch the actual user rows for those students (separate query
   // instead of FK embed, which can get silently dropped by RLS).
   const { data: userRows } = await supabase
     .from('users')
-    .select('id, name, dance_style, last_active_date, avatar_url')
+    .select('id, name, dance_style, last_active_date, avatar_url, latin_coach_id, ballroom_coach_id')
     .in('id', wantedIds);
 
   const byId = new Map();
@@ -366,6 +374,14 @@ export async function getMyStudents() {
         id: s.id,
         name: s.name || 'Student',
         danceStyle: s.dance_style || '',
+        // Styles this coach coaches them in — union of accepted-request categories
+        // and the live users.{style}_coach_id link (either can drift; the union is
+        // robust). Drives the "Latin or Ballroom?" picker when it has both.
+        coachStyles: [...new Set([
+          ...(catsByStudent[s.id] || []),
+          ...(s.latin_coach_id === coachId ? ['latin'] : []),
+          ...(s.ballroom_coach_id === coachId ? ['ballroom'] : []),
+        ])],
         photoUrl: s.avatar_url || null,
         lastActiveDate: lastPracticeIso,
         daysSincePractice,
@@ -833,6 +849,78 @@ export async function getClassDetail(classId) {
     .eq('id', classId)
     .single();
   return data || null;
+}
+
+// ─── Reconciliation: too many active focus points (max 3 per student) ──────────
+// When a new private leaves a student with >3 active focus points (a carried-over
+// "not yet" focus that the coach kept + the new ones), the coach must drop one
+// back to 3. We surface one reconciliation group per affected student. The new
+// critical is always kept; the rest are the "drop one" candidates (the carried
+// over one is flagged so the sheet can show its +2 target growth).
+const TIER_RANK = { critical: 0, important: 1, supporting: 2 };
+function tierTarget(tier) { return tier === 'critical' ? 3 : 2; }
+
+export async function getReconcileNeeded(studentIds) {
+  if (!studentIds || studentIds.length === 0) return [];
+  const { data } = await supabase
+    .from('focus_points')
+    .select('id, user_id, name, subtitle, context, tier, practice_count, is_held, created_at, dance, group_fp')
+    .in('user_id', studentIds)
+    .eq('status', 'active')
+    .eq('is_deleted', false)
+    .eq('is_archived', false)
+    .eq('is_other', false);
+
+  // Reconciliation is PER dance category: a 2-style dancer keeps up to 3 Latin
+  // AND up to 3 Ballroom — they must never be mixed into one "too many" bucket.
+  // Group focuses have their own ≤2 cap and are excluded. Untagged focuses count
+  // in both styles (focusMatchesCategory), matching readiness.
+  const byUser = {};
+  for (const fp of data ?? []) {
+    if (fp.group_fp) continue;
+    (byUser[fp.user_id] ||= []).push(fp);
+  }
+
+  const groups = [];
+  for (const [userId, fps] of Object.entries(byUser)) {
+    for (const category of ['latin', 'ballroom']) {
+      const inCat = fps.filter((fp) => focusMatchesCategory(fp, category));
+      if (inCat.length <= 3) continue;
+      const sorted = [...inCat].sort(
+        (a, b) => (TIER_RANK[a.tier] ?? 3) - (TIER_RANK[b.tier] ?? 3)
+          || new Date(b.created_at) - new Date(a.created_at),
+      );
+      const kept = sorted[0]; // highest-rank (the new critical) — always kept
+      const candidates = sorted.slice(1).map((fp) => ({
+        id: fp.id,
+        name: fp.name,
+        tier: fp.tier,
+        carried: !!fp.is_held,
+        done: fp.practice_count ?? 0,
+        target: tierTarget(fp.tier),
+        concept: fp.context || fp.subtitle || null,
+      }));
+      groups.push({
+        userId,
+        category,
+        kept: { id: kept.id, name: kept.name, tier: kept.tier, done: kept.practice_count ?? 0, target: tierTarget(kept.tier) },
+        candidates,
+      });
+    }
+  }
+  return groups;
+}
+
+// Apply the coach's choice: drop the removed focus point(s) to `past` (the coach
+// keeps 1–3). Accepts one id or an array. (The server-side re-rank + carried-over
+// target +2 land with the yoda-score deploy; this keeps the student at ≤3 active.)
+export async function applyReconcile(removedIds) {
+  const ids = Array.isArray(removedIds) ? removedIds : (removedIds ? [removedIds] : []);
+  if (ids.length === 0) return;
+  await supabase
+    .from('focus_points')
+    .update({ status: 'past' })
+    .in('id', ids);
 }
 
 // ─── Focus Point Validation ───────────────────────────────────────────────────
@@ -1433,10 +1521,12 @@ export async function getStartClassRoster() {
 
   // Per-student readiness (same source of truth as the student's own
   // profile/Train screen: focuses from the most recent private with usable
-  // focus_points, tier-based targets, capped done counts).
-  const readinessPerStudent = await Promise.all(
-    students.map(s => getLessonReadiness(s.id).catch(() => null)),
-  );
+  // focus_points, train_target-based targets, capped done counts).
+  // ONE batched round-trip (get_students_readiness runs get_lesson_readiness
+  // per student server-side) instead of N parallel RPCs the free-tier pooler
+  // serialized into a ~20s staircase on the Start-class roster.
+  const readinessMap = await getStudentsReadiness(studentIds).catch(() => ({}));
+  const readinessPerStudent = studentIds.map(id => readinessMap[id] || null);
 
   // Resolve each readiness `lastClassDate` to a class_input_id so we can
   // fetch the duration of the class that actually produced the focuses.
@@ -1501,6 +1591,7 @@ export async function getStartClassRoster() {
       id: s.id,
       name: s.name,
       photoUrl: s.photoUrl,
+      coachStyles: s.coachStyles || [],
       lastPrivateClassDate: r?.lastClassDate || s.lastPrivateClassDate,
       lastPrivateDurationMin: classId ? durationByClass[classId] || null : null,
       readiness: r?.percent ?? 0,
