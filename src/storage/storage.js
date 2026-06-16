@@ -531,9 +531,13 @@ export async function getStudentsReadiness(userIds, category = null) {
 //   inviteCode, readiness, coupleReadiness, coachQuestions, focusPoints,
 //   classInputsCount, totalSessions, activityStats } | null.
 // See supabase/migrations/20260612d_student_profile_bundle.sql.
-export async function getStudentProfileBundle(targetUserId = null) {
+// `category` ('latin' | 'ballroom' | null) scopes the readiness/coupleReadiness
+// in the bundle to that dance style — Profile passes Train's last-selected style
+// so a 2-style dancer's readiness matches the toggle instead of anchoring on the
+// most-recent private of any style.
+export async function getStudentProfileBundle(targetUserId = null, category = null) {
   const userId = targetUserId || (await getUserId());
-  const { data } = await supabase.rpc('get_student_profile', { p_user: userId });
+  const { data } = await supabase.rpc('get_student_profile', { p_user: userId, p_category: category });
   return data || null;
 }
 

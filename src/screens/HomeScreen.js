@@ -36,7 +36,7 @@ import {
   getTopFocusPointsWithCounts,
   getTeacherContextForAI,
 } from '../storage/storage';
-import { getSlots, getCoupleSlots, getSessionCountForFocus, startTrainingSession } from '../utils/algorithm';
+import { getTrainFocus, startTrainingSession } from '../utils/algorithm';
 import { markFirstScreenReady } from '../utils/firstPaint';
 import { getMyCouple, getCoupleReadiness, mostTrainedMode, getCoupleLock } from '../storage/coupleStorage';
 import { supabase } from '../services/supabase/client';
@@ -76,6 +76,16 @@ const HOME_CACHE_KEY = '@cache_home';
 // instead of waiting on the cold-start couple fetch.
 const COUPLE_CACHE_KEY = '@cache_home_couple';
 const CATEGORY_STORAGE_KEY = 'train_category_filter';
+// Per-style snapshot of fetchCategoryData (solo+couple slots/readiness/counts),
+// persisted so the FIRST Latin↔Ballroom toggle after a cold start paints
+// instantly from disk instead of waiting on a round-trip (the in-memory
+// categoryCacheRef prefetch is lost across launches). Suffixed by category.
+const STYLE_CACHE_KEY = '@cache_train_style:';
+function persistStyleData(cat, d) {
+  if (d && !d.error && (d.slot1 || d.coupleSlots?.slot1)) {
+    AsyncStorage.setItem(STYLE_CACHE_KEY + (cat || 'all'), JSON.stringify(d)).catch(() => {});
+  }
+}
 
 function formatTime(seconds) {
   const s = Math.max(0, Math.floor(seconds));
@@ -637,27 +647,30 @@ export default function HomeScreen({ navigation }) {
   // Fetch the complete per-style data bundle (solo slots + readiness, couple
   // slots + readiness, and the two solo session counts). Used by the toggle,
   // the background prefetch, and the revalidate-after-cache-hit path.
-  async function fetchCategoryData(cat, coupleIdArg) {
-    const cid = coupleIdArg !== undefined ? coupleIdArg : (couple?.coupleId || null);
-    const [slots, coupleData] = await Promise.all([
-      getSlots(cat, true),
-      cid ? getCoupleSlots(cid, cat).catch(() => null) : Promise.resolve(null),
-    ]);
-    const [c1, c2] = await Promise.all([
-      slots.slot1?.id ? getSessionCountForFocus(slots.slot1.id) : Promise.resolve(0),
-      slots.slot2?.id ? getSessionCountForFocus(slots.slot2.id) : Promise.resolve(0),
-    ]);
+  // One round-trip for a style's solo + couple cards. Shape kept identical to the
+  // old multi-query version so applyCategoryData / the toggle path are unchanged.
+  // (The 2nd arg is now resolved server-side and ignored — kept for call sites.)
+  async function fetchCategoryData(cat) {
+    const b = await getTrainFocus(cat);
+    if (!b) {
+      return {
+        slot1: null, slot2: null, slot3: null, readiness: null,
+        coupleSlots: { slot1: null, slot2: null, slot3: null }, coupleReadiness: null,
+        sessionCount: 0, slot2Count: 0,
+        // error → callers keep the current cards rather than blanking them.
+        error: true,
+      };
+    }
+    const ss = b.solo?.slots || [];
+    const cs = b.couple?.slots || [];
     return {
-      slot1: slots.slot1, slot2: slots.slot2, slot3: slots.slot3,
-      readiness: slots.readiness ?? null,
-      coupleSlots: coupleData
-        ? { slot1: coupleData.slot1, slot2: coupleData.slot2, slot3: coupleData.slot3 }
-        : { slot1: null, slot2: null, slot3: null },
-      coupleReadiness: coupleData?.readiness ?? null,
-      sessionCount: c1, slot2Count: c2,
-      // Propagated so the toggle/prefetch paths never cache or apply a failed
-      // fetch (which would blank the cards on style switch).
-      error: !!slots.error || !!coupleData?.error,
+      slot1: ss[0] || null, slot2: ss[1] || null, slot3: ss[2] || null,
+      readiness: b.solo?.readiness ?? null,
+      coupleSlots: { slot1: cs[0] || null, slot2: cs[1] || null, slot3: cs[2] || null },
+      coupleReadiness: b.couple?.readiness ?? null,
+      sessionCount: b.sessionCounts?.slot1 ?? 0,
+      slot2Count: b.sessionCounts?.slot2 ?? 0,
+      error: false,
     };
   }
 
@@ -713,62 +726,42 @@ export default function HomeScreen({ navigation }) {
     // Supabase fetches that produce the first paint.
     setTimeout(() => { getTeacherContextForAI().catch(() => {}); }, 2000);
 
-    // ─── Wave 1 (blocking): everything we need to paint the solo hero + cards ──
-    const [slots, sessions, classes, focusTrained, wa, savedPhoto] = await Promise.all([
-      getSlots(cat, true),
-      getTrainingSessionsThisWeek(),
-      getSessionsThisWeek(),
-      getFocusTrainedThisWeek(),
-      getWeekActivity(),
+    // ─── First paint blocks ONLY on the hero focus (the get_train_focus bundle)
+    // + the local photo. The week stats + metrics aren't needed for the hero, so
+    // they fill in just after (below) instead of adding ~4 serial pooler
+    // round-trips to the cold-start critical path.
+    setMyUserId(u?.id || null);
+    const coupleId = coupleV?.coupleId || null;
+    const [catData, savedPhoto] = await Promise.all([
+      fetchCategoryData(cat),
       AsyncStorage.getItem('@profile_photo'),
     ]);
-    // getSlots already computes lesson readiness internally — reuse it instead
-    // of firing a second identical query chain.
-    const readinessValue = slots.readiness ?? null;
     setUser(u);
     setCouple(coupleV);
-    // A transient getSlots failure (timeout / free-tier pooler saturation)
-    // returns { error:true } with null slots — DON'T apply it, or focus points
-    // already on screen vanish into the "log your next class" empty state. Keep
-    // the current (cached) slots + readiness until a clean fetch lands.
-    if (!slots.error) {
-      setSlot1(slots.slot1);
-      setSlot2(slots.slot2);
-      setSlot3(slots.slot3);
-      setReadiness(readinessValue);
+    // A transient failure returns { error:true } with null slots — DON'T apply it,
+    // or focus points already on screen vanish into the "log your next class"
+    // empty state. Keep the current (cached) cards until a clean fetch lands.
+    if (!catData.error) {
+      applyCategoryData(catData, !!coupleId);
+      persistStyleData(cat, catData);
     }
-    setSessionsThisWeek(sessions);
-    setClassesThisWeek(classes);
-    setFocusTrainedThisWeek(focusTrained);
-    setWeekActivity(wa || {});
     setPhotoUri(savedPhoto || null);
     lastLoadRef.current = Date.now();
 
-    // ─── Couple card data (non-blocking) ──
-    setMyUserId(u?.id || null);
-    const coupleId = coupleV?.coupleId || null;
+    // ─── Couple lock + primary card (category-independent) ──
     if (coupleId) {
-      Promise.all([
-        getCoupleSlots(coupleId, cat),
-        mostTrainedMode(coupleId).catch(() => 'solo'),
-      ]).then(([cs, primary]) => {
-        // Same guard as the solo card: a failed couple fetch keeps the current
-        // couple focuses instead of blanking them.
-        if (!cs?.error) {
-          setCoupleSlots(cs || { slot1: null, slot2: null, slot3: null });
-          setCoupleReadiness(cs?.readiness ?? null);
-        }
+      getCoupleLock(coupleId).then(setCoupleLock).catch(() => setCoupleLock(null));
+      mostTrainedMode(coupleId).then((primary) => {
         setPrimaryMode(primary);
-        // Cache the couple slice for instant paint on reopen — but only when
-        // there's a focus to show (don't poison the next launch with an empty
-        // couple from a cold-start failure). Mirrors the solo #3 guard.
-        if (cs?.slot1) {
+        // Cache the couple slice for instant paint on reopen — only when there's
+        // a focus to show (don't poison the next launch with an empty couple).
+        if (catData.coupleSlots?.slot1) {
           AsyncStorage.setItem(COUPLE_CACHE_KEY, JSON.stringify({
-            couple: coupleV, coupleSlots: cs, coupleReadiness: cs?.readiness ?? null, primaryMode: primary, category: cat,
+            couple: coupleV, coupleSlots: catData.coupleSlots,
+            coupleReadiness: catData.coupleReadiness ?? null, primaryMode: primary, category: cat,
           })).catch(() => {});
         }
-      }).catch(() => {});
-      getCoupleLock(coupleId).then(setCoupleLock).catch(() => setCoupleLock(null));
+      }).catch(() => setPrimaryMode('solo'));
     } else {
       setCoupleSlots({ slot1: null, slot2: null, slot3: null });
       setCoupleReadiness(null);
@@ -777,33 +770,31 @@ export default function HomeScreen({ navigation }) {
       AsyncStorage.removeItem(COUPLE_CACHE_KEY).catch(() => {}); // unpaired → drop stale couple
     }
 
-    // ─── Wave 2 (non-blocking): session counts + metrics fill in after ──
-    // Kicked off in parallel and applied when they land, so the screen
-    // renders immediately instead of waiting on a 2nd & 3rd serial wave.
+    // ─── Week stats + metrics (non-blocking) → fill in after the hero, then
+    // persist the full cache snapshot once everything has landed. ──
     Promise.all([
-      slots.slot1?.id ? getSessionCountForFocus(slots.slot1.id) : Promise.resolve(0),
-      slots.slot2?.id ? getSessionCountForFocus(slots.slot2.id) : Promise.resolve(0),
+      getTrainingSessionsThisWeek(),
+      getSessionsThisWeek(),
+      getFocusTrainedThisWeek(),
+      getWeekActivity(),
       u?.id ? getAllStudentMetrics(u.id, cat).catch(() => null) : Promise.resolve(null),
-    ]).then(([c1, c2, m]) => {
-      // Counts track slot1/slot2; on a getSlots error we kept the old slots, so
-      // keep their counts too rather than zeroing them.
-      if (!slots.error) {
-        setSessionCount(c1);
-        setSlot2Count(c2);
-      }
+    ]).then(([sessions, classes, focusTrained, wa, m]) => {
+      setSessionsThisWeek(sessions);
+      setClassesThisWeek(classes);
+      setFocusTrainedThisWeek(focusTrained);
+      setWeekActivity(wa || {});
       const metricsFinal = m || { progression: 0, retention: 100, global: 0 };
       if (m) setMetrics(metricsFinal);
-      // Persist the FULL snapshot (with timestamp) once everything is in — but
-      // only when there's actually a focus to show. Caching an empty/failed
-      // load would poison the next launch into the "log your next class" flash.
-      if (slots.slot1) {
+      // Persist the FULL snapshot — only when there's a focus to show (caching an
+      // empty/failed load would poison the next launch into the empty state).
+      if (catData.slot1) {
         AsyncStorage.setItem(HOME_CACHE_KEY, JSON.stringify({
           ts: Date.now(),
-          user: u, slot1: slots.slot1, slot2: slots.slot2, slot3: slots.slot3,
-          sessionCount: c1, slot2Count: c2,
+          user: u, slot1: catData.slot1, slot2: catData.slot2, slot3: catData.slot3,
+          sessionCount: catData.sessionCount, slot2Count: catData.slot2Count,
           sessionsThisWeek: sessions, classesThisWeek: classes,
           focusTrainedThisWeek: focusTrained, weekActivity: wa || {}, metrics: metricsFinal,
-          readiness: readinessValue,
+          readiness: catData.readiness ?? null,
           category: cat,
         })).catch(() => {});
       }
@@ -834,22 +825,36 @@ export default function HomeScreen({ navigation }) {
 
     const cached = categoryCacheRef.current[next];
     if (cached) {
-      // Instant swap from cache, then refresh in the background.
+      // Instant swap from in-memory cache, then refresh in the background.
       applyCategoryData(cached, hasCouple);
       fetchCategoryData(next).then((d) => {
         if (d.error) return; // keep the cached view rather than blanking it
         categoryCacheRef.current[next] = d;
+        persistStyleData(next, d);
         if (switchSeqRef.current === seq) applyCategoryData(d, hasCouple);
       }).catch(() => {});
       return;
     }
 
-    // No cache yet → show the skeleton while we fetch this style fresh.
-    setCategorySwitching(true);
+    // No in-memory cache → paint instantly from the persisted style cache if we
+    // have it (covers the first toggle after a cold start, before the prefetch
+    // warms it). Only show the skeleton when there's nothing cached at all.
+    let paintedFromDisk = false;
+    try {
+      const raw = await AsyncStorage.getItem(STYLE_CACHE_KEY + (next || 'all'));
+      if (raw && switchSeqRef.current === seq) {
+        const d = JSON.parse(raw);
+        categoryCacheRef.current[next] = d;
+        applyCategoryData(d, hasCouple);
+        paintedFromDisk = true;
+      }
+    } catch {}
+    if (!paintedFromDisk && switchSeqRef.current === seq) setCategorySwitching(true);
     try {
       const d = await fetchCategoryData(next);
       if (!d.error) {
         categoryCacheRef.current[next] = d;
+        persistStyleData(next, d);
         if (switchSeqRef.current === seq) applyCategoryData(d, hasCouple);
       }
     } catch {}
@@ -867,8 +872,8 @@ export default function HomeScreen({ navigation }) {
     // Defer so the prefetch yields to the initial screen's own secondary
     // waves (session counts, metrics, AI pre-warm) on slow connections.
     const t = setTimeout(() => {
-      fetchCategoryData(other, couple?.coupleId || null)
-        .then((d) => { if (!cancelled && !d.error) categoryCacheRef.current[other] = d; })
+      fetchCategoryData(other)
+        .then((d) => { if (!cancelled && !d.error) { categoryCacheRef.current[other] = d; persistStyleData(other, d); } })
         .catch(() => {});
     }, 1200);
     return () => { cancelled = true; clearTimeout(t); };
@@ -889,33 +894,47 @@ export default function HomeScreen({ navigation }) {
       let hadCache = false;
       let cacheTs = 0;
       let revealed = false;
+      let cacheMatchesToggle = false;
       if (isFirst) {
         try {
-          const raw = await AsyncStorage.getItem(HOME_CACHE_KEY);
+          const [raw, savedCat] = await Promise.all([
+            AsyncStorage.getItem(HOME_CACHE_KEY),
+            AsyncStorage.getItem(CATEGORY_STORAGE_KEY),
+          ]);
           if (raw) {
             const c = JSON.parse(raw);
             hadCache = true;
             cacheTs = c.ts || 0;
+            const isBoth = c.user?.dance_style === 'Latin & Ballroom';
+            // Single source of truth for the active style = the persisted toggle.
+            // NEVER let a stale HOME_CACHE.category override it — that mismatch is
+            // what made the Train toggle "revert on its own".
+            const wantCat = isBoth ? (savedCat === 'ballroom' ? 'ballroom' : 'latin') : null;
+            cacheMatchesToggle = (c.category ?? null) === wantCat;
             setUser(c.user);
-            setShowFilter(c.user?.dance_style === 'Latin & Ballroom');
-            setCategory(c.category ?? null);
-            setSlot1(c.slot1);
-            setSlot2(c.slot2);
-            setSlot3(c.slot3 || null);
+            setShowFilter(isBoth);
+            setCategory(wantCat);
+            // Category-independent stats always paint from cache.
             setSessionCount(c.sessionCount || 0);
             setSlot2Count(c.slot2Count || 0);
             setSessionsThisWeek(c.sessionsThisWeek || 0);
             setClassesThisWeek(c.classesThisWeek || 0);
             setFocusTrainedThisWeek(c.focusTrainedThisWeek || 0);
             setWeekActivity(c.weekActivity || {});
-            setReadiness(c.readiness || null);
             if (c.metrics) setMetrics(c.metrics);
-            // Seed lastLoadRef from cache so subsequent focuses honor freshness
-            // and don't redundantly refetch.
-            if (cacheTs) lastLoadRef.current = cacheTs;
-            setIsLoading(false); // stale-while-revalidate: show cache instantly
-            reveal(); // fade cached content in NOW, even while the refresh runs
-            revealed = true;
+            // Focus slots/readiness only paint when the cache is for the style the
+            // toggle is on; otherwise they're the other style → keep the skeleton
+            // until load() fetches the right one (now a single fast RPC).
+            if (cacheMatchesToggle) {
+              setSlot1(c.slot1);
+              setSlot2(c.slot2);
+              setSlot3(c.slot3 || null);
+              setReadiness(c.readiness || null);
+              if (cacheTs) lastLoadRef.current = cacheTs;
+              setIsLoading(false); // stale-while-revalidate: show cache instantly
+              reveal(); // fade cached content in NOW, even while the refresh runs
+              revealed = true;
+            }
           }
           // Couple slice — separate cache key, applied even if the solo cache
           // was empty, so the couple focus paints instantly on reopen instead
@@ -933,7 +952,7 @@ export default function HomeScreen({ navigation }) {
       // Skip the network refresh entirely if cache is fresh (< FRESH_TTL).
       // Tab switches & quick back-nav feel instant, no spinner flash.
       const fresh = isFirst
-        ? hadCache && cacheTs && (Date.now() - cacheTs < FRESH_TTL)
+        ? hadCache && cacheTs && cacheMatchesToggle && (Date.now() - cacheTs < FRESH_TTL)
         : (Date.now() - lastLoadRef.current < FRESH_TTL);
       if (!fresh) {
         try { await load(); } catch {}
@@ -1068,6 +1087,16 @@ export default function HomeScreen({ navigation }) {
   const partnerLock = (coupleLock && myUserId && coupleLock.lockedByUserId !== myUserId) ? coupleLock : null;
   const coupleInProgress = coupleSessionActive || !!partnerLock;
   const anyInProgress = isSessionActive || !!partnerLock;
+  // Auto-expand rule: when both cards are present for the current style but one
+  // side (solo / couple) has no focus points in progress, force the side WITH
+  // focuses to be primary/expanded — overrides the saved swap state. An active /
+  // in-progress session still wins (handled by soloSessionActive/coupleInProgress).
+  const soloHasFocus = !!slot1;
+  const coupleHasFocus = !!(coupleSlots && coupleSlots.slot1);
+  const autoExpand = (paired && !soloSessionActive && !coupleInProgress)
+    ? (!soloHasFocus && coupleHasFocus ? 'couple'
+      : (!coupleHasFocus && soloHasFocus ? 'solo' : null))
+    : null;
   // The card that's actually training stays visible regardless of the style
   // filter (can't hide a running session behind a filter); the idle card still
   // follows the filter.
@@ -1202,7 +1231,7 @@ export default function HomeScreen({ navigation }) {
           // forces the couple card primary instead.
           const soloIsPrimary = soloSessionActive ? true
             : coupleInProgress ? false
-            : (primaryMode === 'solo');
+            : ((autoExpand ?? primaryMode) === 'solo');
 
           const timerNode = (
             <View style={s.inProgressRight}>
@@ -1336,7 +1365,7 @@ export default function HomeScreen({ navigation }) {
         {/* See all focus points */}
         <TouchableOpacity
           style={[cc.allLink, SMALL_SCREEN && { paddingVertical: 6 }]}
-          onPress={() => navigation.navigate('AllFocusPoints')}
+          onPress={() => navigation.navigate('AllFocusPoints', { category })}
           activeOpacity={0.7}
         >
           <Text style={cc.allLinkText}>All focus points</Text>
@@ -1360,7 +1389,7 @@ export default function HomeScreen({ navigation }) {
             : paired && (
               (coupleVisible && !soloVisible) ? true
               : (soloVisible && !coupleVisible) ? false
-              : rdlPrimary === 'couple'
+              : (autoExpand ? autoExpand === 'couple' : rdlPrimary === 'couple')
             );
           const mainF = primaryCouple ? coupleF : soloF;
           const sideF = (!isSessionActive && paired && bothVisible) ? (primaryCouple ? soloF : coupleF) : [];

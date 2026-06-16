@@ -721,7 +721,7 @@ export default function DashboardScreen({ navigation }) {
               <TouchableOpacity
                 style={[
                   styles.actionsBtn,
-                  { backgroundColor: actionCounts.focus > 0 ? RED : WARNING },
+                  { backgroundColor: (actionCounts.focus > 0 || actionCounts.reconcile > 0) ? RED : WARNING },
                 ]}
                 activeOpacity={0.85}
                 onPress={() => navigation.navigate('ActionNeeded')}

@@ -882,8 +882,12 @@ export default function ProfileScreen({ navigation, route }) {
     // + avatar stay local. couple / partner requests keep the `undefined` =
     // "bundle failed, keep what we have" sentinel so a transient failure never
     // blanks the partnership.
+    // Mirror Train's last-selected Latin/Ballroom style so readiness matches the
+    // toggle (a 2-style dancer's Profile otherwise anchored on the most-recent
+    // private of any style). null = single-style / unset.
+    const trainCat = await AsyncStorage.getItem('train_category_filter').catch(() => null);
     const [bundle, { data: { session } }, savedPhoto] = await Promise.all([
-      withTimeout(getStudentProfileBundle(), null),
+      withTimeout(getStudentProfileBundle(null, trainCat), null),
       supabase.auth.getSession(),                          // local — no network hang
       AsyncStorage.getItem(AVATAR_KEY).catch(() => null),  // local
     ]);

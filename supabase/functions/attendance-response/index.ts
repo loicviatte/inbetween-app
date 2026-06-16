@@ -151,6 +151,7 @@ async function processResponse(
       drill: fp.drill ?? null,
       tier: fp.tier ?? 'supporting',
       base_score: STARTING_SCORES[fp.tier ?? 'supporting'] ?? 5,
+      train_target: (fp.tier ?? 'supporting') === 'critical' ? 3 : 2,
       mention_count: fp.mention_count ?? 0,
       explicit_priority: fp.explicit_priority ?? false,
       first_timestamp: fp.first_timestamp ?? null,

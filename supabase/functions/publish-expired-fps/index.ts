@@ -24,6 +24,7 @@
 // idempotent, body ignored.
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { autoResolveCarryover } from '../_shared/yoda-score.ts'
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
@@ -129,13 +130,18 @@ async function sweep() {
 
   const toPublish: string[] = []
   const toDrop: string[] = []
+  const publishedStudentIds = new Set<string>()
   for (const fp of eligible) {
     const isGroup = !!(fp.group_fp && fp.source_class_input_id)
     const attended =
       !isGroup ||
       attendedKeys.has(`${fp.source_class_input_id}:${fp.user_id}`)
-    if (!attended) toDrop.push(fp.id)
-    else toPublish.push(fp.id)
+    if (!attended) {
+      toDrop.push(fp.id)
+    } else {
+      toPublish.push(fp.id)
+      if (!isGroup) publishedStudentIds.add(fp.user_id)
+    }
   }
 
   // Two batched updates instead of one-per-row.
@@ -158,13 +164,22 @@ async function sweep() {
     }
   }
 
+  // #autoResolve: a "not yet" carry-over the coach never reconciled wins by
+  // default once these focuses publish — drop the lowest-ranked new focuses for
+  // each affected student down to 3 (mirrors the coach's ReconcileFocusSheet).
+  let autoResolved = 0
+  for (const sid of publishedStudentIds) {
+    autoResolved += await autoResolveCarryover(supabase, sid)
+  }
+
   console.log(
-    `[publish-expired-fps] swept ${expired.length} (published ${toPublish.length}, dropped ${toDrop.length}, gated ${gated.length})`,
+    `[publish-expired-fps] swept ${expired.length} (published ${toPublish.length}, dropped ${toDrop.length}, gated ${gated.length}, auto-resolved ${autoResolved})`,
   )
   return {
     published: toPublish.length,
     dropped: toDrop.length,
     gated: gated.length,
+    autoResolved,
     total: expired.length,
   }
 }

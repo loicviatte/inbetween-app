@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { AppState } from 'react-native';
 import * as Notifications from 'expo-notifications';
-import { getMyStudents, getCoachActivityFeed, getPendingCoachRequests, getCoachNotes, getPendingFocusPoints } from '../storage/coachStorage';
+import { getMyStudents, getCoachActivityFeed, getPendingCoachRequests, getCoachNotes, getPendingFocusPoints, getReconcileNeeded } from '../storage/coachStorage';
 import { getPendingCoupleFocusPoints } from '../storage/coupleStorage';
 import { getUser } from '../storage/storage';
 import { getNotifications } from '../storage/notificationsStorage';
@@ -16,7 +16,7 @@ export function CoachDataProvider({ children }) {
   const [notes, setNotes] = useState([]);
   const [user, setUser] = useState(null);
   const [unreadCount, setUnreadCount] = useState(0);
-  const [actionCounts, setActionCounts] = useState({ focus: 0, merge: 0, name: 0, total: 0 });
+  const [actionCounts, setActionCounts] = useState({ focus: 0, merge: 0, name: 0, reconcile: 0, total: 0 });
   const [studentActionCounts, setStudentActionCounts] = useState({});
   const [initialLoading, setInitialLoading] = useState(true);
   const loaded = useRef(false);
@@ -59,12 +59,14 @@ export function CoachDataProvider({ children }) {
     // ─── Critical wave: blocks first render. Just the data the coach
     // home screen NEEDS to render its student list + identity. The rest
     // (feed, notes, action badges) populates in the background.
+    let studentList = [];
     try {
       const [s, u] = await Promise.all([
         getMyStudents().catch(() => []),
         getUser().catch(() => null),
       ]);
-      setStudents(s || []);
+      studentList = s || [];
+      setStudents(studentList);
       setUser(u);
     } catch {}
     if (!loaded.current) {
@@ -88,7 +90,8 @@ export function CoachDataProvider({ children }) {
         .then((res) => res)
         .catch(() => ({ count: 0, data: [] })),
       getPendingCoupleFocusPoints().catch(() => []),
-    ]).then(([ev, r, n, notifs, fps, mergesRes, coupleFps]) => {
+      getReconcileNeeded(studentList.map((x) => x.id)).catch(() => []),
+    ]).then(([ev, r, n, notifs, fps, mergesRes, coupleFps, reconcileGroups]) => {
       setEvents((ev || []).slice(0, 12));
       setRequests(r || []);
       setNotes(n || []);
@@ -98,11 +101,13 @@ export function CoachDataProvider({ children }) {
       const mergeCount = mergesRes?.count || 0;
       const nameNotifs = (notifs || []).filter((x) => x.type === 'name_match_confirm');
       const nameCount = nameNotifs.length;
+      const reconcileCount = (reconcileGroups || []).length;
       setActionCounts({
         focus: focusCount,
         merge: mergeCount,
         name: nameCount,
-        total: focusCount + mergeCount + nameCount,
+        reconcile: reconcileCount,
+        total: focusCount + mergeCount + nameCount + reconcileCount,
       });
 
       // Per-student action count (focus validation + merge + name match)

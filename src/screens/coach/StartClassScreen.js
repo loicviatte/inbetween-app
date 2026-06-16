@@ -813,9 +813,14 @@ export default function StartClassScreen({ navigation }) {
     if (active.kind === 'private' && active.studentId) {
       const match = students.find((s) => s.id === active.studentId);
       if (match) {
-        // Reuse the existing loader so detail data is consistent with a
-        // fresh pick (focus points, questions, last class).
-        loadStudentDetail(match);
+        // Reuse the existing loader so detail data is consistent with a fresh
+        // pick (focus points, questions, last class). Use the style persisted
+        // when the class started (so the debrief stays scoped to it); fall back
+        // to the single coached style, else null.
+        loadStudentDetail(
+          match,
+          active.category ?? ((match.coachStyles && match.coachStyles.length === 1) ? match.coachStyles[0] : null),
+        );
       } else {
         // Fallback: at least land on the briefing view with what we have.
         setSelectedStudent({
@@ -1489,6 +1494,10 @@ export default function StartClassScreen({ navigation }) {
       startedAt: now,
       studentId: selectedStudent?.id ?? null,
       studentName: selectedStudent?.name ?? null,
+      // Persist the picked Latin/Ballroom style so a restore after app-kill
+      // re-scopes the debrief to it (else default-retire could retire the OTHER
+      // style's untouched focuses for a 2-style student).
+      category: briefingCategoryRef.current ?? null,
     });
 
     try {
@@ -1715,29 +1724,29 @@ export default function StartClassScreen({ navigation }) {
     const localMode = isLocalMode;
 
     // Persist coach verdicts on the readiness focuses (fire-and-forget).
-    //   "good"    → archive the focus (status = past)
-    //   "not yet" → flag as held; the focus stops appearing in the
-    //               readiness checklist until the student finishes the
-    //               new class's primary focuses (then it re-enters with
-    //               a 15-minute training target)
+    // Default-retire is the core of the rework: a focus point lives only until
+    // the coach validates it at a debrief (or the student archives it).
+    //   "not yet"  → held; carried over to be reconciled with the new class's
+    //                focuses (+2 target on merge, server-side).
+    //   everything else (marked "Good" OR left untouched) → status = past:
+    //                retired by default, disappears from the student's plan.
     // Couple debriefs write to couple_focus_points (the verdict ids are couple
     // FP ids); the recording coach is the couple coach so RLS allows it.
     const verdictTable = view === 'couple-briefing' ? 'couple_focus_points' : 'focus_points';
-    const goodIds = Object.entries(readinessVerdicts)
-      .filter(([, verdict]) => verdict === 'good')
-      .map(([id]) => id);
-    if (goodIds.length > 0) {
-      supabase
-        .from(verdictTable)
-        .update({ status: 'past' })
-        .in('id', goodIds)
-        .then(() => {}, (err) => {
-          console.warn('[StartClass] readiness verdict persist failed:', err);
-        });
-    }
-    const notYetIds = Object.entries(readinessVerdicts)
-      .filter(([, verdict]) => verdict === 'not_yet')
-      .map(([id]) => id);
+    // The same carryover list the debrief UI built from readiness — the old
+    // class's still-active, non-held focuses the coach just reviewed.
+    const carryoverList =
+      view === 'couple-briefing'
+        ? (coupleReadinessDetail?.focuses || [])
+        : (view === 'private-briefing' && studentReadiness)
+          ? (studentReadiness.focuses || [])
+          : [];
+    const notYetIds = carryoverList
+      .map((f) => f.focusPointId)
+      .filter((id) => readinessVerdicts[id] === 'not_yet');
+    const retireIds = carryoverList
+      .map((f) => f.focusPointId)
+      .filter((id) => readinessVerdicts[id] !== 'not_yet');
     if (notYetIds.length > 0) {
       supabase
         .from(verdictTable)
@@ -1745,6 +1754,15 @@ export default function StartClassScreen({ navigation }) {
         .in('id', notYetIds)
         .then(() => {}, (err) => {
           console.warn('[StartClass] not-yet hold persist failed:', err);
+        });
+    }
+    if (retireIds.length > 0) {
+      supabase
+        .from(verdictTable)
+        .update({ status: 'past' })
+        .in('id', retireIds)
+        .then(() => {}, (err) => {
+          console.warn('[StartClass] default-retire persist failed:', err);
         });
     }
     setReadinessVerdicts({});
@@ -1912,7 +1930,12 @@ export default function StartClassScreen({ navigation }) {
   // Load student detail when picked. Per-student reads go through the
   // shared context cache so tapping the same student twice is instant
   // (60s TTL — long enough for a select→briefing→back→briefing trip).
-  const loadStudentDetail = useCallback(async (student) => {
+  // When a coach teaches the SAME student both styles, they pick Latin/Ballroom
+  // before the briefing opens — so the readiness AND the end-of-class debrief are
+  // scoped to that style (the right focus points show, and default-retire only
+  // touches that style's focuses).
+  const [stylePicker, setStylePicker] = useState(null); // student awaiting style choice
+  const loadStudentDetail = useCallback(async (student, category = null) => {
     setSelectedStudent(student);
     setDetailLoading(true);
     setView('private-briefing');
@@ -1923,7 +1946,7 @@ export default function StartClassScreen({ navigation }) {
         getOrFetch(`${sk}:questions`, () => getStudentQuestions(student.id).catch(() => [])),
         getOrFetch(`${sk}:openQuestions`, () => getStudentOpenQuestions(student.id).catch(() => [])),
         getOrFetch(`${sk}:activity:40`, () => getStudentRecentActivity(student.id, 40).catch(() => [])),
-        getOrFetch(`${sk}:readiness`, () => getLessonReadiness(student.id).catch(() => null)),
+        getOrFetch(`${sk}:readiness:${category || 'all'}`, () => getLessonReadiness(student.id, category).catch(() => null)),
       ]);
       setFocusPoints(fps || []);
       setQuestions(qs || []);
@@ -1957,6 +1980,65 @@ export default function StartClassScreen({ navigation }) {
     } catch {}
     setDetailLoading(false);
   }, []);
+
+  // Open a student's briefing. If this coach teaches them BOTH styles, ask which
+  // one first (so readiness/debrief are scoped to it); otherwise open directly
+  // on the single style this coach coaches them in.
+  const pickStudent = useCallback((student) => {
+    const styles = student?.coachStyles || [];
+    if (styles.includes('latin') && styles.includes('ballroom')) {
+      setStylePicker(student);
+    } else {
+      loadStudentDetail(student, styles[0] || null);
+    }
+  }, [loadStudentDetail]);
+
+  // "Latin or Ballroom?" picker — shown when the coach taps a student they teach
+  // both styles. The choice scopes the briefing readiness AND the debrief focuses.
+  function renderStylePicker() {
+    return (
+      <Modal
+        visible={!!stylePicker}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setStylePicker(null)}
+      >
+        {stylePicker && (
+          <Pressable style={notYet.backdrop} onPress={() => setStylePicker(null)}>
+            <Pressable style={notYet.card} onPress={() => { /* swallow */ }}>
+              <HeroCardGradient />
+              <View style={notYet.iconWrap}>
+                <Ionicons name="albums-outline" size={22} color="#F6D27A" />
+              </View>
+              <Text style={notYet.title}>Latin or Ballroom?</Text>
+              <Text style={notYet.body}>
+                <Text>You coach </Text>
+                <Text style={notYet.bodyAccent}>{stylePicker.name}</Text>
+                <Text> in both — which class are you starting?</Text>
+              </Text>
+              <TouchableOpacity
+                style={notYet.primaryBtn}
+                activeOpacity={0.85}
+                onPress={() => { const st = stylePicker; setStylePicker(null); loadStudentDetail(st, 'latin'); }}
+              >
+                <Text style={notYet.primaryBtnText}>Latin</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[notYet.primaryBtn, { marginTop: 8 }]}
+                activeOpacity={0.85}
+                onPress={() => { const st = stylePicker; setStylePicker(null); loadStudentDetail(st, 'ballroom'); }}
+              >
+                <Text style={notYet.primaryBtnText}>Ballroom</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={notYet.secondaryBtn} activeOpacity={0.7} onPress={() => setStylePicker(null)}>
+                <Text style={notYet.secondaryBtnText}>Cancel</Text>
+              </TouchableOpacity>
+            </Pressable>
+          </Pressable>
+        )}
+      </Modal>
+    );
+  }
 
   // Couple equivalent of loadStudentDetail — loads the same kinds of data so the
   // couple briefing can mirror the solo layout. (Couples have no "class recap"
@@ -2186,17 +2268,16 @@ export default function StartClassScreen({ navigation }) {
     const questionsToAddress = view === 'private-briefing' ? (openQuestions || []) : [];
     const coveredCount = Object.values(questionVerdicts).filter(v => v === 'covered').length;
 
-    // Focus-verdict gating: the coach must pick Good or Not yet for every
-    // carryover focus before Done becomes enabled. The point is to force
-    // a moment of reflection on each one — no autopilot Done.
+    // Carryover focuses from the student's last class. Each can be marked
+    // "Not yet" to keep training it (carried over, reconciled with the new
+    // class's focuses). Anything left unmarked is retired by default on Done —
+    // a focus point lives only until the coach validates it. Done is never gated.
     const carryoverFocuses =
       view === 'couple-briefing'
         ? (coupleReadinessDetail?.focuses || [])
         : (view === 'private-briefing' && studentReadiness)
           ? (studentReadiness.focuses || [])
           : [];
-    const allFocusesVerdicted = carryoverFocuses.length === 0
-      || carryoverFocuses.every(f => !!readinessVerdicts[f.focusPointId]);
 
     return (
       <Modal
@@ -2259,6 +2340,10 @@ export default function StartClassScreen({ navigation }) {
             {carryoverFocuses.length > 0 && (
               <>
                 <Text style={db.secLabel}>How did it go?</Text>
+                <Text style={db.verdictHint}>
+                  Tap “Not yet” to keep training a focus. Anything you leave
+                  unmarked is retired when you tap Done.
+                </Text>
                 <View style={db.verdictList}>
                   {carryoverFocuses.map((f) => {
                     const verdict = readinessVerdicts[f.focusPointId];
@@ -2437,14 +2522,11 @@ export default function StartClassScreen({ navigation }) {
 
             <View style={db.bottomBar}>
               <TouchableOpacity
-                style={[db.btnDone, !allFocusesVerdicted && db.btnDoneDisabled]}
-                activeOpacity={allFocusesVerdicted ? 0.88 : 1}
-                onPress={allFocusesVerdicted ? finishDebrief : undefined}
-                disabled={!allFocusesVerdicted}
+                style={db.btnDone}
+                activeOpacity={0.88}
+                onPress={finishDebrief}
               >
-                <Text style={[db.btnDoneText, !allFocusesVerdicted && db.btnDoneTextDisabled]}>
-                  {allFocusesVerdicted ? 'Done' : 'Rate every focus to finish'}
-                </Text>
+                <Text style={db.btnDoneText}>Done</Text>
               </TouchableOpacity>
             </View>
 
@@ -2981,7 +3063,7 @@ export default function StartClassScreen({ navigation }) {
                 <PrivateCard
                   key={st.id}
                   st={st}
-                  onPress={() => loadStudentDetail(students.find(x => x.id === st.id) || st)}
+                  onPress={() => pickStudent(students.find(x => x.id === st.id) || st)}
                 />
               ))
             )}
@@ -3094,6 +3176,7 @@ export default function StartClassScreen({ navigation }) {
               </View>
             </TouchableOpacity>
           </ScrollView>
+          {renderStylePicker()}
         </SafeAreaView>
       </View>
     );
@@ -3133,7 +3216,7 @@ export default function StartClassScreen({ navigation }) {
                 key={st.id}
                 style={s.studentRow}
                 activeOpacity={0.7}
-                onPress={() => loadStudentDetail(st)}
+                onPress={() => pickStudent(st)}
               >
                 <View style={s.studentAvatar}>
                   <Text style={s.studentAvatarText}>{initials(st.name)}</Text>
@@ -3152,6 +3235,7 @@ export default function StartClassScreen({ navigation }) {
             );
           })}
         </ScrollView>
+        {renderStylePicker()}
       </SafeAreaView>
     );
   }
@@ -5747,6 +5831,15 @@ const db = StyleSheet.create({
     color: '#CCC',
     marginTop: 6,
     paddingLeft: 2,
+  },
+  verdictHint: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 11,
+    color: '#8A8A8A',
+    marginHorizontal: 24,
+    marginTop: -2,
+    marginBottom: 10,
+    lineHeight: 15,
   },
   // Focus point validation list — dark brown cards matching the rest of
   // the debrief surface.
