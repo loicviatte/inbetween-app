@@ -206,7 +206,7 @@ export default function MicSyncFlowModal() {
               <>
                 <TouchableOpacity style={s.retryBtn} onPress={pickFolderFromInstructions} activeOpacity={0.88}>
                   <Ionicons name="folder-open" size={15} color="#0A0A0A" />
-                  <Text style={s.retryBtnText}>OPEN FILES</Text>
+                  <Text style={s.retryBtnText}>START</Text>
                 </TouchableOpacity>
                 <TouchableOpacity onPress={cancelFlow} activeOpacity={0.7}>
                   <Text style={s.ghostLink}>CANCEL</Text>
@@ -705,7 +705,7 @@ const s = StyleSheet.create({
     letterSpacing: -0.5,
     textAlign: 'center',
     marginTop: 10,
-    marginBottom: 8,
+    marginBottom: 40,
   },
   grantIntro: {
     fontFamily: Fonts.jakartaRegular,
@@ -859,7 +859,7 @@ const s = StyleSheet.create({
   helperLink: {
     fontFamily: Fonts.jakartaMedium,
     fontSize: 12.5,
-    color: 'rgba(255,255,255,0.55)',
+    color: GOLD_500,
     textDecorationLine: 'underline',
     textAlign: 'center',
     paddingVertical: 12,
