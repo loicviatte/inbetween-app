@@ -20,7 +20,7 @@ import {
   Easing,
 } from 'react-native';
 import { Image } from 'expo-image';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import Svg, { Circle } from 'react-native-svg';
 import { Fonts } from '../theme';
@@ -85,6 +85,11 @@ function PulseText({ children, style }) {
 
 export default function MicSyncFlowModal() {
   const sync = useDjiSync();
+  // Read insets from the app-level SafeAreaProvider (always measured/correct)
+  // rather than a SafeAreaView INSIDE the <Modal>: the modal presents in a
+  // separate native container whose inset measurement races to 0 on ~half of
+  // opens, cropping the close button + bottom actions against the screen edge.
+  const insets = useSafeAreaInsets();
   if (!sync) return null;
 
   const {
@@ -134,7 +139,7 @@ export default function MicSyncFlowModal() {
       statusBarTranslucent
     >
       <View style={[s.stage, phase === 'error' && s.stageErr]}>
-        <SafeAreaView style={s.safe} edges={['top', 'bottom']}>
+        <View style={[s.safe, { paddingTop: Math.max(insets.top, 8), paddingBottom: Math.max(insets.bottom, 8) }]}>
           {/* Top row: close + context label */}
           <View style={s.topRow}>
             <TouchableOpacity
@@ -244,7 +249,7 @@ export default function MicSyncFlowModal() {
               </>
             )}
           </View>
-        </SafeAreaView>
+        </View>
       </View>
     </Modal>
   );
