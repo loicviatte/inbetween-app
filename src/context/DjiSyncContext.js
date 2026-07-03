@@ -927,6 +927,23 @@ export function DjiSyncProvider({ children }) {
     refreshPending();
   }, [refreshPending, stopOfflineRetry, startOfflineRetry]);
 
+  // DEV ONLY: drop the folder bookmark so the "Set up auto-sync" onboarding
+  // banner reappears — lets us review the setup wizard without reinstalling.
+  // Exposed only when __DEV__; the modal renders its trigger under the same gate.
+  const devResetFolder = useCallback(() => {
+    try { DjiFiles.clearFolder?.(); } catch {}
+    stopOfflineRetry();
+    offlinePendingRef.current = [];
+    baselineEstablishedRef.current = false;
+    lastSeenMaxIdxRef.current = -1;
+    setFlowOpen(false);
+    setErrorInfo(null);
+    setSummary(null);
+    setPhase('idle');
+    refreshFolderAccess();
+    refreshPending();
+  }, [refreshFolderAccess, refreshPending, stopOfflineRetry]);
+
   // ─── Derived pill state ───────────────────────────────────────────────
   const pillState = useMemo(() => {
     if (!enabled) return 'hidden';
@@ -964,6 +981,7 @@ export function DjiSyncProvider({ children }) {
       micConnectedCheck,
       openGrantInstructions,
       pickFolderFromInstructions,
+      devResetFolder,
     }),
     [
       enabled,
@@ -991,6 +1009,7 @@ export function DjiSyncProvider({ children }) {
       micConnectedCheck,
       openGrantInstructions,
       pickFolderFromInstructions,
+      devResetFolder,
     ],
   );
 
