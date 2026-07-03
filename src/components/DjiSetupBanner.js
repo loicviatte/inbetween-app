@@ -581,6 +581,7 @@ const s = StyleSheet.create({
   },
   bulletRow: {
     gap: 6,
+    alignItems: 'flex-start',
   },
   bulletHint: {
     fontFamily: Fonts.jakartaRegular,

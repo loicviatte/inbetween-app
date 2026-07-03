@@ -11,7 +11,7 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import Svg, { Rect, Circle } from 'react-native-svg';
+import Svg, { Path, Circle } from 'react-native-svg';
 import { Fonts } from '../theme';
 
 const IOS_BLUE = '#4187F5'; // the blue of the iOS Files "Browse" tab + NO NAME drive
@@ -37,9 +37,17 @@ export function BrowseTabChip() {
 export function NoNameChip() {
   return (
     <View style={c.noNameChip}>
-      <Svg width={28} height={20} viewBox="0 0 28 20">
-        <Rect x="2.5" y="4" width="23" height="12.5" rx="3.8" stroke={IOS_BLUE} strokeWidth="1.9" fill="none" />
-        <Circle cx="7" cy="10.2" r="1.6" fill={IOS_BLUE} />
+      <Svg width={27} height={20} viewBox="0 0 30 22">
+        <Path
+          d="M10 4 L20 4 L25.5 10 L25.5 15.5 Q25.5 17.5 23.5 17.5 L6.5 17.5 Q4.5 17.5 4.5 15.5 L4.5 10 Z"
+          stroke={IOS_BLUE}
+          strokeWidth="1.8"
+          fill="none"
+          strokeLinejoin="round"
+          strokeLinecap="round"
+        />
+        <Path d="M4.5 10 L25.5 10" stroke={IOS_BLUE} strokeWidth="1.8" strokeLinecap="round" />
+        <Circle cx="9" cy="13.7" r="1.5" fill={IOS_BLUE} />
       </Svg>
       <Text style={c.noNameLabel}>NO NAME</Text>
       <Ionicons name="chevron-forward" size={14} color="#BFBFC4" />
@@ -66,7 +74,6 @@ const c = StyleSheet.create({
   noNameChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    alignSelf: 'flex-start',
     backgroundColor: '#F3F3F5',
     borderRadius: 12,
     paddingVertical: 9,

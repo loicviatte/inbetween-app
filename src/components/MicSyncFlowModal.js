@@ -327,35 +327,6 @@ function ConnectScreen() {
 
 // ─── Grant access (guided folder-pick instructions) ─────────────────────
 function GrantInstructionsScreen() {
-  const steps = [
-    {
-      n: '1',
-      body: (
-        <Text style={s.grantStepText}>
-          Tap <Text style={s.grantStrong}>Browse</Text> at the bottom.
-        </Text>
-      ),
-      chip: <BrowseTabChip />,
-    },
-    {
-      n: '2',
-      body: (
-        <Text style={s.grantStepText}>
-          Tap <Text style={s.grantStrong}>NO NAME</Text> under Locations.
-        </Text>
-      ),
-      chip: <NoNameChip />,
-      hint: 'If NO NAME isn’t there, make sure the mic is turned on.',
-    },
-    {
-      n: '3',
-      body: (
-        <Text style={s.grantStepText}>
-          Tap <Text style={s.grantStrong}>Open</Text> at the top-right.
-        </Text>
-      ),
-    },
-  ];
   return (
     <View style={s.grantWrap}>
       <View style={s.eyebrowRow}>
@@ -365,18 +336,24 @@ function GrantInstructionsScreen() {
       <Text style={s.grantTitle}>Point us to your mic.</Text>
       <Text style={s.grantIntro}>Tap Open Files, then:</Text>
       <View style={s.grantSteps}>
-        {steps.map((st) => (
-          <View key={st.n} style={s.stepRow}>
-            <View style={s.stepBadge}>
-              <Text style={s.stepBadgeTxt}>{st.n}</Text>
-            </View>
-            <View style={s.stepBody}>
-              {st.body}
-              {st.chip}
-              {st.hint ? <Text style={s.grantHint}>{st.hint}</Text> : null}
-            </View>
-          </View>
-        ))}
+        <View style={s.grantStep}>
+          <Text style={s.grantStepText}>
+            <Text style={s.grantStepNum}>1  </Text>Tap <Text style={s.grantStrong}>Browse</Text> at the bottom.
+          </Text>
+          <BrowseTabChip />
+        </View>
+        <View style={s.grantStep}>
+          <Text style={s.grantStepText}>
+            <Text style={s.grantStepNum}>2  </Text>Tap <Text style={s.grantStrong}>NO NAME</Text> under Locations.
+          </Text>
+          <NoNameChip />
+          <Text style={s.grantHint}>If NO NAME isn’t there, make sure the mic is turned on.</Text>
+        </View>
+        <View style={s.grantStep}>
+          <Text style={s.grantStepText}>
+            <Text style={s.grantStepNum}>3  </Text>Tap <Text style={s.grantStrong}>Open</Text> at the top-right.
+          </Text>
+        </View>
       </View>
     </View>
   );
@@ -720,50 +697,41 @@ const s = StyleSheet.create({
   },
 
   // ─── Grant-access instructions ──────────────────────────────────────
-  grantWrap: { alignItems: 'center', maxWidth: 340, paddingHorizontal: 4 },
+  grantWrap: { alignItems: 'center', maxWidth: 320, paddingHorizontal: 4 },
   grantTitle: {
     fontFamily: Fonts.ttDemiBold,
-    fontSize: 25,
+    fontSize: 26,
     color: '#fff',
     letterSpacing: -0.5,
     textAlign: 'center',
-    marginTop: 8,
-    marginBottom: 6,
+    marginTop: 10,
+    marginBottom: 8,
   },
   grantIntro: {
     fontFamily: Fonts.jakartaRegular,
     fontSize: 13.5,
     color: 'rgba(255,255,255,0.5)',
     textAlign: 'center',
-    marginBottom: 20,
+    marginBottom: 18,
   },
-  grantSteps: { alignSelf: 'stretch', gap: 15 },
-  stepRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
-  stepBadge: {
-    width: 23,
-    height: 23,
-    borderRadius: 12,
-    borderWidth: 1.5,
-    borderColor: 'rgba(232,181,48,0.45)',
-    backgroundColor: 'rgba(232,181,48,0.1)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 1,
-  },
-  stepBadgeTxt: { fontFamily: Fonts.jakartaExtraBold, fontSize: 11.5, color: GOLD_300, marginTop: -1 },
-  stepBody: { flex: 1, gap: 9, paddingTop: 1 },
+  grantSteps: { alignSelf: 'stretch', gap: 14 },
+  grantStep: { alignItems: 'center', gap: 8 },
   grantStepText: {
     fontFamily: Fonts.jakartaMedium,
     fontSize: 14,
-    color: 'rgba(255,255,255,0.9)',
+    color: 'rgba(255,255,255,0.85)',
     lineHeight: 20,
+    textAlign: 'center',
+    alignSelf: 'stretch',
   },
-  grantStrong: { fontFamily: Fonts.jakartaExtraBold, color: GOLD_300 },
+  grantStepNum: { fontFamily: Fonts.jakartaExtraBold, color: GOLD_500 },
+  grantStrong: { fontFamily: Fonts.jakartaExtraBold, color: GOLD_500 },
   grantHint: {
     fontFamily: Fonts.jakartaRegular,
     fontSize: 12,
     color: 'rgba(255,255,255,0.42)',
     lineHeight: 16,
+    textAlign: 'center',
   },
 
   progressStack: { marginTop: 26, alignItems: 'center', width: '100%', maxWidth: 300 },
