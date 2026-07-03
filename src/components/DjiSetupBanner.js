@@ -24,6 +24,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Fonts } from '../theme';
 import { supabase } from '../services/supabase/client';
 import { isLocalRecordingMode } from '../services/featureFlags';
@@ -179,17 +180,23 @@ export default function DjiSetupBanner() {
   return (
     <>
       <TouchableOpacity
-        style={s.banner}
+        style={s.pillWrap}
         activeOpacity={0.85}
         onPress={handleBannerTap}
         accessibilityRole="button"
         accessibilityLabel="Set up DJI auto-sync"
       >
-        <Ionicons name="alert-circle" size={14} color="#fff" />
-        <Text style={s.bannerText} numberOfLines={1}>
-          Set up auto-sync
-        </Text>
-        <Ionicons name="chevron-forward" size={14} color="#fff" />
+        <LinearGradient
+          colors={['#C93838', '#B22A2A']}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 0, y: 1 }}
+          style={s.pill}
+        >
+          <View style={s.pillIc}>
+            <Ionicons name="flash" size={12} color="#fff" />
+          </View>
+          <Text style={s.pillLbl} numberOfLines={1}>SET UP</Text>
+        </LinearGradient>
       </TouchableOpacity>
 
       <Modal
@@ -462,24 +469,33 @@ const s = StyleSheet.create({
   // Flex 1 lets it absorb the remaining horizontal space — that's why
   // CoachTabHeader's row uses justifyContent: 'space-between' rather
   // than fixed widths.
-  banner: {
-    flex: 1,
+  // Matches DjiSyncPill exactly so the "set up" and "sync files" states share
+  // one visual language in the header (centered gradient capsule + icon-circle).
+  pillWrap: { flex: 1, alignItems: 'center', marginHorizontal: 10 },
+  pill: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
     gap: 6,
-    height: 40,
-    marginHorizontal: 10,
-    paddingHorizontal: 10,
-    backgroundColor: RED,
-    borderRadius: 12,
+    height: 32,
+    paddingLeft: 6,
+    paddingRight: 12,
+    borderRadius: 999,
+    borderWidth: 0.5,
+    borderColor: 'rgba(255,255,255,0.10)',
   },
-  bannerText: {
+  pillIc: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pillLbl: {
     fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 12,
-    color: '#FFFFFF',
-    letterSpacing: 0.3,
-    flexShrink: 1,
+    fontSize: 10,
+    letterSpacing: 1.4,
+    color: '#fff',
   },
 
   // ─── Modal ──────────────────────────────────────────────────────────
