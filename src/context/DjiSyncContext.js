@@ -651,17 +651,28 @@ export function DjiSyncProvider({ children }) {
     }
     const anyDji = entries.some((e) => parseDjiFileName(e.name));
     if (!anyDji) {
-      // Folder reads FINE — it just holds no DJI recordings yet. That is NOT a
-      // broken bookmark, so don't scare the coach with "Lost access": resolve to
-      // a calm "Up to date" (there's simply nothing on the mic to import).
-      resolveUpToDate();
+      // The granted folder reads fine but holds NO DJI recordings — almost always
+      // the WRONG folder was picked (a real mic's NO NAME root always carries
+      // DJI_* files). Route to the grant-access recovery so the coach can re-pick
+      // the right folder, instead of dead-ending on "Up to date". This is the
+      // whole point of the "Mic is connected" button: verify + recover access.
+      // (We give an accurate message rather than the alarming generic "Lost
+      // access" — the folder isn't broken, it's just the wrong one.)
+      baselineEstablishedRef.current = false;
+      lastSeenMaxIdxRef.current = -1;
+      setErrorInfo({
+        kind: 'no-access',
+        message:
+          'No DJI recordings in the connected folder. Grant access to NO NAME at the root of your mic — not a sub-folder.',
+      });
+      setPhase('error');
       return;
     }
     // Mic readable + DJI files present — run a foreground sync. If it turns out
     // there's nothing new to import, `explicit` resolves it to "Up to date"
     // instead of dead-ending back on the Connect spinner.
     attemptSync(true, { explicit: true });
-  }, [attemptSync, handleBrokenBookmark, resolveUpToDate, runUpload]);
+  }, [attemptSync, handleBrokenBookmark, runUpload]);
 
   // "Grant access" button (no-access screen) → show the guided instructions
   // (Browse → NO NAME → Open) before firing the picker.
