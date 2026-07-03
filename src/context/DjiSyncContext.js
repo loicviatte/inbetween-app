@@ -123,6 +123,12 @@ export function DjiSyncProvider({ children }) {
   const offlineRetryTimerRef = useRef(null);
   const runUploadRef = useRef(null); // latest runUpload, so the timer stays stable
   const summaryAccumRef = useRef({ files: 0, runtimeSec: 0, sizeBytes: 0 });
+  // True when the current 'done' came from a run the coach engaged with (a
+  // foreground sync, an explicit "up to date", or a drained offline hold) — that
+  // 'done' stays sticky until acknowledged, even with the flow closed. A purely
+  // SILENT background 'done' leaves this false so the poll can still supersede it
+  // with a newly-arrived file (the silent auto-sync promise). See the tick guard.
+  const stickyDoneRef = useRef(false);
 
   const refreshFolderAccess = useCallback(() => {
     try {
@@ -256,6 +262,9 @@ export function DjiSyncProvider({ children }) {
           setStageLabel(null);
           setImported(s.files);
           setSummary({ files: s.files, runtimeSec: s.runtimeSec, sizeBytes: s.sizeBytes });
+          // A drained offline hold followed a visible error the coach saw — keep
+          // this 'done' sticky until they acknowledge it.
+          stickyDoneRef.current = true;
           setPhase('done');
           refreshPending();
         }
@@ -500,6 +509,10 @@ export function DjiSyncProvider({ children }) {
           runtimeSec: pairRuntime + orphanRuntime,
           sizeBytes: pairBytes + orphanBytes,
         });
+        // A foreground run is one the coach opened the flow for — its 'done' stays
+        // sticky until acknowledged. A silent background run leaves it non-sticky
+        // so a newly-arrived file can still supersede it (silent auto-sync).
+        stickyDoneRef.current = foreground;
         setPhase('done');
         refreshPending();
       } catch (err) {
@@ -526,6 +539,8 @@ export function DjiSyncProvider({ children }) {
     setUnmatched(0);
     setPendingReview(0);
     setSummary({ files: 0, runtimeSec: 0, sizeBytes: 0 });
+    // Always coach-initiated (mic-connected / grant / retry) → sticky until ack.
+    stickyDoneRef.current = true;
     setPhase('done');
   }, []);
 
@@ -538,6 +553,11 @@ export function DjiSyncProvider({ children }) {
   const attemptSync = useCallback(
     async (foreground, { explicit = false } = {}) => {
       if (syncRunningRef.current || !userId) return;
+      // Never start a fresh plan/execute while prepared items are held offline:
+      // the 8s retry timer owns them, and a new runExecute would reset
+      // summaryAccumRef and ignore the hold, racing (and mis-counting) the drain.
+      // The poll already bails on this; this guards the manual entry points too.
+      if (offlinePendingRef.current.length > 0) return;
       let plan;
       let orphanCount = 0;
       try {
@@ -608,6 +628,14 @@ export function DjiSyncProvider({ children }) {
   // plugged. Read it — if we can (DJI files present) → sync; if not → the
   // bookmark is missing/wrong → go to the grant-access screen.
   const micConnectedCheck = useCallback(async () => {
+    // If prepared uploads are still held offline, "Mic is connected" means "try
+    // the upload now" — resume the drain rather than starting a fresh mic scan
+    // (which would race the retry timer and could hide the pending hold behind an
+    // "Up to date"). This also keeps the offline/retry state honest.
+    if (offlinePendingRef.current.length > 0) {
+      runUpload(offlinePendingRef.current);
+      return;
+    }
     if (!DjiFiles.hasFolder?.()) {
       handleBrokenBookmark();
       return;
@@ -633,7 +661,7 @@ export function DjiSyncProvider({ children }) {
     // there's nothing new to import, `explicit` resolves it to "Up to date"
     // instead of dead-ending back on the Connect spinner.
     attemptSync(true, { explicit: true });
-  }, [attemptSync, handleBrokenBookmark, resolveUpToDate]);
+  }, [attemptSync, handleBrokenBookmark, resolveUpToDate, runUpload]);
 
   // "Grant access" button (no-access screen) → show the guided instructions
   // (Browse → NO NAME → Open) before firing the picker.
@@ -750,13 +778,15 @@ export function DjiSyncProvider({ children }) {
       const p = phaseRef.current;
       // The 2s poll must never clobber a screen the coach is looking at or
       // acting on: an in-flight import ('syncing'), the guided grant-access
-      // instructions ('granting'), or a sticky error ('error'). It also must not
-      // turn the green Complete screen back into "Importing" while the modal is
-      // still showing it — but a completed run with the flow CLOSED may still
-      // auto-pick-up newly-arrived files (the whole point of background sync), so
-      // 'done' is frozen only while its screen is actually on-screen.
+      // instructions ('granting'), or a sticky error ('error').
       if (p === 'syncing' || p === 'granting' || p === 'error') return;
-      if (p === 'done' && flowOpenRef.current) return;
+      // 'done' is frozen while its Complete screen is on-screen (flowOpen), AND
+      // whenever it's a coach-facing 'done' (a foreground sync they opened the
+      // flow for, an explicit "up to date", or a drained offline hold) — that one
+      // stays sticky until acknowledged, even after RUN IN BACKGROUND. A PURELY
+      // SILENT background 'done' (stickyDoneRef false) is NOT frozen, so a newly-
+      // arrived file can still auto-import (the silent auto-sync promise).
+      if (p === 'done' && (flowOpenRef.current || stickyDoneRef.current)) return;
 
       const maxIdx = await peekMaxIndex();
       if (maxIdx === null) return; // no folder / mic not mounted
@@ -837,15 +867,28 @@ export function DjiSyncProvider({ children }) {
 
   // Acknowledge the sticky green "done" pill (tap → view → close).
   const acknowledgeDone = useCallback(() => {
+    // Never strand prepared-but-unsent uploads on acknowledge. If a hold is
+    // somehow still live under this 'done' (shouldn't happen — done normally
+    // means the drain finished — but defend against it), keep the hold + its
+    // retry alive and reflect the true still-uploading state instead of going
+    // idle and silently dropping the m4a.
+    if (offlinePendingRef.current.length > 0) {
+      setFlowOpen(false);
+      setErrorInfo({ kind: 'offline', message: 'Waiting for a connection to finish uploading.' });
+      setPhase('error');
+      startOfflineRetry();
+      return;
+    }
     stopOfflineRetry();
     offlinePendingRef.current = [];
     summaryAccumRef.current = { files: 0, runtimeSec: 0, sizeBytes: 0 };
+    stickyDoneRef.current = false;
     setFlowOpen(false);
     setPhase('idle');
     setSummary(null);
     setProgressPct(0);
     refreshPending();
-  }, [refreshPending, stopOfflineRetry]);
+  }, [refreshPending, stopOfflineRetry, startOfflineRetry]);
 
   // ─── Derived pill state ───────────────────────────────────────────────
   const pillState = useMemo(() => {
