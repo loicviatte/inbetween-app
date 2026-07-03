@@ -23,7 +23,6 @@ import {
   AppState,
   ActivityIndicator,
 } from 'react-native';
-import { Image } from 'expo-image';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Fonts } from '../theme';
 import { supabase } from '../services/supabase/client';
@@ -34,14 +33,7 @@ import {
 } from '../services/localRecordingAutoSync';
 import { parseDjiFileName } from '../services/localRecordingMatcher';
 import * as DjiFiles from 'local-recording-files';
-
-// Visual aids for the instructions step — exact captures of the iOS
-// Files app UI so the coach recognises what to tap. Drop the cropped
-// PNGs into /assets/dji-setup/ (any reasonable resolution, 2x for
-// retina). If the assets aren't there yet, the screenshots simply
-// don't render and the text instructions stand on their own.
-const BROWSE_TAB_IMAGE = require('../../assets/dji-setup/browse.png');
-const NO_NAME_IMAGE = require('../../assets/dji-setup/no-name.png');
+import { BrowseTabChip, NoNameChip } from './DjiFilesChips';
 
 const INK_950 = '#0A0A0A';
 const RED = '#D44545';
@@ -366,14 +358,15 @@ function StepInstructions({ onBack, onOpenFiles }) {
             <Text style={s.bulletDot}>1.  </Text>
             Tap <Text style={s.strongRed}>Browse</Text> at the bottom.
           </Text>
-          <Image source={BROWSE_TAB_IMAGE} style={s.stepImageBrowse} resizeMode="contain" />
+          <BrowseTabChip />
         </View>
         <View style={s.bulletRow}>
           <Text style={s.bullet}>
             <Text style={s.bulletDot}>2.  </Text>
             Tap <Text style={s.strongRed}>NO NAME</Text> under Locations.
           </Text>
-          <Image source={NO_NAME_IMAGE} style={s.stepImageNoName} resizeMode="contain" />
+          <NoNameChip />
+          <Text style={s.bulletHint}>If NO NAME isn’t there, make sure the mic is turned on.</Text>
         </View>
         <Text style={s.bullet}>
           <Text style={s.bulletDot}>3.  </Text>
@@ -589,20 +582,12 @@ const s = StyleSheet.create({
   bulletRow: {
     gap: 6,
   },
-  stepImageBrowse: {
-    width: '100%',
-    height: 56,
-    alignSelf: 'center',
+  bulletHint: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 12,
+    color: '#8A8A8A',
+    lineHeight: 16,
     marginTop: 2,
-    marginBottom: 2,
-  },
-  stepImageNoName: {
-    width: 160,
-    height: 36,
-    alignSelf: 'flex-start',
-    marginLeft: 16,
-    marginTop: 2,
-    marginBottom: 2,
   },
   connectedCard: {
     flexDirection: 'row',

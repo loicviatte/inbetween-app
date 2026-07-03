@@ -22,9 +22,10 @@ import {
 import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import Svg, { Circle, Rect } from 'react-native-svg';
+import Svg, { Circle } from 'react-native-svg';
 import { Fonts } from '../theme';
 import { useDjiSync } from '../context/DjiSyncContext';
+import { BrowseTabChip, NoNameChip } from './DjiFilesChips';
 
 const MIC_IMG = require('../../assets/dji-setup/dji-mic2.webp');
 
@@ -33,7 +34,6 @@ const GOLD_300 = '#F6D27A';
 const RED = '#D44545';
 const RED_SOFT = '#FF8C8C';
 const GREEN = '#2FBF71'; // success accent for the "Synced" screen
-const IOS_BLUE = '#4187F5'; // the blue of the iOS Files "Browse" tab + NO NAME drive
 const RING_C = 2 * Math.PI * 48; // circumference for the r=48 orbital ring
 
 // ─── Formatters ─────────────────────────────────────────────────────────
@@ -326,41 +326,6 @@ function ConnectScreen() {
 }
 
 // ─── Grant access (guided folder-pick instructions) ─────────────────────
-// Crisp vector recreations of the two iOS Files elements the coach must tap —
-// the old PNG screenshots read as bright, blurry rectangles on the dark flow.
-// BrowseChip = the bottom tab bar (Browse highlighted); NoNameChip = the
-// "NO NAME" drive row under Locations.
-function BrowseChip() {
-  const tabs = [
-    { key: 'Recents', icon: 'time' },
-    { key: 'Shared', icon: 'people' },
-    { key: 'Browse', icon: 'folder', active: true },
-  ];
-  return (
-    <View style={s.browseChip}>
-      {tabs.map((t) => (
-        <View key={t.key} style={[s.browseTab, t.active && s.browseTabActive]}>
-          <Ionicons name={t.icon} size={16} color={t.active ? IOS_BLUE : '#1D1D1F'} />
-          <Text style={[s.browseTabLabel, t.active && s.browseTabLabelActive]}>{t.key}</Text>
-        </View>
-      ))}
-    </View>
-  );
-}
-
-function NoNameChip() {
-  return (
-    <View style={s.noNameChip}>
-      <Svg width={28} height={20} viewBox="0 0 28 20">
-        <Rect x="2.5" y="4" width="23" height="12.5" rx="3.8" stroke={IOS_BLUE} strokeWidth="1.9" fill="none" />
-        <Circle cx="7" cy="10.2" r="1.6" fill={IOS_BLUE} />
-      </Svg>
-      <Text style={s.noNameLabel}>NO NAME</Text>
-      <Ionicons name="chevron-forward" size={14} color="#BFBFC4" />
-    </View>
-  );
-}
-
 function GrantInstructionsScreen() {
   const steps = [
     {
@@ -370,7 +335,7 @@ function GrantInstructionsScreen() {
           Tap <Text style={s.grantStrong}>Browse</Text> at the bottom.
         </Text>
       ),
-      chip: <BrowseChip />,
+      chip: <BrowseTabChip />,
     },
     {
       n: '2',
@@ -800,34 +765,6 @@ const s = StyleSheet.create({
     color: 'rgba(255,255,255,0.42)',
     lineHeight: 16,
   },
-  // Browse tab-bar chip — the iOS Files bottom bar, recreated crisply
-  browseChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'stretch',
-    backgroundColor: '#F3F3F5',
-    borderRadius: 15,
-    padding: 5,
-    gap: 3,
-  },
-  browseTab: { flex: 1, alignItems: 'center', gap: 3, paddingVertical: 6, borderRadius: 11 },
-  browseTabActive: { backgroundColor: '#E4E6EB' },
-  browseTabLabel: { fontFamily: Fonts.jakartaBold, fontSize: 9.5, color: '#1D1D1F', letterSpacing: 0.1 },
-  browseTabLabelActive: { color: IOS_BLUE },
-  // NO NAME drive row chip — the "Locations" entry to tap
-  noNameChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    alignSelf: 'flex-start',
-    backgroundColor: '#F3F3F5',
-    borderRadius: 12,
-    paddingVertical: 9,
-    paddingLeft: 12,
-    paddingRight: 11,
-    gap: 9,
-    minWidth: 176,
-  },
-  noNameLabel: { flex: 1, fontFamily: Fonts.jakartaExtraBold, fontSize: 13.5, color: '#1C1C1E', letterSpacing: 0.4 },
 
   progressStack: { marginTop: 26, alignItems: 'center', width: '100%', maxWidth: 300 },
   progressEyebrow: {
