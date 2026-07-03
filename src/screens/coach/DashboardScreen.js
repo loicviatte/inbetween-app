@@ -1,5 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useFocusEffect } from '@react-navigation/native';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -7,7 +6,6 @@ import {
   ScrollView,
   TouchableOpacity,
   ActivityIndicator,
-  AppState,
 } from 'react-native';
 import { Image } from 'expo-image';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -24,10 +22,7 @@ import {
 } from '../../storage/activeCoachClass';
 import { supabase } from '../../services/supabase/client';
 import { isLocalRecordingMode } from '../../services/featureFlags';
-import { useDjiAutoSync } from '../../services/useDjiAutoSync';
-import { fetchPendingUploads } from '../../services/localRecordingAutoSync';
 import * as DjiFiles from 'local-recording-files';
-import UploadFlowModal from '../../components/UploadFlowModal';
 
 // ── Palette ─────────────────────────────────────────────────────────────────
 // Gold scale + ink + paper, aligned with the May 2026 design refresh.
@@ -226,62 +221,6 @@ function ActivityRow({ item, isLast }) {
   );
 }
 
-// ── DJI auto-sync status pill ──────────────────────────────────────────
-// Visually swaps into the START CLASS button slot while the foreground
-// poller (useDjiAutoSync) is running an import. Module-level helper so it
-// doesn't get re-created on every Dashboard render.
-function renderSyncPill(autoSync) {
-  const { phase, currentIdx, total, imported, pending, errorMessage } = autoSync;
-
-  let label;
-  let leftEl;
-  let bgStyle;
-  let textStyle;
-
-  if (phase === 'detecting') {
-    label = 'Detecting mic…';
-    leftEl = <ActivityIndicator size="small" color={INK_950} />;
-    bgStyle = styles.syncPillNeutral;
-    textStyle = styles.syncPillTextDark;
-  } else if (phase === 'syncing') {
-    label = total > 0
-      ? `Importing ${currentIdx} of ${total}…`
-      : 'Importing…';
-    leftEl = <ActivityIndicator size="small" color={INK_950} />;
-    bgStyle = styles.syncPillNeutral;
-    textStyle = styles.syncPillTextDark;
-  } else if (phase === 'done') {
-    // Surface admin-review count alongside the imported count so the
-    // coach knows some files still need a human pass on inbetween-admin.
-    const reviewSuffix = pending > 0 ? ` (${pending} for review)` : '';
-    label = imported === 1
-      ? `1 recording synced${reviewSuffix}`
-      : `${imported} recordings synced${reviewSuffix}`;
-    leftEl = <Ionicons name="checkmark-circle" size={16} color="#2D8A4A" />;
-    bgStyle = styles.syncPillSuccess;
-    textStyle = styles.syncPillTextSuccess;
-  } else if (phase === 'error') {
-    label = 'Sync error — tap UPLOAD to retry';
-    leftEl = <Ionicons name="alert-circle" size={16} color="#B33A3A" />;
-    bgStyle = styles.syncPillError;
-    textStyle = styles.syncPillTextError;
-    // errorMessage is logged but not surfaced in the pill itself —
-    // most error strings are too long for the CTA-sized slot.
-    void errorMessage;
-  } else {
-    return null;
-  }
-
-  return (
-    <View style={[styles.syncPill, bgStyle]}>
-      {leftEl}
-      <Text style={[styles.syncPillText, textStyle]} numberOfLines={1}>
-        {label}
-      </Text>
-    </View>
-  );
-}
-
 // ── Screen ──────────────────────────────────────────────────────────────────
 export default function DashboardScreen({ navigation }) {
   const { students, events, actionCounts, studentActionCounts, initialLoading: loading } = useCoachData();
@@ -307,9 +246,10 @@ export default function DashboardScreen({ navigation }) {
   const [activeClass, setActiveClass] = useState(getActiveCoachClass());
   const [chronoTick, setChronoTick] = useState(0);
 
-  // Local-recording-mode user check (gated to viatteloic@gmail.com). When
-  // true, we surface a "Upload pending recordings" entry point so the
-  // coach can attach DJI mic WAV files to completed classes.
+  // Local-recording-mode check. The DJI mic sync UI (header pill + full-
+  // screen flow) now lives in DjiSyncContext at the navigator level; here
+  // we only need isLocalMode to release the audio-route monitor before a
+  // class starts (see the START CLASS handler below).
   const [authUser, setAuthUser] = useState(null);
   useEffect(() => {
     supabase.auth.getUser()
@@ -317,100 +257,6 @@ export default function DashboardScreen({ navigation }) {
       .catch(() => setAuthUser(null));
   }, []);
   const isLocalMode = isLocalRecordingMode(authUser);
-
-  // Auto-detects DJI mic file additions while the coach has the app open
-  // and automatically imports them. Polls the bookmarked folder every 5s
-  // when the app is foregrounded; surfaces sync progress as state we
-  // project into the START CLASS button below.
-  const autoSync = useDjiAutoSync({
-    userId: authUser?.id ?? null,
-    enabled: isLocalMode,
-  });
-
-  // First-run gate: tracks whether the coach has already granted folder
-  // access to the DJI mic. iOS sandboxing requires an explicit user pick
-  // via UIDocumentPicker the first time — after that the bookmark is
-  // persisted in UserDefaults and the auto-sync resolves it silently on
-  // every subsequent plug-in. We surface this state to gate the
-  // onboarding card vs. the regular UPLOAD button.
-  const [hasFolderAccess, setHasFolderAccess] = useState(false);
-  useEffect(() => {
-    if (!isLocalMode) {
-      setHasFolderAccess(false);
-      return;
-    }
-    const check = () => {
-      try {
-        setHasFolderAccess(DjiFiles.hasFolder?.() ?? false);
-      } catch {
-        setHasFolderAccess(false);
-      }
-    };
-    check();
-    const sub = AppState.addEventListener('change', (state) => {
-      if (state === 'active') check();
-    });
-    return () => sub.remove();
-  }, [isLocalMode]);
-
-  // Upload-flow modal: opened when the coach taps the big UPLOAD button
-  // on the dashboard (Phase 2, after folder access is granted). Walks
-  // through plug-in detection → connected → syncing → done. Replaces
-  // the old "navigate to LocalUploadScreen" path for the primary flow.
-  const [uploadFlowModalOpen, setUploadFlowModalOpen] = useState(false);
-
-  // How many classes are waiting on audio. Drives whether the manual
-  // UPLOAD DJI RECORDING fallback button is shown — when there's nothing
-  // pending we hide it entirely so the dashboard stays clean. Refreshed
-  // on mount, on app foreground, and right after an auto-sync completes
-  // (since the count just changed).
-  const [pendingUploadCount, setPendingUploadCount] = useState(0);
-  useEffect(() => {
-    if (!isLocalMode || !authUser?.id) {
-      setPendingUploadCount(0);
-      return;
-    }
-    let cancelled = false;
-    const refresh = async () => {
-      try {
-        const rows = await fetchPendingUploads(authUser.id);
-        if (!cancelled) setPendingUploadCount(rows.length);
-      } catch {
-        /* ignore — keep last value */
-      }
-    };
-    refresh();
-    const sub = AppState.addEventListener('change', (state) => {
-      if (state === 'active') refresh();
-    });
-    return () => {
-      cancelled = true;
-      sub.remove();
-    };
-  }, [isLocalMode, authUser?.id]);
-  // Re-fetch when an auto-sync run lands so the manual fallback button
-  // shows/hides without needing a manual refresh.
-  useEffect(() => {
-    if (!isLocalMode || !authUser?.id) return;
-    if (autoSync.phase !== 'done' && autoSync.phase !== 'error') return;
-    fetchPendingUploads(authUser.id)
-      .then((rows) => setPendingUploadCount(rows.length))
-      .catch(() => {});
-  }, [autoSync.phase, isLocalMode, authUser?.id]);
-
-  // Also refetch every time the dashboard regains focus (e.g. coach
-  // finishes a class on StartClassScreen and navigates back). React
-  // Navigation keeps the dashboard mounted in the stack, so AppState
-  // change + initial useEffect don't fire — we need useFocusEffect to
-  // catch this transition.
-  useFocusEffect(
-    useCallback(() => {
-      if (!isLocalMode || !authUser?.id) return;
-      fetchPendingUploads(authUser.id)
-        .then((rows) => setPendingUploadCount(rows.length))
-        .catch(() => {});
-    }, [isLocalMode, authUser?.id]),
-  );
 
   useEffect(() => subscribeToActiveCoachClass(setActiveClass), []);
   useEffect(() => {
@@ -641,61 +487,6 @@ export default function DashboardScreen({ navigation }) {
                   <Text style={styles.inProgressArrow}>›</Text>
                 </View>
               </TouchableOpacity>
-            ) : autoSync.phase !== 'idle' ? (
-              // In place of START CLASS: live status of the auto-sync.
-              // The coach plugs the mic, the app picks it up via the
-              // foreground polling in useDjiAutoSync and surfaces progress
-              // here. No tap needed — fully automatic for high-confidence
-              // matches; lower-confidence imports still upload but flag
-              // for review on inbetween-admin.
-              renderSyncPill(autoSync)
-            ) : isLocalMode && hasFolderAccess && pendingUploadCount > 0 ? (
-              // ── Phase 2 CTA: priority on UPLOAD (ink, big) + START CLASS
-              // demoted to a small outlined chip next to it. The coach
-              // typically taps UPLOAD right after a class ends, which
-              // walks them through the plug-in + sync flow via the
-              // UploadFlow modal below.
-              <>
-                <TouchableOpacity
-                  style={styles.uploadPrimaryBtn}
-                  activeOpacity={0.88}
-                  onPress={() => setUploadFlowModalOpen(true)}
-                  // Hidden affordance: long-press opens the legacy
-                  // LocalUploadScreen with its "Reset folder access" /
-                  // "Pick a single file manually" controls. Lets a
-                  // power user re-pick the folder bookmark without
-                  // needing to interrupt the main upload modal flow.
-                  onLongPress={() => navigation.navigate('LocalUpload')}
-                  delayLongPress={550}
-                >
-                  <Ionicons name="cloud-upload-outline" size={16} color={INK_950} />
-                  {/* numberOfLines + adjustsFontSizeToFit keeps "UPLOAD
-                      99 RECORDINGS" on a single line: the text engine
-                      shrinks the font (down to minimumFontScale) when
-                      it doesn't fit, rather than wrapping or clipping. */}
-                  <Text
-                    style={styles.uploadPrimaryText}
-                    numberOfLines={1}
-                    adjustsFontSizeToFit
-                    minimumFontScale={0.65}
-                  >
-                    UPLOAD {pendingUploadCount === 1 ? '1 RECORDING' : `${pendingUploadCount} RECORDINGS`}
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.startClassSmallBtn}
-                  activeOpacity={0.85}
-                  onPress={async () => {
-                    if (isLocalMode) {
-                      try { await DjiFiles.stopAudioRouteMonitor?.(); } catch {}
-                    }
-                    navigation.navigate('StartClass');
-                  }}
-                >
-                  <Ionicons name="play" size={12} color={INK_950} />
-                  <Text style={styles.startClassSmallText}>START</Text>
-                </TouchableOpacity>
-              </>
             ) : (
               <TouchableOpacity
                 style={styles.startClassBtn}
@@ -813,22 +604,6 @@ export default function DashboardScreen({ navigation }) {
         </ScrollView>
       </View>
 
-      {/* Phase-2 upload flow — opens when the coach taps the big UPLOAD
-          button. Internally handles plug-in detection, sync execution,
-          and success/error states. */}
-      <UploadFlowModal
-        visible={uploadFlowModalOpen}
-        userId={authUser?.id ?? null}
-        onClose={() => setUploadFlowModalOpen(false)}
-        onDone={() => {
-          setUploadFlowModalOpen(false);
-          if (authUser?.id) {
-            fetchPendingUploads(authUser.id)
-              .then((rows) => setPendingUploadCount(rows.length))
-              .catch(() => {});
-          }
-        }}
-      />
     </View>
   );
 }
@@ -1481,86 +1256,6 @@ const styles = StyleSheet.create({
     color: T2,
     paddingVertical: 4,
   },
-
-  // ─── DJI auto-sync status pill (sits in the START CLASS slot) ─────────
-  // Matches startClassBtn dimensions (flex 8, same padding + radius) so
-  // the swap is layout-neutral. Three visual variants: neutral (in-flight),
-  // success (done), error.
-  syncPill: {
-    flex: 8,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    borderRadius: 10,
-    minHeight: 40,
-  },
-  syncPillNeutral: {
-    backgroundColor: '#EAE4D7',
-  },
-  syncPillSuccess: {
-    backgroundColor: 'rgba(45, 138, 74, 0.12)',
-    borderWidth: 1,
-    borderColor: 'rgba(45, 138, 74, 0.25)',
-  },
-  syncPillError: {
-    backgroundColor: 'rgba(179, 58, 58, 0.10)',
-    borderWidth: 1,
-    borderColor: 'rgba(179, 58, 58, 0.22)',
-  },
-  syncPillText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 13,
-    letterSpacing: 0.4,
-    flexShrink: 1,
-  },
-  syncPillTextDark: { color: INK_950 },
-  syncPillTextSuccess: { color: '#1F6B36' },
-  syncPillTextError: { color: '#8B2A2A' },
-
-  // ─── Phase-2 CTA buttons ─────────────────────────────────────────────
-  // After folder bookmark is granted, when there's a pending upload, the
-  // CTA flips: UPLOAD (white, primary) takes the spotlight on the dark
-  // hero card; START CLASS demotes to a compact outlined chip next to
-  // it. White-on-dark is what gives the right pop here — ink would
-  // blend into the hero card background.
-  uploadPrimaryBtn: {
-    flex: 6,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 10,
-  },
-  uploadPrimaryText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 13.5,
-    color: INK_950,
-    letterSpacing: 1.1,
-  },
-  startClassSmallBtn: {
-    flex: 2,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 5,
-    paddingVertical: 12,
-    paddingHorizontal: 8,
-    backgroundColor: GOLD_500,
-    borderRadius: 10,
-  },
-  startClassSmallText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 11.5,
-    color: INK_950,
-    letterSpacing: 1.0,
-  },
-
 });
 
 const miniS = StyleSheet.create({

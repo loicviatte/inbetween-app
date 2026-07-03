@@ -22,6 +22,8 @@ import {
 import { hydrateAllFromCold } from '../storage/hydrate';
 import { pokeUploadWorker } from '../services/uploadWorker';
 import { CoachDataProvider } from '../context/CoachDataContext';
+import { DjiSyncProvider } from '../context/DjiSyncContext';
+import MicSyncFlowModal from '../components/MicSyncFlowModal';
 import CoachTabHeader from '../components/CoachTabHeader';
 import CustomTabBar from '../components/CustomTabBar';
 import CoachHomeScreen from '../screens/coach/CoachHomeScreen';
@@ -127,6 +129,7 @@ export default function CoachAppNavigator({ navigationRef }) {
   useCoachStartupEffects(navigationRef);
   return (
     <CoachDataProvider>
+      <DjiSyncProvider>
       <CoachStack.Navigator screenOptions={{ headerShown: false }}>
         <CoachStack.Screen name="CoachMainTabs" component={CoachMainTabs} />
         <CoachStack.Screen
@@ -190,6 +193,8 @@ export default function CoachAppNavigator({ navigationRef }) {
           options={{ animation: 'slide_from_right' }}
         />
       </CoachStack.Navigator>
+      <MicSyncFlowModal />
+      </DjiSyncProvider>
     </CoachDataProvider>
   );
 }

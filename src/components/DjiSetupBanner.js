@@ -242,7 +242,7 @@ export default function DjiSetupBanner() {
             {step === 'error' && (
               <StepError
                 onCancel={dismissModal}
-                onRetry={() => setStep('action')}
+                onRetry={() => setStep('instructions')}
               />
             )}
           </Pressable>
