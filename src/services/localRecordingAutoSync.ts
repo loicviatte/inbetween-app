@@ -405,6 +405,7 @@ async function uploadFileToStorage(
   // createUploadTask streams byte progress via the callback; uploadAsync()
   // resolves the same { status, body } shape as the plain upload.
   let lastProgressAt = Date.now();
+  let allBytesSentAt = 0; // when the final byte hit the wire (0 = not yet)
   let stallTimer: ReturnType<typeof setInterval> | undefined;
   const task = FileSystem.createUploadTask(url, localUri, options, (p: any) => {
     lastProgressAt = Date.now();
@@ -413,28 +414,36 @@ async function uploadFileToStorage(
     if (onProgress && total > 0) {
       onProgress(Math.min(1, sent / total));
     }
-    // Once every byte is on the wire, the remaining wait is the SERVER forming
-    // its response — NOT a network stall. Stop the watchdog so a slow ack after
-    // a fully-sent upload isn't misreported as a lost connection (false offline).
-    if (total > 0 && sent >= total && stallTimer) {
-      clearInterval(stallTimer);
-      stallTimer = undefined;
+    // Mark when every byte is on the wire. After this the only wait is the
+    // SERVER forming its response, which the watchdog bounds with a SEPARATE,
+    // longer ack timeout (not the short no-progress stall) — so a slow ack isn't
+    // misread as a lost connection (false offline) while STILL capping a hung/
+    // half-open socket that never acks. Fully clearing the watchdog here (an
+    // earlier bug) let such a socket hang the upload — and the whole offline
+    // retry loop — forever.
+    if (total > 0 && sent >= total && !allBytesSentAt) {
+      allBytesSentAt = Date.now();
     }
   });
 
   // If the connection drops MID-upload, the in-flight request does NOT error —
   // it hangs until the OS socket timeout (can be minutes), freezing the bar.
-  // Watchdog: no byte progress for UPLOAD_STALL_MS ⇒ treat it as a lost
-  // connection, cancel, and reject with a network error so the caller can hold
-  // the file offline and retry once we're back online. (Cleared the moment all
-  // bytes are sent — see above; the post-upload server wait must not count.)
+  // Two-phase watchdog, both cancel + reject with a network error so the caller
+  // holds the file offline and retries once we're back online:
+  //   • mid-transfer: no byte progress for UPLOAD_STALL_MS ⇒ lost connection.
+  //   • after all bytes sent: bound the server-ack wait to ACK_TIMEOUT_MS.
   const UPLOAD_STALL_MS = 15_000;
+  const ACK_TIMEOUT_MS = 60_000;
   const uploadPromise = task.uploadAsync();
   // Keep it handled — cancelAsync() below can make it reject after we've raced away.
   uploadPromise.catch(() => {});
   const stallGuard = new Promise<never>((_, reject) => {
     stallTimer = setInterval(() => {
-      if (Date.now() - lastProgressAt > UPLOAD_STALL_MS) {
+      const now = Date.now();
+      const stalled = allBytesSentAt
+        ? now - allBytesSentAt > ACK_TIMEOUT_MS
+        : now - lastProgressAt > UPLOAD_STALL_MS;
+      if (stalled) {
         try { task.cancelAsync?.(); } catch {}
         reject(new Error('E_UPLOAD_STALL: network stalled mid-upload — connection lost'));
       }

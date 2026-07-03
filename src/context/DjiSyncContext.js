@@ -190,18 +190,38 @@ export function DjiSyncProvider({ children }) {
     }, OFFLINE_RETRY_MS);
   }, [stopOfflineRetry]);
 
+  // Immediate "Reconnecting…" feedback for a MANUAL retry / mic-connected tap so
+  // the button never looks dead — whether it kicks off a fresh upload or a
+  // retry is already draining. The upload (this one or the in-flight one)
+  // resolves it into the right terminal phase: 'done', or back to the offline
+  // error screen if still down. Clears the per-file counters too so we don't
+  // flash the previous run's stale "N of M" / ETA under the Reconnecting label.
+  const showReconnecting = useCallback(() => {
+    setErrorInfo(null);
+    setStageLabel('Reconnecting…');
+    setProgressPct(0);
+    setEtaSec(null);
+    setFileIdx(0);
+    setFileTotal(0);
+    setFileSizeBytes(0);
+    setPhase('syncing');
+  }, []);
+
   // Upload a list of already-prepared recordings (no mic, no transcode) — used
   // by the offline auto-retry AND the "Try again" button. On continued network
   // failure it re-holds the remainder and keeps waiting.
   const runUpload = useCallback(
-    async (items) => {
+    async (items, { manual = false } = {}) => {
       if (syncRunningRef.current || !userId || !items.length) return;
       syncRunningRef.current = true;
       stopOfflineRetry();
-      // Retry SILENTLY: stay on the current screen (the offline one) and only
-      // flip to the visible "Uploading…" once real bytes actually flow — that's
-      // the proof the network is back. A retry that stalls while still offline
-      // therefore never flashes "Uploading…"; the screen just stays offline.
+      // A MANUAL "Try again" / "Mic is connected" tap gets IMMEDIATE feedback (a
+      // "Reconnecting…" state) so it never looks dead; if the network is still
+      // down the offline branch below drops it right back to the offline screen.
+      // The AUTO (timer) retry stays silent — it only flips to the visible
+      // "Uploading…" once real bytes actually flow (proof the network is back),
+      // so an offline auto-retry never flashes anything.
+      if (manual) showReconnecting();
       let sawBytes = false;
       try {
         const result = await uploadPreparedItems(userId, items, {
@@ -281,7 +301,7 @@ export function DjiSyncProvider({ children }) {
         syncRunningRef.current = false;
       }
     },
-    [userId, refreshPending, stopOfflineRetry, startOfflineRetry],
+    [userId, refreshPending, stopOfflineRetry, startOfflineRetry, showReconnecting],
   );
   useEffect(() => {
     runUploadRef.current = runUpload;
@@ -633,7 +653,10 @@ export function DjiSyncProvider({ children }) {
     // (which would race the retry timer and could hide the pending hold behind an
     // "Up to date"). This also keeps the offline/retry state honest.
     if (offlinePendingRef.current.length > 0) {
-      runUpload(offlinePendingRef.current);
+      // If a retry is already draining, just acknowledge the tap (the in-flight
+      // upload resolves the phase); otherwise kick off a fresh manual attempt.
+      if (syncRunningRef.current) showReconnecting();
+      else runUpload(offlinePendingRef.current, { manual: true });
       return;
     }
     if (!DjiFiles.hasFolder?.()) {
@@ -672,7 +695,7 @@ export function DjiSyncProvider({ children }) {
     // there's nothing new to import, `explicit` resolves it to "Up to date"
     // instead of dead-ending back on the Connect spinner.
     attemptSync(true, { explicit: true });
-  }, [attemptSync, handleBrokenBookmark, runUpload]);
+  }, [attemptSync, handleBrokenBookmark, runUpload, showReconnecting]);
 
   // "Grant access" button (no-access screen) → show the guided instructions
   // (Browse → NO NAME → Open) before firing the picker.
@@ -864,7 +887,10 @@ export function DjiSyncProvider({ children }) {
     // Offline with files already prepared → just re-attempt the upload (no
     // re-copy / re-transcode). Otherwise run a fresh sync from the mic.
     if (offlinePendingRef.current.length > 0) {
-      runUpload(offlinePendingRef.current);
+      // If a retry is already draining, just acknowledge the tap (the in-flight
+      // upload resolves the phase); otherwise kick off a fresh manual attempt.
+      if (syncRunningRef.current) showReconnecting();
+      else runUpload(offlinePendingRef.current, { manual: true });
       return;
     }
     setErrorInfo(null);
@@ -874,7 +900,7 @@ export function DjiSyncProvider({ children }) {
     // explicit → if there's nothing left to import, resolve to "Up to date"
     // instead of dropping the coach back onto an endless Connect spinner.
     attemptSync(true, { explicit: true });
-  }, [attemptSync, runUpload]);
+  }, [attemptSync, runUpload, showReconnecting]);
 
   // Acknowledge the sticky green "done" pill (tap → view → close).
   const acknowledgeDone = useCallback(() => {
