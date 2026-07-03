@@ -22,19 +22,18 @@ import {
 import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import Svg, { Circle } from 'react-native-svg';
+import Svg, { Circle, Rect } from 'react-native-svg';
 import { Fonts } from '../theme';
 import { useDjiSync } from '../context/DjiSyncContext';
 
 const MIC_IMG = require('../../assets/dji-setup/dji-mic2.webp');
-const BROWSE_IMG = require('../../assets/dji-setup/browse.png');
-const NONAME_IMG = require('../../assets/dji-setup/no-name.png');
 
 const GOLD_500 = '#E8B530';
 const GOLD_300 = '#F6D27A';
 const RED = '#D44545';
 const RED_SOFT = '#FF8C8C';
 const GREEN = '#2FBF71'; // success accent for the "Synced" screen
+const IOS_BLUE = '#4187F5'; // the blue of the iOS Files "Browse" tab + NO NAME drive
 const RING_C = 2 * Math.PI * 48; // circumference for the r=48 orbital ring
 
 // ─── Formatters ─────────────────────────────────────────────────────────
@@ -327,7 +326,71 @@ function ConnectScreen() {
 }
 
 // ─── Grant access (guided folder-pick instructions) ─────────────────────
+// Crisp vector recreations of the two iOS Files elements the coach must tap —
+// the old PNG screenshots read as bright, blurry rectangles on the dark flow.
+// BrowseChip = the bottom tab bar (Browse highlighted); NoNameChip = the
+// "NO NAME" drive row under Locations.
+function BrowseChip() {
+  const tabs = [
+    { key: 'Recents', icon: 'time' },
+    { key: 'Shared', icon: 'people' },
+    { key: 'Browse', icon: 'folder', active: true },
+  ];
+  return (
+    <View style={s.browseChip}>
+      {tabs.map((t) => (
+        <View key={t.key} style={[s.browseTab, t.active && s.browseTabActive]}>
+          <Ionicons name={t.icon} size={16} color={t.active ? IOS_BLUE : '#1D1D1F'} />
+          <Text style={[s.browseTabLabel, t.active && s.browseTabLabelActive]}>{t.key}</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function NoNameChip() {
+  return (
+    <View style={s.noNameChip}>
+      <Svg width={28} height={20} viewBox="0 0 28 20">
+        <Rect x="2.5" y="4" width="23" height="12.5" rx="3.8" stroke={IOS_BLUE} strokeWidth="1.9" fill="none" />
+        <Circle cx="7" cy="10.2" r="1.6" fill={IOS_BLUE} />
+      </Svg>
+      <Text style={s.noNameLabel}>NO NAME</Text>
+      <Ionicons name="chevron-forward" size={14} color="#BFBFC4" />
+    </View>
+  );
+}
+
 function GrantInstructionsScreen() {
+  const steps = [
+    {
+      n: '1',
+      body: (
+        <Text style={s.grantStepText}>
+          Tap <Text style={s.grantStrong}>Browse</Text> at the bottom.
+        </Text>
+      ),
+      chip: <BrowseChip />,
+    },
+    {
+      n: '2',
+      body: (
+        <Text style={s.grantStepText}>
+          Tap <Text style={s.grantStrong}>NO NAME</Text> under Locations.
+        </Text>
+      ),
+      chip: <NoNameChip />,
+      hint: 'If NO NAME isn’t there, make sure the mic is turned on.',
+    },
+    {
+      n: '3',
+      body: (
+        <Text style={s.grantStepText}>
+          Tap <Text style={s.grantStrong}>Open</Text> at the top-right.
+        </Text>
+      ),
+    },
+  ];
   return (
     <View style={s.grantWrap}>
       <View style={s.eyebrowRow}>
@@ -335,23 +398,20 @@ function GrantInstructionsScreen() {
         <Text style={s.eyebrow}>ONE-TIME SETUP</Text>
       </View>
       <Text style={s.grantTitle}>Point us to your mic.</Text>
-      <Text style={s.grantIntro}>Tap Open Files, then in the Files screen:</Text>
+      <Text style={s.grantIntro}>Tap Open Files, then:</Text>
       <View style={s.grantSteps}>
-        <View style={s.grantStep}>
-          <Text style={s.grantStepText}>
-            <Text style={s.grantStepNum}>1  </Text>Tap <Text style={s.grantStrong}>Browse</Text> at the bottom.
-          </Text>
-          <Image source={BROWSE_IMG} style={s.grantImgBrowse} contentFit="contain" />
-        </View>
-        <View style={s.grantStep}>
-          <Text style={s.grantStepText}>
-            <Text style={s.grantStepNum}>2  </Text>Tap <Text style={s.grantStrong}>NO NAME</Text> under Locations.
-          </Text>
-          <Image source={NONAME_IMG} style={s.grantImgNoName} contentFit="contain" />
-        </View>
-        <Text style={s.grantStepText}>
-          <Text style={s.grantStepNum}>3  </Text>Tap <Text style={s.grantStrong}>Open</Text> at the top-right.
-        </Text>
+        {steps.map((st) => (
+          <View key={st.n} style={s.stepRow}>
+            <View style={s.stepBadge}>
+              <Text style={s.stepBadgeTxt}>{st.n}</Text>
+            </View>
+            <View style={s.stepBody}>
+              {st.body}
+              {st.chip}
+              {st.hint ? <Text style={s.grantHint}>{st.hint}</Text> : null}
+            </View>
+          </View>
+        ))}
       </View>
     </View>
   );
@@ -695,35 +755,79 @@ const s = StyleSheet.create({
   },
 
   // ─── Grant-access instructions ──────────────────────────────────────
-  grantWrap: { alignItems: 'center', maxWidth: 320, paddingHorizontal: 4 },
+  grantWrap: { alignItems: 'center', maxWidth: 340, paddingHorizontal: 4 },
   grantTitle: {
     fontFamily: Fonts.ttDemiBold,
-    fontSize: 26,
+    fontSize: 25,
     color: '#fff',
     letterSpacing: -0.5,
     textAlign: 'center',
-    marginTop: 10,
-    marginBottom: 8,
+    marginTop: 8,
+    marginBottom: 6,
   },
   grantIntro: {
     fontFamily: Fonts.jakartaRegular,
     fontSize: 13.5,
     color: 'rgba(255,255,255,0.5)',
     textAlign: 'center',
-    marginBottom: 18,
+    marginBottom: 20,
   },
-  grantSteps: { alignSelf: 'stretch', gap: 12 },
-  grantStep: { gap: 6 },
+  grantSteps: { alignSelf: 'stretch', gap: 15 },
+  stepRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
+  stepBadge: {
+    width: 23,
+    height: 23,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: 'rgba(232,181,48,0.45)',
+    backgroundColor: 'rgba(232,181,48,0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 1,
+  },
+  stepBadgeTxt: { fontFamily: Fonts.jakartaExtraBold, fontSize: 11.5, color: GOLD_300, marginTop: -1 },
+  stepBody: { flex: 1, gap: 9, paddingTop: 1 },
   grantStepText: {
     fontFamily: Fonts.jakartaMedium,
     fontSize: 14,
-    color: 'rgba(255,255,255,0.85)',
+    color: 'rgba(255,255,255,0.9)',
     lineHeight: 20,
   },
-  grantStepNum: { fontFamily: Fonts.jakartaExtraBold, color: GOLD_500 },
-  grantStrong: { fontFamily: Fonts.jakartaExtraBold, color: GOLD_500 },
-  grantImgBrowse: { width: '100%', height: 52, alignSelf: 'center', marginTop: 2 },
-  grantImgNoName: { width: 170, height: 38, alignSelf: 'flex-start', marginLeft: 20, marginTop: 2 },
+  grantStrong: { fontFamily: Fonts.jakartaExtraBold, color: GOLD_300 },
+  grantHint: {
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.42)',
+    lineHeight: 16,
+  },
+  // Browse tab-bar chip — the iOS Files bottom bar, recreated crisply
+  browseChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'stretch',
+    backgroundColor: '#F3F3F5',
+    borderRadius: 15,
+    padding: 5,
+    gap: 3,
+  },
+  browseTab: { flex: 1, alignItems: 'center', gap: 3, paddingVertical: 6, borderRadius: 11 },
+  browseTabActive: { backgroundColor: '#E4E6EB' },
+  browseTabLabel: { fontFamily: Fonts.jakartaBold, fontSize: 9.5, color: '#1D1D1F', letterSpacing: 0.1 },
+  browseTabLabelActive: { color: IOS_BLUE },
+  // NO NAME drive row chip — the "Locations" entry to tap
+  noNameChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    backgroundColor: '#F3F3F5',
+    borderRadius: 12,
+    paddingVertical: 9,
+    paddingLeft: 12,
+    paddingRight: 11,
+    gap: 9,
+    minWidth: 176,
+  },
+  noNameLabel: { flex: 1, fontFamily: Fonts.jakartaExtraBold, fontSize: 13.5, color: '#1C1C1E', letterSpacing: 0.4 },
 
   progressStack: { marginTop: 26, alignItems: 'center', width: '100%', maxWidth: 300 },
   progressEyebrow: {
