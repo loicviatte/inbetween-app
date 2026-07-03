@@ -334,7 +334,7 @@ function GrantInstructionsScreen() {
         <Text style={s.eyebrow}>ONE-TIME SETUP</Text>
       </View>
       <Text style={s.grantTitle}>Point us to your mic.</Text>
-      <Text style={s.grantIntro}>Tap Open Files, then:</Text>
+      <Text style={s.grantIntro}>Tap Start, then:</Text>
       <View style={s.grantSteps}>
         <View style={s.grantStep}>
           <Text style={s.grantStepText}>
