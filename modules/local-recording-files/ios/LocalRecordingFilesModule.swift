@@ -41,6 +41,16 @@ import AVFoundation
 // persisted in UserDefaults under this key.
 private let BOOKMARK_KEY = "inbetween.dji.folder.bookmark.v1"
 
+// Cooperative-cancellation state for the copy / transcode operations. A
+// JS-side timeout (mic unplugged mid-copy, or a stalled transcode) calls
+// cancelCopy()/cancelTranscode() so the native op aborts promptly instead of
+// holding the security scope / burning CPU for minutes. The module is a
+// singleton and these ops run one-at-a-time, so file-scoped state is safe; the
+// lock only guards a cancel arriving on a different thread than the worker.
+private let opLock = NSLock()
+private var pendingCopyCancel = false
+private var pendingExport: AVAssetExportSession?
+
 public class LocalRecordingFilesModule: Module {
   // Strong reference to the picker delegate while a picker is on screen.
   // Without this, the delegate is deallocated immediately and the picker's
@@ -115,10 +125,16 @@ public class LocalRecordingFilesModule: Module {
     }
 
     // ─── hasFolder() ──────────────────────────────────────────────────
-    // True if we have a saved bookmark that resolves to a still-valid
-    // folder URL. Lets the JS layer decide whether to show "Pick folder"
-    // (first-time onboarding) vs "Plug your mic" (already set up).
+    // Whether the coach is set up (has a folder bookmark). Lets the JS layer
+    // decide "Pick folder" (first-time onboarding) vs "Plug your mic" (already
+    // set up). We resolve first so iOS can drop a bookmark it flags STALE (the
+    // mic was reformatted / its identity changed) — resolveFolderURL() removes
+    // the blob in that case — then report whether a bookmark STILL exists.
+    // A merely transient resolve failure (mic simply unplugged right now) keeps
+    // the blob, so this still returns true ("set up, just not plugged in") and
+    // does NOT regress to the onboarding banner every time the mic is unplugged.
     Function("hasFolder") { () -> Bool in
+      _ = LocalRecordingFilesModule.resolveFolderURL()
       return UserDefaults.standard.data(forKey: BOOKMARK_KEY) != nil
     }
 
@@ -227,6 +243,8 @@ public class LocalRecordingFilesModule: Module {
         promise.reject("E_NO_FOLDER", "No folder access")
         return
       }
+      // Fresh cancel state for this copy (copies run one at a time).
+      opLock.lock(); pendingCopyCancel = false; opLock.unlock()
 
       let started = folderURL.startAccessingSecurityScopedResource()
       defer { if started { folderURL.stopAccessingSecurityScopedResource() } }
@@ -275,12 +293,41 @@ public class LocalRecordingFilesModule: Module {
         options: [.withoutChanges],
         error: &coordErr
       ) { (resolvedURL) in
+        // Chunked read instead of one big Data(contentsOf:) so that (a) a
+        // JS-side timeout can cancel between chunks (via cancelCopy) and (b) a
+        // vanished USB volume tends to error per-chunk rather than the whole
+        // 266 MB read hanging while holding the security scope. (A read already
+        // blocked in-kernel still can't be interrupted mid-syscall — the JS
+        // timeout is the backstop there.) We write to a ".part" sibling and
+        // atomic-rename at the end, so destURL is never a truncated/partial file.
+        let partURL = destURL.appendingPathExtension("part")
         do {
-          let data = try Data(contentsOf: resolvedURL)
-          try data.write(to: destURL, options: .atomic)
-          NSLog("[LocalRecordingFiles] copy ok via coordinator: \(data.count) bytes → \(destURL.path)")
+          try? fm.removeItem(at: partURL)
+          guard fm.createFile(atPath: partURL.path, contents: nil) else {
+            throw NSError(domain: "LRF", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "could not create part file"])
+          }
+          let readHandle = try FileHandle(forReadingFrom: resolvedURL)
+          defer { try? readHandle.close() }
+          let writeHandle = try FileHandle(forWritingTo: partURL)
+          defer { try? writeHandle.close() }
+          let chunkSize = 4 * 1024 * 1024 // 4 MB
+          var total = 0
+          while true {
+            opLock.lock(); let cancelled = pendingCopyCancel; opLock.unlock()
+            if cancelled {
+              throw NSError(domain: "LRF", code: 2,
+                            userInfo: [NSLocalizedDescriptionKey: "E_COPY_CANCELLED: copy cancelled (mic likely unplugged)"])
+            }
+            guard let chunk = try readHandle.read(upToCount: chunkSize), !chunk.isEmpty else { break }
+            try writeHandle.write(contentsOf: chunk)
+            total += chunk.count
+          }
+          try fm.moveItem(at: partURL, to: destURL)
+          NSLog("[LocalRecordingFiles] copy ok chunked: \(total) bytes → \(destURL.path)")
         } catch {
-          NSLog("[LocalRecordingFiles] inner read/write failed: \(error)")
+          NSLog("[LocalRecordingFiles] chunked copy failed: \(error)")
+          try? fm.removeItem(at: partURL)
           innerErr = error
         }
       }
@@ -324,7 +371,11 @@ public class LocalRecordingFilesModule: Module {
       }
       export.outputURL = outURL
       export.outputFileType = .m4a
+      // Publish the session so a JS-side timeout can cancelExport() it instead
+      // of leaving it encoding after we've abandoned the result.
+      opLock.lock(); pendingExport = export; opLock.unlock()
       export.exportAsynchronously {
+        opLock.lock(); if pendingExport === export { pendingExport = nil }; opLock.unlock()
         switch export.status {
         case .completed:
           promise.resolve(outURL.absoluteString)
@@ -336,6 +387,25 @@ public class LocalRecordingFilesModule: Module {
           promise.reject("E_TRANSCODE", "unexpected export status \(export.status.rawValue)")
         }
       }
+    }
+
+    // ─── cancelCopy() ─────────────────────────────────────────────────
+    // Aborts an in-flight copyFileToCache. JS calls this when its copy timeout
+    // fires (mic unplugged mid-copy): the chunked read checks this flag between
+    // chunks and bails, releasing the security scope early. Best-effort — if a
+    // read is already blocked in-kernel on a fully-dead volume the flag is only
+    // seen once that read returns; the JS-side timeout stays the hard backstop.
+    Function("cancelCopy") { () -> Void in
+      opLock.lock(); pendingCopyCancel = true; opLock.unlock()
+    }
+
+    // ─── cancelTranscode() ────────────────────────────────────────────
+    // Aborts an in-flight transcodeToM4A. JS calls this when its transcode
+    // timeout fires so AVAssetExportSession stops burning CPU on a result we've
+    // already given up on.
+    Function("cancelTranscode") { () -> Void in
+      opLock.lock(); let export = pendingExport; opLock.unlock()
+      export?.cancelExport()
     }
 
     // ─── startAudioRouteMonitor() ────────────────────────────────────

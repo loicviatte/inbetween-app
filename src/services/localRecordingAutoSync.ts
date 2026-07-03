@@ -1152,10 +1152,14 @@ export async function executeAutoSync(
   const copyFromMic = async (relativePath: string): Promise<string> => {
     let timer: ReturnType<typeof setTimeout>;
     const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(
-        () => reject(new Error('E_MIC_TIMEOUT: mic read timed out — receiver likely unplugged')),
-        COPY_TIMEOUT_MS,
-      );
+      timer = setTimeout(() => {
+        // Ask the native side to abort the chunked read so it can release the
+        // security scope early. Best-effort: it only lands promptly if the file
+        // provider is still returning reads — a fully-dead volume can block
+        // in-kernel until iOS gives up. This 60s timeout is the hard backstop.
+        try { DjiFiles.cancelCopy?.(); } catch {}
+        reject(new Error('E_MIC_TIMEOUT: mic read timed out — receiver likely unplugged'));
+      }, COPY_TIMEOUT_MS);
     });
     try {
       return (await Promise.race([DjiFiles.copyFileToCache(relativePath), timeout])) as string;
@@ -1171,10 +1175,11 @@ export async function executeAutoSync(
   const transcodeWithTimeout = async (wavUri: string): Promise<string> => {
     let timer: ReturnType<typeof setTimeout>;
     const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(
-        () => reject(new Error('E_TRANSCODE: compression stalled — the recording may be corrupt')),
-        TRANSCODE_TIMEOUT_MS,
-      );
+      timer = setTimeout(() => {
+        // Stop AVAssetExportSession from encoding a result we've abandoned.
+        try { DjiFiles.cancelTranscode?.(); } catch {}
+        reject(new Error('E_TRANSCODE: compression stalled — the recording may be corrupt'));
+      }, TRANSCODE_TIMEOUT_MS);
     });
     try {
       return (await Promise.race([DjiFiles.transcodeToM4A(wavUri), timeout])) as string;

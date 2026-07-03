@@ -77,7 +77,13 @@ export async function pickFolder(): Promise<string | null> {
   return await mod.pickFolder();
 }
 
-/** True iff we have a saved folder bookmark. Synchronous. */
+/**
+ * True iff the coach is set up (has a saved folder bookmark). Synchronous, but
+ * NOT side-effect-free: it resolves the bookmark first, so one iOS flags STALE
+ * (e.g. the mic was reformatted) is dropped here and this returns false. A
+ * transiently-unresolvable bookmark (mic simply unplugged right now) is kept, so
+ * this still returns true ("set up, just not plugged in").
+ */
 export function hasFolder(): boolean {
   const mod = getMod();
   if (!mod) return false;
@@ -135,6 +141,36 @@ export async function transcodeToM4A(inputUri: string): Promise<string> {
   const mod = getMod();
   if (!mod) throw new Error('LocalRecordingFiles module unavailable on this platform');
   return await mod.transcodeToM4A(inputUri);
+}
+
+/**
+ * Best-effort: abort an in-flight copyFileToCache. Call this when a JS-side
+ * copy timeout fires (mic unplugged mid-copy) so the native read stops holding
+ * the security scope instead of blocking on a dead volume for minutes.
+ * Optional-chained so an older native build without it is a safe no-op.
+ */
+export function cancelCopy(): void {
+  const mod = getMod();
+  if (!mod) return;
+  try {
+    mod.cancelCopy?.();
+  } catch {
+    /* best-effort */
+  }
+}
+
+/**
+ * Best-effort: abort an in-flight transcodeToM4A so AVAssetExportSession stops
+ * encoding after a JS-side transcode timeout. No-op on older native builds.
+ */
+export function cancelTranscode(): void {
+  const mod = getMod();
+  if (!mod) return;
+  try {
+    mod.cancelTranscode?.();
+  } catch {
+    /* best-effort */
+  }
 }
 
 // ─── Audio route monitor ─────────────────────────────────────────────────
