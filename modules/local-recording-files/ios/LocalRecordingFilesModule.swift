@@ -50,6 +50,7 @@ private let BOOKMARK_KEY = "inbetween.dji.folder.bookmark.v1"
 private let opLock = NSLock()
 private var pendingCopyCancel = false
 private var pendingExport: AVAssetExportSession?
+private var pendingTranscodeCancelled = false
 
 public class LocalRecordingFilesModule: Module {
   // Strong reference to the picker delegate while a picker is on screen.
@@ -373,16 +374,30 @@ public class LocalRecordingFilesModule: Module {
       export.outputFileType = .m4a
       // Publish the session so a JS-side timeout can cancelExport() it instead
       // of leaving it encoding after we've abandoned the result.
-      opLock.lock(); pendingExport = export; opLock.unlock()
+      opLock.lock(); pendingTranscodeCancelled = false; pendingExport = export; opLock.unlock()
       export.exportAsynchronously {
-        opLock.lock(); if pendingExport === export { pendingExport = nil }; opLock.unlock()
-        switch export.status {
-        case .completed:
+        opLock.lock()
+        let wasCancelled = pendingTranscodeCancelled
+        if pendingExport === export { pendingExport = nil }
+        opLock.unlock()
+
+        // Happy path: export finished and JS still wants the result.
+        if export.status == .completed && !wasCancelled {
           promise.resolve(outURL.absoluteString)
+          return
+        }
+        // Abandoned — failed, cancelled, or (the race) completed AFTER a JS
+        // timeout already called cancelTranscode(). In every abandoned case JS
+        // will not consume outURL, so delete it here or it orphans in the temp
+        // dir (no sweep touches the temp root).
+        try? FileManager.default.removeItem(at: outURL)
+        switch export.status {
         case .failed:
           promise.reject("E_TRANSCODE", export.error?.localizedDescription ?? "transcode failed")
         case .cancelled:
           promise.reject("E_TRANSCODE", "transcode cancelled")
+        case .completed:
+          promise.reject("E_TRANSCODE", "transcode cancelled after completion")
         default:
           promise.reject("E_TRANSCODE", "unexpected export status \(export.status.rawValue)")
         }
@@ -404,7 +419,7 @@ public class LocalRecordingFilesModule: Module {
     // timeout fires so AVAssetExportSession stops burning CPU on a result we've
     // already given up on.
     Function("cancelTranscode") { () -> Void in
-      opLock.lock(); let export = pendingExport; opLock.unlock()
+      opLock.lock(); pendingTranscodeCancelled = true; let export = pendingExport; opLock.unlock()
       export?.cancelExport()
     }
 
