@@ -362,69 +362,81 @@ export async function fetchPendingUploads(userId: string): Promise<PendingClassR
     .filter((p) => p.durationSec >= MIN_VALID_DURATION_SEC);
 }
 
+const DEDUP_PAGE = 1000;
+
+function isMissingTableError(err: any): boolean {
+  const code = err?.code;
+  return (
+    code === '42P01' ||
+    code === 'PGRST205' ||
+    /relation .* does not exist|could not find the table/i.test(err?.message ?? '')
+  );
+}
+
 async function fetchImportedFilenames(userId: string): Promise<Set<string>> {
   // Dedup by EXACT filename (e.g. "DJI_03_20260514_123159.WAV"), not by
-  // mic_file_index. The mic's index counter restarts at 1 whenever it
-  // gets reformatted (firmware behaviour, or user-triggered reset),
-  // which would otherwise make every "new" file appear < the max we'd
-  // already imported and get silently filtered out. The filename
-  // includes a precise timestamp from the mic's RTC so collisions
-  // across reformats are vanishingly unlikely.
-  //
-  // Failed / discarded rows are excluded so a stuck upload doesn't
+  // mic_file_index. The mic's index counter restarts at 1 whenever it gets
+  // reformatted, which would otherwise make every "new" file appear < the max
+  // we'd already imported and get silently filtered out. The filename includes
+  // a precise mic-RTC timestamp so collisions across reformats are vanishingly
+  // unlikely. Failed/discarded rows are excluded so a stuck upload doesn't
   // permanently block re-syncing the same file.
-  const { data, error } = await supabase
-    .from('class_recordings')
-    .select('mic_file_name, meta')
-    .eq('user_id', userId)
-    .eq('local_recording_mode', true)
-    .not('mic_file_name', 'is', null)
-    .not('status', 'in', '(failed,discarded)')
-    .limit(500);
-  // A failed read is NOT "nothing imported yet". If we swallowed the error and
-  // returned an empty/partial Set, every already-imported file would look new
-  // and get re-copied/re-transcoded and (on a foreground run) re-INSERTed as a
-  // duplicate orphan. Throw so the caller aborts the sync instead.
-  if (error) throw error;
+  //
+  // We PAGINATE (not a fixed .limit) — a coach with >500 lifetime imports would
+  // otherwise get a truncated, non-deterministic dedup set and re-import the
+  // filenames that fell outside the cap. A failed read throws (an empty/partial
+  // Set derived from a failure would drive mass re-upload).
   const names = new Set<string>();
-  for (const r of (data ?? []) as any[]) {
-    if (r.mic_file_name) names.add(r.mic_file_name as string);
-    // A split recording stores every part's filename in meta.mic_file_names
-    // (mic_file_name only holds the first part). Collect them all so the
-    // 2nd/3rd part of an already-imported session isn't re-offered as new.
-    const partNames = r.meta?.mic_file_names;
-    if (Array.isArray(partNames)) {
-      for (const n of partNames) if (typeof n === 'string') names.add(n);
+
+  for (let from = 0; ; from += DEDUP_PAGE) {
+    const { data, error } = await supabase
+      .from('class_recordings')
+      .select('mic_file_name, meta')
+      .eq('user_id', userId)
+      .eq('local_recording_mode', true)
+      .not('mic_file_name', 'is', null)
+      .not('status', 'in', '(failed,discarded)')
+      .order('id', { ascending: true })
+      .range(from, from + DEDUP_PAGE - 1);
+    if (error) throw error;
+    const batch = (data ?? []) as any[];
+    for (const r of batch) {
+      if (r.mic_file_name) names.add(r.mic_file_name as string);
+      // A split recording stores every part's filename in meta.mic_file_names
+      // (mic_file_name only holds the first part) — collect them all.
+      const partNames = r.meta?.mic_file_names;
+      if (Array.isArray(partNames)) {
+        for (const n of partNames) if (typeof n === 'string') names.add(n);
+      }
     }
+    if (batch.length < DEDUP_PAGE) break;
   }
-  // Also dedup against files already uploaded via the unmatched safety net,
-  // so they're never re-offered or re-uploaded on a later sync. (Table may
-  // not exist on older deployments — the optional chain + null guard keep
-  // this a no-op rather than throwing in that case.)
-  const { data: orphans, error: orphansError } = await supabase
-    .from('unmatched_recordings')
-    .select('part_filenames')
-    .eq('user_id', userId)
-    .neq('status', 'discarded')
-    .limit(500);
-  // Only the documented "table missing on older deployments" case is a safe
-  // no-op (Postgres 42P01 / PostgREST relation-not-found). Any OTHER error
-  // (network/RLS/timeout) means an incomplete dedup set → throw so we don't
-  // re-upload already-orphaned files as duplicates.
-  if (orphansError) {
-    const code = (orphansError as any).code;
-    const missingTable =
-      code === '42P01' ||
-      code === 'PGRST205' ||
-      /relation .* does not exist|could not find the table/i.test(orphansError.message ?? '');
-    if (!missingTable) throw orphansError;
-  }
-  for (const r of (orphans ?? []) as any[]) {
-    const parts = r.part_filenames;
-    if (Array.isArray(parts)) {
-      for (const n of parts) if (typeof n === 'string') names.add(n);
+
+  // Also dedup against files already uploaded via the unmatched safety net.
+  // Table may not exist on older deployments — that specific error is a no-op;
+  // any other error means an incomplete dedup set → throw.
+  for (let from = 0; ; from += DEDUP_PAGE) {
+    const { data: orphans, error: orphansError } = await supabase
+      .from('unmatched_recordings')
+      .select('part_filenames')
+      .eq('user_id', userId)
+      .neq('status', 'discarded')
+      .order('id', { ascending: true })
+      .range(from, from + DEDUP_PAGE - 1);
+    if (orphansError) {
+      if (isMissingTableError(orphansError)) break;
+      throw orphansError;
     }
+    const batch = (orphans ?? []) as any[];
+    for (const r of batch) {
+      const parts = r.part_filenames;
+      if (Array.isArray(parts)) {
+        for (const n of parts) if (typeof n === 'string') names.add(n);
+      }
+    }
+    if (batch.length < DEDUP_PAGE) break;
   }
+
   return names;
 }
 
@@ -719,6 +731,149 @@ export async function purgeExpiredPreparedFiles(): Promise<void> {
   } catch { /* best-effort */ }
 }
 
+// ─── Orphan → class reconciliation ───────────────────────────────────────
+// An orphan (unmatched_recordings) is created when a mic file matched no PENDING
+// class at sync time; its filenames then enter the dedup set, so if the class
+// appears LATER (coach synced before ending it), the mic file can never re-match
+// and the class stays pending forever, focus points never released. This
+// resolves that by matching an already-uploaded orphan to a pending class on
+// duration + date and ATTACHING it (chunks point at the orphan's m4a — no
+// re-upload). Always admin_review_status='pending' — a duration match with no
+// mic re-read is a guess, so a human confirms before focus points go live.
+
+async function kickFinalizeClass(classId: string): Promise<void> {
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const url = `${process.env.EXPO_PUBLIC_SUPABASE_URL}/functions/v1/finalize-class`;
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token ?? ''}` },
+      body: JSON.stringify({ recording_id: classId }),
+    }).catch(() => {});
+  } catch { /* fire-and-forget */ }
+}
+
+async function attachOrphanToClass(
+  userId: string,
+  cls: PendingClassRow,
+  orphan: any,
+): Promise<void> {
+  const classId = cls.id;
+  const storagePaths: string[] = Array.isArray(orphan.storage_paths) ? orphan.storage_paths : [];
+  const partNames: string[] = Array.isArray(orphan.part_filenames) ? orphan.part_filenames : [];
+  if (storagePaths.length === 0) return;
+
+  // Point chunks at the orphan's already-uploaded m4a. Prune any stale chunk
+  // rows first so a re-attach can't leave orphaned higher-idx rows.
+  await supabase.from('class_recording_chunks').delete().eq('recording_id', classId);
+  const chunkRows = storagePaths.map((sp, idx) => ({
+    recording_id: classId,
+    idx,
+    storage_path: sp,
+    status: 'uploaded',
+  }));
+  const { error: chunkErr } = await supabase.from('class_recording_chunks').upsert(chunkRows);
+  if (chunkErr) throw chunkErr;
+
+  const firstName = partNames[0] ?? null;
+  const djiMeta = firstName ? parseDjiFileName(firstName) : null;
+  const audioFolder = storagePaths[0].slice(0, storagePaths[0].lastIndexOf('/') + 1) || null;
+  const { data: existing } = await supabase
+    .from('class_recordings').select('meta').eq('id', classId).maybeSingle();
+  const mergedMeta = { ...((existing?.meta as Record<string, unknown>) ?? {}), mic_file_names: partNames };
+
+  const { error: updErr } = await supabase
+    .from('class_recordings')
+    .update({
+      status: 'ready',
+      expected_chunks: storagePaths.length,
+      audio_folder: audioFolder,
+      last_heartbeat_at: new Date().toISOString(),
+      mic_file_name: firstName,
+      mic_file_index: orphan.dji_index ?? djiMeta?.index ?? null,
+      mic_file_timestamp: orphan.mic_timestamp ?? djiMeta?.timestamp?.toISOString() ?? null,
+      mic_file_duration_sec: orphan.duration_sec ?? null,
+      mic_file_size_bytes: orphan.size_bytes ?? null,
+      file_imported_at: new Date().toISOString(),
+      match_confidence: 'medium',
+      admin_review_status: 'pending', // a reconciliation match is always a guess
+      admin_reviewed_at: null,
+      meta: mergedMeta,
+    })
+    .eq('id', classId);
+  if (updErr) throw updErr;
+
+  // Mark the orphan attached so it's not re-attached or re-offered, and record
+  // which class claimed it (the schema anticipates exactly this).
+  const { error: orphErr } = await supabase
+    .from('unmatched_recordings')
+    .update({ status: 'attached', attached_recording_id: classId })
+    .eq('id', orphan.id)
+    .eq('status', 'uploaded'); // guard: don't clobber a concurrently-attached row
+  if (orphErr) throw orphErr;
+
+  await kickFinalizeClass(classId);
+}
+
+/**
+ * Attach already-uploaded orphans to pending classes they plausibly belong to.
+ * Returns the set of class IDs that got an orphan attached (the caller drops
+ * them from the working set so they're not also matched against the mic).
+ */
+async function reconcileOrphansToClasses(
+  userId: string,
+  pendingClasses: PendingClassRow[],
+): Promise<Set<string>> {
+  const reconciled = new Set<string>();
+  if (pendingClasses.length === 0) return reconciled;
+
+  const { data: orphans, error } = await supabase
+    .from('unmatched_recordings')
+    .select('id, dji_index, mic_timestamp, duration_sec, size_bytes, part_filenames, storage_paths')
+    .eq('user_id', userId)
+    .eq('status', 'uploaded');
+  if (error) {
+    if (isMissingTableError(error)) return reconciled;
+    throw error;
+  }
+  if (!orphans || orphans.length === 0) return reconciled;
+
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const RECONCILE_DATE_TOLERANCE_DAYS = 2; // same window planAutoSync admits files by
+  const used = new Set<string>();
+  // Oldest class first — deterministic, and pairs the earliest orphan to the
+  // earliest class when several are duration-close.
+  const classes = [...pendingClasses].sort((a, b) => +a.startedAt - +b.startedAt);
+  for (const cls of classes) {
+    const expected = cls.durationSec;
+    if (!expected) continue;
+    let best: any = null;
+    let bestScore = Infinity;
+    for (const o of orphans) {
+      if (used.has(o.id)) continue;
+      if (!o.duration_sec || !o.mic_timestamp) continue;
+      if (!Array.isArray(o.storage_paths) || o.storage_paths.length === 0) continue;
+      const ratio = o.duration_sec / expected;
+      if (ratio < 0.5 || ratio > 1.5) continue; // ±50% (matcher's medium band)
+      const oDay = Math.floor(Date.parse(o.mic_timestamp) / DAY_MS);
+      const cDay = Math.floor(+cls.startedAt / DAY_MS);
+      if (Math.abs(oDay - cDay) > RECONCILE_DATE_TOLERANCE_DAYS) continue;
+      const score = Math.abs(ratio - 1);
+      if (score < bestScore) { bestScore = score; best = o; }
+    }
+    if (!best) continue;
+    used.add(best.id);
+    try {
+      await attachOrphanToClass(userId, cls, best);
+      reconciled.add(cls.id);
+    } catch (err) {
+      console.warn('[autoSync] orphan reconcile failed for class', cls.id, err);
+      used.delete(best.id); // let it retry next run
+    }
+  }
+  return reconciled;
+}
+
 // ─── Planning: figure out what to import without uploading yet ──────────
 
 /**
@@ -742,6 +897,19 @@ export async function planAutoSync(
     };
   }
 
+  // First resolve any already-uploaded orphans to these pending classes (reuse
+  // the audio, no re-upload). Reconciled classes drop out of the working set so
+  // a mic file can't ALSO get matched to a class we just attached an orphan to.
+  let reconciledIds = new Set<string>();
+  try {
+    reconciledIds = await reconcileOrphansToClasses(userId, pendingClasses);
+  } catch (err) {
+    console.warn('[autoSync] orphan reconciliation failed (non-fatal):', err);
+  }
+  const workingClasses = reconciledIds.size
+    ? pendingClasses.filter((p) => !reconciledIds.has(p.id))
+    : pendingClasses;
+
   const allEntries = await DjiFiles.listFiles();
   const importedFilenames = await fetchImportedFilenames(userId);
 
@@ -754,7 +922,7 @@ export async function planAutoSync(
   // recordings" even though the right files were sitting right there.
   const DATE_TOLERANCE_DAYS = 2;
   const acceptableDates = new Set<string>();
-  for (const p of pendingClasses) {
+  for (const p of workingClasses) {
     const base = new Date(Date.UTC(
       p.startedAt.getUTCFullYear(),
       p.startedAt.getUTCMonth(),
@@ -824,7 +992,7 @@ export async function planAutoSync(
     };
   }
 
-  const classesForMatcher = pendingClasses.map((p) => ({
+  const classesForMatcher = workingClasses.map((p) => ({
     id: p.id,
     startedAt: p.startedAt,
     endedAt: p.endedAt,
@@ -848,7 +1016,7 @@ export async function planAutoSync(
 
   if (result.status === 'matched') {
     for (const m of result.matches) {
-      const cls = pendingClasses.find((p) => p.id === m.class.id);
+      const cls = workingClasses.find((p) => p.id === m.class.id);
       let adminReviewStatus = deriveAdminReviewStatus(result.status, m.confidence);
       // Auto-approval ALSO requires the paired file's date to be plausibly near
       // the class date. Equal session/class counts force a positional 1:1
@@ -888,7 +1056,7 @@ export async function planAutoSync(
       const scored = matchSessionsToClasses([cls], [session]);
       const m = scored.matches[0];
       if (!m) continue;
-      const pendingRow = pendingClasses.find((p) => p.id === cls.id);
+      const pendingRow = workingClasses.find((p) => p.id === cls.id);
       pairs.push({
         classId: cls.id,
         parts: sessionToParts(session),
@@ -1012,16 +1180,24 @@ export async function uploadUnmatchedSession(args: {
     } catch { /* leave it in tmp */ }
   }
 
-  const { error } = await supabase.from('unmatched_recordings').insert({
-    user_id: userId,
-    dji_index: session.index,
-    mic_timestamp: session.startTimestamp.toISOString(),
-    duration_sec: session.durationSec,
-    size_bytes: parts.reduce((n, p) => n + (p.size || 0), 0),
-    part_filenames: parts.map((p) => p.name),
-    storage_paths: storagePaths,
-    status: 'uploaded',
-  });
+  // Upsert (not insert) on the natural key so a lost-ACK retry can't create a
+  // duplicate orphan row: if the INSERT committed server-side but its response
+  // was lost, the offline/retry loop re-runs this whole function and the second
+  // attempt is a no-op instead of a second row. ignoreDuplicates → keep the
+  // existing row (don't clobber a possibly-already-attached one).
+  const { error } = await supabase.from('unmatched_recordings').upsert(
+    {
+      user_id: userId,
+      dji_index: session.index,
+      mic_timestamp: session.startTimestamp.toISOString(),
+      duration_sec: session.durationSec,
+      size_bytes: parts.reduce((n, p) => n + (p.size || 0), 0),
+      part_filenames: parts.map((p) => p.name),
+      storage_paths: storagePaths,
+      status: 'uploaded',
+    },
+    { onConflict: 'user_id,dji_index,mic_timestamp', ignoreDuplicates: true },
+  );
   if (error) throw error;
 }
 
@@ -1142,16 +1318,21 @@ async function uploadPreparedOrphan(
     );
     storagePaths.push(storagePath);
   }
-  const { error } = await supabase.from('unmatched_recordings').insert({
-    user_id: userId,
-    dji_index: session.index,
-    mic_timestamp: session.startTimestamp.toISOString(),
-    duration_sec: session.durationSec,
-    size_bytes: m4aParts.reduce((n, p) => n + (p.sizeBytes || 0), 0),
-    part_filenames: m4aParts.map((p) => p.name),
-    storage_paths: storagePaths,
-    status: 'uploaded',
-  });
+  // Upsert on the natural key — a lost-ACK retry of this orphan upload re-runs
+  // the whole function, and without this it would insert a duplicate row.
+  const { error } = await supabase.from('unmatched_recordings').upsert(
+    {
+      user_id: userId,
+      dji_index: session.index,
+      mic_timestamp: session.startTimestamp.toISOString(),
+      duration_sec: session.durationSec,
+      size_bytes: m4aParts.reduce((n, p) => n + (p.sizeBytes || 0), 0),
+      part_filenames: m4aParts.map((p) => p.name),
+      storage_paths: storagePaths,
+      status: 'uploaded',
+    },
+    { onConflict: 'user_id,dji_index,mic_timestamp', ignoreDuplicates: true },
+  );
   if (error) throw error;
 
   // Committed — retire the prepared m4a to the short-lived backup.
