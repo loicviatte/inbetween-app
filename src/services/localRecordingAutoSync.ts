@@ -1308,15 +1308,28 @@ export async function executeAutoSync(
   const TRANSCODE_TIMEOUT_MS = 90_000;
   const transcodeWithTimeout = async (wavUri: string): Promise<string> => {
     let timer: ReturnType<typeof setTimeout>;
+    let timedOut = false;
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
+        timedOut = true;
         // Stop AVAssetExportSession from encoding a result we've abandoned.
         try { DjiFiles.cancelTranscode?.(); } catch {}
         reject(new Error('E_TRANSCODE: compression stalled — the recording may be corrupt'));
       }, TRANSCODE_TIMEOUT_MS);
     });
+    const native = DjiFiles.transcodeToM4A(wavUri);
+    // Late-arrival cleanup: if cancelExport() lost the race and the export still
+    // finished AFTER our timeout already rejected, JS never consumes this path —
+    // delete it so the m4a doesn't orphan in the native temp dir. The second
+    // handler swallows a late rejection so it isn't an unhandled promise.
+    native.then(
+      (path: string) => {
+        if (timedOut && path) FileSystem.deleteAsync(path, { idempotent: true }).catch(() => {});
+      },
+      () => {},
+    );
     try {
-      return (await Promise.race([DjiFiles.transcodeToM4A(wavUri), timeout])) as string;
+      return (await Promise.race([native, timeout])) as string;
     } finally {
       clearTimeout(timer!);
     }
