@@ -774,92 +774,26 @@ async function insertOrphanRow(row: Record<string, unknown>): Promise<void> {
 }
 
 async function attachOrphanToClass(
-  userId: string,
+  _userId: string,
   cls: PendingClassRow,
   orphan: any,
 ): Promise<boolean> {
-  const classId = cls.id;
-  const storagePaths: string[] = Array.isArray(orphan.storage_paths) ? orphan.storage_paths : [];
-  const partNames: string[] = Array.isArray(orphan.part_filenames) ? orphan.part_filenames : [];
-  if (storagePaths.length === 0) return false;
-
-  // CLAIM the orphan FIRST — this single guarded UPDATE is the atomicity +
-  // concurrency anchor. Postgres serializes concurrent UPDATEs on the row, so
-  // of two racing reconcile passes (reconcile runs OUTSIDE the sync lock, so
-  // the 2s poll CAN overlap it) exactly one flips status uploaded→attached and
-  // gets a row back; the loser sees 0 rows and bails before touching chunks or
-  // the class. Claiming before writing also means a crash mid-write can never
-  // leave a FINALIZED class whose orphan is still 'uploaded' (which would let
-  // the same audio be re-attached to a different class later).
-  const { data: claimed, error: claimErr } = await supabase
-    .from('unmatched_recordings')
-    .update({ status: 'attached', attached_recording_id: classId })
-    .eq('id', orphan.id)
-    .eq('status', 'uploaded')
-    .select('id');
-  if (claimErr) throw claimErr;
-  if (!claimed || claimed.length === 0) return false; // lost the race / already claimed
-
-  try {
-    // Point chunks at the orphan's already-uploaded m4a. Prune stale rows first.
-    await supabase.from('class_recording_chunks').delete().eq('recording_id', classId);
-    const chunkRows = storagePaths.map((sp, idx) => ({
-      recording_id: classId,
-      idx,
-      storage_path: sp,
-      status: 'uploaded',
-    }));
-    const { error: chunkErr } = await supabase.from('class_recording_chunks').upsert(chunkRows);
-    if (chunkErr) throw chunkErr;
-
-    const firstName = partNames[0] ?? null;
-    const djiMeta = firstName ? parseDjiFileName(firstName) : null;
-    const audioFolder = storagePaths[0].slice(0, storagePaths[0].lastIndexOf('/') + 1) || null;
-    const { data: existing } = await supabase
-      .from('class_recordings').select('meta').eq('id', classId).maybeSingle();
-    const mergedMeta = { ...((existing?.meta as Record<string, unknown>) ?? {}), mic_file_names: partNames };
-
-    // Guard on mic_file_name IS NULL so we only finalize a STILL-pending class —
-    // if a mic file matched it concurrently, this affects 0 rows and we bail
-    // (→ revert the claim below) rather than double-attaching.
-    const { data: updated, error: updErr } = await supabase
-      .from('class_recordings')
-      .update({
-        status: 'ready',
-        expected_chunks: storagePaths.length,
-        audio_folder: audioFolder,
-        last_heartbeat_at: new Date().toISOString(),
-        mic_file_name: firstName,
-        mic_file_index: orphan.dji_index ?? djiMeta?.index ?? null,
-        mic_file_timestamp: orphan.mic_timestamp ?? djiMeta?.timestamp?.toISOString() ?? null,
-        mic_file_duration_sec: orphan.duration_sec ?? null,
-        mic_file_size_bytes: orphan.size_bytes ?? null,
-        file_imported_at: new Date().toISOString(),
-        match_confidence: 'medium',
-        admin_review_status: 'pending', // a reconciliation match is always a guess
-        admin_reviewed_at: null,
-        meta: mergedMeta,
-      })
-      .eq('id', classId)
-      .is('mic_file_name', null)
-      .select('id');
-    if (updErr) throw updErr;
-    if (!updated || updated.length === 0) throw new Error('class no longer pending');
-
-    await kickFinalizeClass(classId);
-    return true;
-  } catch (err) {
-    // The audio was NOT finalized onto the class — release the claim so the
-    // orphan can be cleanly retried next run (best-effort; if this revert fails
-    // the orphan stays 'attached' with no finalized class, which is still safe:
-    // it's never re-attached elsewhere, so no wrong-audio can result).
-    await supabase
-      .from('unmatched_recordings')
-      .update({ status: 'uploaded', attached_recording_id: null })
-      .eq('id', orphan.id)
-      .then(() => {}, () => {});
-    throw err;
-  }
+  // The attach touches 3 tables (chunks, class, orphan) and must be ATOMIC +
+  // concurrency-safe against a racing mic-match or a second device. Doing it as
+  // separate client statements is neither (an earlier client-side version left
+  // a class pointing at the wrong orphan's audio when a guard failed AFTER the
+  // chunk delete). Delegate the whole thing to a single transactional RPC with
+  // row locks: it re-checks the orphan is still 'uploaded' and the class is
+  // still pending (mic_file_name IS NULL) under lock and rolls the entire
+  // transaction back otherwise — so no partial/wrong-audio state is possible.
+  const { data, error } = await supabase.rpc('reconcile_attach_orphan', {
+    p_orphan_id: orphan.id,
+    p_class_id: cls.id,
+  });
+  if (error) throw error;
+  if (data !== true) return false; // orphan already claimed / class no longer pending
+  await kickFinalizeClass(cls.id);
+  return true;
 }
 
 /**
