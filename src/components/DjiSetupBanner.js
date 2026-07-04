@@ -473,8 +473,8 @@ function renderStep(step, foundCount) {
             <Eyebrow>TEST RECORDING</Eyebrow>
             <Text style={s.h2}>Record a quick test.</Text>
             <Text style={s.p}>
-              Press <Text style={s.strong}>REC</Text> — the <Text style={s.strong}>red light</Text> turns on. Count to
-              three, then press <Text style={s.strong}>REC</Text> again to stop.
+              Short-press <Text style={s.strong}>REC</Text> — the <Text style={s.strong}>red light</Text> turns on. Count
+              to three, then short-press <Text style={s.strong}>REC</Text> again to stop.
             </Text>
           </View>
         </>
