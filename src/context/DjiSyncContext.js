@@ -47,6 +47,7 @@ import {
   scanUnmatchedSessions,
   classifySyncError,
   uploadPreparedItems,
+  purgeExpiredPreparedFiles,
 } from '../services/localRecordingAutoSync';
 
 const POLL_INTERVAL_MS = 2000;
@@ -188,6 +189,16 @@ export function DjiSyncProvider({ children }) {
       } catch {}
     };
   }, [phase]);
+
+  // Sweep leftover prepared m4a ONCE on provider mount. At mount the in-memory
+  // offline hold (offlinePendingRef) is always empty, so every file in
+  // PREPARE_DIR is definitionally a leftover from a prior session (app killed /
+  // hold lost) — never a file the live process is still holding. Running this
+  // only at mount is why it can't delete an actively-held upload (a mid-session
+  // hold's freshly-prepared files are also too recent for the stale window).
+  useEffect(() => {
+    purgeExpiredPreparedFiles().catch(() => {});
+  }, []);
 
   // ─── Offline upload: hold prepared items, retry until the network is back ──
   const stopOfflineRetry = useCallback(() => {

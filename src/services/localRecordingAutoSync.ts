@@ -824,17 +824,21 @@ export async function planAutoSync(
     for (const m of result.matches) {
       const cls = pendingClasses.find((p) => p.id === m.class.id);
       let adminReviewStatus = deriveAdminReviewStatus(result.status, m.confidence);
-      // Auto-approval ALSO requires the paired file's timestamp to be plausibly
-      // near the class start. Equal session/class counts force a positional 1:1
+      // Auto-approval ALSO requires the paired file's date to be plausibly near
+      // the class date. Equal session/class counts force a positional 1:1
       // pairing even when the sets are actually mis-aligned — a class with no
       // file plus a stray orphan gives equal counts, and a duration coincidence
-      // would otherwise auto-release focus points to the WRONG student. RTC
-      // drift is bounded (that's why candidates are gated to ±DATE_TOLERANCE_DAYS
-      // of a class), so a pair whose timestamp is further off than that window
-      // isn't trustworthy → hold it for admin review instead of auto-approving.
+      // would otherwise auto-release focus points to the WRONG student. We reuse
+      // the SAME ±DATE_TOLERANCE_DAYS *calendar-date* window the candidate gate
+      // admits files by, so a legitimate high-RTC-drift match that was admitted
+      // is never over-held — only a pair whose date lands outside that window
+      // (a genuine mis-alignment) drops to admin review instead of auto-approve.
       if (adminReviewStatus === 'approved' && cls?.startedAt) {
-        const driftMs = Math.abs(+m.session.startTimestamp - +cls.startedAt);
-        if (driftMs > DATE_TOLERANCE_DAYS * 24 * 60 * 60 * 1000) {
+        const DAY_MS = 24 * 60 * 60 * 1000;
+        const utcDay = (d: Date) =>
+          Math.floor(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) / DAY_MS);
+        const dayGap = Math.abs(utcDay(m.session.startTimestamp) - utcDay(cls.startedAt));
+        if (!(dayGap <= DATE_TOLERANCE_DAYS)) {
           adminReviewStatus = 'pending';
         }
       }

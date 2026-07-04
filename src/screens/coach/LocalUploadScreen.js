@@ -49,7 +49,6 @@ import {
   executeAutoSync,
   attachSessionToClass,
   purgeExpiredM4aBackups,
-  purgeExpiredPreparedFiles,
 } from '../../services/localRecordingAutoSync';
 import * as DjiFiles from 'local-recording-files';
 
@@ -130,7 +129,7 @@ export default function LocalUploadScreen({ navigation }) {
 
   // Sweep stale on-device m4a backups (kept ~3 days, then dropped — the
   // uploaded audio lives in Supabase Storage). Fire-and-forget on mount.
-  useEffect(() => { purgeExpiredM4aBackups(); purgeExpiredPreparedFiles(); }, []);
+  useEffect(() => { purgeExpiredM4aBackups(); }, []);
 
   // ─── Auto-sync via the native folder picker ───────────────────────────
   // Preferred path: if the native module is built into this binary AND
