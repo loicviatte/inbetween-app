@@ -19,6 +19,11 @@ verify_jwt = false
 [functions.monitor-report]
 verify_jwt = true
 
+# Fired by a DB trigger (pg_net) with a service-role bearer when a DJI-mic match
+# needs admin review — gate on the JWT like the other cron/trigger functions.
+[functions.notify-audio-match]
+verify_jwt = true
+
 [functions.telegram-webhook]
 verify_jwt = false
 
