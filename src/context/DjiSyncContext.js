@@ -35,6 +35,7 @@ import React, {
   useState,
 } from 'react';
 import { AppState } from 'react-native';
+import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import * as DjiFiles from 'local-recording-files';
 import { supabase } from '../services/supabase/client';
 import { isLocalRecordingMode } from '../services/featureFlags';
@@ -49,6 +50,13 @@ import {
 } from '../services/localRecordingAutoSync';
 
 const POLL_INTERVAL_MS = 2000;
+// Keeps the screen (and thus the app process) awake while a sync is actively
+// running, so a coach can plug the mic in, set the phone down, and have the
+// copy → transcode → upload finish. iOS suspends a backgrounded app within
+// seconds and can't read the USB mic while suspended, so an auto-locking
+// screen would otherwise silently stall the sync. Foreground-only mitigation —
+// NOT true background execution.
+const KEEP_AWAKE_TAG = 'dji-sync';
 // Cadence of the simulated progress creep during the no-byte-progress phases
 // (mic read + transcode). ~700ms so the bar visibly ticks up ~each second.
 const CREEP_INTERVAL_MS = 700;
@@ -168,6 +176,18 @@ export function DjiSyncProvider({ children }) {
     });
     return () => sub.remove();
   }, [enabled, refreshFolderAccess, refreshPending]);
+
+  // Hold the screen awake for the duration of an active sync so the process
+  // isn't suspended mid copy/transcode/upload if the coach sets the phone down.
+  useEffect(() => {
+    if (phase !== 'syncing') return undefined;
+    activateKeepAwakeAsync(KEEP_AWAKE_TAG).catch(() => {});
+    return () => {
+      try {
+        Promise.resolve(deactivateKeepAwake(KEEP_AWAKE_TAG)).catch(() => {});
+      } catch {}
+    };
+  }, [phase]);
 
   // ─── Offline upload: hold prepared items, retry until the network is back ──
   const stopOfflineRetry = useCallback(() => {
