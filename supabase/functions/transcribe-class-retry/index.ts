@@ -45,10 +45,33 @@ const MAX_RECORDINGS_PER_RUN = 50
 
 const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY)
 
-Deno.serve(async (_req: Request) => {
-  // Always do the actual work in waitUntil so the cron caller (pg_net) gets
-  // an instant response — pg_net keeps responses for only 6 hours and we
-  // don't want backlogged work to drag the cron poke timeout.
+function jwtRoleIs(authHeader: string | null, expectedRole: string): boolean {
+  const m = (authHeader ?? '').match(/^\s*Bearer\s+(.+)$/i)
+  if (!m) return false
+  const parts = m[1].trim().split('.')
+  if (parts.length !== 3) return false
+  try {
+    let payload = parts[1].replace(/-/g, '+').replace(/_/g, '/')
+    const pad = payload.length % 4
+    if (pad) payload += '='.repeat(4 - pad)
+    return JSON.parse(atob(payload))?.role === expectedRole
+  } catch {
+    return false
+  }
+}
+
+Deno.serve(async (req: Request) => {
+  // Only the cron (service role) may trigger this global sweep. Without the
+  // gate any authenticated coach could POST their own Bearer JWT and repeatedly
+  // kick the whole AssemblyAI-poll + Claude-translation sweep on demand — a
+  // cost/abuse vector. Sibling fns already gate (finalize-class on service_role,
+  // assemblyai-webhook on the webhook secret); this one had none.
+  if (!jwtRoleIs(req.headers.get('Authorization'), 'service_role')) {
+    return new Response(JSON.stringify({ error: 'forbidden' }), {
+      status: 403,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
   const result = await sweep()
   return new Response(JSON.stringify(result), {
     status: 200,
@@ -95,7 +118,23 @@ async function healOne(recordingId: string) {
     .eq('status', 'transcribing')
 
   for (const chunk of transcribingChunks ?? []) {
-    if (!chunk.assemblyai_job_id) continue
+    if (!chunk.assemblyai_job_id) {
+      // Crashed between the atomic claim (uploaded→transcribing) and the
+      // AssemblyAI POST: the chunk is 'transcribing' with NO job_id, so no
+      // webhook or poll can ever advance it and the recording would strand
+      // forever (the cron just re-sweeps it every 5 min). Reset it to 'uploaded'
+      // — guarded to only fire while it's still stuck + jobless so we can't
+      // clobber a chunk a concurrent run just POSTed — so the finalizeRecording
+      // claim below re-POSTs it (idempotent).
+      await supabase
+        .from('class_recording_chunks')
+        .update({ status: 'uploaded', error: 'reset: transcribing with no job_id' })
+        .eq('recording_id', recordingId)
+        .eq('idx', chunk.idx)
+        .eq('status', 'transcribing')
+        .is('assemblyai_job_id', null)
+      continue
+    }
     const job = await pollAssemblyAI(chunk.assemblyai_job_id)
     if (!job) continue
     if (job.status === 'completed') {
