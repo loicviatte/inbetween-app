@@ -275,6 +275,13 @@ const M4A_BACKUP_RETENTION_MS = 3 * 24 * 60 * 60 * 1000; // 3 days
 // upload is held waiting for the network to come back). Cache survives
 // backgrounding; lost on app kill (then the file re-prepares next launch).
 const PREPARE_DIR = `${FileSystem.cacheDirectory ?? ''}dji-prepared/`;
+// A prepared m4a normally lives in PREPARE_DIR for seconds (until its upload
+// commits and it's retired to backup) — or minutes while an offline hold
+// retries. Anything older than this window is a leftover from a hard failure or
+// an app kill (the in-memory hold that referenced it is gone), safe to sweep.
+// Comfortably longer than any single continuous offline hold so an active
+// retry's freshly-written file is never reclaimed out from under it.
+const PREPARE_STALE_MS = 24 * 60 * 60 * 1000; // 1 day
 
 function deriveAdminReviewStatus(
   sessionStatus: MatchSession['status'],
@@ -340,7 +347,7 @@ async function fetchImportedFilenames(userId: string): Promise<Set<string>> {
   //
   // Failed / discarded rows are excluded so a stuck upload doesn't
   // permanently block re-syncing the same file.
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('class_recordings')
     .select('mic_file_name, meta')
     .eq('user_id', userId)
@@ -348,6 +355,11 @@ async function fetchImportedFilenames(userId: string): Promise<Set<string>> {
     .not('mic_file_name', 'is', null)
     .not('status', 'in', '(failed,discarded)')
     .limit(500);
+  // A failed read is NOT "nothing imported yet". If we swallowed the error and
+  // returned an empty/partial Set, every already-imported file would look new
+  // and get re-copied/re-transcoded and (on a foreground run) re-INSERTed as a
+  // duplicate orphan. Throw so the caller aborts the sync instead.
+  if (error) throw error;
   const names = new Set<string>();
   for (const r of (data ?? []) as any[]) {
     if (r.mic_file_name) names.add(r.mic_file_name as string);
@@ -363,12 +375,24 @@ async function fetchImportedFilenames(userId: string): Promise<Set<string>> {
   // so they're never re-offered or re-uploaded on a later sync. (Table may
   // not exist on older deployments — the optional chain + null guard keep
   // this a no-op rather than throwing in that case.)
-  const { data: orphans } = await supabase
+  const { data: orphans, error: orphansError } = await supabase
     .from('unmatched_recordings')
     .select('part_filenames')
     .eq('user_id', userId)
     .neq('status', 'discarded')
     .limit(500);
+  // Only the documented "table missing on older deployments" case is a safe
+  // no-op (Postgres 42P01 / PostgREST relation-not-found). Any OTHER error
+  // (network/RLS/timeout) means an incomplete dedup set → throw so we don't
+  // re-upload already-orphaned files as duplicates.
+  if (orphansError) {
+    const code = (orphansError as any).code;
+    const missingTable =
+      code === '42P01' ||
+      code === 'PGRST205' ||
+      /relation .* does not exist|could not find the table/i.test(orphansError.message ?? '');
+    if (!missingTable) throw orphansError;
+  }
   for (const r of (orphans ?? []) as any[]) {
     const parts = r.part_filenames;
     if (Array.isArray(parts)) {
@@ -523,6 +547,21 @@ export async function attachSessionToClass(args: {
     } catch { /* leave it in tmp */ }
   }
 
+  // Drop any stale chunk rows left by an earlier, LARGER import of this class.
+  // Chunks are keyed by (recording_id, idx) and only ever upserted, never
+  // deleted, while expected_chunks is re-set to the current part count. If a
+  // re-import produces fewer parts, a leftover higher-idx chunk would otherwise
+  // survive — and finalize gates on chunk COUNT, not idx completeness — so a
+  // stale part could be transcribed into the final transcript.
+  {
+    const { error: pruneErr } = await supabase
+      .from('class_recording_chunks')
+      .delete()
+      .eq('recording_id', classId)
+      .gte('idx', parts.length);
+    if (pruneErr) throw pruneErr;
+  }
+
   const first = parts[0];
   const djiMeta = parseDjiFileName(first.name);
   const totalSizeBytes = parts.reduce((sum, p) => sum + (p.size || 0), 0);
@@ -618,6 +657,35 @@ export async function purgeExpiredM4aBackups(): Promise<void> {
           ? now - fi.modificationTime * 1000
           : Infinity;
         if (ageMs > M4A_BACKUP_RETENTION_MS) {
+          await FileSystem.deleteAsync(path, { idempotent: true });
+        }
+      } catch { /* skip this file */ }
+    }
+  } catch { /* best-effort */ }
+}
+
+/**
+ * Sweep the PREPARE_DIR staging folder. Prepared m4a are retired to the backup
+ * folder on a successful upload; any file left here past PREPARE_STALE_MS is a
+ * leftover from a hard failure, a failed retire-move, or an app kill (the
+ * in-memory offline hold that referenced it no longer exists), so it will never
+ * be uploaded and is safe to delete. Best-effort: never throws. Call alongside
+ * purgeExpiredM4aBackups() on a surface the coach opens regularly.
+ */
+export async function purgeExpiredPreparedFiles(): Promise<void> {
+  try {
+    const info = await FileSystem.getInfoAsync(PREPARE_DIR);
+    if (!info.exists) return;
+    const names = await FileSystem.readDirectoryAsync(PREPARE_DIR);
+    const now = Date.now();
+    for (const name of names) {
+      const path = `${PREPARE_DIR}${name}`;
+      try {
+        const fi = await FileSystem.getInfoAsync(path);
+        const ageMs = fi.exists && fi.modificationTime
+          ? now - fi.modificationTime * 1000
+          : Infinity;
+        if (ageMs > PREPARE_STALE_MS) {
           await FileSystem.deleteAsync(path, { idempotent: true });
         }
       } catch { /* skip this file */ }
@@ -755,6 +823,21 @@ export async function planAutoSync(
   if (result.status === 'matched') {
     for (const m of result.matches) {
       const cls = pendingClasses.find((p) => p.id === m.class.id);
+      let adminReviewStatus = deriveAdminReviewStatus(result.status, m.confidence);
+      // Auto-approval ALSO requires the paired file's timestamp to be plausibly
+      // near the class start. Equal session/class counts force a positional 1:1
+      // pairing even when the sets are actually mis-aligned — a class with no
+      // file plus a stray orphan gives equal counts, and a duration coincidence
+      // would otherwise auto-release focus points to the WRONG student. RTC
+      // drift is bounded (that's why candidates are gated to ±DATE_TOLERANCE_DAYS
+      // of a class), so a pair whose timestamp is further off than that window
+      // isn't trustworthy → hold it for admin review instead of auto-approving.
+      if (adminReviewStatus === 'approved' && cls?.startedAt) {
+        const driftMs = Math.abs(+m.session.startTimestamp - +cls.startedAt);
+        if (driftMs > DATE_TOLERANCE_DAYS * 24 * 60 * 60 * 1000) {
+          adminReviewStatus = 'pending';
+        }
+      }
       pairs.push({
         classId: m.class.id,
         parts: sessionToParts(m.session),
@@ -763,7 +846,7 @@ export async function planAutoSync(
         confidence: m.confidence,
         actualDurationSec: m.actualDurationSec,
         studentName: cls?.studentName ?? null,
-        adminReviewStatus: deriveAdminReviewStatus(result.status, m.confidence),
+        adminReviewStatus,
       });
     }
   } else if (result.status === 'count_mismatch') {
@@ -941,6 +1024,18 @@ async function uploadPreparedPair(
       .from('class_recording_chunks')
       .upsert({ recording_id: classId, idx, storage_path: storagePath, status: 'uploaded' });
     if (chunkErr) throw chunkErr;
+  }
+
+  // Drop stale chunk rows from an earlier, larger import of this class (see the
+  // matching prune in attachSessionToClass) so a shrunk re-import can't leave a
+  // leftover higher-idx chunk that finalize would fold into the transcript.
+  {
+    const { error: pruneErr } = await supabase
+      .from('class_recording_chunks')
+      .delete()
+      .eq('recording_id', classId)
+      .gte('idx', m4aParts.length);
+    if (pruneErr) throw pruneErr;
   }
 
   const first = m4aParts[0];
@@ -1208,27 +1303,44 @@ export async function executeAutoSync(
     labelPrefix: string,
   ): Promise<PreparedM4aPart[]> => {
     const out: PreparedM4aPart[] = [];
-    for (let p = 0; p < parts.length; p++) {
-      emit(`${labelPrefix} · reading part ${p + 1}/${parts.length}…`, p);
-      let wavUri: string;
-      try {
-        wavUri = await copyFromMic(parts[p].relativePath);
-      } catch (copyErr) {
-        micDisconnected = true;
-        throw copyErr;
+    try {
+      for (let p = 0; p < parts.length; p++) {
+        emit(`${labelPrefix} · reading part ${p + 1}/${parts.length}…`, p);
+        let wavUri: string;
+        try {
+          wavUri = await copyFromMic(parts[p].relativePath);
+        } catch (copyErr) {
+          micDisconnected = true;
+          throw copyErr;
+        }
+        emit(`${labelPrefix} · compressing part ${p + 1}/${parts.length}…`, p);
+        // Always free the ~266 MB copied WAV, even if the transcode times out or
+        // throws — its original still lives on the mic, so the cache copy is pure
+        // scratch. Without the finally it would leak on every E_TRANSCODE.
+        let m4aTmp: string;
+        try {
+          m4aTmp = await transcodeWithTimeout(wavUri);
+        } finally {
+          try { await FileSystem.deleteAsync(wavUri, { idempotent: true }); } catch {}
+        }
+        let m4aUri = m4aTmp;
+        try {
+          await FileSystem.makeDirectoryAsync(PREPARE_DIR, { intermediates: true });
+          m4aUri = `${PREPARE_DIR}${parts[p].fileName}_${p}.m4a`;
+          await FileSystem.moveAsync({ from: m4aTmp, to: m4aUri });
+        } catch { m4aUri = m4aTmp; }
+        out.push({ m4aUri, name: parts[p].fileName, sizeBytes: parts[p].sizeBytes });
       }
-      emit(`${labelPrefix} · compressing part ${p + 1}/${parts.length}…`, p);
-      const m4aTmp = await transcodeWithTimeout(wavUri);
-      try { await FileSystem.deleteAsync(wavUri, { idempotent: true }); } catch {}
-      let m4aUri = m4aTmp;
-      try {
-        await FileSystem.makeDirectoryAsync(PREPARE_DIR, { intermediates: true });
-        m4aUri = `${PREPARE_DIR}${parts[p].fileName}_${p}.m4a`;
-        await FileSystem.moveAsync({ from: m4aTmp, to: m4aUri });
-      } catch { m4aUri = m4aTmp; }
-      out.push({ m4aUri, name: parts[p].fileName, sizeBytes: parts[p].sizeBytes });
+      return out;
+    } catch (err) {
+      // A later part failed (e.g. mic unplugged mid-session): the earlier parts'
+      // m4a are already staged in PREPARE_DIR but this whole recording won't
+      // upload. Delete them so they don't strand until the periodic sweep.
+      for (const part of out) {
+        try { await FileSystem.deleteAsync(part.m4aUri, { idempotent: true }); } catch {}
+      }
+      throw err;
     }
-    return out;
   };
 
   // ── Matched pairs: PREPARE (copy+transcode) then UPLOAD, holding on a
