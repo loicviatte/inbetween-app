@@ -453,7 +453,6 @@ export function DjiSyncProvider({ children }) {
         const pendingReviewCount = (result.pairs ?? []).filter(
           (p) => p.adminReviewStatus === 'pending',
         ).length;
-        const didSomething = importedCount > 0 || unmatchedCount > 0;
 
         // Seed the running summary with the pairs/orphans that ALREADY uploaded
         // this run (i.e. NOT offline-held and NOT hard-failed). Used by BOTH
@@ -522,7 +521,12 @@ export function DjiSyncProvider({ children }) {
           return;
         }
 
-        if ((result.errors?.length ?? 0) > 0 && !didSomething) {
+        // Surface a hard (non-network) per-item failure even when OTHER items
+        // uploaded fine. Gating this on !didSomething hid a stuck class behind a
+        // green "done" whenever at least one sibling succeeded — the coach would
+        // never know class B failed and stays pending forever. Mirrors the
+        // offline-drain path, which surfaces errors regardless of partial wins.
+        if ((result.errors?.length ?? 0) > 0) {
           const message = result.errors[0]?.error ?? 'Sync failed';
           setErrorInfo({ kind: classifySyncError(message), message });
           setPhase('error');

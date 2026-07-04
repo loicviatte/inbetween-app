@@ -32,8 +32,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { Fonts } from '../theme';
 import { supabase } from '../services/supabase/client';
 import { isLocalRecordingMode } from '../services/featureFlags';
-import { fetchPendingUploads } from '../services/localRecordingAutoSync';
-import { parseDjiFileName } from '../services/localRecordingMatcher';
+import { fetchPendingUploads, countMicSessions } from '../services/localRecordingAutoSync';
 import * as DjiFiles from 'local-recording-files';
 import { BrowseTabChip, NoNameChip } from './DjiFilesChips';
 import { useDjiSync } from '../context/DjiSyncContext';
@@ -319,9 +318,9 @@ export default function DjiSetupBanner() {
       let djiCount = 0;
       try {
         const entries = await DjiFiles.listFiles();
-        for (const entry of entries) {
-          if (parseDjiFileName(entry.name)) djiCount += 1;
-        }
+        // Count logical recordings (sessions), not raw file-parts — a split
+        // recording is several files sharing an index but is ONE recording.
+        djiCount = countMicSessions(entries);
       } catch {
         /* listFiles can fail right after pick — treat as 0 */
       }

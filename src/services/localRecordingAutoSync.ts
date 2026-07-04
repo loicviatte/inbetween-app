@@ -235,6 +235,32 @@ function approximateWavDurationSec(sizeBytes: number): number {
 }
 
 /**
+ * Count LOGICAL recordings (sessions) among raw mic-folder entries. The DJI mic
+ * splits one continuous recording into multiple ~30-min parts that share an
+ * index, so a raw parseable-file count over-reports (a 90-min class = 3 files =
+ * 1 recording). Groups parts into sessions exactly like the sync pipeline does.
+ * Used by the setup success screen so "Found N recordings" matches reality.
+ */
+export function countMicSessions(
+  entries: Array<{ name: string; sizeBytes: number }>,
+): number {
+  const micFiles: MicFile[] = [];
+  for (const entry of entries) {
+    const meta = parseDjiFileName(entry.name);
+    if (!meta) continue;
+    micFiles.push({
+      fileName: entry.name,
+      index: meta.index,
+      timestamp: meta.timestamp,
+      durationSec: approximateWavDurationSec(entry.sizeBytes),
+      sizeBytes: entry.sizeBytes,
+      uri: '',
+    });
+  }
+  return groupMicFilesIntoSessions(micFiles).length;
+}
+
+/**
  * Minimum duration we'll consider as a "real" recording, applied
  * symmetrically to BOTH mic files AND pending class_recordings rows:
  *
@@ -1326,6 +1352,17 @@ export async function executeAutoSync(
           m4aTmp = await transcodeWithTimeout(wavUri);
         } finally {
           try { await FileSystem.deleteAsync(wavUri, { idempotent: true }); } catch {}
+        }
+        // Guard against a transcode that reports success but produced an empty /
+        // near-empty m4a — a subtly-corrupt WAV that AVFoundation opens with no
+        // readable audio can still export .completed. Uploading it would
+        // transcribe silence into the class. A real ≥60s recording is hundreds
+        // of KB, so anything under a few KB is broken → fail the part (the WAV is
+        // already freed; a later sync re-copies the original from the mic).
+        const outInfo = await FileSystem.getInfoAsync(m4aTmp);
+        if (!outInfo.exists || outInfo.size < 4096) {
+          try { await FileSystem.deleteAsync(m4aTmp, { idempotent: true }); } catch {}
+          throw new Error('E_TRANSCODE_EMPTY');
         }
         let m4aUri = m4aTmp;
         try {
