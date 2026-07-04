@@ -982,6 +982,7 @@ export function DjiSyncProvider({ children }) {
       openGrantInstructions,
       pickFolderFromInstructions,
       devResetFolder,
+      refreshFolderAccess,
     }),
     [
       enabled,
@@ -1010,6 +1011,7 @@ export function DjiSyncProvider({ children }) {
       openGrantInstructions,
       pickFolderFromInstructions,
       devResetFolder,
+      refreshFolderAccess,
     ],
   );
 

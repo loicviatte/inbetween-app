@@ -36,6 +36,7 @@ import { fetchPendingUploads } from '../services/localRecordingAutoSync';
 import { parseDjiFileName } from '../services/localRecordingMatcher';
 import * as DjiFiles from 'local-recording-files';
 import { BrowseTabChip, NoNameChip } from './DjiFilesChips';
+import { useDjiSync } from '../context/DjiSyncContext';
 
 const MIC_FRONT = require('../../assets/dji-setup/dji-mic2.webp');
 const MIC_SIDE_POWER = require('../../assets/dji-setup/dji_mic_2_side_power.png');
@@ -48,10 +49,6 @@ const GOLD_300 = '#F6D27A';
 const RED_HI = '#E85555';
 const STAGE = '#060606';
 const INK = '#0A0A0A';
-
-// Delay between dismissing the RN Modal and presenting the iOS
-// UIDocumentPicker — without it, the picker races the modal teardown.
-const MODAL_DISMISS_DELAY_MS = 380;
 
 // Progress-bar % + "NN / 04" counter per step.
 const STEP_META = {
@@ -102,12 +99,14 @@ function IntroLink() {
   const fly = useRef(new Animated.Value(0)).current;
   const [w, setW] = useState(0);
   useEffect(() => {
+    if (!w) return; // wait for onLayout — else the glide range is [0,0] (frozen)
+    fly.setValue(0);
     const loop = Animated.loop(
       Animated.timing(fly, { toValue: 1, duration: 2800, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
     );
     loop.start();
     return () => loop.stop();
-  }, [fly]);
+  }, [fly, w]);
   const tx = fly.interpolate({ inputRange: [0, 1], outputRange: [0, Math.max(0, w - 18)] });
   const op = fly.interpolate({ inputRange: [0, 0.12, 0.85, 1], outputRange: [0, 1, 1, 0] });
   return (
@@ -173,9 +172,16 @@ export default function DjiSetupBanner() {
   const [pendingCount, setPendingCount] = useState(0);
   const [modalOpen, setModalOpen] = useState(false);
   const [step, setStep] = useState('intro');
+  // displayStep lags `step` during the out→in transition so the content that
+  // animates out is the OLD screen, then we swap and animate the new one in.
+  const [displayStep, setDisplayStep] = useState('intro');
   const [foundCount, setFoundCount] = useState(0);
   const dismissedRef = useRef(false);
+  const pickingRef = useRef(false); // a folder pick is in flight
+  const sync = useDjiSync(); // sibling provider — to refresh its pill after grant
   const insets = useSafeAreaInsets();
+  const trans = useRef(new Animated.Value(1)).current; // 1 = shown, 0 = hidden
+  const progress = useRef(new Animated.Value(STEP_META.intro.pct)).current;
 
   const isLocalMode = isLocalRecordingMode(authUser);
 
@@ -221,82 +227,132 @@ export default function DjiSetupBanner() {
     return () => sub.remove();
   }, [refreshPending]);
 
+  // Progress bar eases toward the new step's target the instant you tap.
+  useEffect(() => {
+    Animated.timing(progress, {
+      toValue: (STEP_META[step] ?? STEP_META.intro).pct,
+      duration: 420,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: false,
+    }).start();
+  }, [step, progress]);
+
+  // Content cross-transition: fade+lift the current screen OUT, swap to the new
+  // step, then animate it IN. Keeps in AND out smooth between every step.
+  useEffect(() => {
+    if (step === displayStep) return;
+    Animated.timing(trans, {
+      toValue: 0,
+      duration: 150,
+      easing: Easing.in(Easing.cubic),
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (!finished) return;
+      setDisplayStep(step);
+      Animated.timing(trans, {
+        toValue: 1,
+        duration: 240,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }).start();
+    });
+  }, [step, displayStep, trans]);
+
   function handleBannerTap() {
     dismissedRef.current = false;
     setStep('intro');
+    setDisplayStep('intro');
+    trans.setValue(1);
+    progress.setValue(STEP_META.intro.pct);
     setModalOpen(true);
   }
 
   function dismissModal() {
     dismissedRef.current = true;
+    pickingRef.current = false;
     setModalOpen(false);
     setTimeout(() => setStep('intro'), 250);
   }
 
   // Files step → fire the iOS folder picker, then verify the pick holds DJI
-  // recordings (else surface the error step with a retry path).
-  function handleOpenPicker() {
-    setTimeout(async () => {
+  // recordings (else the error step + retry). Guards: pickingRef blocks a
+  // double-tap starting a second picker; dismissedRef is checked after EVERY
+  // await so a stale continuation can't clear a just-granted bookmark or flip
+  // the flow after the coach closed it. hasFolderAccess is only trusted once the
+  // folder is verified to actually contain DJI files (no false→true→false churn).
+  async function handleOpenPicker() {
+    if (pickingRef.current) return;
+    pickingRef.current = true;
+    try {
+      const folderName = await DjiFiles.pickFolder();
+      if (dismissedRef.current) return; // closed while the picker was up
+      if (!folderName) return; // cancelled — stay on files
+
+      setStep('verifying');
+      let djiCount = 0;
       try {
-        const folderName = await DjiFiles.pickFolder();
-        if (!folderName) return; // cancelled — stay on files
-        setStep('verifying');
-        setHasFolderAccess(true);
-
-        let djiCount = 0;
-        try {
-          const entries = await DjiFiles.listFiles();
-          for (const entry of entries) {
-            if (parseDjiFileName(entry.name)) djiCount += 1;
-          }
-        } catch {
-          /* listFiles can fail right after pick — treat as 0 */
+        const entries = await DjiFiles.listFiles();
+        for (const entry of entries) {
+          if (parseDjiFileName(entry.name)) djiCount += 1;
         }
-
-        if (djiCount === 0) {
-          try {
-            DjiFiles.clearFolder?.();
-          } catch {}
-          setHasFolderAccess(false);
-          setStep('error');
-        } else {
-          refreshPending();
-          setFoundCount(djiCount);
-          setStep('success');
-        }
-      } catch (err) {
-        console.warn('[DjiSetupBanner] pickFolder failed:', err);
-        setStep('error');
+      } catch {
+        /* listFiles can fail right after pick — treat as 0 */
       }
-    }, MODAL_DISMISS_DELAY_MS);
+      if (dismissedRef.current) return; // closed during verifying
+
+      if (djiCount === 0) {
+        try {
+          DjiFiles.clearFolder?.();
+        } catch {}
+        setStep('error');
+      } else {
+        setHasFolderAccess(true);
+        sync?.refreshFolderAccess?.(); // let the sibling provider show its sync pill
+        refreshPending();
+        setFoundCount(djiCount);
+        setStep('success');
+      }
+    } catch (err) {
+      if (dismissedRef.current) return;
+      console.warn('[DjiSetupBanner] pickFolder failed:', err);
+      setStep('error');
+    } finally {
+      pickingRef.current = false;
+    }
   }
 
   const visible = isLocalMode && !hasFolderAccess && pendingCount > 0;
-  if (!visible) return null;
+  // Stay mounted while the flow modal is open even after hasFolderAccess flips
+  // true (successful pick) — otherwise the whole component (and the modal) would
+  // unmount mid-flow and the coach would never see verifying / success. The pill
+  // itself still only renders when there's setup to do (`visible`).
+  if (!visible && !modalOpen) return null;
 
   const meta = STEP_META[step] ?? STEP_META.intro;
 
   return (
     <>
-      <TouchableOpacity
-        style={s.pillWrap}
-        activeOpacity={0.85}
-        onPress={handleBannerTap}
-        accessibilityRole="button"
-        accessibilityLabel="Set up DJI auto-sync"
-      >
-        <LinearGradient colors={['#C93838', '#B22A2A']} start={{ x: 0, y: 0 }} end={{ x: 0, y: 1 }} style={s.pill}>
-          <View style={s.pillIc}>
-            <Ionicons name="flash" size={12} color="#fff" />
-          </View>
-          <Text style={s.pillLbl} numberOfLines={1}>
-            SET UP
-          </Text>
-        </LinearGradient>
-      </TouchableOpacity>
+      {visible && (
+        <TouchableOpacity
+          style={s.pillWrap}
+          activeOpacity={0.85}
+          onPress={handleBannerTap}
+          accessibilityRole="button"
+          accessibilityLabel="Set up DJI auto-sync"
+        >
+          <LinearGradient colors={['#C93838', '#B22A2A']} start={{ x: 0, y: 0 }} end={{ x: 0, y: 1 }} style={s.pill}>
+            <View style={s.pillIc}>
+              <Ionicons name="flash" size={12} color="#fff" />
+            </View>
+            <Text style={s.pillLbl} numberOfLines={1}>
+              SET UP
+            </Text>
+          </LinearGradient>
+        </TouchableOpacity>
+      )}
 
       <Modal visible={modalOpen} animationType="slide" transparent={false} onRequestClose={dismissModal} statusBarTranslucent>
-        <View style={[s.stage, step === 'error' && s.stageErr]}>
+        <View style={[s.stage, displayStep === 'error' && s.stageErr]}>
           <View style={[s.safe, { paddingTop: Math.max(insets.top, 10), paddingBottom: Math.max(insets.bottom, 8) }]}>
             {/* Top bar: close · progress · counter */}
             <View style={s.top}>
@@ -304,16 +360,28 @@ export default function DjiSetupBanner() {
                 <Ionicons name="close" size={15} color="rgba(255,255,255,0.7)" />
               </TouchableOpacity>
               <View style={s.progressTrack}>
-                <View style={[s.progressFill, { width: `${meta.pct}%` }]} />
+                <Animated.View
+                  style={[s.progressFill, { width: progress.interpolate({ inputRange: [0, 100], outputRange: ['0%', '100%'] }) }]}
+                />
               </View>
               <Text style={[s.stepCount, step === 'success' && s.stepCountDone]}>{meta.count}</Text>
             </View>
 
-            {/* Hero + copy */}
-            <View style={[s.hero, step === 'files' && s.heroFiles]}>{renderStep(step, foundCount)}</View>
+            {/* Hero + copy (cross-fades between steps) */}
+            <Animated.View
+              style={[
+                s.hero,
+                displayStep === 'files' && s.heroFiles,
+                { opacity: trans, transform: [{ translateY: trans.interpolate({ inputRange: [0, 1], outputRange: [14, 0] }) }] },
+              ]}
+            >
+              {renderStep(displayStep, foundCount)}
+            </Animated.View>
 
             {/* Bottom actions */}
-            <View style={s.bottom}>{renderBottom(step, { dismissModal, setStep, handleOpenPicker })}</View>
+            <Animated.View style={[s.bottom, { opacity: trans }]}>
+              {renderBottom(displayStep, { dismissModal, setStep, handleOpenPicker })}
+            </Animated.View>
           </View>
         </View>
       </Modal>
@@ -351,8 +419,10 @@ function renderStep(step, foundCount) {
       return (
         <>
           <View style={s.micStage}>
-            <Image source={MIC_SIDE_POWER} style={s.micImg} contentFit="contain" />
-            <PulseRing color={GOLD_400} left="38%" top="52%" size={46} />
+            <View style={s.powerImgWrap}>
+              <Image source={MIC_SIDE_POWER} style={s.micImg} contentFit="contain" />
+              <PulseRing color={GOLD_400} left="38%" top="52%" size={54} />
+            </View>
           </View>
           <View style={s.copy}>
             <Eyebrow>POWER ON</Eyebrow>
@@ -648,6 +718,19 @@ const s = StyleSheet.create({
   // Mic hero
   micStage: { width: 300, height: 300, alignItems: 'center', justifyContent: 'center', position: 'relative' },
   micImg: { width: '100%', height: '100%' },
+  // Power-on: a larger image that overflows the 300 stage (so the copy below
+  // keeps its position) with the pulse ring anchored to the enlarged frame.
+  powerImgWrap: {
+    position: 'absolute',
+    width: 410,
+    height: 410,
+    left: '50%',
+    top: '50%',
+    marginLeft: -205,
+    marginTop: -205,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   micFrontImg: { width: 210, height: 210 },
   markWrap: { position: 'absolute' },
   markRing: { ...StyleSheet.absoluteFillObject, borderWidth: 1.5 },
