@@ -49,6 +49,7 @@ const GOLD_300 = '#F6D27A';
 const RED_HI = '#E85555';
 const STAGE = '#060606';
 const INK = '#0A0A0A';
+const CABLE_TRAVEL = 220; // how far the USB-C cable slides in from the left
 
 // Progress-bar % + "NN / 04" counter per step.
 const STEP_META = {
@@ -150,6 +151,33 @@ function SuccessHero() {
         </LinearGradient>
       </Animated.View>
     </View>
+  );
+}
+
+// USB-C cable that glides in from the left of the screen and docks at the mic,
+// on a gentle loop (slide in → hold → invisibly reset → repeat).
+function CableAnim() {
+  const slide = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(slide, { toValue: 1, duration: 1300, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+        Animated.delay(1100),
+      ]),
+      { resetBeforeIteration: true },
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [slide]);
+  const tx = slide.interpolate({ inputRange: [0, 1], outputRange: [-CABLE_TRAVEL, 0] });
+  const op = slide.interpolate({ inputRange: [0, 0.08, 1], outputRange: [0, 1, 1] });
+  return (
+    <Animated.View style={[s.cableTrack, { opacity: op, transform: [{ translateX: tx }] }]} pointerEvents="none">
+      <View style={s.cableWire} />
+      <View style={s.cablePlug}>
+        <View style={s.cablePlugTip} />
+      </View>
+    </Animated.View>
   );
 }
 
@@ -457,15 +485,13 @@ function renderStep(step, foundCount) {
         <>
           <View style={s.micStage}>
             <Image source={MIC_FRONT} style={s.micFrontImg} contentFit="contain" />
-            <View style={s.plugBadge}>
-              <Ionicons name="flash" size={13} color={INK} />
-            </View>
+            <CableAnim />
           </View>
           <View style={s.copy}>
-            <Eyebrow>CONNECT USB-C</Eyebrow>
+            <Eyebrow>{'CONNECT USB‑C'}</Eyebrow>
             <Text style={s.h2}>Plug in your mic.</Text>
             <Text style={s.p}>
-              Connect the receiver to your iPhone via <Text style={s.strong}>USB-C</Text>.
+              Connect the receiver to your iPhone via <Text style={s.strong}>{'USB‑C'}</Text>.
             </Text>
           </View>
         </>
@@ -734,21 +760,42 @@ const s = StyleSheet.create({
   micFrontImg: { width: 210, height: 210 },
   markWrap: { position: 'absolute' },
   markRing: { ...StyleSheet.absoluteFillObject, borderWidth: 1.5 },
-  plugBadge: {
+  // USB-C cable: a track that overflows the stage to the left; the wire trails
+  // off toward the screen edge and the metal plug docks at the mic's left side.
+  cableTrack: {
     position: 'absolute',
-    right: 58,
     top: '50%',
-    marginTop: -16,
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: GOLD_400,
+    marginTop: -14,
+    left: -150,
+    right: 248,
+    height: 28,
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+  },
+  cableWire: {
+    flex: 1,
+    height: 9,
+    backgroundColor: '#2b2b2e',
+    borderRadius: 5,
+  },
+  cablePlug: {
+    width: 46,
+    height: 26,
+    borderRadius: 5,
+    backgroundColor: '#cfcfd3',
     shadowColor: GOLD_500,
-    shadowOpacity: 0.6,
-    shadowRadius: 12,
+    shadowOpacity: 0.5,
+    shadowRadius: 10,
     shadowOffset: { width: 0, height: 0 },
+  },
+  cablePlugTip: {
+    position: 'absolute',
+    right: -9,
+    top: 6,
+    width: 10,
+    height: 14,
+    borderRadius: 2,
+    backgroundColor: '#b8b8bc',
   },
   errBadge: {
     width: 96,
