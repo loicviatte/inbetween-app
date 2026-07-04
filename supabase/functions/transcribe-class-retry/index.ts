@@ -24,7 +24,8 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { identifyCoachSpeaker } from '../_shared/transcript.ts'
-import { finalizeRecording } from '../_shared/finalize-recording.ts'
+import { finalizeRecording, composeAndFinalize } from '../_shared/finalize-recording.ts'
+import { isEnglishLang, translateUtterancesToEnglish, translateTextToEnglish } from '../_shared/translate.ts'
 
 declare global {
   const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void }
@@ -34,6 +35,7 @@ const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 const ASSEMBLYAI_API_KEY = Deno.env.get('ASSEMBLYAI_API_KEY')!
 const ASSEMBLYAI_WEBHOOK_SECRET = Deno.env.get('ASSEMBLYAI_WEBHOOK_SECRET')!
+const ANTHROPIC_API_KEY = Deno.env.get('ANTHROPIC_API_KEY')
 const FUNCTIONS_PUBLIC_URL =
   Deno.env.get('FUNCTIONS_PUBLIC_URL') ?? `${SUPABASE_URL}/functions/v1`
 const ASSEMBLYAI_API = 'https://api.assemblyai.com/v2'
@@ -97,15 +99,31 @@ async function healOne(recordingId: string) {
     const job = await pollAssemblyAI(chunk.assemblyai_job_id)
     if (!job) continue
     if (job.status === 'completed') {
-      const utterances = Array.isArray(job.utterances) ? job.utterances : []
+      // Normalize to English exactly like the primary webhook — otherwise a
+      // non-English class recovered on this path lands as an untranslated
+      // transcript (and without source_language/translated markers).
+      const rawUtterances = Array.isArray(job.utterances) ? job.utterances : []
+      const rawText = typeof job.text === 'string' ? job.text : ''
+      const language = String(job.language_code || '').toLowerCase()
+      const english = isEnglishLang(language)
+      let utterances = rawUtterances
+      let text = rawText
+      if (!english) {
+        const tu = await translateUtterancesToEnglish(ANTHROPIC_API_KEY, rawUtterances, language)
+        if (tu) utterances = tu
+        const tt = await translateTextToEnglish(ANTHROPIC_API_KEY, rawText, language)
+        if (tt) text = tt
+      }
       await supabase
         .from('class_recording_chunks')
         .update({
           status: 'transcribed',
           transcript_json: {
             utterances,
-            text: job.text ?? '',
+            text,
             audio_duration: job.audio_duration,
+            source_language: language || null,
+            translated: !english,
           },
           speaker_labels: identifyCoachSpeaker(utterances),
           duration_ms: Math.round((Number(job.audio_duration) || 0) * 1000),
@@ -137,6 +155,13 @@ async function healOne(recordingId: string) {
     assemblyaiWebhookSecret: ASSEMBLYAI_WEBHOOK_SECRET,
     functionsPublicUrl: FUNCTIONS_PUBLIC_URL,
   })
+
+  // finalizeRecording only CREATES AssemblyAI jobs. When the completion webhook
+  // was lost (failure modes #2/#3 above) every chunk is already terminal, so
+  // there are no jobs to create and the recording would sit in 'transcribing'
+  // forever. Compose the transcript + create the class_input here too — the
+  // finalize RPC is idempotent, so racing a late webhook is safe.
+  await composeAndFinalize(recordingId, supabase)
 }
 
 async function pollAssemblyAI(jobId: string): Promise<any | null> {
