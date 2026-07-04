@@ -27,7 +27,7 @@ import {
 } from 'react-native';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaProvider, initialWindowMetrics, useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Fonts } from '../theme';
 import { supabase } from '../services/supabase/client';
@@ -207,7 +207,6 @@ export default function DjiSetupBanner() {
   const dismissedRef = useRef(false);
   const pickingRef = useRef(false); // a folder pick is in flight
   const sync = useDjiSync(); // sibling provider — to refresh its pill after grant
-  const insets = useSafeAreaInsets();
   const trans = useRef(new Animated.Value(1)).current; // 1 = shown, 0 = hidden
   const progress = useRef(new Animated.Value(STEP_META.intro.pct)).current;
 
@@ -380,8 +379,13 @@ export default function DjiSetupBanner() {
       )}
 
       <Modal visible={modalOpen} animationType="slide" transparent={false} onRequestClose={dismissModal} statusBarTranslucent>
-        <View style={[s.stage, displayStep === 'error' && s.stageErr]}>
-          <View style={[s.safe, { paddingTop: Math.max(insets.top, 10), paddingBottom: Math.max(insets.bottom, 8) }]}>
+        {/* A RN Modal renders into its own native window that does NOT inherit
+            the host app's SafeAreaProvider — so the ambient insets read 0 at the
+            bottom and the CTA gets clipped by the home indicator. A nested
+            provider re-measures against the modal's own window. */}
+        <SafeAreaProvider initialMetrics={initialWindowMetrics}>
+          <View style={[s.stage, displayStep === 'error' && s.stageErr]}>
+            <ModalSafe>
             {/* Top bar: close · progress · counter */}
             <View style={s.top}>
               <TouchableOpacity style={s.close} onPress={dismissModal} activeOpacity={0.7}>
@@ -410,10 +414,23 @@ export default function DjiSetupBanner() {
             <Animated.View style={[s.bottom, { opacity: trans }]}>
               {renderBottom(displayStep, { dismissModal, setStep, handleOpenPicker })}
             </Animated.View>
+            </ModalSafe>
           </View>
-        </View>
+        </SafeAreaProvider>
       </Modal>
     </>
+  );
+}
+
+// Reads insets from the *nested* provider inside the Modal — the ambient app
+// provider isn't delivered into a Modal's separate native window, so bottom
+// would resolve to 0 and clip the CTA behind the home indicator.
+function ModalSafe({ children }) {
+  const insets = useSafeAreaInsets();
+  return (
+    <View style={[s.safe, { paddingTop: Math.max(insets.top, 10), paddingBottom: Math.max(insets.bottom, 8) }]}>
+      {children}
+    </View>
   );
 }
 
