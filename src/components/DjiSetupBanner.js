@@ -422,14 +422,23 @@ export default function DjiSetupBanner() {
   );
 }
 
-// Reads insets from the *nested* provider inside the Modal — the ambient app
-// provider isn't delivered into a Modal's separate native window, so bottom
-// would resolve to 0 and clip the CTA behind the home indicator.
+// Both the ambient app-provider insets AND the modal's own nested-provider
+// insets come back bottom:0 in this Modal on-device, so the CTA gets clipped by
+// the home indicator. The reliable source is `initialWindowMetrics.insets` —
+// the real window insets captured natively at app init; the setup Modal is
+// always full-screen, so those ARE the correct device insets. Take the max of
+// all three so we never under-pad, with a small floor for non-safe devices.
 function ModalSafe({ children }) {
   const insets = useSafeAreaInsets();
+  const win = initialWindowMetrics?.insets;
+  const padTop = Math.max(insets.top, win?.top ?? 0, 10);
+  const padBottom = Math.max(insets.bottom, win?.bottom ?? 0, 8);
+  // paddingBottom on this flex parent wasn't reliably reserving space on-device,
+  // so lift the CTA with an explicit spacer View in the column flow instead.
   return (
-    <View style={[s.safe, { paddingTop: Math.max(insets.top, 10), paddingBottom: Math.max(insets.bottom, 8) }]}>
+    <View style={[s.safe, { paddingTop: padTop }]}>
       {children}
+      <View style={{ height: padBottom }} />
     </View>
   );
 }
@@ -666,7 +675,11 @@ function renderBottom(step, { dismissModal, setStep, handleOpenPicker }) {
         </View>
       );
     case 'success':
-      return <PrimaryBtn gold label="OPEN DASHBOARD" icon={arrow} onPress={dismissModal} />;
+      return (
+        <View style={s.actions}>
+          <PrimaryBtn gold label="OPEN DASHBOARD" icon={arrow} onPress={dismissModal} />
+        </View>
+      );
     case 'error':
       return (
         <View style={s.actions}>

@@ -112,7 +112,6 @@ export default function MicSyncFlowModal() {
     micConnectedCheck,
     openGrantInstructions,
     pickFolderFromInstructions,
-    devResetFolder,
   } = sync;
 
   // After a bit on the Connect screen with no auto-detection, surface a subtle
@@ -248,11 +247,6 @@ export default function MicSyncFlowModal() {
                   <Text style={s.ghostLink}>CANCEL</Text>
                 </TouchableOpacity>
               </>
-            )}
-            {__DEV__ && devResetFolder && (
-              <TouchableOpacity onPress={devResetFolder} activeOpacity={0.6}>
-                <Text style={s.devLink}>⟲ reset folder access (dev)</Text>
-              </TouchableOpacity>
             )}
           </View>
         </View>
@@ -865,13 +859,6 @@ const s = StyleSheet.create({
     letterSpacing: 2,
     color: 'rgba(255,255,255,0.4)',
     paddingVertical: 14,
-    textAlign: 'center',
-  },
-  devLink: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 10.5,
-    color: 'rgba(255,120,120,0.55)',
-    paddingVertical: 8,
     textAlign: 'center',
   },
   helperLink: {
