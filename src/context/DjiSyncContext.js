@@ -48,6 +48,7 @@ import {
   classifySyncError,
   uploadPreparedItems,
   purgeExpiredPreparedFiles,
+  purgeExpiredM4aBackups,
 } from '../services/localRecordingAutoSync';
 
 const POLL_INTERVAL_MS = 2000;
@@ -129,6 +130,10 @@ export function DjiSyncProvider({ children }) {
 
   // ─── Offline hold / retry refs ────────────────────────────────────────
   const offlinePendingRef = useRef([]); // PreparedUpload[] prepared but not uploaded
+  // Hard (non-network) real-class errors from a run that ALSO went offline, so
+  // the offline drain surfaces them at the end instead of a clean "done" that
+  // hides a class that actually failed.
+  const heldHardErrorsRef = useRef([]);
   const offlineRetryTimerRef = useRef(null);
   const runUploadRef = useRef(null); // latest runUpload, so the timer stays stable
   const summaryAccumRef = useRef({ files: 0, runtimeSec: 0, sizeBytes: 0 });
@@ -198,6 +203,11 @@ export function DjiSyncProvider({ children }) {
   // hold's freshly-prepared files are also too recent for the stale window).
   useEffect(() => {
     purgeExpiredPreparedFiles().catch(() => {});
+    // The default auto-sync flow never opens LocalUploadScreen (the only other
+    // caller), so sweep the uploaded-m4a backups here too or they accumulate
+    // forever for coaches who only use automatic sync. Both are safe at mount:
+    // backups are post-upload (never held) and prepared files aren't held yet.
+    purgeExpiredM4aBackups().catch(() => {});
   }, []);
 
   // ─── Offline upload: hold prepared items, retry until the network is back ──
@@ -291,12 +301,20 @@ export function DjiSyncProvider({ children }) {
           sizeBytes:
             summaryAccumRef.current.sizeBytes + uploaded.reduce((n, it) => n + (it.sizeBytes || 0), 0),
         };
+        // A hard failure surfaces if a REAL class failed either during this
+        // drain OR back in the original run (carried in heldHardErrorsRef when
+        // that run also went offline). Orphan-only failures don't escalate.
+        const drainRealErrors = (result.errors ?? []).filter(
+          (e) => !String(e.classId ?? '').startsWith('unmatched:'),
+        );
+        const heldRealErrors = heldHardErrorsRef.current;
         if (result.offline && result.stillPending.length > 0) {
+          // Still draining — keep any held hard errors to surface once it lands.
           offlinePendingRef.current = result.stillPending;
           setErrorInfo({ kind: 'offline', message: 'Waiting for a connection to finish uploading.' });
           setPhase('error');
           startOfflineRetry();
-        } else if ((result.errors?.length ?? 0) > 0) {
+        } else if (drainRealErrors.length > 0 || heldRealErrors.length > 0) {
           // A hard (non-network) failure — surface it instead of a misleading
           // "done". Even when some items DID upload (already counted in
           // summaryAccumRef), the failed ones would otherwise be silently
@@ -304,10 +322,14 @@ export function DjiSyncProvider({ children }) {
           // re-offered on the next sync. The offline loop only retries
           // network-held items, so there's nothing to auto-retry here.
           offlinePendingRef.current = [];
-          setErrorInfo({ kind: 'generic', message: result.errors[0]?.error ?? 'Upload failed' });
+          heldHardErrorsRef.current = [];
+          const message =
+            drainRealErrors[0]?.error ?? heldRealErrors[0]?.error ?? 'Upload failed';
+          setErrorInfo({ kind: 'generic', message });
           setPhase('error');
         } else {
           offlinePendingRef.current = [];
+          heldHardErrorsRef.current = [];
           const s = summaryAccumRef.current;
           setProgressPct(100);
           setStageLabel(null);
@@ -483,6 +505,14 @@ export function DjiSyncProvider({ children }) {
           };
         };
 
+        // Only a REAL class failing should escalate to the error screen. The
+        // safety-net orphan upload (foreground) is best-effort — an orphan that
+        // fails to upload lands in result.errors as `unmatched:<idx>` but must
+        // NOT turn a run where every real class imported into a full error.
+        const realErrors = (result.errors ?? []).filter(
+          (e) => !String(e.classId ?? '').startsWith('unmatched:'),
+        );
+
         // Mic unplugged mid-import — surface the disconnect screen with the
         // "X of Y imported, Z remaining" breakdown, even if some succeeded.
         if (result.micDisconnected) {
@@ -501,6 +531,7 @@ export function DjiSyncProvider({ children }) {
           if (result.offline && (result.offlinePending?.length ?? 0) > 0) {
             seedSummaryFromUploaded();
             offlinePendingRef.current = result.offlinePending;
+            heldHardErrorsRef.current = realErrors; // surface after the drain
             startOfflineRetry();
           }
           setErrorInfo({ kind: 'disconnect', message: 'Lost connection to your mic mid-import.' });
@@ -514,6 +545,7 @@ export function DjiSyncProvider({ children }) {
         if (result.offline && (result.offlinePending?.length ?? 0) > 0) {
           seedSummaryFromUploaded();
           offlinePendingRef.current = result.offlinePending;
+          heldHardErrorsRef.current = realErrors; // surface after the drain
           setStageLabel(null);
           setErrorInfo({ kind: 'offline', message: 'Waiting for a connection to finish uploading.' });
           setPhase('error');
@@ -524,10 +556,10 @@ export function DjiSyncProvider({ children }) {
         // Surface a hard (non-network) per-item failure even when OTHER items
         // uploaded fine. Gating this on !didSomething hid a stuck class behind a
         // green "done" whenever at least one sibling succeeded — the coach would
-        // never know class B failed and stays pending forever. Mirrors the
-        // offline-drain path, which surfaces errors regardless of partial wins.
-        if ((result.errors?.length ?? 0) > 0) {
-          const message = result.errors[0]?.error ?? 'Sync failed';
+        // never know class B failed and it stays pending forever. Only REAL
+        // class failures escalate (a best-effort orphan failure doesn't).
+        if (realErrors.length > 0) {
+          const message = realErrors[0]?.error ?? 'Sync failed';
           setErrorInfo({ kind: classifySyncError(message), message });
           setPhase('error');
           return;
@@ -953,6 +985,7 @@ export function DjiSyncProvider({ children }) {
     }
     stopOfflineRetry();
     offlinePendingRef.current = [];
+    heldHardErrorsRef.current = [];
     summaryAccumRef.current = { files: 0, runtimeSec: 0, sizeBytes: 0 };
     stickyDoneRef.current = false;
     setFlowOpen(false);

@@ -103,6 +103,7 @@ export default function MicSyncFlowModal() {
     stageLabel,
     imported,
     unmatched,
+    pendingReview,
     summary,
     errorInfo,
     runInBackground,
@@ -177,7 +178,7 @@ export default function MicSyncFlowModal() {
                 stageLabel={stageLabel}
               />
             )}
-            {phase === 'done' && <CompleteScreen summary={summary} imported={imported} unmatched={unmatched} />}
+            {phase === 'done' && <CompleteScreen summary={summary} imported={imported} unmatched={unmatched} pendingReview={pendingReview} />}
             {phase === 'error' && (
               <ErrorScreen errorInfo={errorInfo} fileIdx={fileIdx} fileTotal={fileTotal} />
             )}
@@ -422,9 +423,18 @@ function ImportingScreen({ progressPct, fileIdx, fileTotal, fileSizeBytes, etaSe
 }
 
 // ─── Complete (done) ─────────────────────────────────────────────────────
-function CompleteScreen({ summary, imported, unmatched }) {
+function CompleteScreen({ summary, imported, unmatched, pendingReview = 0 }) {
   const files = summary?.files ?? imported + unmatched;
   const noneNew = files === 0;
+  // Priority tail: an admin-review hold is the most important caveat (those
+  // recordings are NOT live for the student yet), then unmatched, else the
+  // default. Prevents "Ready to tag them" implying immediate use.
+  const tail =
+    pendingReview > 0
+      ? ` ${pendingReview} held for review before ${pendingReview === 1 ? 'it goes' : 'they go'} live.`
+      : unmatched > 0
+        ? ` ${unmatched} couldn't be matched to a class — saved for review.`
+        : ' Ready when you are to tag them.';
   return (
     <>
       <MicArt
@@ -449,11 +459,7 @@ function CompleteScreen({ summary, imported, unmatched }) {
         <Text style={s.p}>
           {noneNew
             ? "Nothing new on the mic — everything's already imported."
-            : `${files} ${files === 1 ? 'recording' : 'recordings'} landed safely.${
-                unmatched > 0
-                  ? ` ${unmatched} couldn't be matched to a class — saved for review.`
-                  : ' Ready when you are to tag them.'
-              }`}
+            : `${files} ${files === 1 ? 'recording' : 'recordings'} landed safely.${tail}`}
         </Text>
       </View>
       {!noneNew && summary && (

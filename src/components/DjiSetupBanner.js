@@ -573,7 +573,7 @@ function renderStep(step, foundCount) {
               {foundCount > 0 ? (
                 <>
                   Found <Text style={s.strong}>{foundCount} recording{foundCount === 1 ? '' : 's'}</Text> on your mic.
-                  Plug in after each class to sync — automatically.
+                  Plug in after each class and new ones sync automatically.
                 </>
               ) : (
                 <>Plug your mic in after each class to sync your recordings — automatically.</>

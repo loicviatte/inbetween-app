@@ -1373,17 +1373,25 @@ export default function StartClassScreen({ navigation }) {
           .from('class_recordings')
           .update({ audio_folder: `${user.id}/${recordingId}/` })
           .eq('id', recordingId);
+        // MUST check the error: supabase-js resolves a failed insert as
+        // { error } (FK/RLS/DB error), it doesn't throw. If we swallowed it the
+        // recording would proceed with an EMPTY class_recording_students set →
+        // finalize_recording_atomic propagates zero students → yoda-extract
+        // attributes the whole couple/group lesson to the COACH. Throw so the
+        // catch resets newPipelineRef and we don't run a half-initialized class.
         if (isCouple && selectedCouple) {
-          await supabase
+          const { error: csErr } = await supabase
             .from('class_recording_students')
             .insert([
               { recording_id: recordingId, student_id: selectedCouple.dancerA.id },
               { recording_id: recordingId, student_id: selectedCouple.dancerB.id },
             ]);
+          if (csErr) throw csErr;
         } else if (!isPrivate && Array.isArray(students) && students.length > 0) {
-          await supabase
+          const { error: csErr } = await supabase
             .from('class_recording_students')
             .insert(students.map((s) => ({ recording_id: recordingId, student_id: s.id })));
+          if (csErr) throw csErr;
         }
         newPipelineRef.current = true;
         recordingIdRef.current = recordingId;
