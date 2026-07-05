@@ -849,8 +849,14 @@ async function processRecord(record: ClassInputRecord): Promise<void> {
     .select('admin_review_status')
     .eq('class_input_id', id)
     .maybeSingle()
-  if (recReview?.admin_review_status === 'pending') {
-    console.log(`[yoda-extract] Deferring ${id}: audio match awaiting admin review`)
+  const review = recReview?.admin_review_status
+  // Extract ONLY on an affirmative go: no linked recording (normal class),
+  // status null, or 'approved'. 'pending' = awaiting review; 'rejected' = wrong
+  // audio the admin withheld — both must NOT extract (a reject also re-fires
+  // this trigger via its class_inputs UPDATE, and would otherwise extract the
+  // exact wrong-audio transcript the reject meant to hold back).
+  if (review === 'pending' || review === 'rejected') {
+    console.log(`[yoda-extract] Deferring ${id}: audio match is ${review}`)
     return
   }
 
