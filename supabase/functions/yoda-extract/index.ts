@@ -836,6 +836,24 @@ async function processRecord(record: ClassInputRecord): Promise<void> {
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
   )
 
+  // DEFER extraction for an uncertain DJI-mic match: while its linked recording
+  // is admin_review_status='pending', an admin hasn't yet confirmed WHO the
+  // class is for / the type / the style in the Audio Matching dashboard.
+  // Extracting now would attribute focus points to a possibly-wrong student and
+  // burn Anthropic tokens on a class we might re-assign. The dashboard's confirm
+  // sets the recording to 'approved' AND updates this class_input, which re-fires
+  // this INSERT-OR-UPDATE trigger — and this time the gate passes. Non-DJI
+  // classes (no linked recording, or status null/approved) are unaffected.
+  const { data: recReview } = await supabase
+    .from('class_recordings')
+    .select('admin_review_status')
+    .eq('class_input_id', id)
+    .maybeSingle()
+  if (recReview?.admin_review_status === 'pending') {
+    console.log(`[yoda-extract] Deferring ${id}: audio match awaiting admin review`)
+    return
+  }
+
   // Atomic claim: the webhook payload above is a snapshot. Concurrent
   // deliveries (Supabase has at-least-once semantics) would each pass the
   // status guard then both run the full extraction pipeline — duplicate
