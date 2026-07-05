@@ -195,9 +195,21 @@ async function processClassInput(supabase: any, payload: any): Promise<void> {
   // linked by shared_group_id so the coach can aggregate across students.
   const sharedFps = aiData.shared_focus_points ?? []
   if (isGroupClass && sharedFps.length > 0) {
-    const studentIds: string[] = (aiData.students ?? [])
-      .map((s: any) => s.student_id)
-      .filter((x: string) => !!x)
+    // Shared focus points are CLASS-WIDE → give them to every attendee (the
+    // class_input_students roster), not just the students the AI happened to
+    // return. The AI omits students it had nothing individual to say about, so
+    // keying off aiData.students silently dropped shared FPs for quiet
+    // attendees. Fall back to the AI's list only if the roster is empty.
+    const { data: rosterRows } = await supabase
+      .from('class_input_students')
+      .select('student_id')
+      .eq('class_input_id', class_input_id)
+    let studentIds: string[] = [
+      ...new Set((rosterRows ?? []).map((r: any) => r.student_id).filter((x: string) => !!x)),
+    ]
+    if (studentIds.length === 0) {
+      studentIds = (aiData.students ?? []).map((s: any) => s.student_id).filter((x: string) => !!x)
+    }
     // Group classes surface at most 2 shared focus points.
     for (const sfp of sharedFps.slice(0, 2)) {
       const sharedGroupId = crypto.randomUUID()
