@@ -880,7 +880,12 @@ export default function StartClassScreen({ navigation }) {
   useEffect(() => {
     if (restoredRef.current) return;
     const active = getActiveCoachClass();
-    if (!active) return;
+    if (!active) {
+      // No class to resume → clear any orphan "class in progress" Live Activity
+      // left behind by a stop that was killed before it could tear down.
+      laEndAllCoachRecordings().catch(() => {});
+      return;
+    }
     restoredRef.current = true;
     setClassStartedAt(active.startedAt);
     const elapsed = Date.now() - active.startedAt;
