@@ -3236,7 +3236,7 @@ export default function StartClassScreen({ navigation }) {
         <View style={{ flex: 1 }}>
         <Animated.ScrollView
           style={{ flex: 1 }}
-          contentContainerStyle={{ paddingTop: HERO_FULL + 76, paddingBottom: 120 }}
+          contentContainerStyle={{ paddingTop: HERO_FULL + 76, paddingBottom: 200 }}
           scrollEventThrottle={16}
           onScroll={Animated.event(
             [{ nativeEvent: { contentOffset: { y: pbScrollY } } }],
@@ -3552,7 +3552,7 @@ export default function StartClassScreen({ navigation }) {
         <View style={{ flex: 1 }}>
         <Animated.ScrollView
           style={{ flex: 1 }}
-          contentContainerStyle={{ paddingTop: HERO_FULL + 76, paddingBottom: 120 }}
+          contentContainerStyle={{ paddingTop: HERO_FULL + 76, paddingBottom: 200 }}
           scrollEventThrottle={16}
           onScroll={Animated.event(
             [{ nativeEvent: { contentOffset: { y: pbScrollY } } }],
@@ -3736,7 +3736,7 @@ export default function StartClassScreen({ navigation }) {
         <View style={{ flex: 1 }}>
           <Animated.ScrollView
             style={{ flex: 1 }}
-            contentContainerStyle={{ paddingTop: HERO_FULL + 76, paddingBottom: 120 }}
+            contentContainerStyle={{ paddingTop: HERO_FULL + 76, paddingBottom: 200 }}
             scrollEventThrottle={16}
             onScroll={Animated.event(
               [{ nativeEvent: { contentOffset: { y: gbScrollY } } }],
@@ -5245,6 +5245,10 @@ const s = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
+    // Pushed to the right edge of the running row. In local-recording mode the
+    // audio-route badge (which normally fills the space) is hidden, so without
+    // this the Stop button sits glued to the timer digits.
+    marginLeft: 'auto',
     backgroundColor: '#D44545',
     borderRadius: 10,
     paddingHorizontal: 14,
