@@ -52,6 +52,7 @@ import {
   startCoachRecording as laStartCoachRecording,
   updateCoachRecording as laUpdateCoachRecording,
   endCoachRecording as laEndCoachRecording,
+  endAllCoachRecordings as laEndAllCoachRecordings,
 } from 'live-activities';
 import { isNewRecordingPipelineEnabled, isNativeRecorderEnabled, isLocalRecordingMode } from '../../services/featureFlags';
 import { enqueueChunk } from '../../storage/recordingQueue';
@@ -1624,6 +1625,21 @@ export default function StartClassScreen({ navigation }) {
     // disabling it during the async work below.
     if (stoppingRef.current) return;
     stoppingRef.current = true;
+
+    // Tear down the "class in progress" surfaces FIRST — before the async
+    // recorder teardown below — so quitting the app mid-stop (or before
+    // finishing the debrief) never leaves a stale Live Activity widget or a
+    // false "class interrupted, please try again" on next launch. Safe to do
+    // now: the recording is over and its chunks upload independently of this
+    // screen; finishDebrief's clearActiveCoachClass() then no-ops.
+    stopHeartbeat();
+    // End EVERY coach-recording Live Activity (not only the id we tracked) so a
+    // stale/lost activity id can't leave a "class in progress" widget stuck on
+    // the lock screen. Native, immediate dismissal.
+    try { await laEndAllCoachRecordings(); } catch {}
+    liveActivityIdRef.current = null;
+    clearActiveCoachClass();
+
     logRecordingEvent({
       type: 'session_stopping',
       appState: AppState.currentState,
@@ -1667,12 +1683,6 @@ export default function StartClassScreen({ navigation }) {
         recordingRef.current = null;
         await setAudioModeAsync({ allowsRecording: false, allowsBackgroundRecording: false, shouldPlayInBackground: false });
       }
-    }
-
-    stopHeartbeat();
-    if (liveActivityIdRef.current) {
-      try { await laEndCoachRecording(liveActivityIdRef.current); } catch {}
-      liveActivityIdRef.current = null;
     }
 
     // If the recording was interrupted, the freeze duration is the truth.
