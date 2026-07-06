@@ -24,6 +24,11 @@ verify_jwt = true
 [functions.notify-audio-match]
 verify_jwt = true
 
+# Nightly pg_cron digest nudging coaches to sync unimported DJI audio.
+# Invoked with a service-role bearer — gate on the JWT.
+[functions.notify-sync-reminders]
+verify_jwt = true
+
 [functions.telegram-webhook]
 verify_jwt = false
 

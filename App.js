@@ -95,6 +95,11 @@ function handleNotificationTap(data) {
     navigationRef.navigate('Notifications');
     return;
   }
+  if (type === 'sync_reminder') {
+    // Coach-only nudge → the DJI audio upload screen.
+    navigationRef.navigate('LocalUpload');
+    return;
+  }
   if (type === 'coach_request_received') {
     // Carry the request id so the Students screen pops an Accept/Decline modal
     // right away (payload uses snake_case; older pushes used camelCase).

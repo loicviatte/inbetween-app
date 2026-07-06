@@ -44,6 +44,7 @@ const TYPE_CONFIG = {
   merge_request:           { label: 'Merge',       color: '#5788E6' },
   merge_request_student:   { label: 'Merge',       color: '#5788E6', cta: 'Review' },
   name_match_confirm:      { label: 'Name match',  color: '#FF9500', cta: 'Confirm' },
+  sync_reminder:           { label: 'Sync',        color: Colors.orange, cta: 'Import audio' },
 };
 
 function formatTime(dateStr) {
@@ -265,6 +266,9 @@ export default function NotificationsScreen({ navigation }) {
       // CoachHomeScreen is the STUDENTS tab inside CoachMainTabs and surfaces
       // pending requests at the top of the list with accept/reject buttons.
       navigation.navigate('CoachMainTabs', { screen: 'STUDENTS' });
+    } else if (notif.type === 'sync_reminder') {
+      // Coach-only nudge to import unsynced DJI audio → the upload screen.
+      navigation.navigate('LocalUpload');
     } else {
       // Fallback for any unknown type — at least show the content rather than no-op.
       setActiveNotif(notif);
