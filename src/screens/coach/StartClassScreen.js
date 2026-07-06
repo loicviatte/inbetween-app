@@ -611,19 +611,35 @@ export default function StartClassScreen({ navigation }) {
       );
   }, []);
 
-  // Load the readiness roster (per-student focus briefings) every time the
-  // select view is shown. Cheap enough to refresh — single batched query.
+  // Load the readiness roster (per-student focus briefings) whenever the select
+  // view is shown. Cache-first: paint the last roster instantly from disk, then
+  // refresh in the background. The full fetch is a slow sequential staircase on
+  // the free-tier pooler (~15-25s), so without the cache the coach stares at a
+  // spinner every single time they open Start Class.
   useEffect(() => {
     if (view !== 'select') return;
     let active = true;
-    setRosterLoading(true);
     (async () => {
+      let hadCache = false;
+      try {
+        const raw = await AsyncStorage.getItem('startClassRoster.v1');
+        const cached = raw ? JSON.parse(raw) : null;
+        if (active && Array.isArray(cached) && cached.length) {
+          setRoster(cached);
+          setRosterLoading(false);
+          hadCache = true;
+        }
+      } catch {}
+      if (active && !hadCache) setRosterLoading(true);
       try {
         const { students: list } = await getStartClassRoster();
-        if (active) setRoster(list || []);
+        if (active) {
+          setRoster(list || []);
+          AsyncStorage.setItem('startClassRoster.v1', JSON.stringify(list || [])).catch(() => {});
+        }
       } catch (err) {
         console.warn('[StartClass] roster load failed:', err);
-        if (active) setRoster([]);
+        if (active && !hadCache) setRoster([]);
       } finally {
         if (active) setRosterLoading(false);
       }

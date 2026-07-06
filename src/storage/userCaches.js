@@ -29,6 +29,7 @@ const USER_CACHE_KEYS = [
   'recordingQueue.v1',
   'activeSession.v1',
   'activeCoachClass.v1',
+  'startClassRoster.v1',
 ];
 
 /** Remove every user-specific cache. Safe to call repeatedly. */

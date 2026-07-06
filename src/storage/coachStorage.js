@@ -120,23 +120,18 @@ export async function getMyStudents() {
   // - coach 'Latin'    → accepted requests with category = 'latin'
   // - coach 'Ballroom' → accepted requests with category = 'ballroom'
   // - coach dual/null  → any accepted request
-  const { data: me } = await supabase
-    .from('users')
-    .select('dance_style')
-    .eq('id', coachId)
-    .maybeSingle();
+  // dance_style and the accepted requests both only need coachId → fetch them
+  // in parallel (one round-trip wave instead of two on the slow free-tier
+  // pooler). Filter requests by category in JS afterwards to match the coach's
+  // dance_style (avoids PostgREST .or()+.is.null parsing quirks).
+  const [{ data: me }, { data: acceptedReqs }] = await Promise.all([
+    supabase.from('users').select('dance_style').eq('id', coachId).maybeSingle(),
+    supabase.from('coach_requests').select('student_id, category').eq('coach_id', coachId).eq('status', 'accepted'),
+  ]);
 
   const ds = (me?.dance_style || '').toLowerCase();
   const isLatin = ds === 'latin';
   const isBallroom = ds === 'ballroom' || ds === 'standard';
-
-  // Step 1 — fetch accepted requests. Filter by category in JS to match the
-  // coach's dance_style (avoids PostgREST .or()+.is.null parsing quirks).
-  const { data: acceptedReqs } = await supabase
-    .from('coach_requests')
-    .select('student_id, category')
-    .eq('coach_id', coachId)
-    .eq('status', 'accepted');
 
   const wantedReqs = (acceptedReqs || []).filter((r) => {
     if (isLatin) return r.category === 'latin' || r.category == null;
@@ -1530,40 +1525,10 @@ export async function getStartClassRoster() {
   // serialized into a ~20s staircase on the Start-class roster.
   const readinessMap = await getStudentsReadiness(studentIds).catch(() => ({}));
   const readinessPerStudent = studentIds.map(id => readinessMap[id] || null);
-
-  // Resolve each readiness `lastClassDate` to a class_input_id so we can
-  // fetch the duration of the class that actually produced the focuses.
-  // (Different from `s.lastPrivateClassDate` when the most recent private
-  // hasn't been processed yet — readiness walks back to the latest one
-  // that has focuses.)
-  const readinessClassDates = readinessPerStudent
-    .map(r => r?.lastClassDate)
-    .filter(Boolean);
-  const classIdByDate = {};
-  if (readinessClassDates.length > 0) {
-    const { data: classRows } = await supabase
-      .from('class_inputs')
-      .select('id, user_id, student_id, created_at, lesson_type')
-      .or(`student_id.in.(${studentIds.join(',')}),user_id.in.(${studentIds.join(',')})`)
-      .eq('is_deleted', false)
-      .in('created_at', readinessClassDates);
-    for (const c of classRows || []) {
-      classIdByDate[c.created_at] = c.id;
-    }
-  }
-  const durationByClass = {};
-  const classIds = Object.values(classIdByDate);
-  if (classIds.length > 0) {
-    const { data: recRows } = await supabase
-      .from('class_recordings')
-      .select('class_input_id, duration_ms')
-      .in('class_input_id', classIds);
-    for (const r of recRows || []) {
-      if (r?.duration_ms) {
-        durationByClass[r.class_input_id] = Math.max(1, Math.round(r.duration_ms / 60000));
-      }
-    }
-  }
+  // NOTE: we intentionally do NOT fetch each student's last-class DURATION here.
+  // It was two more sequential round-trips (class_inputs → class_recordings,
+  // ~8s on the free-tier pooler) just to render a "· N min" label on the
+  // roster card — not worth blocking the whole Start-class list on. Dropped.
 
   const enriched = students.map((s, idx) => {
     const r = readinessPerStudent[idx];
@@ -1589,14 +1554,13 @@ export async function getStartClassRoster() {
       };
     });
 
-    const classId = r?.lastClassDate ? classIdByDate[r.lastClassDate] : null;
     return {
       id: s.id,
       name: s.name,
       photoUrl: s.photoUrl,
       coachStyles: s.coachStyles || [],
       lastPrivateClassDate: r?.lastClassDate || s.lastPrivateClassDate,
-      lastPrivateDurationMin: classId ? durationByClass[classId] || null : null,
+      lastPrivateDurationMin: null,
       readiness: r?.percent ?? 0,
       briefings,
       status: s.status,
