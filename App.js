@@ -277,19 +277,11 @@ export default function App() {
     return () => sub.remove();
   }, []);
 
-  // Expo can rotate the push token; re-register on change so users.push_token
-  // doesn't go stale (a stale token silently no-ops — see send-push's
-  // DeviceNotRegistered cleanup). Force a fresh getExpoPushTokenAsync via
-  // registerPushToken rather than trusting the listener's device-token payload.
-  useEffect(() => {
-    const sub = Notifications.addPushTokenListener(() => {
-      const uid = currentUserIdRef.current;
-      if (!uid) return;
-      registeredPushUsersRef.current.delete(uid);
-      registerPushToken(uid).catch(() => {});
-    });
-    return () => sub.remove();
-  }, []);
+  // NOTE: no Notifications.addPushTokenListener here. Calling getExpoPushTokenAsync
+  // (inside registerPushToken) itself fires that listener, so re-registering from
+  // it creates an infinite loop. Token rotation is rare and is covered by
+  // re-registering on the next SIGNED_IN + send-push nulling DeviceNotRegistered
+  // tokens, so we deliberately don't listen for rotation.
 
   function drainPendingNotifTap() {
     const data = pendingNotifTapRef.current;
