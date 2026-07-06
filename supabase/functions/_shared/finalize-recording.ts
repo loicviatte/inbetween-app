@@ -312,13 +312,23 @@ export async function composeAndFinalize(
   // callers — a live webhook racing the cron sees was_created=false).
   if (rpcRow.was_created) {
     try {
-      await supabase.from('notifications').insert({
-        user_id: rec.user_id,
-        type: 'transcript_ready',
-        title: 'Class transcribed',
-        body: 'Your class is ready to review.',
-        data: { class_input_id: rpcRow.class_input_id },
-      })
+      // Skip for coaches — their actionable signal is 'focus_points_added'
+      // (after scoring). Keep transcript_ready only for a student who records
+      // their own class (recording owner isn't a coach).
+      const { data: owner } = await supabase
+        .from('users')
+        .select('role')
+        .eq('id', rec.user_id)
+        .maybeSingle()
+      if ((owner?.role ?? '').toLowerCase() !== 'coach') {
+        await supabase.from('notifications').insert({
+          user_id: rec.user_id,
+          type: 'transcript_ready',
+          title: 'Class transcribed',
+          body: 'Your class is ready to review.',
+          data: { class_input_id: rpcRow.class_input_id },
+        })
+      }
     } catch (err) {
       console.warn('[finalize] push notif failed:', err instanceof Error ? err.message : err)
     }

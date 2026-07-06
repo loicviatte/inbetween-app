@@ -344,6 +344,17 @@ async function tryFinalizeRecording(recordingId: string) {
 }
 
 async function sendTranscriptReadyPush(userId: string, classInputId: string) {
+  // Skip for coaches. In the coach recording flow the actionable signal is
+  // 'focus_points_added' (fired after scoring); a transcript_ready ping here is
+  // premature (no focus points yet) and redundant. Keep it only for a student
+  // who records their own class — i.e. when the recording owner isn't a coach.
+  const { data: owner } = await supabase
+    .from('users')
+    .select('role')
+    .eq('id', userId)
+    .maybeSingle()
+  if ((owner?.role ?? '').toLowerCase() === 'coach') return
+
   // The send-push edge function is wired up as a DB webhook on inserts into
   // the `notifications` table. Inserting a row both delivers the push (via
   // the webhook) and surfaces the notification in the in-app list.
