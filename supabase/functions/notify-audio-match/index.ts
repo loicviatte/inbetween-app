@@ -1,12 +1,17 @@
 // notify-audio-match
 //
-// Pings the ops Telegram chat when a DJI-mic recording enters
-// admin_review_status='pending' — an uncertain audio↔class match the admin must
-// confirm in the dashboard's Audio Matching section before its focus points
-// reach students. Invoked by an AFTER-UPDATE trigger on class_recordings via
-// pg_net (see migration 20260704_notify_audio_match.sql). Mirrors the existing
-// monitor-report → Telegram pattern; reuses its sendMessage helper + the same
-// TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID secrets.
+// Pings the ops Telegram chat when a DJI-mic recording with an actual audio
+// file matched to it lands in admin_review_status='pending' — an uncertain
+// audio↔class match the admin must confirm in the dashboard's Audio Matching
+// section before its focus points reach students. Invoked by a trigger on
+// class_recordings via pg_net (see migration 20260706_notify_audio_match_file_guard.sql).
+//
+// IMPORTANT: a class_recordings row is inserted at *class start* already stamped
+// admin_review_status='pending' as a placeholder — long before any audio exists.
+// We must NOT notify for those. The `file_imported_at` guard below (mirrored in
+// the trigger) is the discriminator: it is only set once the matcher attaches an
+// imported mic file. Mirrors the existing monitor-report → Telegram pattern;
+// reuses its sendMessage helper + the same TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID.
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { sendMessage } from './telegram.ts'
@@ -49,11 +54,17 @@ Deno.serve(async (req) => {
 
   const { data: rec } = await supabase
     .from('class_recordings')
-    .select('id, user_id, class_input_id, match_confidence, started_at, ended_at, lesson_type, admin_review_status')
+    .select('id, user_id, class_input_id, match_confidence, started_at, ended_at, lesson_type, admin_review_status, file_imported_at')
     .eq('id', recordingId)
     .maybeSingle()
-  // Only notify while it's actually pending (guards against a stale trigger).
-  if (!rec || rec.admin_review_status !== 'pending') return json({ ok: true, skipped: true })
+  // Only notify while it's actually pending (guards against a stale trigger) AND
+  // an audio file has actually been imported/matched. Skipping the fileless case
+  // is what prevents a Telegram ping at class *start*, where the row is inserted
+  // as a pending placeholder with no audio yet (belt-and-suspenders with the
+  // trigger's own file_imported_at guard).
+  if (!rec || rec.admin_review_status !== 'pending' || !rec.file_imported_at) {
+    return json({ ok: true, skipped: true })
+  }
 
   const [{ data: coach }, { data: ci }] = await Promise.all([
     rec.user_id
