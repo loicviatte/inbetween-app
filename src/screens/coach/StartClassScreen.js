@@ -533,20 +533,16 @@ export default function StartClassScreen({ navigation }) {
   const recordingIdRef = useRef(null);      // class_recordings.id when on new pipeline
   const userIdRef = useRef(null);           // captured at startClassNow
 
-  // Current view / recording state, readable from the beforeRemove closure.
-  const viewRef = useRef(view);
-  useEffect(() => { viewRef.current = view; }, [view]);
-  const classStartedAtRef = useRef(classStartedAt);
-  useEffect(() => { classStartedAtRef.current = classStartedAt; }, [classStartedAt]);
-
-  // Screen-level back (iOS edge-swipe / hardware back) while in a sub-view
-  // should return to the roster, not pop StartClass to the coach home. The
-  // in-screen floating back arrows already setView('select'); this covers the
-  // gesture/system back that would otherwise leave the screen. Don't hijack
-  // once a class is actually recording.
+  // Screen-level back (iOS edge-swipe / hardware back) while in a sub-view but
+  // NOT recording should return to the roster, not pop StartClass to the coach
+  // home. Once a class is recording, let the default back happen so the coach
+  // lands back on the Dashboard, where the running class shows as a live
+  // "class in progress" chrono (tap it to jump back in). Depend on
+  // view/classStartedAt so the listener closure always reads current values —
+  // no refs that could go stale (which sent back to the roster mid-recording).
   useEffect(() => {
     const unsub = navigation.addListener('beforeRemove', (e) => {
-      if (viewRef.current !== 'select' && !classStartedAtRef.current) {
+      if (view !== 'select' && !classStartedAt) {
         e.preventDefault();
         setView('select');
         setSearchQuery('');
@@ -554,7 +550,7 @@ export default function StartClassScreen({ navigation }) {
       }
     });
     return unsub;
-  }, [navigation]);
+  }, [navigation, view, classStartedAt]);
   // Append-only journal of session events (AppState transitions, rotation
   // failures, audio route changes) flushed into class_recordings.meta.events.
   // Lets us tell after the fact what really happened during a class that
