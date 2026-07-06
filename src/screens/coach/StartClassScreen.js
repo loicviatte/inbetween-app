@@ -499,9 +499,19 @@ export default function StartClassScreen({ navigation }) {
   // src/services/featureFlags.js.
   const [authUser, setAuthUser] = useState(null);
   useEffect(() => {
+    let cancelled = false;
+    // Hydrate from the locally-cached session FIRST (synchronous read from
+    // AsyncStorage, no network) so isLocalMode is correct on the very first
+    // render — otherwise the legacy Bluetooth UI flashes during the cold-start
+    // window while the network getUser() below is still resolving. Then refresh
+    // from getUser() to validate the token / pick up any role change.
+    supabase.auth.getSession()
+      .then(({ data: { session } }) => { if (!cancelled && session?.user) setAuthUser(session.user); })
+      .catch(() => {});
     supabase.auth.getUser()
-      .then(({ data: { user } }) => setAuthUser(user))
-      .catch(() => setAuthUser(null));
+      .then(({ data: { user } }) => { if (!cancelled && user) setAuthUser(user); })
+      .catch(() => {});
+    return () => { cancelled = true; };
   }, []);
   const isLocalMode = isLocalRecordingMode(authUser);
 
@@ -1128,13 +1138,31 @@ export default function StartClassScreen({ navigation }) {
   }
 
   async function openAudioModal() {
+    // Resolve local-recording mode as late as possible. The component-mount
+    // auth fetch (supabase.auth.getUser, a NETWORK call) can still be in
+    // flight on a cold free-tier start; if the coach taps Start before it
+    // resolves, `isLocalMode` is stale-false and a DJI coach gets misrouted
+    // into the legacy "Connect a Bluetooth mic" flow (the modal David Yates
+    // wrongly saw). Fall back to the locally-cached session (no network, so
+    // Start stays instant) to decide, and backfill authUser so the rest of
+    // the screen agrees.
+    let localMode = isLocalMode;
+    if (!authUser?.id) {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.user) {
+          localMode = isLocalRecordingMode(session.user);
+          setAuthUser(session.user);
+        }
+      } catch {}
+    }
     // Local-recording mode: phone captures no audio, so the "Choose your
     // mic" modal is meaningless. Short-circuit through a "press REC on
     // your DJI mic" confirmation — we just need a timestamp + a
     // class_recordings row; the DJI mic file is imported later via USB-C.
     // The confirmation prevents the silent-failure case where the coach
     // starts the class in the app but never presses REC on the mic.
-    if (isLocalMode) {
+    if (localMode) {
       setMicPermGranted(false);
       setRecStartConfirmOpen(true);
       return;
