@@ -556,6 +556,22 @@ export default function StartClassScreen({ navigation }) {
     });
     return unsub;
   }, [navigation, view, classStartedAt]);
+
+  // Back arrow inside a briefing. If a class is recording, leave to the
+  // Dashboard (where the running class lives as a "class in progress" chrono)
+  // rather than dropping onto the roster — otherwise the coach lands on the
+  // student list mid-recording and can start a SECOND class. Not recording →
+  // return to the roster as before.
+  function backFromBriefing() {
+    if (classStartedAt) {
+      navigation.goBack();
+    } else {
+      setView('select');
+      setSearchQuery('');
+      setSelectedCouple(null);
+    }
+  }
+
   // Append-only journal of session events (AppState transitions, rotation
   // failures, audio route changes) flushed into class_recordings.meta.events.
   // Lets us tell after the fact what really happened during a class that
@@ -3480,7 +3496,7 @@ export default function StartClassScreen({ navigation }) {
 
         {/* Floating back arrow */}
         <TouchableOpacity
-          onPress={() => { setView('select'); setSearchQuery(''); }}
+          onPress={backFromBriefing}
           style={pb.floatingBack}
           activeOpacity={0.7}
           hitSlop={12}
@@ -3696,7 +3712,7 @@ export default function StartClassScreen({ navigation }) {
 
         {/* Floating back arrow */}
         <TouchableOpacity
-          onPress={() => { setView('select'); setSelectedCouple(null); }}
+          onPress={backFromBriefing}
           style={pb.floatingBack}
           activeOpacity={0.7}
           hitSlop={12}
@@ -3901,7 +3917,7 @@ export default function StartClassScreen({ navigation }) {
 
           {/* Floating back arrow */}
           <TouchableOpacity
-            onPress={() => setView('select')}
+            onPress={backFromBriefing}
             style={pb.floatingBack}
             activeOpacity={0.7}
             hitSlop={12}
