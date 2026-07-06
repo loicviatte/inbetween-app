@@ -640,6 +640,22 @@ export default function StartClassScreen({ navigation }) {
   useEffect(() => {
     if (view !== 'select') return;
     let active = true;
+    // Warm each student's briefing detail in the background so tapping one is
+    // near-instant instead of another 20-30s cold staircase. Core (fps +
+    // readiness) first so the briefing can render + the coach can start; the
+    // rest fills in after. getOrFetch dedups in-flight, so a tap mid-prefetch
+    // awaits the same request rather than firing a second one.
+    const prefetchDetails = (students) => {
+      for (const st of (students || [])) {
+        if (!st?.id) continue;
+        const sk = `student:${st.id}`;
+        getOrFetch(`${sk}:fps`, () => getStudentFocusPoints(st.id).catch(() => []));
+        getOrFetch(`${sk}:readiness:all`, () => getLessonReadiness(st.id, null).catch(() => null));
+        getOrFetch(`${sk}:questions`, () => getStudentQuestions(st.id).catch(() => []));
+        getOrFetch(`${sk}:openQuestions`, () => getStudentOpenQuestions(st.id).catch(() => []));
+        getOrFetch(`${sk}:activity:40`, () => getStudentRecentActivity(st.id, 40).catch(() => []));
+      }
+    };
     (async () => {
       let hadCache = false;
       try {
@@ -649,6 +665,7 @@ export default function StartClassScreen({ navigation }) {
           setRoster(cached);
           setRosterLoading(false);
           hadCache = true;
+          prefetchDetails(cached); // start warming immediately from cache
         }
       } catch {}
       if (active && !hadCache) setRosterLoading(true);
@@ -657,6 +674,7 @@ export default function StartClassScreen({ navigation }) {
         if (active) {
           setRoster(list || []);
           AsyncStorage.setItem('startClassRoster.v1', JSON.stringify(list || [])).catch(() => {});
+          if (!hadCache) prefetchDetails(list); // no cache → warm from the fresh roster
         }
       } catch (err) {
         console.warn('[StartClass] roster load failed:', err);
@@ -2003,23 +2021,41 @@ export default function StartClassScreen({ navigation }) {
   const loadStudentDetail = useCallback(async (student, category = null) => {
     setSelectedStudent(student);
     briefingCategoryRef.current = category ?? null; // read by startClassNow
+    // Clear the previous student's secondary data so it doesn't flash while
+    // this one's phase-2 loads.
+    setQuestions([]);
+    setOpenQuestions([]);
+    setLastClass(null);
+    setReadinessVerdicts({});
+    setQuestionVerdicts({});
     setDetailLoading(true);
     setView('private-briefing');
+    const sk = `student:${student.id}`;
+
+    // Phase 1 — the core the coach needs to review + START the class: focus
+    // points + readiness. Drop the loading gate as soon as these land (they're
+    // prefetched on roster load, so usually already warm/in-flight) — the coach
+    // can start without waiting on the secondary data below.
     try {
-      const sk = `student:${student.id}`;
-      const [fps, qs, openQs, activity, readiness] = await Promise.all([
+      const [fps, readiness] = await Promise.all([
         getOrFetch(`${sk}:fps`, () => getStudentFocusPoints(student.id).catch(() => [])),
-        getOrFetch(`${sk}:questions`, () => getStudentQuestions(student.id).catch(() => [])),
-        getOrFetch(`${sk}:openQuestions`, () => getStudentOpenQuestions(student.id).catch(() => [])),
-        getOrFetch(`${sk}:activity:40`, () => getStudentRecentActivity(student.id, 40).catch(() => [])),
         getOrFetch(`${sk}:readiness:${category || 'all'}`, () => getLessonReadiness(student.id, category).catch(() => null)),
       ]);
       setFocusPoints(fps || []);
+      setStudentReadiness(readiness);
+    } catch {}
+    setDetailLoading(false);
+
+    // Phase 2 — secondary detail (questions, open questions, recent activity →
+    // last class). Fills in behind the already-usable briefing.
+    try {
+      const [qs, openQs, activity] = await Promise.all([
+        getOrFetch(`${sk}:questions`, () => getStudentQuestions(student.id).catch(() => [])),
+        getOrFetch(`${sk}:openQuestions`, () => getStudentOpenQuestions(student.id).catch(() => [])),
+        getOrFetch(`${sk}:activity:40`, () => getStudentRecentActivity(student.id, 40).catch(() => [])),
+      ]);
       setQuestions(qs || []);
       setOpenQuestions(openQs || []);
-      setStudentReadiness(readiness);
-      setReadinessVerdicts({});
-      setQuestionVerdicts({});
 
       // Find most recent class logged with THIS coach (has a summary)
       const lastCls = (activity || []).find(
@@ -2044,7 +2080,6 @@ export default function StartClassScreen({ navigation }) {
         setLastClass(null);
       }
     } catch {}
-    setDetailLoading(false);
   }, []);
 
   // Open a student's briefing. If this coach teaches them BOTH styles, ask which

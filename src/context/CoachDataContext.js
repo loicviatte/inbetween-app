@@ -30,10 +30,23 @@ export function CoachDataProvider({ children }) {
 
   const getOrFetch = useCallback(async (key, fetcher, ttlMs = 60000) => {
     const cached = cacheRef.current.get(key);
-    if (cached && cached.expiresAt > Date.now()) return cached.data;
-    const data = await fetcher();
-    cacheRef.current.set(key, { data, expiresAt: Date.now() + ttlMs });
-    return data;
+    if (cached && cached.expiresAt > Date.now()) {
+      if ('data' in cached) return cached.data;      // resolved
+      if (cached.promise) return cached.promise;     // in-flight → share it (dedup)
+    }
+    // Store the in-flight promise so a background prefetch + a near-simultaneous
+    // tap on the same key await ONE request instead of firing two (critical when
+    // each round-trip is a slow cold-start on the free tier).
+    const promise = fetcher();
+    cacheRef.current.set(key, { promise, expiresAt: Date.now() + ttlMs });
+    try {
+      const data = await promise;
+      cacheRef.current.set(key, { data, expiresAt: Date.now() + ttlMs });
+      return data;
+    } catch (e) {
+      cacheRef.current.delete(key);                  // don't cache failures
+      throw e;
+    }
   }, []);
 
   const invalidateCache = useCallback((prefix) => {
