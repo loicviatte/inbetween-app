@@ -989,7 +989,7 @@ export default function TrainerReviewScreen({ navigation }) {
   return (
     <SafeAreaView style={styles.safe}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Yoda Review</Text>
+        <Text style={styles.headerTitle}>Class Review</Text>
         <TouchableOpacity onPress={handleLogout} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
           <Text style={styles.logoutText}>Log out</Text>
         </TouchableOpacity>

@@ -330,7 +330,7 @@ async function processClassInput(supabase: any, payload: any): Promise<void> {
           user_id: cid,
           type: 'focus_points_added',
           title: 'New couple focus points',
-          body: `Yoda added ${coupleCreated} couple focus point${coupleCreated > 1 ? 's' : ''}. Review before they publish.`,
+          body: `${coupleCreated} new couple focus point${coupleCreated > 1 ? 's' : ''}. Review before they publish.`,
           data: { couple_id: classInput.couple_id, class_input_id: class_input_id },
         })
       }
@@ -637,7 +637,7 @@ async function processStudentFocusPoints(
       user_id: coachId,
       type: 'focus_points_added',
       title: 'New focus points added',
-      body: `Yoda added ${newFPCount} focus point${newFPCount > 1 ? 's' : ''} for ${studentName}. Review before they publish to the student.`,
+      body: `${newFPCount} new focus point${newFPCount > 1 ? 's' : ''} for ${studentName}. Review before they publish to the student.`,
       data: { student_id: studentId, class_input_id: classInputId },
     })
     console.log(`[yoda-score] Notified coach ${coachId} of ${newFPCount} new FPs for ${studentId}`)
