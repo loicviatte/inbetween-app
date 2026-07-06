@@ -548,6 +548,7 @@ export default function StartClassScreen({ navigation }) {
   const newPipelineRef = useRef(false);     // captured at startClassNow
   const recordingIdRef = useRef(null);      // class_recordings.id when on new pipeline
   const userIdRef = useRef(null);           // captured at startClassNow
+  const localModeRef = useRef(false);       // captured at startClassNow — read by stopClass
 
   // Screen-level back (iOS edge-swipe / hardware back) while in a sub-view but
   // NOT recording should return to the roster, not pop StartClass to the coach
@@ -1478,6 +1479,7 @@ export default function StartClassScreen({ navigation }) {
       // Resolve local mode from the freshly-fetched user so we don't race
       // with the component-mount auth fetch.
       localMode = isLocalRecordingMode(user);
+      localModeRef.current = localMode; // read by stopClass to stamp ended_at at Stop
       if (user && isNewRecordingPipelineEnabled(user)) {
         const isPrivate = view === 'private-briefing';
         const isCouple = view === 'couple-briefing';
@@ -1758,6 +1760,23 @@ export default function StartClassScreen({ navigation }) {
           trigger,
         }).catch(() => {});
       } catch {}
+    }
+
+    // Local-recording (DJI) mode: stamp ended_at NOW, at Stop — not only when
+    // the debrief is finished. Otherwise a coach who stops but abandons the
+    // debrief (closes the app, navigates away) leaves the row stuck in
+    // status='recording' with ended_at=null forever, so the class never shows
+    // in the upload list and never triggers a sync reminder. finishDebrief
+    // re-stamps harmlessly. Non-local classes keep stamping at debrief-finish
+    // (their audio + class_input are created there).
+    if (localModeRef.current && recordingIdRef.current) {
+      supabase
+        .from('class_recordings')
+        .update({ ended_at: new Date().toISOString() })
+        .eq('id', recordingIdRef.current)
+        .then(() => {}, (err) => {
+          console.warn('[StartClass] stop-time ended_at update failed:', err);
+        });
     }
 
     setDebriefOpen(true);
