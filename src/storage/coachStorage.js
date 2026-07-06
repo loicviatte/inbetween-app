@@ -1053,7 +1053,10 @@ async function markFocusAddedNotificationsReadForStudent(studentId) {
     .from('notifications')
     .update({ read: true })
     .eq('user_id', coachId)
-    .eq('type', 'focus_points_added')
+    // student-class-score emits the SINGULAR 'focus_point_added' when a class
+    // touches exactly one FP and the PLURAL when >1 — match both, else a
+    // single-FP class leaves the coach's bell lit forever after review.
+    .in('type', ['focus_points_added', 'focus_point_added'])
     .eq('read', false)
     .contains('data', { student_id: studentId });
 }

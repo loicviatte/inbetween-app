@@ -14,6 +14,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { View, AppState, StyleSheet, Animated } from 'react-native';
 import { NavigationContainer, DefaultTheme, createNavigationContainerRef } from '@react-navigation/native';
 import * as Notifications from 'expo-notifications';
+import { registerPushToken } from './src/services/notifications';
 import { useFonts } from 'expo-font';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -88,7 +89,10 @@ function handleNotificationTap(data) {
   if (!navigationRef.isReady()) return;
   const type = data?.type;
   if (type === 'transcript_ready') {
-    navigationRef.navigate('Dashboard');
+    // Recipient may be a coach or a student (separate navigators, and there is
+    // no 'Dashboard' route in either — the old target was a dead no-op). Land on
+    // the Notifications list, which is registered in both navigators.
+    navigationRef.navigate('Notifications');
     return;
   }
   if (type === 'coach_request_received') {
@@ -144,6 +148,22 @@ export default function App() {
   // Buffer for a notification tap that arrived before the navigator was
   // mounted (cold launch via push). Drained from NavigationContainer.onReady.
   const pendingNotifTapRef = useRef(null);
+
+  // Push-token registration lives here (not just at password login) so a session
+  // restored on cold launch — or any SIGNED_IN — (re)writes users.push_token.
+  // Deduped per user per app run; the rotation listener below forces a refresh.
+  const currentUserIdRef = useRef(null);
+  const registeredPushUsersRef = useRef(new Set());
+  function maybeRegisterPush(userId) {
+    if (!userId) {
+      currentUserIdRef.current = null;
+      return;
+    }
+    currentUserIdRef.current = userId;
+    if (registeredPushUsersRef.current.has(userId)) return;
+    registeredPushUsersRef.current.add(userId);
+    registerPushToken(userId).catch(() => {}); // fire-and-forget
+  }
 
   // TT Travels Next powers the onboarding / auth flow. In dev & production
   // builds these are embedded natively (expo-font config plugin) so they
@@ -216,6 +236,7 @@ export default function App() {
       await reconcileAuthUser(s?.user?.id ?? null);
       setSession(s ?? null);
       setUserEmail(s?.user?.email ?? null);
+      maybeRegisterPush(s?.user?.id ?? null);
       loadRoleFor(s);
     });
 
@@ -223,6 +244,7 @@ export default function App() {
       await reconcileAuthUser(s?.user?.id ?? null);
       setSession(s ?? null);
       setUserEmail(s?.user?.email ?? null);
+      maybeRegisterPush(s?.user?.id ?? null);
       loadRoleFor(s);
     });
 
@@ -246,6 +268,20 @@ export default function App() {
       } else {
         pendingNotifTapRef.current = data;
       }
+    });
+    return () => sub.remove();
+  }, []);
+
+  // Expo can rotate the push token; re-register on change so users.push_token
+  // doesn't go stale (a stale token silently no-ops — see send-push's
+  // DeviceNotRegistered cleanup). Force a fresh getExpoPushTokenAsync via
+  // registerPushToken rather than trusting the listener's device-token payload.
+  useEffect(() => {
+    const sub = Notifications.addPushTokenListener(() => {
+      const uid = currentUserIdRef.current;
+      if (!uid) return;
+      registeredPushUsersRef.current.delete(uid);
+      registerPushToken(uid).catch(() => {});
     });
     return () => sub.remove();
   }, []);

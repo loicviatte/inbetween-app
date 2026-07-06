@@ -31,6 +31,19 @@ export async function deleteNotification(id) {
   } catch {}
 }
 
+// Coach "action needed" review notifications whose read state is the SOURCE of
+// the bell badge until the coach actually reviews the focus points. These must
+// NOT be flipped to read just because the coach opened the notifications list —
+// otherwise the bell drops to 0 while the work still sits in ActionNeeded. They
+// are marked read by the review action itself (markFocusAddedNotificationsRead*
+// in coachStorage/coupleStorage). Students never receive these types, so the
+// exclusion is a no-op on the student side.
+const KEEP_UNREAD_UNTIL_ACTIONED = [
+  'focus_point_added',
+  'focus_points_added',
+  'focus_reconcile_needed',
+];
+
 export async function markAllNotificationsRead() {
   try {
     const { data: { session } } = await supabase.auth.getSession();
@@ -40,6 +53,7 @@ export async function markAllNotificationsRead() {
       .from('notifications')
       .update({ read: true })
       .eq('user_id', userId)
-      .eq('read', false);
+      .eq('read', false)
+      .not('type', 'in', `(${KEEP_UNREAD_UNTIL_ACTIONED.join(',')})`);
   } catch {}
 }

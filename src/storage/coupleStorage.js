@@ -524,7 +524,8 @@ async function markCoupleFocusAddedRead(coupleId) {
     .from('notifications')
     .update({ read: true })
     .eq('user_id', coachId)
-    .eq('type', 'focus_points_added')
+    // Match singular + plural (see markFocusAddedNotificationsReadForStudent).
+    .in('type', ['focus_points_added', 'focus_point_added'])
     .eq('read', false)
     .contains('data', { couple_id: coupleId })
     .then(() => {}, () => {});

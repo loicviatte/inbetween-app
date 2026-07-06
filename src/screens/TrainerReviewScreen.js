@@ -15,6 +15,7 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import { Fonts, Spacing } from '../theme';
 import { supabase } from '../services/supabase/client';
 import { clearUserCaches } from '../storage/userCaches';
+import { clearPushToken } from '../services/notifications';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -940,6 +941,9 @@ export default function TrainerReviewScreen({ navigation }) {
 
   async function handleLogout() {
     await clearUserCaches();
+    // Drop this device's push token before sign-out (shared-device hygiene).
+    const { data: { session } } = await supabase.auth.getSession();
+    clearPushToken(session?.user?.id);
     await supabase.auth.signOut();
   }
 

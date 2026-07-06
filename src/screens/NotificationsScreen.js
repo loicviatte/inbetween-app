@@ -255,8 +255,12 @@ export default function NotificationsScreen({ navigation }) {
       } else {
         navigation.navigate('ActionNeeded');
       }
-    } else if (notif.type === 'merge_request_student' && notif.data?.merge_request_id) {
-      navigation.navigate('MergeReview', { mergeRequestId: notif.data.merge_request_id });
+    } else if (notif.type === 'merge_request_student') {
+      // No dedicated merge-review screen exists; TrainerReview surfaces the
+      // student's focus points with the merge-request badge, so it's the
+      // actionable landing spot. (Was navigating to an unregistered
+      // 'MergeReview' route → dead no-op.)
+      navigation.navigate('TrainerReview');
     } else if (notif.type === 'coach_request_received') {
       // CoachHomeScreen is the STUDENTS tab inside CoachMainTabs and surfaces
       // pending requests at the top of the list with accept/reject buttons.
