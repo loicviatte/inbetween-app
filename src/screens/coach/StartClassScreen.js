@@ -33,6 +33,7 @@ import { getStudentFocusPoints, getStudentQuestions, getStudentOpenQuestions, ge
 import { getLessonReadiness } from '../../storage/storage';
 import { getMyCouples, getCoupleReadiness, getCoupleFocusPoints, getCoupleActivity } from '../../storage/coupleStorage';
 import QuestionDetailSheet from '../../components/QuestionDetailSheet';
+import MicCueSheet from '../../components/MicCueSheet';
 import {
   getActiveCoachClass,
   setActiveCoachClass,
@@ -2869,84 +2870,36 @@ export default function StartClassScreen({ navigation }) {
     );
   }
 
-  // Local-recording confirmations. Dedicated visual treatment (ad.recModal*)
-  // because these are high-stakes gates — getting the coach to physically
-  // press REC / STOP on the DJI mic before the in-app action proceeds. The
-  // hero icons are custom shapes (red dot for REC, ink square for STOP)
-  // rather than Ionicons, which look thin at these sizes. Overlay is non-
-  // dismissible — the coach must explicitly Cancel or confirm.
+  // Local-recording confirmations — high-stakes gates that get the coach to
+  // physically press REC / STOP on the DJI mic before the in-app action
+  // proceeds. Rendered as the dark MicCueSheet bottom sheet (non-dismissible:
+  // the coach must Cancel or confirm).
 
   function renderRecStartConfirmPrompt() {
-    if (!recStartConfirmOpen) return null;
     return (
-      <Pressable style={ad.recModalOverlay}>
-        <Pressable style={ad.recModalCard} onPress={(e) => e.stopPropagation()}>
-          <View style={[ad.recModalIconRing, ad.recModalIconRingRec]}>
-            <View style={ad.recModalIconDot} />
-          </View>
-          <Text style={ad.recModalTitle}>Press REC on your mic</Text>
-          <Text style={ad.recModalBody}>
-            Your DJI mic records on its own storage. Make sure it's on and
-            recording before you start the class.
-          </Text>
-          <View style={ad.recModalActions}>
-            <TouchableOpacity
-              style={ad.recModalBtnGhost}
-              activeOpacity={0.85}
-              onPress={() => setRecStartConfirmOpen(false)}
-            >
-              <Text style={ad.recModalBtnGhostText}>Cancel</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={ad.recModalBtnPrimary}
-              activeOpacity={0.88}
-              onPress={() => {
-                setRecStartConfirmOpen(false);
-                startClassNow();
-              }}
-            >
-              <Text style={ad.recModalBtnPrimaryText}>Start class</Text>
-            </TouchableOpacity>
-          </View>
-        </Pressable>
-      </Pressable>
+      <MicCueSheet
+        visible={recStartConfirmOpen}
+        mode="start"
+        onCancel={() => setRecStartConfirmOpen(false)}
+        onConfirm={() => {
+          setRecStartConfirmOpen(false);
+          startClassNow();
+        }}
+      />
     );
   }
 
   function renderRecStopConfirmPrompt() {
-    if (!recStopConfirmOpen) return null;
     return (
-      <Pressable style={ad.recModalOverlay}>
-        <Pressable style={ad.recModalCard} onPress={(e) => e.stopPropagation()}>
-          <View style={[ad.recModalIconRing, ad.recModalIconRingStop]}>
-            <View style={ad.recModalIconSquare} />
-          </View>
-          <Text style={ad.recModalTitle}>Press STOP on your mic</Text>
-          <Text style={ad.recModalBody}>
-            Stop the recording on your DJI mic first. That finalizes the WAV
-            file so we can match it when you sync later.
-          </Text>
-          <View style={ad.recModalActions}>
-            <TouchableOpacity
-              style={ad.recModalBtnGhost}
-              activeOpacity={0.85}
-              onPress={() => setRecStopConfirmOpen(false)}
-            >
-              <Text style={ad.recModalBtnGhostText}>Cancel</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={ad.recModalBtnPrimary}
-              activeOpacity={0.88}
-              onPress={() => {
-                setRecStopConfirmOpen(false);
-                stopClass();
-              }}
-            >
-              <Text style={ad.recModalBtnPrimaryText}>End class</Text>
-            </TouchableOpacity>
-          </View>
-        </Pressable>
-      </Pressable>
+      <MicCueSheet
+        visible={recStopConfirmOpen}
+        mode="stop"
+        onCancel={() => setRecStopConfirmOpen(false)}
+        onConfirm={() => {
+          setRecStopConfirmOpen(false);
+          stopClass();
+        }}
+      />
     );
   }
 
@@ -5595,110 +5548,6 @@ const ad = StyleSheet.create({
     textTransform: 'uppercase',
   },
 
-  // ─── Local-recording REC / STOP confirmation modals ────────────────────
-  // Visually distinct from the existing popup* styles (used for "no mic
-  // selected"). Higher-stakes gate, so generous breathing room, a hero
-  // icon ring, ink-dark primary CTA, and a non-dismissible overlay.
-  recModalOverlay: {
-    position: 'absolute',
-    top: 0, left: 0, right: 0, bottom: 0,
-    backgroundColor: 'rgba(13, 13, 18, 0.62)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 24,
-    zIndex: 1000,
-  },
-  recModalCard: {
-    width: '100%',
-    maxWidth: 340,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 26,
-    paddingTop: 28,
-    paddingHorizontal: 24,
-    paddingBottom: 20,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOpacity: 0.22,
-    shadowRadius: 28,
-    shadowOffset: { width: 0, height: 14 },
-    elevation: 14,
-  },
-  recModalIconRing: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 18,
-  },
-  recModalIconRingRec: {
-    backgroundColor: 'rgba(212, 69, 69, 0.12)',
-  },
-  recModalIconRingStop: {
-    backgroundColor: 'rgba(13, 13, 18, 0.06)',
-  },
-  recModalIconDot: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: '#D44545',
-  },
-  recModalIconSquare: {
-    width: 24,
-    height: 24,
-    borderRadius: 6,
-    backgroundColor: '#0D0D12',
-  },
-  recModalTitle: {
-    fontFamily: Fonts.ttDemiBold,
-    fontSize: 20,
-    color: '#0D0D12',
-    textAlign: 'center',
-    letterSpacing: -0.3,
-    marginBottom: 8,
-  },
-  recModalBody: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 13.5,
-    color: '#818898',
-    textAlign: 'center',
-    lineHeight: 19,
-    marginBottom: 22,
-    paddingHorizontal: 6,
-  },
-  recModalActions: {
-    flexDirection: 'row',
-    gap: 10,
-    width: '100%',
-  },
-  recModalBtnGhost: {
-    flex: 1,
-    backgroundColor: '#F2F2F4',
-    borderRadius: 14,
-    paddingVertical: 15,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  recModalBtnGhostText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 13.5,
-    color: '#818898',
-    letterSpacing: 0.2,
-  },
-  recModalBtnPrimary: {
-    flex: 1.4,
-    backgroundColor: '#0D0D12',
-    borderRadius: 14,
-    paddingVertical: 15,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  recModalBtnPrimaryText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 13.5,
-    color: '#FFFFFF',
-    letterSpacing: 0.3,
-  },
 });
 
 // ── End-of-class debrief sheet styles ──────────────────────────────────────
