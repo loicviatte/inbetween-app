@@ -16,6 +16,8 @@ import DashboardSkeleton from '../../components/DashboardSkeleton';
 import { useCoachData } from '../../context/CoachDataContext';
 import { markFirstScreenReady } from '../../utils/firstPaint';
 import { getStudentsReadiness } from '../../storage/storage';
+import { getStartClassRoster } from '../../storage/coachStorage';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   getActiveCoachClass,
   subscribeToActiveCoachClass,
@@ -259,6 +261,17 @@ export default function DashboardScreen({ navigation }) {
   const isLocalMode = isLocalRecordingMode(authUser);
 
   useEffect(() => subscribeToActiveCoachClass(setActiveClass), []);
+  // Warm the Start-class roster cache in the background so the coach's FIRST
+  // open of Start Class is instant too (the fetch is a slow cold-start on the
+  // free-tier pooler; the cache-first read in StartClass then hits immediately).
+  useEffect(() => {
+    (async () => {
+      try {
+        const { students } = await getStartClassRoster();
+        await AsyncStorage.setItem('startClassRoster.v1', JSON.stringify(students || []));
+      } catch {}
+    })();
+  }, []);
   useEffect(() => {
     if (!activeClass) return;
     const id = setInterval(() => setChronoTick((t) => t + 1), 1000);
