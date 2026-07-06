@@ -1398,6 +1398,28 @@ export default function StartClassScreen({ navigation }) {
 
   async function startClassNow() {
     setAudioModalOpen(false);
+
+    // Start the chrono + active-class store IMMEDIATELY — before the slow async
+    // setup below (preview-meter stop, auth fetch, class_recordings insert) — so
+    // the timer appears the instant the coach confirms Start instead of after a
+    // cold DB round-trip that races the still-loading briefing (coach taps Start
+    // and nothing happens for ~30s). The recording rows/refs are created below
+    // in the background; nothing here depends on them.
+    const now = Date.now();
+    const kind = view === 'private-briefing' ? 'private' : 'group';
+    setClassStartedAt(now);
+    setChronoMs(0);
+    chronoMsRef.current = 0;
+    setActiveCoachClass({
+      kind,
+      startedAt: now,
+      studentId: selectedStudent?.id ?? null,
+      studentName: selectedStudent?.name ?? null,
+      // Picked Latin/Ballroom style — a restore after app-kill re-scopes the
+      // debrief to it (else default-retire could touch the OTHER style's
+      // focuses for a 2-style student).
+      category: briefingCategoryRef.current ?? null,
+    });
     if (inputRefreshIntervalRef.current) {
       clearInterval(inputRefreshIntervalRef.current);
       inputRefreshIntervalRef.current = null;
@@ -1572,22 +1594,6 @@ export default function StartClassScreen({ navigation }) {
         }
       }
     }
-
-    const now = Date.now();
-    const kind = view === 'private-briefing' ? 'private' : 'group';
-    setClassStartedAt(now);
-    setChronoMs(0);
-    chronoMsRef.current = 0;
-    setActiveCoachClass({
-      kind,
-      startedAt: now,
-      studentId: selectedStudent?.id ?? null,
-      studentName: selectedStudent?.name ?? null,
-      // Persist the picked Latin/Ballroom style so a restore after app-kill
-      // re-scopes the debrief to it (else default-retire could retire the OTHER
-      // style's untouched focuses for a 2-style student).
-      category: briefingCategoryRef.current ?? null,
-    });
 
     try {
       const id = await laStartCoachRecording({
