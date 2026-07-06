@@ -532,6 +532,29 @@ export default function StartClassScreen({ navigation }) {
   const newPipelineRef = useRef(false);     // captured at startClassNow
   const recordingIdRef = useRef(null);      // class_recordings.id when on new pipeline
   const userIdRef = useRef(null);           // captured at startClassNow
+
+  // Current view / recording state, readable from the beforeRemove closure.
+  const viewRef = useRef(view);
+  useEffect(() => { viewRef.current = view; }, [view]);
+  const classStartedAtRef = useRef(classStartedAt);
+  useEffect(() => { classStartedAtRef.current = classStartedAt; }, [classStartedAt]);
+
+  // Screen-level back (iOS edge-swipe / hardware back) while in a sub-view
+  // should return to the roster, not pop StartClass to the coach home. The
+  // in-screen floating back arrows already setView('select'); this covers the
+  // gesture/system back that would otherwise leave the screen. Don't hijack
+  // once a class is actually recording.
+  useEffect(() => {
+    const unsub = navigation.addListener('beforeRemove', (e) => {
+      if (viewRef.current !== 'select' && !classStartedAtRef.current) {
+        e.preventDefault();
+        setView('select');
+        setSearchQuery('');
+        setSelectedCouple(null);
+      }
+    });
+    return unsub;
+  }, [navigation]);
   // Append-only journal of session events (AppState transitions, rotation
   // failures, audio route changes) flushed into class_recordings.meta.events.
   // Lets us tell after the fact what really happened during a class that
@@ -2897,7 +2920,10 @@ export default function StartClassScreen({ navigation }) {
         onCancel={() => setRecStopConfirmOpen(false)}
         onConfirm={() => {
           setRecStopConfirmOpen(false);
-          stopClass();
+          // Let the sheet's Modal finish dismissing before stopClass opens the
+          // debrief Modal — iOS won't present a second modal while the first is
+          // still animating out, so the debrief would silently fail to appear.
+          setTimeout(() => stopClass(), 350);
         }}
       />
     );
