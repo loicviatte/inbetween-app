@@ -399,6 +399,11 @@ export default function StartClassScreen({ navigation }) {
   };
   const [selectedStudent, setSelectedStudent] = useState(null);
   const [selectedCouple, setSelectedCouple] = useState(null); // couple class context
+  // Picked Latin/Ballroom style for the current private briefing. Read by
+  // startClassNow when it stamps the active class (was referenced there via an
+  // undeclared ref → threw and silently aborted setActiveCoachClass, so the
+  // Dashboard never learned a class was running).
+  const briefingCategoryRef = useRef(null);
   const [couples, setCouples] = useState([]);
   useEffect(() => {
     let alive = true;
@@ -1981,6 +1986,7 @@ export default function StartClassScreen({ navigation }) {
   const [stylePicker, setStylePicker] = useState(null); // student awaiting style choice
   const loadStudentDetail = useCallback(async (student, category = null) => {
     setSelectedStudent(student);
+    briefingCategoryRef.current = category ?? null; // read by startClassNow
     setDetailLoading(true);
     setView('private-briefing');
     try {
