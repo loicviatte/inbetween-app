@@ -644,16 +644,6 @@ export default function StartClassScreen({ navigation }) {
       );
   }, []);
 
-  // TEMP perf instrumentation — writes one row to public.debug_timings so we can
-  // read where the student-detail load spends its time from the OTA production
-  // build (no Metro attached). Fire-and-forget; safe to remove after diagnosis.
-  const logTiming = useCallback((label, payload) => {
-    try { console.log('[perf]', label, JSON.stringify(payload)); } catch {}
-    try {
-      supabase.from('debug_timings').insert({ label, payload }).then(() => {}, () => {});
-    } catch {}
-  }, []);
-
   // Load the readiness roster (per-student focus briefings) whenever the select
   // view is shown. Cache-first: paint the last roster instantly from disk, then
   // refresh in the background. The full fetch is a slow sequential staircase on
@@ -713,10 +703,8 @@ export default function StartClassScreen({ navigation }) {
         }
       } catch {}
       if (active && !hadCache) setRosterLoading(true);
-      const rt0 = Date.now();
       try {
         const { students: list } = await getStartClassRoster();
-        logTiming('roster_load', { ms: Date.now() - rt0, hadCache, count: (list || []).length });
         if (active) {
           setRoster(list || []);
           AsyncStorage.setItem('startClassRoster.v1', JSON.stringify(list || [])).catch(() => {});
@@ -2172,15 +2160,13 @@ export default function StartClassScreen({ navigation }) {
     // 1. Instant paint from the PERSISTED bundle (survives cold launch, unlike
     // the in-memory getOrFetch cache) so the coach sees the last-known briefing
     // immediately instead of the ~10s cold-connection wait. Refreshed below.
-    let painted = false;
     try {
       const raw = await AsyncStorage.getItem(bkey);
-      if (raw) { applyBundle(JSON.parse(raw)); setDetailLoading(false); painted = true; }
+      if (raw) { applyBundle(JSON.parse(raw)); setDetailLoading(false); }
     } catch {}
 
     // 2. Fresh fetch (ONE category-scoped bundle RPC — replaces the old ~8
     // round-trips). Refreshes the UI in place and re-persists for next launch.
-    const t0 = Date.now();
     let bundle = null;
     try {
       bundle = await getOrFetch(
@@ -2188,7 +2174,6 @@ export default function StartClassScreen({ navigation }) {
         () => getCoachStudentDetailBundle(student.id, category).catch(() => null),
       );
     } catch {}
-    logTiming('student_detail_bundle', { student_id: student.id, category: category || null, ms: Date.now() - t0, hit: !!bundle, painted });
 
     if (bundle) {
       applyBundle(bundle);
