@@ -49,3 +49,9 @@ supabase/.temp/
 # Build artifacts
 build.ipa
 *.ipa
+*.aab
+*.apk
+
+# Android / Play Store secrets — never commit
+google-services.json
+play-service-account.json
