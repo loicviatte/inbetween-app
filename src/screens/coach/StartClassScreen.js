@@ -29,7 +29,7 @@ import * as Notifications from 'expo-notifications';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Colors, Fonts, Spacing } from '../../theme';
 import { useCoachData } from '../../context/CoachDataContext';
-import { getStudentFocusPoints, getStudentQuestions, getStudentOpenQuestions, getStudentRecentActivity, getStartClassRoster, markQuestionCovered, linkCoveredQuestionsToClass } from '../../storage/coachStorage';
+import { getStudentFocusPoints, getStudentQuestions, getStudentOpenQuestions, getStudentRecentActivity, getStartClassRoster, markQuestionCovered, linkCoveredQuestionsToClass, getCoachStudentDetailBundle } from '../../storage/coachStorage';
 import { getLessonReadiness } from '../../storage/storage';
 import { getMyCouples, getCoupleReadiness, getCoupleFocusPoints, getCoupleActivity } from '../../storage/coupleStorage';
 import QuestionDetailSheet from '../../components/QuestionDetailSheet';
@@ -680,10 +680,15 @@ export default function StartClassScreen({ navigation }) {
       for (const st of (students || [])) {
         if (!st?.id) continue;
         const sk = `student:${st.id}`;
-        tasks.push(() => getOrFetch(`${sk}:fps`, () => getStudentFocusPoints(st.id).catch(() => [])));
-        tasks.push(() => getOrFetch(`${sk}:questions`, () => getStudentQuestions(st.id).catch(() => [])));
-        tasks.push(() => getOrFetch(`${sk}:openQuestions`, () => getStudentOpenQuestions(st.id).catch(() => [])));
-        tasks.push(() => getOrFetch(`${sk}:activity:40`, () => getStudentRecentActivity(st.id, 40).catch(() => [])));
+        // Warm the SAME bundle key the tap will use: pickStudent passes a
+        // CONCRETE style (coachStyles[0], or the picked one for a 2-style
+        // student), never 'all' for a coached style — so warm one bundle per
+        // style the coach could open (both for 2-style students so either pick
+        // is instant; 'all' only for a style-less student).
+        const styles = (Array.isArray(st.coachStyles) && st.coachStyles.length) ? st.coachStyles : [null];
+        for (const style of styles) {
+          tasks.push(() => getOrFetch(`${sk}:bundle:${style || 'all'}`, () => getCoachStudentDetailBundle(st.id, style).catch(() => null)));
+        }
       }
       let idx = 0;
       const PREFETCH_CONCURRENCY = 3;
@@ -2129,66 +2134,53 @@ export default function StartClassScreen({ navigation }) {
     setView('private-briefing');
     const sk = `student:${student.id}`;
 
-    // TEMP perf instrumentation — time each fetch as the coach experiences it
-    // (through getOrFetch, so a cache/in-flight hit reads ~0ms). Reveals whether
-    // the wait is a fresh network fetch, an in-flight prefetch queue, or render.
+    // ONE category-scoped bundle RPC replaces the old ~8 separate round-trips
+    // (measured cold: 48s, all client-side queue wait). The cache key MUST carry
+    // the CONCRETE style (never 'all' for a coached style) so the 2-style
+    // Latin/Ballroom toggle re-fetches the correctly scoped readiness + focuses,
+    // and so a tap hits the exact key the prefetch warmed. Instrumentation kept.
     const t0 = Date.now();
-    const perf = {};
-    const timed = async (name, p) => { const s = Date.now(); try { return await p; } finally { perf[name] = Date.now() - s; } };
-
-    // Phase 1 — the core the coach needs to review + START the class: focus
-    // points + readiness. Drop the loading gate as soon as these land (they're
-    // prefetched on roster load, so usually already warm/in-flight) — the coach
-    // can start without waiting on the secondary data below.
+    let bundle = null;
     try {
-      const [fps, readiness] = await Promise.all([
-        timed('fps', getOrFetch(`${sk}:fps`, () => getStudentFocusPoints(student.id).catch(() => []))),
-        timed('readiness', getOrFetch(`${sk}:readiness:${category || 'all'}`, () => getLessonReadiness(student.id, category).catch(() => null))),
-      ]);
-      setFocusPoints(fps || []);
-      setStudentReadiness(readiness);
-    } catch {}
-    perf.phase1_total = Date.now() - t0;
-    setDetailLoading(false);
-    logTiming('student_detail_phase1', { student_id: student.id, category: category || null, ...perf });
-
-    // Phase 2 — secondary detail (questions, open questions, recent activity →
-    // last class). Fills in behind the already-usable briefing.
-    const t1 = Date.now();
-    try {
-      const [qs, openQs, activity] = await Promise.all([
-        timed('questions', getOrFetch(`${sk}:questions`, () => getStudentQuestions(student.id).catch(() => []))),
-        timed('openQuestions', getOrFetch(`${sk}:openQuestions`, () => getStudentOpenQuestions(student.id).catch(() => []))),
-        timed('activity', getOrFetch(`${sk}:activity:40`, () => getStudentRecentActivity(student.id, 40).catch(() => []))),
-      ]);
-      perf.phase2_total = Date.now() - t1;
-      logTiming('student_detail_phase2', { student_id: student.id, ...perf });
-      setQuestions(qs || []);
-      setOpenQuestions(openQs || []);
-
-      // Find most recent class logged with THIS coach (has a summary)
-      const lastCls = (activity || []).find(
-        (ev) => ev.type === 'class' && ev.withCurrentCoach && ev.classSummary
+      bundle = await getOrFetch(
+        `${sk}:bundle:${category || 'all'}`,
+        () => getCoachStudentDetailBundle(student.id, category).catch(() => null),
       );
-      if (lastCls) {
-        const clsTime = new Date(lastCls.date).getTime();
-        const trainCounts = {};
-        for (const ev of activity || []) {
-          if (ev.type === 'training' && ev.focusPointId && new Date(ev.date).getTime() > clsTime) {
-            trainCounts[ev.focusPointId] = (trainCounts[ev.focusPointId] || 0) + 1;
-          }
-        }
-        setLastClass({
-          ...lastCls,
-          focusPoints: (lastCls.focusPoints || []).slice(0, 3).map((fp) => ({
-            ...fp,
-            trainedCount: trainCounts[fp.id] || 0,
-          })),
-        });
-      } else {
-        setLastClass(null);
-      }
     } catch {}
+    logTiming('student_detail_bundle', { student_id: student.id, category: category || null, ms: Date.now() - t0, hit: !!bundle });
+
+    setFocusPoints(bundle?.focusPoints || []);
+    setStudentReadiness(bundle?.readiness ?? null);
+    setDetailLoading(false);
+
+    setQuestions(bundle?.questions || []);
+    setOpenQuestions(bundle?.openQuestions || []);
+
+    // Recent activity → most recent class with THIS coach (has a summary), then
+    // per-focus "trained since last class" counts. Same derivation as before;
+    // bundle.activity has the identical event shape as getStudentRecentActivity.
+    const activity = bundle?.activity || [];
+    const lastCls = activity.find(
+      (ev) => ev.type === 'class' && ev.withCurrentCoach && ev.classSummary
+    );
+    if (lastCls) {
+      const clsTime = new Date(lastCls.date).getTime();
+      const trainCounts = {};
+      for (const ev of activity) {
+        if (ev.type === 'training' && ev.focusPointId && new Date(ev.date).getTime() > clsTime) {
+          trainCounts[ev.focusPointId] = (trainCounts[ev.focusPointId] || 0) + 1;
+        }
+      }
+      setLastClass({
+        ...lastCls,
+        focusPoints: (lastCls.focusPoints || []).slice(0, 3).map((fp) => ({
+          ...fp,
+          trainedCount: trainCounts[fp.id] || 0,
+        })),
+      });
+    } else {
+      setLastClass(null);
+    }
   }, []);
 
   // Open a student's briefing. If this coach teaches them BOTH styles, ask which

@@ -2,7 +2,7 @@ import { supabase } from '../services/supabase/client';
 import { computeAllStudentMetricsBatch } from '../utils/studentMetrics';
 import { categoryFromStyle, focusMatchesCategory } from '../utils/danceCategory';
 import { normalizeFocusName } from '../utils/normalizeFocusName';
-import { getStudentsReadiness } from './storage';
+import { getStudentsReadiness, getLessonReadiness } from './storage';
 
 async function getCoachId() {
   const { data: { user } } = await supabase.auth.getUser();
@@ -430,6 +430,32 @@ async function _getMyStudentsImpl() {
 export async function getCoachStudentDetail(studentId) {
   const { data } = await supabase.rpc('get_coach_student_detail', { p_student: studentId });
   return data || null;
+}
+
+// Category-scoped bundle for the Start Class briefing: ONE RPC round-trip that
+// returns { profile, focusPoints, readiness (scoped to p_category), questions,
+// openQuestions, activity, lastClassDate, pendingFps } — replacing the ~8
+// separate round-trips loadStudentDetail used to fire (measured cold: 48s of
+// client-side queue wait). Falls back to the separate calls if the 2-arg RPC
+// isn't resolvable yet (deploy-propagation / PostgREST schema-cache lag): the
+// stale 1-arg overload returns no `activity`, which we detect and reconstruct.
+export async function getCoachStudentDetailBundle(studentId, category = null) {
+  try {
+    const { data, error } = await supabase.rpc('get_coach_student_detail', {
+      p_student: studentId,
+      p_category: category ?? null,
+    });
+    if (!error && data && Array.isArray(data.activity)) return data;
+  } catch {}
+  // Fallback — reconstruct the same shape from the granular functions.
+  const [focusPoints, readiness, questions, openQuestions, activity] = await Promise.all([
+    getStudentFocusPoints(studentId).catch(() => []),
+    getLessonReadiness(studentId, category).catch(() => null),
+    getStudentQuestions(studentId).catch(() => []),
+    getStudentOpenQuestions(studentId).catch(() => []),
+    getStudentRecentActivity(studentId, 40).catch(() => []),
+  ]);
+  return { focusPoints, readiness, questions, openQuestions, activity };
 }
 
 export async function getStudentProfile(studentId) {
