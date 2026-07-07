@@ -32,10 +32,25 @@ const USER_CACHE_KEYS = [
   'startClassRoster.v1',
 ];
 
+// Families of keys that are per-entity (one key per student+style, etc.) and so
+// can't be listed exhaustively — wiped by prefix scan.
+const USER_CACHE_PREFIXES = [
+  'startClass.bundle.v1:', // persisted Start-Class briefing bundles per student+style
+];
+
+async function clearPrefixedCaches() {
+  try {
+    const all = await AsyncStorage.getAllKeys();
+    const doomed = (all || []).filter((k) => USER_CACHE_PREFIXES.some((p) => k.startsWith(p)));
+    if (doomed.length) await AsyncStorage.multiRemove(doomed);
+  } catch {}
+}
+
 /** Remove every user-specific cache. Safe to call repeatedly. */
 export async function clearUserCaches() {
   try {
     await AsyncStorage.multiRemove([...USER_CACHE_KEYS, AUTH_USER_KEY]);
+    await clearPrefixedCaches();
   } catch {}
 }
 
@@ -51,6 +66,7 @@ export async function reconcileAuthUser(currentUserId) {
     if (previous && previous !== currentUserId) {
       // Different user (or signed out → null). Wipe before any screen mounts.
       await AsyncStorage.multiRemove(USER_CACHE_KEYS);
+      await clearPrefixedCaches();
     }
     if (currentUserId) {
       await AsyncStorage.setItem(AUTH_USER_KEY, currentUserId);

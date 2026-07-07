@@ -2123,8 +2123,10 @@ export default function StartClassScreen({ navigation }) {
   const loadStudentDetail = useCallback(async (student, category = null) => {
     setSelectedStudent(student);
     briefingCategoryRef.current = category ?? null; // read by startClassNow
-    // Clear the previous student's secondary data so it doesn't flash while
-    // this one's phase-2 loads.
+    // Clear the previous student's data so it can't flash before this one's
+    // bundle (cache or network) lands.
+    setFocusPoints([]);
+    setStudentReadiness(null);
     setQuestions([]);
     setOpenQuestions([]);
     setLastClass(null);
@@ -2133,12 +2135,51 @@ export default function StartClassScreen({ navigation }) {
     setDetailLoading(true);
     setView('private-briefing');
     const sk = `student:${student.id}`;
+    const bkey = `startClass.bundle.v1:${student.id}:${category || 'all'}`;
 
-    // ONE category-scoped bundle RPC replaces the old ~8 separate round-trips
-    // (measured cold: 48s, all client-side queue wait). The cache key MUST carry
-    // the CONCRETE style (never 'all' for a coached style) so the 2-style
-    // Latin/Ballroom toggle re-fetches the correctly scoped readiness + focuses,
-    // and so a tap hits the exact key the prefetch warmed. Instrumentation kept.
+    // Push a bundle into the briefing UI: focus points, readiness, questions,
+    // then the last-class recap + per-focus "trained since last class" counts.
+    // bundle.activity has the identical event shape as getStudentRecentActivity.
+    const applyBundle = (b) => {
+      setFocusPoints(b?.focusPoints || []);
+      setStudentReadiness(b?.readiness ?? null);
+      setQuestions(b?.questions || []);
+      setOpenQuestions(b?.openQuestions || []);
+      const activity = b?.activity || [];
+      const lastCls = activity.find(
+        (ev) => ev.type === 'class' && ev.withCurrentCoach && ev.classSummary
+      );
+      if (lastCls) {
+        const clsTime = new Date(lastCls.date).getTime();
+        const trainCounts = {};
+        for (const ev of activity) {
+          if (ev.type === 'training' && ev.focusPointId && new Date(ev.date).getTime() > clsTime) {
+            trainCounts[ev.focusPointId] = (trainCounts[ev.focusPointId] || 0) + 1;
+          }
+        }
+        setLastClass({
+          ...lastCls,
+          focusPoints: (lastCls.focusPoints || []).slice(0, 3).map((fp) => ({
+            ...fp,
+            trainedCount: trainCounts[fp.id] || 0,
+          })),
+        });
+      } else {
+        setLastClass(null);
+      }
+    };
+
+    // 1. Instant paint from the PERSISTED bundle (survives cold launch, unlike
+    // the in-memory getOrFetch cache) so the coach sees the last-known briefing
+    // immediately instead of the ~10s cold-connection wait. Refreshed below.
+    let painted = false;
+    try {
+      const raw = await AsyncStorage.getItem(bkey);
+      if (raw) { applyBundle(JSON.parse(raw)); setDetailLoading(false); painted = true; }
+    } catch {}
+
+    // 2. Fresh fetch (ONE category-scoped bundle RPC — replaces the old ~8
+    // round-trips). Refreshes the UI in place and re-persists for next launch.
     const t0 = Date.now();
     let bundle = null;
     try {
@@ -2147,40 +2188,13 @@ export default function StartClassScreen({ navigation }) {
         () => getCoachStudentDetailBundle(student.id, category).catch(() => null),
       );
     } catch {}
-    logTiming('student_detail_bundle', { student_id: student.id, category: category || null, ms: Date.now() - t0, hit: !!bundle });
+    logTiming('student_detail_bundle', { student_id: student.id, category: category || null, ms: Date.now() - t0, hit: !!bundle, painted });
 
-    setFocusPoints(bundle?.focusPoints || []);
-    setStudentReadiness(bundle?.readiness ?? null);
-    setDetailLoading(false);
-
-    setQuestions(bundle?.questions || []);
-    setOpenQuestions(bundle?.openQuestions || []);
-
-    // Recent activity → most recent class with THIS coach (has a summary), then
-    // per-focus "trained since last class" counts. Same derivation as before;
-    // bundle.activity has the identical event shape as getStudentRecentActivity.
-    const activity = bundle?.activity || [];
-    const lastCls = activity.find(
-      (ev) => ev.type === 'class' && ev.withCurrentCoach && ev.classSummary
-    );
-    if (lastCls) {
-      const clsTime = new Date(lastCls.date).getTime();
-      const trainCounts = {};
-      for (const ev of activity) {
-        if (ev.type === 'training' && ev.focusPointId && new Date(ev.date).getTime() > clsTime) {
-          trainCounts[ev.focusPointId] = (trainCounts[ev.focusPointId] || 0) + 1;
-        }
-      }
-      setLastClass({
-        ...lastCls,
-        focusPoints: (lastCls.focusPoints || []).slice(0, 3).map((fp) => ({
-          ...fp,
-          trainedCount: trainCounts[fp.id] || 0,
-        })),
-      });
-    } else {
-      setLastClass(null);
+    if (bundle) {
+      applyBundle(bundle);
+      AsyncStorage.setItem(bkey, JSON.stringify(bundle)).catch(() => {});
     }
+    setDetailLoading(false);
   }, []);
 
   // Open a student's briefing. If this coach teaches them BOTH styles, ask which
