@@ -108,7 +108,24 @@ export async function respondToCoachRequest(requestId, accept) {
 
 // ─── Students ─────────────────────────────────────────────────────────────────
 
+// In-flight dedup: on a cold start BOTH CoachDataContext.loadAll AND
+// getStartClassRoster call getMyStudents() within the same slow window, firing
+// the exact same ~3 round-trips twice and stuffing the front of the cold-start
+// request queue. Sharing the in-flight promise removes that duplicate. Shared
+// ONLY while in-flight (cleared on settle), so there's no staleness — any call
+// made after the previous one resolves fetches fresh.
+let _myStudentsInflight = null;
 export async function getMyStudents() {
+  if (_myStudentsInflight) return _myStudentsInflight;
+  _myStudentsInflight = _getMyStudentsImpl();
+  try {
+    return await _myStudentsInflight;
+  } finally {
+    _myStudentsInflight = null;
+  }
+}
+
+async function _getMyStudentsImpl() {
   const coachId = await getCoachId();
 
   // The *request* is the source of truth for "this student chose me and I

@@ -668,15 +668,32 @@ export default function StartClassScreen({ navigation }) {
     // rest fills in after. getOrFetch dedups in-flight, so a tap mid-prefetch
     // awaits the same request rather than firing a second one.
     const prefetchDetails = (students) => {
+      // Build the warm-up tasks, then drain them with a small concurrency cap.
+      // Firing N×requests at once starves the coach's own tap of the RN socket
+      // pool (~6-8 per host) — that self-inflicted storm is what turned a tap
+      // into a 48s wait. getOrFetch still dedups, so a tap mid-prefetch shares
+      // the in-flight request. NOTE: no readiness prefetch — the roster already
+      // batch-loaded every student's readiness (getStudentsReadiness), and a tap
+      // always requests a CONCRETE style key (readiness:latin/ballroom), so the
+      // old `readiness:all` warmed a key no tap ever reads.
+      const tasks = [];
       for (const st of (students || [])) {
         if (!st?.id) continue;
         const sk = `student:${st.id}`;
-        getOrFetch(`${sk}:fps`, () => getStudentFocusPoints(st.id).catch(() => []));
-        getOrFetch(`${sk}:readiness:all`, () => getLessonReadiness(st.id, null).catch(() => null));
-        getOrFetch(`${sk}:questions`, () => getStudentQuestions(st.id).catch(() => []));
-        getOrFetch(`${sk}:openQuestions`, () => getStudentOpenQuestions(st.id).catch(() => []));
-        getOrFetch(`${sk}:activity:40`, () => getStudentRecentActivity(st.id, 40).catch(() => []));
+        tasks.push(() => getOrFetch(`${sk}:fps`, () => getStudentFocusPoints(st.id).catch(() => [])));
+        tasks.push(() => getOrFetch(`${sk}:questions`, () => getStudentQuestions(st.id).catch(() => [])));
+        tasks.push(() => getOrFetch(`${sk}:openQuestions`, () => getStudentOpenQuestions(st.id).catch(() => [])));
+        tasks.push(() => getOrFetch(`${sk}:activity:40`, () => getStudentRecentActivity(st.id, 40).catch(() => [])));
       }
+      let idx = 0;
+      const PREFETCH_CONCURRENCY = 3;
+      const worker = async () => {
+        while (idx < tasks.length) {
+          const task = tasks[idx++];
+          try { await task(); } catch {}
+        }
+      };
+      for (let w = 0; w < PREFETCH_CONCURRENCY; w++) worker();
     };
     (async () => {
       let hadCache = false;
