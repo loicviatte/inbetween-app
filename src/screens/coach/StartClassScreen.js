@@ -644,6 +644,16 @@ export default function StartClassScreen({ navigation }) {
       );
   }, []);
 
+  // TEMP perf instrumentation — writes one row to public.debug_timings so we can
+  // read where the student-detail load spends its time from the OTA production
+  // build (no Metro attached). Fire-and-forget; safe to remove after diagnosis.
+  const logTiming = useCallback((label, payload) => {
+    try { console.log('[perf]', label, JSON.stringify(payload)); } catch {}
+    try {
+      supabase.from('debug_timings').insert({ label, payload }).then(() => {}, () => {});
+    } catch {}
+  }, []);
+
   // Load the readiness roster (per-student focus briefings) whenever the select
   // view is shown. Cache-first: paint the last roster instantly from disk, then
   // refresh in the background. The full fetch is a slow sequential staircase on
@@ -681,8 +691,10 @@ export default function StartClassScreen({ navigation }) {
         }
       } catch {}
       if (active && !hadCache) setRosterLoading(true);
+      const rt0 = Date.now();
       try {
         const { students: list } = await getStartClassRoster();
+        logTiming('roster_load', { ms: Date.now() - rt0, hadCache, count: (list || []).length });
         if (active) {
           setRoster(list || []);
           AsyncStorage.setItem('startClassRoster.v1', JSON.stringify(list || [])).catch(() => {});
@@ -2100,28 +2112,40 @@ export default function StartClassScreen({ navigation }) {
     setView('private-briefing');
     const sk = `student:${student.id}`;
 
+    // TEMP perf instrumentation — time each fetch as the coach experiences it
+    // (through getOrFetch, so a cache/in-flight hit reads ~0ms). Reveals whether
+    // the wait is a fresh network fetch, an in-flight prefetch queue, or render.
+    const t0 = Date.now();
+    const perf = {};
+    const timed = async (name, p) => { const s = Date.now(); try { return await p; } finally { perf[name] = Date.now() - s; } };
+
     // Phase 1 — the core the coach needs to review + START the class: focus
     // points + readiness. Drop the loading gate as soon as these land (they're
     // prefetched on roster load, so usually already warm/in-flight) — the coach
     // can start without waiting on the secondary data below.
     try {
       const [fps, readiness] = await Promise.all([
-        getOrFetch(`${sk}:fps`, () => getStudentFocusPoints(student.id).catch(() => [])),
-        getOrFetch(`${sk}:readiness:${category || 'all'}`, () => getLessonReadiness(student.id, category).catch(() => null)),
+        timed('fps', getOrFetch(`${sk}:fps`, () => getStudentFocusPoints(student.id).catch(() => []))),
+        timed('readiness', getOrFetch(`${sk}:readiness:${category || 'all'}`, () => getLessonReadiness(student.id, category).catch(() => null))),
       ]);
       setFocusPoints(fps || []);
       setStudentReadiness(readiness);
     } catch {}
+    perf.phase1_total = Date.now() - t0;
     setDetailLoading(false);
+    logTiming('student_detail_phase1', { student_id: student.id, category: category || null, ...perf });
 
     // Phase 2 — secondary detail (questions, open questions, recent activity →
     // last class). Fills in behind the already-usable briefing.
+    const t1 = Date.now();
     try {
       const [qs, openQs, activity] = await Promise.all([
-        getOrFetch(`${sk}:questions`, () => getStudentQuestions(student.id).catch(() => [])),
-        getOrFetch(`${sk}:openQuestions`, () => getStudentOpenQuestions(student.id).catch(() => [])),
-        getOrFetch(`${sk}:activity:40`, () => getStudentRecentActivity(student.id, 40).catch(() => [])),
+        timed('questions', getOrFetch(`${sk}:questions`, () => getStudentQuestions(student.id).catch(() => []))),
+        timed('openQuestions', getOrFetch(`${sk}:openQuestions`, () => getStudentOpenQuestions(student.id).catch(() => []))),
+        timed('activity', getOrFetch(`${sk}:activity:40`, () => getStudentRecentActivity(student.id, 40).catch(() => []))),
       ]);
+      perf.phase2_total = Date.now() - t1;
+      logTiming('student_detail_phase2', { student_id: student.id, ...perf });
       setQuestions(qs || []);
       setOpenQuestions(openQs || []);
 
