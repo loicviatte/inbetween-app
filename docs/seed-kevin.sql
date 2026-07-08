@@ -66,17 +66,17 @@ BEGIN
 
   ------------------------------------------------------------------------------
   -- 3. Focus points (liés aux cours). category ∈ Stability/Technicality/
-  --    Strength/Creativity/Musicality. status 'published' = visible à l'élève.
+  --    Strength/Creativity/Musicality. status 'active' = visible à l'élève.
   ------------------------------------------------------------------------------
   INSERT INTO public.focus_points
     (user_id, name, normalized_name, category, count, status, is_deleted,
      class_input_id, created_at)
   VALUES
-    (kev, 'Rise and fall',      'rise and fall',      'Technicality', 3, 'published', false, c1, now() - interval '7 days'),
-    (kev, 'Level frame',        'level frame',        'Stability',    2, 'published', false, c1, now() - interval '7 days'),
-    (kev, 'Staccato footwork',  'staccato footwork',  'Technicality', 2, 'published', false, c2, now() - interval '3 days'),
-    (kev, 'Standing-leg drive', 'standing leg drive', 'Strength',     1, 'published', false, c2, now() - interval '3 days'),
-    (kev, 'Hip timing',         'hip timing',         'Musicality',   2, 'published', false, c3, now() - interval '1 days');
+    (kev, 'Rise and fall',      'rise and fall',      'Technicality', 3, 'active', false, c1, now() - interval '7 days'),
+    (kev, 'Level frame',        'level frame',        'Stability',    2, 'active', false, c1, now() - interval '7 days'),
+    (kev, 'Staccato footwork',  'staccato footwork',  'Technicality', 2, 'active', false, c2, now() - interval '3 days'),
+    (kev, 'Standing-leg drive', 'standing leg drive', 'Strength',     1, 'active', false, c2, now() - interval '3 days'),
+    (kev, 'Hip timing',         'hip timing',         'Musicality',   2, 'active', false, c3, now() - interval '1 days');
 
   ------------------------------------------------------------------------------
   -- 4. Coach David Yates + liaison en Ballroom (le toggle)
