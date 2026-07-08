@@ -930,7 +930,15 @@ function SessionFeelingModal({ visible, focusName, prevSessionCount, onSave, onS
     if (saving) return;
     setSaving(true);
     const label = FEELINGS[feelingIdx].label;
-    await onSave(label, note.trim() || null);
+    try {
+      await onSave(label, note.trim() || null);
+      // On success onSave navigates away / unmounts this modal, so there's no
+      // need to reset `saving`.
+    } catch {
+      // Save failed (onSave re-threw) — re-enable the button so the user can
+      // retry instead of being stuck on "Saving…".
+      setSaving(false);
+    }
   }
 
   const badgeTranslateY = centerLift.interpolate({
@@ -1875,10 +1883,19 @@ I don't have that in your data, but you can send the question to your coach if y
     sessionCompletedRef.current = true;
     const active = getActiveSession();
     const startedAtMs = active?.startedAt ?? null;
-    if (couple && coupleId) {
-      await completeCoupleTrainingSession(coupleId, focusPointId, feeling, note, startedAtMs);
-    } else {
-      await completeTrainingSession(sessionId, feeling, note, focusPointId, startedAtMs);
+    try {
+      if (couple && coupleId) {
+        await completeCoupleTrainingSession(coupleId, focusPointId, feeling, note, startedAtMs);
+      } else {
+        await completeTrainingSession(sessionId, feeling, note, focusPointId, startedAtMs);
+      }
+    } catch (err) {
+      // Save failed (offline / RLS blip / timeout). Re-open the session for
+      // retry instead of silently losing it, and re-throw so the feeling modal
+      // resets its "Saving…" button.
+      sessionCompletedRef.current = false;
+      Alert.alert('Could not save', 'Your session was not saved. Please check your connection and try again.');
+      throw err;
     }
     if (active?.liveActivityId) {
       laEndFocusPoint(active.liveActivityId, true).catch(() => {});
@@ -1893,10 +1910,19 @@ I don't have that in your data, but you can send the question to your coach if y
     sessionCompletedRef.current = true;
     const active = getActiveSession();
     const startedAtMs = active?.startedAt ?? null;
-    if (couple && coupleId) {
-      await completeCoupleTrainingSession(coupleId, focusPointId, null, null, startedAtMs, null);
-    } else {
-      await completeTrainingSession(sessionId, null, null, focusPointId, startedAtMs, null);
+    try {
+      if (couple && coupleId) {
+        await completeCoupleTrainingSession(coupleId, focusPointId, null, null, startedAtMs, null);
+      } else {
+        await completeTrainingSession(sessionId, null, null, focusPointId, startedAtMs, null);
+      }
+    } catch (err) {
+      // Same as handleSave: don't lose the session on a failed save. Re-enable
+      // retry and surface the error (no re-throw — the skip control isn't
+      // guarded by a saving state).
+      sessionCompletedRef.current = false;
+      Alert.alert('Could not save', 'Your session was not saved. Please check your connection and try again.');
+      return;
     }
     if (active?.liveActivityId) {
       laEndFocusPoint(active.liveActivityId, false).catch(() => {});

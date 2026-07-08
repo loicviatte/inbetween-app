@@ -1,7 +1,7 @@
 import React, { useCallback, useState } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
-  ActivityIndicator, Modal
+  ActivityIndicator, Modal, Alert
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import HeroCardGradient from '../../components/HeroCardGradient';
@@ -132,13 +132,23 @@ export default function FocusValidationScreen({ navigation, route }) {
   }
 
   async function handleApprove(fpId) {
-    await approveFocusPoint(fpId);
+    try {
+      await approveFocusPoint(fpId);
+    } catch (e) {
+      Alert.alert('Could not approve', e?.message ?? 'Please try again.');
+      return;
+    }
     setFps(prev => prev.filter(f => f.id !== fpId));
     refreshCoachData();
   }
 
   async function handleDelete(fpId) {
-    await deletePendingFocusPoint(fpId);
+    try {
+      await deletePendingFocusPoint(fpId);
+    } catch (e) {
+      Alert.alert('Could not delete', e?.message ?? 'Please try again.');
+      return;
+    }
     setFps(prev => prev.filter(f => f.id !== fpId));
     refreshCoachData();
   }
@@ -146,7 +156,14 @@ export default function FocusValidationScreen({ navigation, route }) {
   async function handleEdit(fp) { setEditingFp(fp); }
 
   async function handleSaveEdit(fpId, updates) {
-    await editAndApproveFocusPoint(fpId, updates);
+    try {
+      await editAndApproveFocusPoint(fpId, updates);
+    } catch (e) {
+      // Keep the edit sheet open so the coach can retry instead of silently
+      // thinking nothing happened.
+      Alert.alert('Could not save', e?.message ?? 'Please try again.');
+      return;
+    }
     setFps(prev => prev.filter(f => f.id !== fpId));
     setEditingFp(null);
     refreshCoachData();
@@ -154,17 +171,27 @@ export default function FocusValidationScreen({ navigation, route }) {
 
   async function handleApproveAll() {
     setApproving(true);
-    if (studentId) {
-      await approveAllPendingForStudent(studentId);
-    } else {
-      // Approve all one by one for multi-student view
-      for (const fp of fps) {
-        await approveFocusPoint(fp.id);
+    try {
+      if (studentId) {
+        await approveAllPendingForStudent(studentId);
+        setFps([]);
+      } else {
+        // Multi-student view: approve each independently and only drop the ones
+        // that actually succeeded, so a mid-list failure doesn't leave already-
+        // approved FPs showing as pending (or the whole button stuck).
+        const results = await Promise.allSettled(fps.map(fp => approveFocusPoint(fp.id)));
+        const failedIds = new Set(fps.filter((_, i) => results[i].status === 'rejected').map(fp => fp.id));
+        setFps(prev => prev.filter(f => failedIds.has(f.id)));
+        if (failedIds.size > 0) {
+          Alert.alert('Some could not be approved', `${failedIds.size} focus point${failedIds.size > 1 ? 's' : ''} failed — they’re still listed. Please try again.`);
+        }
       }
+      refreshCoachData();
+    } catch (e) {
+      Alert.alert('Could not approve', e?.message ?? 'Please try again.');
+    } finally {
+      setApproving(false);
     }
-    setFps([]);
-    refreshCoachData();
-    setApproving(false);
   }
 
   const minDeadline = fps.length > 0

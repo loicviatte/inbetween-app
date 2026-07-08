@@ -120,6 +120,13 @@ export function DjiSyncProvider({ children }) {
   useEffect(() => {
     phaseRef.current = phase;
   }, [phase]);
+  // Mirrors errorInfo so the poll loop can tell a truly-stuck error (offline /
+  // no-access) from a recoverable one (generic / disconnect) without a stale
+  // closure.
+  const errorInfoRef = useRef(null);
+  useEffect(() => {
+    errorInfoRef.current = errorInfo;
+  }, [errorInfo]);
 
   // ─── Simulated progress-creep refs (see runExecute) ───────────────────
   const creepTimerRef = useRef(null);
@@ -878,9 +885,17 @@ export function DjiSyncProvider({ children }) {
       if (offlinePendingRef.current.length > 0) return;
       const p = phaseRef.current;
       // The 2s poll must never clobber a screen the coach is looking at or
-      // acting on: an in-flight import ('syncing'), the guided grant-access
-      // instructions ('granting'), or a sticky error ('error').
-      if (p === 'syncing' || p === 'granting' || p === 'error') return;
+      // acting on: an in-flight import ('syncing') or the guided grant-access
+      // instructions ('granting').
+      if (p === 'syncing' || p === 'granting') return;
+      // A sticky 'error' is frozen too — but ONLY offline/no-access errors are
+      // genuinely stuck: offline is owned by the retry timer, and no-access
+      // needs the user to re-grant folder access (a new file can't fix either).
+      // A generic/disconnect error must NOT permanently halt the silent auto-
+      // import: if new files arrive later we clear it and import them (handled
+      // below, after we peek maxIdx). Without this, one transient failure stops
+      // background auto-sync forever.
+      if (p === 'error' && (errorInfoRef.current?.kind === 'offline' || errorInfoRef.current?.kind === 'no-access')) return;
       // 'done' is frozen while its Complete screen is on-screen (flowOpen), AND
       // whenever it's a coach-facing 'done' (a foreground sync they opened the
       // flow for, an explicit "up to date", or a drained offline hold) — that one
@@ -891,6 +906,20 @@ export function DjiSyncProvider({ children }) {
 
       const maxIdx = await peekMaxIndex();
       if (maxIdx === null) return; // no folder / mic not mounted
+
+      // Recoverable sticky error (generic/disconnect): only a newly-arrived file
+      // can supersede it, and only silently in the background (if the coach has
+      // the error screen open, respect it and let them tap TRY AGAIN). Otherwise
+      // the error stays put.
+      if (p === 'error') {
+        if (maxIdx > lastSeenMaxIdxRef.current && !flowOpenRef.current) {
+          lastSeenMaxIdxRef.current = maxIdx;
+          setErrorInfo(null);
+          setPhase('idle');
+          attemptSync(false);
+        }
+        return;
+      }
 
       if (!baselineEstablishedRef.current) {
         lastSeenMaxIdxRef.current = maxIdx;

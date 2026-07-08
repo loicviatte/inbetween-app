@@ -139,7 +139,7 @@ async function uploadOne(entry) {
       // proceed without it. The local file is left on disk for forensic
       // recovery.
       console.warn(`[uploadWorker] giving up on chunk ${recordingId}/${idx} after ${nextRetries} retries: ${msg}`);
-      await supabase
+      const { error: markErr } = await supabase
         .from('class_recording_chunks')
         .update({
           status: 'failed',
@@ -148,6 +148,22 @@ async function uploadOne(entry) {
         })
         .eq('recording_id', recordingId)
         .eq('idx', idx);
+      if (markErr) {
+        // Could NOT mark the chunk terminal (session expired / transient 5xx).
+        // Do NOT drop the local queue entry — it's the only pointer to the
+        // on-disk m4a. Dropping it would strand the chunk row in a non-terminal
+        // state that finalize-class waits on forever. Keep it and retry the
+        // terminal-marking on a later tick.
+        const delay = backoffDelayMs(retries);
+        await patchChunk(recordingId, idx, {
+          status: 'failed',
+          retries: nextRetries,
+          nextAttemptAt: Date.now() + delay,
+          error: msg.slice(0, 500),
+        });
+        console.warn(`[uploadWorker] give-up DB update failed for ${recordingId}/${idx}; keeping local file for retry:`, markErr.message);
+        return;
+      }
       await removeChunk(recordingId, idx);
       return;
     }

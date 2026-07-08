@@ -59,7 +59,8 @@ import { enqueueChunk } from '../../storage/recordingQueue';
 import { pokeUploadWorker } from '../../services/uploadWorker';
 import ContinuousAudioRecorder from 'continuous-audio-recorder';
 
-const ASSEMBLYAI_API_KEY = process.env.EXPO_PUBLIC_ASSEMBLYAI_API_KEY;
+// AssemblyAI is proxied server-side (supabase/functions/assemblyai-transcribe)
+// so the account key never ships in the app bundle.
 
 // Universal 3 Pro supports a free-form prompt (BETA). This is passed as the
 // `prompt` field on the create-transcript request.
@@ -199,65 +200,73 @@ function identifyCoachSpeaker(utterances) {
 }
 
 async function transcribeAudio(uri) {
-  if (!ASSEMBLYAI_API_KEY) throw new Error('NO_ASSEMBLYAI_KEY');
+  // Proxied through supabase/functions/assemblyai-transcribe so the AssemblyAI
+  // key stays server-side. The job is created server-side; we then poll the
+  // same function for status (a single call can't block for the whole
+  // transcription without exceeding the edge wall-clock budget).
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session?.access_token) throw new Error('NO_AUTH_SESSION');
+  const token = session.access_token;
+  const fnUrl = `${process.env.EXPO_PUBLIC_SUPABASE_URL}/functions/v1/assemblyai-transcribe`;
 
-  // 1. Upload audio file as raw binary (FileSystem.uploadAsync handles file:// URIs natively)
-  const upResult = await FileSystem.uploadAsync('https://api.assemblyai.com/v2/upload', uri, {
-    httpMethod: 'POST',
-    uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
-    headers: {
-      authorization: ASSEMBLYAI_API_KEY,
-      'content-type': 'application/octet-stream',
-    },
-  });
-  if (upResult.status !== 200) {
-    throw new Error(`AssemblyAI upload ${upResult.status}: ${upResult.body?.slice(0, 200) || ''}`);
-  }
-  const { upload_url } = JSON.parse(upResult.body);
-
-  // 2. Create transcript job with DanceSport keyterms biasing
-  const createRes = await fetch('https://api.assemblyai.com/v2/transcript', {
+  // 1. Upload + create job. The DanceSport biasing prompt is sent as a field
+  //    (not a secret) so the server-side create request keeps the same config.
+  const formData = new FormData();
+  formData.append('file', { uri, type: 'audio/m4a', name: 'chunk.m4a' });
+  formData.append('prompt', DANCE_PROMPT);
+  const createRes = await fetch(fnUrl, {
     method: 'POST',
-    headers: {
-      authorization: ASSEMBLYAI_API_KEY,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({
-      audio_url: upload_url,
-      speech_models: ['universal-3-pro'],
-      prompt: DANCE_PROMPT,
-      speaker_labels: true,
-      punctuate: true,
-      format_text: true,
-    }),
+    headers: { Authorization: `Bearer ${token}` },
+    body: formData,
   });
-  if (!createRes.ok) throw new Error(`AssemblyAI create ${createRes.status}: ${await createRes.text().catch(() => '')}`);
-  const { id: jobId } = await createRes.json();
+  if (!createRes.ok) {
+    const body = await createRes.text().catch(() => '');
+    throw new Error(`transcribe create ${createRes.status}: ${body.slice(0, 200)}`);
+  }
+  const { jobId } = await createRes.json();
+  if (!jobId) throw new Error('transcribe create: missing jobId');
 
-  // 3. Poll until completed (max ~10 min)
+  // 2. Poll until completed (max ~10 min). Returns raw utterances + duration so
+  //    the caller can stitch chunks into one continuous timeline with per-chunk
+  //    speaker re-labeling.
   const deadline = Date.now() + 10 * 60 * 1000;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 2000));
-    const pollRes = await fetch(`https://api.assemblyai.com/v2/transcript/${jobId}`, {
-      headers: { authorization: ASSEMBLYAI_API_KEY },
+    const pollRes = await fetch(fnUrl, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ jobId }),
     });
-    if (!pollRes.ok) throw new Error(`AssemblyAI poll ${pollRes.status}`);
+    if (!pollRes.ok) throw new Error(`transcribe poll ${pollRes.status}`);
     const job = await pollRes.json();
     if (job.status === 'completed') {
-      // Return raw utterances + duration so the caller can stitch chunks
-      // into a single continuous timeline with cumulative timestamp offsets
-      // and per-chunk speaker re-labeling.
-      // audio_duration is in seconds; convert to ms for consistency.
-      const durationMs = Math.round((Number(job.audio_duration) || 0) * 1000);
       return {
         utterances: Array.isArray(job.utterances) ? job.utterances : [],
         text: typeof job.text === 'string' ? job.text : '',
-        durationMs,
+        durationMs: Number(job.durationMs) || 0,
       };
     }
     if (job.status === 'error') throw new Error(`AssemblyAI: ${job.error || 'unknown error'}`);
   }
   throw new Error('AssemblyAI transcription timed out');
+}
+
+// Run `fn` over `items` with at most `limit` in flight at once, preserving
+// input order in the returned results. Avoids the N-parallel-request storm that
+// starves the RN socket pool / free-tier Supabase pooler.
+async function mapWithConcurrency(items, limit, fn) {
+  const list = items || [];
+  const results = new Array(list.length);
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < list.length) {
+      const i = cursor++;
+      results[i] = await fn(list[i], i);
+    }
+  };
+  const n = Math.max(1, Math.min(limit, list.length));
+  await Promise.all(Array.from({ length: n }, () => worker()));
+  return results;
 }
 
 // ── Palette ────────────────────────────────────────────────────────────────
@@ -2277,17 +2286,16 @@ export default function StartClassScreen({ navigation }) {
     setGroupLoading(true);
     setView('group-briefing');
     try {
-      const [allFPs, allQs] = await Promise.all([
-        Promise.all(
-          students.map(async (s) => {
-            const fps = await getStudentFocusPoints(s.id).catch(() => []);
-            return fps.map(fp => ({ ...fp, studentId: s.id, studentName: s.name }));
-          })
-        ),
-        Promise.all(
-          students.map((s) => getStudentQuestions(s.id).catch(() => []))
-        ),
-      ]);
+      // Bounded concurrency: firing 2×N requests at once saturates the RN
+      // socket pool (~6-8/host) and the free-tier Supabase pooler — the exact
+      // request storm the roster prefetch was reworked to avoid (see
+      // prefetchDetails' worker pool). Cap peak in-flight per phase instead.
+      const GROUP_CONCURRENCY = 4;
+      const allFPs = await mapWithConcurrency(students, GROUP_CONCURRENCY, async (s) => {
+        const fps = await getStudentFocusPoints(s.id).catch(() => []);
+        return fps.map(fp => ({ ...fp, studentId: s.id, studentName: s.name }));
+      });
+      const allQs = await mapWithConcurrency(students, GROUP_CONCURRENCY, (s) => getStudentQuestions(s.id).catch(() => []));
 
       // Aggregate by focus name. `assigned` = students who have this FP;
       // `practiced` = students who practiced it this week (weekCount > 0).

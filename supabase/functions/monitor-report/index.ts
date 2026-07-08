@@ -80,7 +80,13 @@ async function callClaude(payload: unknown): Promise<ClaudeOutput> {
   const json = await res.json()
   const text = json?.content?.[0]?.text ?? ''
   const cleaned = text.trim().replace(/^```json\s*/i, '').replace(/```$/, '').trim()
-  return JSON.parse(cleaned) as ClaudeOutput
+  try {
+    return JSON.parse(cleaned) as ClaudeOutput
+  } catch (e) {
+    // Surface a clear parse error (with a snippet) instead of a bare
+    // SyntaxError, so a truncated / non-JSON Claude response is diagnosable.
+    throw new Error(`monitor-report: Claude did not return valid JSON (${e instanceof Error ? e.message : String(e)}): ${cleaned.slice(0, 200)}`)
+  }
 }
 
 // Authoritative dedupe is on `kind`. IDs are derived from kind (reused if the

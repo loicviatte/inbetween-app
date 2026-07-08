@@ -217,17 +217,26 @@ export default function App() {
       resetAnalyticsUser();
       return;
     }
+    // Guard against a fast account switch (A signs out, B signs in): a
+    // background role fetch for A can resolve AFTER B is active and clobber
+    // B's navigator. currentUserIdRef is set synchronously by maybeRegisterPush
+    // on each auth event (before this runs), so bail if we're no longer the
+    // active user before any setUserRole / invite-code side effect.
+    const uid = s.user.id;
+    const stillCurrent = () => uid === currentUserIdRef.current;
     const cached = await readCachedRole(s);
     if (cached) {
+      if (!stillCurrent()) return;
       setUserRole(cached);
       if (cached === 'coach') {
         try { await getOrCreateInviteCode(); } catch {}
       }
-      loadFreshRole(s.user.id).then((fresh) => {
-        if (fresh && fresh !== cached) setUserRole(fresh);
+      loadFreshRole(uid).then((fresh) => {
+        if (stillCurrent() && fresh && fresh !== cached) setUserRole(fresh);
       });
     } else {
-      const fresh = await loadFreshRole(s.user.id);
+      const fresh = await loadFreshRole(uid);
+      if (!stillCurrent()) return;
       const role = fresh || 'student';
       setUserRole(role);
       if (role === 'coach') {
@@ -341,8 +350,11 @@ export default function App() {
         </NavigationContainer>
         {/* The navigator mounts + loads underneath; the logo overlay covers it
             until the first screen paints. `!session` (logged-out → Auth) has no
-            signalling screen, so it resolves done=true and never shows. */}
-        <ColdStartOverlay done={(firstReady && minElapsed) || !session} />
+            signalling screen, so it resolves done=true and never shows. The
+            trainer navigator likewise has no screen that calls
+            markFirstScreenReady(), so gate it on minElapsed instead of firstReady
+            — otherwise the overlay blocks all taps until the 6s hang-guard. */}
+        <ColdStartOverlay done={(firstReady && minElapsed) || !session || (userEmail === TRAINER_EMAIL && minElapsed)} />
       </View>
       </RootErrorBoundary>
     </SafeAreaProvider>

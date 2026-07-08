@@ -14,6 +14,11 @@ import { DANCE_PROMPT, composeTranscript } from './transcript.ts'
 
 const ASSEMBLYAI_API = 'https://api.assemblyai.com/v2'
 const SIGNED_URL_TTL = 12 * 60 * 60 // 12 hours
+// After this many failed AssemblyAI job-creation attempts, stop rolling the
+// chunk back to 'uploaded' (which the retry sweep re-attempts forever, re-
+// billing each time) and mark it terminally 'failed' so the completeness gate
+// can finalize with the chunks that DID transcribe.
+const MAX_ASSEMBLYAI_CREATE_RETRIES = 5
 
 export interface FinalizeResult {
   status: 'transcribing' | 'waiting' | 'completed' | 'failed' | 'discarded'
@@ -178,16 +183,23 @@ export async function finalizeRecording(
     })
     if (!createRes.ok) {
       const text = await createRes.text().catch(() => '')
+      const nextRetries = (chunk as any).retries != null ? (chunk as any).retries + 1 : 1
       // Roll back the claim — chunk was atomically transitioned to
       // 'transcribing' but we never got a job_id, so it's effectively
       // still uploaded. Returning to 'uploaded' lets the next retry
-      // attempt re-create the job.
+      // attempt re-create the job — but only up to a cap. Past the cap the
+      // audio is almost certainly unprocessable (corrupt / persistent 4xx);
+      // keeping it 'uploaded' would re-create (and re-bill) the job on every
+      // 5-min cron sweep forever and wedge the recording in 'transcribing'.
+      // Mark it terminally 'failed' so the completeness gate can finalize the
+      // chunks that did transcribe.
+      const terminal = nextRetries > MAX_ASSEMBLYAI_CREATE_RETRIES
       await supabase
         .from('class_recording_chunks')
         .update({
-          status: 'uploaded',
+          status: terminal ? 'failed' : 'uploaded',
           error: `assemblyai create ${createRes.status}: ${text.slice(0, 200)}`,
-          retries: (chunk as any).retries != null ? (chunk as any).retries + 1 : 1,
+          retries: nextRetries,
         })
         .eq('recording_id', recordingId)
         .eq('idx', chunk.idx)

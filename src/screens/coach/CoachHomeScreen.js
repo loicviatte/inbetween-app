@@ -49,8 +49,8 @@ const AVATAR_PALETTE = [
 ];
 
 function initialOf(name) {
-  if (!name) return '?';
-  return name.trim()[0].toUpperCase();
+  const t = (name || '').trim();
+  return t ? t[0].toUpperCase() : '?';
 }
 
 function avatarColorFor(id) {

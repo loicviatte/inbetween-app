@@ -127,7 +127,10 @@ export async function saveClassInput(input) {
   const userId = await getUserId();
   const { data, error } = await supabase
     .from('class_inputs')
-    .insert({ status: 'pending', ...input, user_id: userId, is_deleted: false })
+    // status/user_id/is_deleted come AFTER the spread so a caller-supplied
+    // field can't override the intended values (new class inputs are always
+    // 'pending' and owned by the current user).
+    .insert({ ...input, status: 'pending', user_id: userId, is_deleted: false })
     .select('id')
     .single();
   if (error) throw error;

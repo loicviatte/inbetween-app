@@ -53,7 +53,7 @@ async function callClaude(prompt, maxTokens = 200) {
 }
 
 export function normalizeLabel(str) {
-  return str
+  return (str || '')
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
@@ -269,13 +269,15 @@ Rules:
 // ─── Class title ──────────────────────────────────────────────────────────────
 
 export async function generateClassTitle(class_summary, practicePoint1) {
-  const source = class_summary?.trim() || practicePoint1;
+  const source = class_summary?.trim() || practicePoint1 || '';
   const prompt = `A dance student described their class: "${source}"\n\nGenerate a 2-4 word keyword title summarising what they worked on (e.g. "Stability & Creativity", "Jump Power Class", "Hip Flow Drills"). Capitalize each word. Return ONLY the title, nothing else.`;
 
   try {
     const title = await callClaude(prompt, 20);
     return title.replace(/^["']|["']$/g, '');
   } catch {
-    return source.split(' ').slice(0, 4).join(' ');
+    // source is always a string now; fall back to a generic title if empty so
+    // the catch can never throw on `.split`.
+    return source.split(' ').slice(0, 4).join(' ') || 'Class';
   }
 }

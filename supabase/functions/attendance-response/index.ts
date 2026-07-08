@@ -52,6 +52,27 @@ Deno.serve(async (req: Request) => {
     return new Response(JSON.stringify({ error: 'Missing or invalid fields: class_input_id, attended (boolean)' }), { status: 400 })
   }
 
+  // Authorization: the caller must actually be on this class's roster. Group
+  // attendance rows are created by yoda-extract (notifyGroupClassAttendance)
+  // for every invited studio student, so a legitimate responder ALWAYS has a
+  // class_input_students row. Without this check, any authenticated user could
+  // POST an arbitrary class_input_id and self-assign that class's focus points
+  // (or spam the coach with name-match notifications).
+  const { data: rosterRow, error: rosterErr } = await supabase
+    .from('class_input_students')
+    .select('id')
+    .eq('class_input_id', class_input_id)
+    .eq('student_id', studentId)
+    .maybeSingle()
+  if (rosterErr) {
+    console.error('[attendance-response] Roster check failed:', rosterErr.message)
+    return new Response(JSON.stringify({ error: 'Server error' }), { status: 500 })
+  }
+  if (!rosterRow) {
+    console.warn(`[attendance-response] Rejected: student ${studentId} is not on the roster for class ${class_input_id}`)
+    return new Response(JSON.stringify({ error: 'Not on class roster' }), { status: 403 })
+  }
+
   EdgeRuntime.waitUntil(processResponse(supabase, studentId, class_input_id, attended))
 
   return new Response(JSON.stringify({ received: true }), {
