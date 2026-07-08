@@ -54,13 +54,15 @@ export async function getPendingCoachRequests() {
   const coachId = await getCoachId();
   const { data } = await supabase
     .from('coach_requests')
-    .select('id, student_id, created_at, users!coach_requests_student_id_fkey(name, dance_style)')
+    .select('id, student_id, category, created_at, users!coach_requests_student_id_fkey(name, dance_style)')
     .eq('coach_id', coachId)
     .eq('status', 'pending')
     .order('created_at', { ascending: false });
   return (data || []).map(r => ({
     id: r.id,
     studentId: r.student_id,
+    category: r.category, // 'latin' | 'ballroom' | null — lets the card distinguish
+                          // two requests from the same 2-style student.
     name: r.users?.name || 'Unknown',
     danceStyle: r.users?.dance_style || '',
     createdAt: r.created_at,

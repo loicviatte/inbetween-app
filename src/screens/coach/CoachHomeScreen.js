@@ -271,7 +271,8 @@ function LastPrivateRow({ student, onPress, isLast }) {
 }
 
 // ── Request Row (pending coach requests at top) ─────────────────────────────
-function RequestRow({ student, onAccept, onReject }) {
+function RequestRow({ student, category, onAccept, onReject }) {
+  const catLabel = category === 'latin' ? 'Latin' : category === 'ballroom' ? 'Ballroom' : null;
   return (
     <View style={styles.requestRow}>
       <View style={styles.lpAvatar}>
@@ -281,7 +282,9 @@ function RequestRow({ student, onAccept, onReject }) {
         <Text style={styles.onTrackName} numberOfLines={1}>
           {student.name}
         </Text>
-        <Text style={styles.requestSub}>Wants to be coached</Text>
+        <Text style={styles.requestSub}>
+          {catLabel ? `Wants a ${catLabel} coach` : 'Wants to be coached'}
+        </Text>
       </View>
       <TouchableOpacity style={styles.rejectBtn} onPress={onReject} activeOpacity={0.8}>
         <Ionicons name="close" size={16} color={C.sub} />
@@ -647,6 +650,7 @@ export default function CoachHomeScreen({ navigation, route }) {
               <RequestRow
                 key={r.id}
                 student={{ id: r.studentId, name: r.name }}
+                category={r.category}
                 onAccept={() => handleAccept(r.id)}
                 onReject={() => handleReject(r.id)}
               />
