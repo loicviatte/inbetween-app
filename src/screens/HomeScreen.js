@@ -125,13 +125,14 @@ function currentWeekRange() {
   return `${months[mon.getMonth()]} ${mon.getDate()} – ${months[sun.getMonth()]} ${sun.getDate()}`;
 }
 
-function CategoryToggle({ category, onPress }) {
+function CategoryToggle({ category, onPress, disabled }) {
   const label = category === 'latin' ? 'Latin' : 'Ballroom';
   return (
     <TouchableOpacity
-      style={s.toggle}
+      style={[s.toggle, disabled && { opacity: 0.4 }]}
       onPress={onPress}
       activeOpacity={0.75}
+      disabled={disabled}
     >
       <Text style={s.toggleLabel}>{label}</Text>
       <Ionicons name="chevron-down" size={16} color={Colors.black} />
@@ -1163,6 +1164,7 @@ export default function HomeScreen({ navigation }) {
             <CategoryToggle
               category={category}
               onPress={() => setPickerVisible(true)}
+              disabled={anyInProgress}
             />
           ) : null
         }
@@ -1978,12 +1980,19 @@ const s = StyleSheet.create({
     // Soft gold outline — ties the card to the yellow progress bar inside
     borderWidth: 1,
     borderColor: 'rgba(232,181,48,0.32)',
-    // Subtle elevation — sits one layer above the page gradient
-    shadowColor: '#E8B530',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 12,
-    elevation: 1,
+    // Subtle elevation — sits one layer above the page gradient.
+    // iOS only: Android ignores the gold shadowColor and draws a grey
+    // elevation halo that clashes with the rounded gold border (the "weird
+    // border" artifact). The gold borderWidth alone reads cleanly on Android.
+    ...Platform.select({
+      ios: {
+        shadowColor: '#E8B530',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.1,
+        shadowRadius: 12,
+      },
+      android: {},
+    }),
   },
   readyHeaderRow: {
     flexDirection: 'row',
@@ -2260,7 +2269,7 @@ const w = StyleSheet.create({
 
 // ─── Get ready · next private — readiness card (bottom of Train) ──────────────
 const rdl = StyleSheet.create({
-  card: { backgroundColor: 'rgba(255,255,255,0.5)', borderWidth: 1, borderColor: 'rgba(10,10,10,0.09)', borderRadius: 16, paddingHorizontal: 14, paddingVertical: 12, marginBottom: 4, shadowColor: '#000', shadowOpacity: 0.05, shadowOffset: { width: 0, height: 5 }, shadowRadius: 14, elevation: 1 },
+  card: { backgroundColor: 'rgba(255,255,255,0.5)', borderWidth: 1, borderColor: 'rgba(10,10,10,0.09)', borderRadius: 16, paddingHorizontal: 14, paddingVertical: 12, marginBottom: 4, ...Platform.select({ ios: { shadowColor: '#000', shadowOpacity: 0.05, shadowOffset: { width: 0, height: 5 }, shadowRadius: 14 }, android: {} }) },
   topRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
   eye: { fontFamily: Fonts.jakartaExtraBold, fontSize: 9, letterSpacing: 1.2, textTransform: 'uppercase', color: '#A8801A' },
   hd: { flexDirection: 'row', alignItems: 'center', gap: 8 },

@@ -519,6 +519,11 @@ export default function LogModal({ visible, onClose, onSubmitted, initialDraft }
 
   function handleTeacherChange(text) {
     setTeacherName(text);
+    // Stay in edit mode while typing. teacherEditing starts false, so without
+    // this the first keystroke makes teacherName non-empty while editing is
+    // still false → the `!teacherEditing && teacherName` chip condition fires
+    // and commits the single letter as a "teacher" chip.
+    setTeacherEditing(true);
     setTeacherSuggestions([]);
     if (searchTimeout.current) clearTimeout(searchTimeout.current);
     if (!text.trim() || text.trim().length < 2) return;
@@ -560,7 +565,7 @@ export default function LogModal({ visible, onClose, onSubmitted, initialDraft }
   return (
     <Modal visible={visible} animationType="fade" transparent onRequestClose={handleClose}>
       <View style={styles.overlay}>
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.kvContainer}>
+        <KeyboardAvoidingView behavior="padding" style={styles.kvContainer}>
           <Animated.View style={[styles.sheet, { transform: [{ translateY }] }]}>
 
             {/* ── Header ─────────────────────────────────────────── */}
@@ -610,7 +615,7 @@ export default function LogModal({ visible, onClose, onSubmitted, initialDraft }
                     {/* Teacher */}
                     <View>
                       <View style={styles.metaRow}>
-                        <Text style={styles.metaLabel}>Teacher</Text>
+                        <Text style={styles.metaLabel} numberOfLines={1}>Teacher</Text>
                         {!teacherEditing && teacherName ? (
                           <View style={styles.teacherChip}>
                             <Text style={styles.teacherChipText}>{teacherName}</Text>
@@ -1024,7 +1029,7 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.jakartaBold,
     fontSize: 14,
     color: Colors.black,
-    width: 72,
+    width: 84,
   },
   metaValuePlaceholder: {
     fontFamily: Fonts.jakartaMedium,

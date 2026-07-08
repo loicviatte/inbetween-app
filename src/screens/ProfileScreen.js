@@ -50,6 +50,8 @@ import BottomSheet from '../components/BottomSheet';
 import { useProfile } from '../context/ProfileContext';
 import { clearUserCaches } from '../storage/userCaches';
 import { clearPushToken } from '../services/notifications';
+import { getActiveSession, clearActiveSession, clearChatMessages } from '../storage/activeSession';
+import { endFocusPoint as laEndFocusPoint } from 'live-activities';
 import {
   getMyCouple,
   getMyPartnerCode,
@@ -1202,7 +1204,32 @@ export default function ProfileScreen({ navigation, route }) {
     }
   }
 
-  async function handleLogout() {
+  // A focus session runs off a plain JS module (activeSession) whose in-memory
+  // holder survives clearUserCaches() (that only wipes AsyncStorage). If we sign
+  // out without clearing it, the running chrono bleeds into the NEXT account
+  // signed in on this device. So logout confirms first, then hard-clears it.
+  function handleLogout() {
+    if (getActiveSession()) {
+      Alert.alert(
+        'Session in progress',
+        'You have a focus session running. Logging out will discard it. Continue?',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Discard & log out', style: 'destructive', onPress: () => { performLogout(); } },
+        ],
+      );
+      return;
+    }
+    performLogout();
+  }
+
+  async function performLogout() {
+    // End + clear the active focus session (memory + storage) so it can't
+    // survive into the next account on this device.
+    const active = getActiveSession();
+    if (active?.liveActivityId) { try { laEndFocusPoint(active.liveActivityId, false); } catch {} }
+    clearActiveSession();
+    clearChatMessages();
     // Clear the in-memory avatar first so the next user doesn't see this
     // user's photo flash before the network fetch resolves.
     setAvatarUri(null);

@@ -11,9 +11,10 @@
 // is skipped on a student cold start.
 
 import React, { useEffect, useRef, useState } from 'react';
-import { View, AppState, StyleSheet, Animated } from 'react-native';
+import { View, AppState, StyleSheet, Animated, Platform } from 'react-native';
 import { NavigationContainer, DefaultTheme, createNavigationContainerRef } from '@react-navigation/native';
 import * as Notifications from 'expo-notifications';
+import * as SplashScreen from 'expo-splash-screen';
 import { registerPushToken } from './src/services/notifications';
 import { useFonts } from 'expo-font';
 import { StatusBar } from 'expo-status-bar';
@@ -36,6 +37,15 @@ import InBetweenLoader from './src/components/InBetweenLoader';
 import RootErrorBoundary from './src/components/RootErrorBoundary';
 
 const navigationRef = createNavigationContainerRef();
+
+// Android: hold the native splash on screen until the JS logo loader paints, so
+// the static splash logo hands off seamlessly to the shimmering InBetweenLoader
+// (kills the flash/gap between the two). NOT on iOS — SplashScreen.hideAsync
+// from JS crashes iOS 26 + iPhone 17 Pro in distribution builds
+// (facebook/react-native#53960), so iOS keeps the default auto-hide behaviour.
+if (Platform.OS === 'android') {
+  SplashScreen.preventAutoHideAsync().catch(() => {});
+}
 
 // Brand logo on the cold-start background. Same visual whether shown alone
 // (while session/role resolve) or as the overlay (while the first page loads),
@@ -133,6 +143,13 @@ export default function App() {
   // Dashboard call markFirstScreenReady). The 6s timeout is a pure hang-guard —
   // a wired screen normally signals well before it.
   const [firstReady, setFirstReady] = useState(isFirstScreenReady());
+  // Android: React has now committed its first frame (the logo loader / cold-start
+  // overlay is on screen), so drop the native splash we held at module load. The
+  // handoff is invisible — both draw the same gold mark on the same black bg. On
+  // iOS this is a no-op (we never held the splash there — see top-of-file guard).
+  useEffect(() => {
+    if (Platform.OS === 'android') SplashScreen.hideAsync().catch(() => {});
+  }, []);
   useEffect(() => {
     if (firstReady) return;
     const off = onFirstScreenReady(() => setFirstReady(true));

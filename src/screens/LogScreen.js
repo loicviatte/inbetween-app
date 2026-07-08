@@ -938,7 +938,7 @@ export default function LogScreen({ navigation }) {
           </ScrollView>
 
           {/* Bottom search + Add */}
-          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={90}>
+          <KeyboardAvoidingView behavior="padding" keyboardVerticalOffset={90}>
             <View style={styles.bottomBar}>
               <View style={styles.searchWrap}>
                 <Ionicons name="search" size={16} color={FG_3} />
