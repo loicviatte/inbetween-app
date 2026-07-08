@@ -14,7 +14,7 @@ on:
       profile:
         description: EAS build profile
         type: choice
-        options: [development, preview]
+        options: [development, preview, production]
         default: development
   # Feature-branch escape hatch: build on demand by pushing a commit whose
   # message contains "[android-build]" (guarded in the job `if` below), so we
@@ -57,22 +57,27 @@ jobs:
       # --local builds on this runner (no cloud queue). The Android signing
       # keystore is fetched from EAS's remote credentials (created during the
       # first `eas build --profile preview`), so no interactive prompt.
+      # --local builds on this runner (no cloud queue). production → .aab (for
+      # the Play Store); development/preview → .apk (sideload / dev client).
       - name: Build Android locally (no EAS queue)
         env:
           EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
           EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
           EXPO_PUBLIC_ASSEMBLYAI_API_KEY: ${{ secrets.EXPO_PUBLIC_ASSEMBLYAI_API_KEY }}
-        run: >
-          eas build
-          --platform android
-          --profile ${{ inputs.profile || 'development' }}
-          --local
-          --non-interactive
-          --output ${{ github.workspace }}/app.apk
+          PROFILE: ${{ inputs.profile || 'development' }}
+        run: |
+          EXT=apk
+          [ "$PROFILE" = "production" ] && EXT=aab
+          eas build \
+            --platform android \
+            --profile "$PROFILE" \
+            --local \
+            --non-interactive \
+            --output "${{ github.workspace }}/app.$EXT"
 
-      - name: Upload APK artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: android-${{ inputs.profile || 'development' }}-${{ github.sha }}
-          path: ${{ github.workspace }}/app.apk
+          path: ${{ github.workspace }}/app.*
           retention-days: 7
