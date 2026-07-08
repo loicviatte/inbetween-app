@@ -54,6 +54,18 @@ export async function finalizeRecording(
   if (recErr) throw new Error(`load recording: ${recErr.message}`)
   if (!rec) throw new Error('recording not found')
 
+  // Processing hold: a recording flagged meta._hold uploads its chunks to
+  // Storage normally, but must NOT be transcribed until the flag is cleared
+  // (an ops hold — e.g. while a human verifies something about the class).
+  // Skip ALL AssemblyAI work and leave the chunks + recording untouched. The
+  // retry sweep re-checks later and this short-circuits each time; clearing
+  // meta._hold (then re-kicking finalize-class or waiting for the cron) lets
+  // it transcribe normally.
+  if (rec.meta && (rec.meta as { _hold?: unknown })._hold) {
+    console.log(`[finalize-recording] ${recordingId} on _hold — chunks kept in Storage, transcription skipped`)
+    return { status: 'waiting' }
+  }
+
   if (['completed', 'discarded', 'failed'].includes(rec.status)) {
     return { status: rec.status as FinalizeResult['status'] }
   }
