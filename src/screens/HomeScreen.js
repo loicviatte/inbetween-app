@@ -2267,7 +2267,7 @@ const w = StyleSheet.create({
 
 // ─── Get ready · next private — readiness card (bottom of Train) ──────────────
 const rdl = StyleSheet.create({
-  card: { backgroundColor: 'rgba(255,255,255,0.5)', borderWidth: 1, borderColor: 'rgba(10,10,10,0.09)', borderRadius: 16, paddingHorizontal: 14, paddingVertical: 12, marginBottom: 4, shadowColor: '#000', shadowOpacity: 0.05, shadowOffset: { width: 0, height: 5 }, shadowRadius: 14, elevation: 1 },
+  card: { backgroundColor: 'rgba(255,255,255,0.5)', borderWidth: 1, borderColor: 'rgba(10,10,10,0.09)', borderRadius: 16, paddingHorizontal: 14, paddingVertical: 12, marginBottom: 4, ...Platform.select({ ios: { shadowColor: '#000', shadowOpacity: 0.05, shadowOffset: { width: 0, height: 5 }, shadowRadius: 14 }, android: {} }) },
   topRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
   eye: { fontFamily: Fonts.jakartaExtraBold, fontSize: 9, letterSpacing: 1.2, textTransform: 'uppercase', color: '#A8801A' },
   hd: { flexDirection: 'row', alignItems: 'center', gap: 8 },
