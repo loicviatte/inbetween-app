@@ -648,12 +648,17 @@ async function _linkToCoachByCategory(userId, inviteCode, category) {
     if (existing.status === 'pending') return { coach: { ...coach, pending: true }, pending: true };
   }
 
-  await supabase.from('coach_requests').insert({
+  // Surface insert failures instead of silently returning pending=true. A
+  // failed insert means NO row was written, so the on_coach_request_created
+  // trigger never fires and the coach is never notified — the UI must not
+  // pretend the request went through.
+  const { error: reqErr } = await supabase.from('coach_requests').insert({
     student_id: userId,
     coach_id: coach.id,
     status: 'pending',
     category,
   });
+  if (reqErr) throw new Error(reqErr.message || 'Could not send the request. Please try again.');
 
   return { coach: { ...coach, pending: true }, pending: true };
 }
