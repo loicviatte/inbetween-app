@@ -52,6 +52,9 @@ build.ipa
 *.aab
 *.apk
 
-# Android / Play Store secrets — never commit
-google-services.json
+# Play Store service-account key — REAL secret, never commit (goes to EAS creds)
 play-service-account.json
+# NOTE: google-services.json (Android Firebase client config) is intentionally
+# committed — it's embedded in every APK anyway (not a secret), and the CI
+# `eas build --local` needs it in the checkout. Sending pushes still requires
+# the FCM V1 service-account key, which lives in EAS credentials, not here.
