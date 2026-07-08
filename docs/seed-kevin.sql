@@ -5,14 +5,20 @@
 -- AVANT DE LANCER : remplace l'email de Kevin ligne ci-dessous par le vrai
 -- email du compte élève auquel tu es connecté sur la tablette.
 --
--- Ce script est idempotent-friendly : relançable sans dupliquer David (il est
--- retrouvé par email), mais il RE-crée les cours/focus points à chaque run.
+-- Ce script est idempotent-friendly : le coach est un compte RÉEL existant
+-- (retrouvé par email, jamais créé ici), mais il RE-crée les cours/focus
+-- points à chaque run.
+--
+-- ⚠️ NE crée PLUS de faux coach « david.yates.coach@inbetween.demo » : ce compte
+-- était inséré dans auth.users sans auth.identities → impossible à supprimer via
+-- l'API admin GoTrue (500 "Database error loading user"). On lie désormais Kevin
+-- au vrai compte coach ci-dessous.
 -- ============================================================================
 
 DO $$
 DECLARE
   kevin_email TEXT := 'REMPLACER_PAR_EMAIL_DE_KEVIN';  -- ← ⚠️ à éditer
-  david_email TEXT := 'david.yates.coach@inbetween.demo';
+  coach_email TEXT := 'viatteloic@gmail.com';  -- vrai compte coach (David Yates)
   kev   UUID;
   david UUID;
   c1 UUID; c2 UUID; c3 UUID;
@@ -106,30 +112,16 @@ BEGIN
      ARRAY['Rumba'], 'important');
 
   ------------------------------------------------------------------------------
-  -- 4. Coach David Yates + liaison en Ballroom (le toggle)
+  -- 4. Lier Kevin à son coach RÉEL (Latin + Ballroom) — plus de faux compte.
   ------------------------------------------------------------------------------
-  SELECT id INTO david FROM public.users WHERE lower(email) = lower(david_email);
+  SELECT id INTO david FROM public.users WHERE lower(email) = lower(coach_email);
 
   IF david IS NULL THEN
-    -- Créer l'utilisateur auth ; le trigger handle_new_user crée la ligne
-    -- public.users (name + role lus depuis raw_user_meta_data).
-    david := gen_random_uuid();
-    INSERT INTO auth.users
-      (instance_id, id, aud, role, email, encrypted_password,
-       email_confirmed_at, raw_app_meta_data, raw_user_meta_data,
-       created_at, updated_at)
-    VALUES
-      ('00000000-0000-0000-0000-000000000000', david, 'authenticated',
-       'authenticated', david_email, crypt('DemoPassw0rd!', gen_salt('bf')),
-       now(), '{"provider":"email","providers":["email"]}',
-       '{"name":"David Yates","role":"coach"}', now(), now());
+    RAISE EXCEPTION 'Coach introuvable pour % — crée d''abord ce compte coach, ne pas le seeder ici', coach_email;
   END IF;
 
-  -- Garantir name/role même si l'utilisateur existait déjà
-  UPDATE public.users SET name = 'David Yates', role = 'coach' WHERE id = david;
+  -- Lier le vrai coach à Kevin dans les deux styles (ask-coach + readiness).
+  UPDATE public.users SET latin_coach_id = david, ballroom_coach_id = david WHERE id = kev;
 
-  -- Lier David comme coach Ballroom de Kevin
-  UPDATE public.users SET ballroom_coach_id = david WHERE id = kev;
-
-  RAISE NOTICE 'OK — Kevin=% David=% (3 cours, 5 focus points, ballroom lié)', kev, david;
+  RAISE NOTICE 'OK — Kevin=% coach=% (3 cours, 5 focus points, coach latin+ballroom lié)', kev, david;
 END $$;
