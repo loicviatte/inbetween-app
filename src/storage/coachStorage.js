@@ -344,16 +344,21 @@ async function _getMyStudentsImpl() {
       // How many distinct focus points practiced since last private class
       const fpSincePrivate = distinctFPSincePrivate[s.id] || 0;
 
-      // Status based on practice since last private class:
-      //   on_track  → practiced >= 2 distinct focus points
-      //   attention → practiced exactly 1 focus point ("in progress")
-      //   silent    → practiced 0 focus points
-      let status = 'on_track';
-      if (fpSincePrivate === 0) {
-        status = 'silent';
-      } else if (fpSincePrivate === 1) {
-        status = 'attention';
-      }
+      // "Needs attention" is recency-based (coach request 2026-07-08): a student
+      // who logged ANY training in the last 72h is on track; one who hasn't
+      // trained in >72h (or has never trained) needs attention. A single recent
+      // session is enough — we no longer require 2 distinct focuses, and a new
+      // class no longer resets it (only fresh training does). Uses the most-
+      // recent completed training (NOT the last_active_date fallback, which
+      // isn't necessarily a training session).
+      const NEEDS_ATTENTION_HOURS = 72;
+      const lastTrainIso = lastPracticeByStudent[s.id] || null;
+      const hoursSinceTrain = lastTrainIso
+        ? (Date.now() - new Date(lastTrainIso).getTime()) / 3600000
+        : null;
+      const status = (hoursSinceTrain == null || hoursSinceTrain > NEEDS_ATTENTION_HOURS)
+        ? 'silent'
+        : 'on_track';
 
       // Shared Progression / Retention / Global metrics (identical source
       // as the student detail hero gauges). All three are on a 0-100 scale
@@ -376,12 +381,10 @@ async function _getMyStudentsImpl() {
           text: 'New focus points to review',
         };
       } else if (status === 'silent') {
-        const label = lastPrivateClassIso
-          ? `No practice since last class`
-          : 'No practice yet';
+        const label = hoursSinceTrain == null
+          ? 'No practice yet'
+          : `No practice in ${Math.floor(hoursSinceTrain / 24)}d`;
         alert = { kind: 'inactive', text: label };
-      } else if (status === 'attention') {
-        alert = { kind: 'in_progress', text: `1 focus practiced — keep going` };
       }
 
       return {
