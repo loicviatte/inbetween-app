@@ -545,7 +545,31 @@ Always return this exact structure:
 
 // ─── Main handler ─────────────────────────────────────────────────────────────
 
+// Shared secret for the class_inputs Database Webhook that triggers this
+// function. verify_jwt is false (the function runs service-role DB writes +
+// paid Anthropic calls with no user context), so without this the endpoint is
+// publicly invokable by anyone who knows the project ref.
+//
+// ENABLEMENT (coordinated rollout — do BOTH, then this hard-gates the fn):
+//   1. `supabase secrets set YODA_WEBHOOK_SECRET=<random>` (or via dashboard).
+//   2. Add header `X-Webhook-Secret: <same value>` to the class_inputs
+//      Database Webhook (Dashboard → Database → Webhooks) that calls
+//      /functions/v1/yoda-extract.
+// Until the secret env var is set we fall back to the previous open behavior,
+// so deploying this code alone can never break the extraction pipeline.
+const YODA_WEBHOOK_SECRET = Deno.env.get('YODA_WEBHOOK_SECRET')
+
 Deno.serve(async (req: Request) => {
+  if (YODA_WEBHOOK_SECRET) {
+    const provided = req.headers.get('X-Webhook-Secret') ?? req.headers.get('x-webhook-secret')
+    if (!provided || provided !== YODA_WEBHOOK_SECRET) {
+      console.warn('[yoda-extract] Rejected: missing/invalid X-Webhook-Secret')
+      return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 })
+    }
+  } else {
+    console.warn('[yoda-extract] YODA_WEBHOOK_SECRET not set — running UNAUTHENTICATED. Configure it to close this hole.')
+  }
+
   let record: ClassInputRecord | null = null
   try {
     const payload: WebhookPayload = await req.json()

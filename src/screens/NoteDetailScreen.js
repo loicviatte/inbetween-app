@@ -149,6 +149,7 @@ export default function NoteDetailScreen({ route, navigation }) {
 
   const autoSaveTimer = useRef(null);
   const hasChanges = useRef(false);
+  const inFlightSaveRef = useRef(null);
   const stateRef = useRef({ title, content, video_clips, linked_class_input_id });
 
   // Animated FAB — always above bottom bar + keyboard
@@ -200,14 +201,30 @@ export default function NoteDetailScreen({ route, navigation }) {
   }, [linked_class_input_id]);
 
   async function persist(data) {
-    const savedId = await saveNote({
-      ...(idRef.current ? { id: idRef.current } : {}),
-      title: data.title,
-      content: data.content,
-      video_clips: data.video_clips,
-      linked_class_input_id: data.linked_class_input_id,
-    });
-    if (!idRef.current && savedId) idRef.current = savedId;
+    // Serialize saves. Without this, the 800ms autosave can fire an INSERT
+    // (idRef still null while it's in flight) and the focus-effect cleanup can
+    // fire a SECOND INSERT before idRef is set → two duplicate notes. Chaining
+    // on the in-flight save guarantees idRef is assigned first, so the next
+    // call UPDATEs the same row instead of inserting a duplicate.
+    if (inFlightSaveRef.current) {
+      try { await inFlightSaveRef.current; } catch {}
+    }
+    const p = (async () => {
+      const savedId = await saveNote({
+        ...(idRef.current ? { id: idRef.current } : {}),
+        title: data.title,
+        content: data.content,
+        video_clips: data.video_clips,
+        linked_class_input_id: data.linked_class_input_id,
+      });
+      if (!idRef.current && savedId) idRef.current = savedId;
+    })();
+    inFlightSaveRef.current = p;
+    try {
+      await p;
+    } finally {
+      if (inFlightSaveRef.current === p) inFlightSaveRef.current = null;
+    }
   }
 
   function scheduleAutoSave() {

@@ -127,7 +127,10 @@ export async function saveClassInput(input) {
   const userId = await getUserId();
   const { data, error } = await supabase
     .from('class_inputs')
-    .insert({ status: 'pending', ...input, user_id: userId, is_deleted: false })
+    // status/user_id/is_deleted come AFTER the spread so a caller-supplied
+    // field can't override the intended values (new class inputs are always
+    // 'pending' and owned by the current user).
+    .insert({ ...input, status: 'pending', user_id: userId, is_deleted: false })
     .select('id')
     .single();
   if (error) throw error;
@@ -645,12 +648,17 @@ async function _linkToCoachByCategory(userId, inviteCode, category) {
     if (existing.status === 'pending') return { coach: { ...coach, pending: true }, pending: true };
   }
 
-  await supabase.from('coach_requests').insert({
+  // Surface insert failures instead of silently returning pending=true. A
+  // failed insert means NO row was written, so the on_coach_request_created
+  // trigger never fires and the coach is never notified — the UI must not
+  // pretend the request went through.
+  const { error: reqErr } = await supabase.from('coach_requests').insert({
     student_id: userId,
     coach_id: coach.id,
     status: 'pending',
     category,
   });
+  if (reqErr) throw new Error(reqErr.message || 'Could not send the request. Please try again.');
 
   return { coach: { ...coach, pending: true }, pending: true };
 }

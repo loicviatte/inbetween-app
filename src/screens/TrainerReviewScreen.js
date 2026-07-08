@@ -581,7 +581,13 @@ function ClassCard({ classGroup, onPress }) {
       <View style={clStyles.cardBody}>
         <Text style={clStyles.title} numberOfLines={2}>{classGroup.title}</Text>
         <Text style={clStyles.date}>
-          {new Date(classGroup.candidates[0]?.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
+          {(() => {
+            const raw = classGroup.candidates[0]?.created_at;
+            const d = raw ? new Date(raw) : null;
+            return d && !Number.isNaN(d.getTime())
+              ? d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+              : '';
+          })()}
         </Text>
       </View>
       <View style={[clStyles.badge, allDone && clStyles.badgeDone]}>
@@ -826,6 +832,10 @@ export default function TrainerReviewScreen({ navigation }) {
 
       const items = data ?? [];
       setScoreDecisions(items);
+      // Reset the review cursor — it only ever increments, so without this a
+      // Refresh after reaching "All caught up" (idx === N) would slice the
+      // freshly-loaded decisions from index N and silently skip the first N.
+      setScoreCurrentIdx(0);
 
       // Load class titles
       const uniqueClassIds = [...new Set(items.map(c => c.class_input_id).filter(Boolean))];

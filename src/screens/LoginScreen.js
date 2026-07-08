@@ -49,7 +49,7 @@ export default function LoginScreen({ navigation }) {
       password,
     });
     if (!err && authData?.user?.id) {
-      registerPushToken(authData.user.id); // fire and forget
+      registerPushToken(authData.user.id).catch(() => {}); // fire and forget
     }
     setLoading(false);
     if (err) setError(err.message);

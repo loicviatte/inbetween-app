@@ -21,12 +21,25 @@ declare global {
   const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void }
 }
 
+// Constant-time-ish string compare (avoids leaking the service-role key via
+// early-exit timing). Length is allowed to leak; the secret is high-entropy.
+function safeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false
+  let diff = 0
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i)
+  return diff === 0
+}
+
 // ─── Main handler ─────────────────────────────────────────────────────────────
 
 Deno.serve(async (req: Request) => {
-  // Auth check — must be called with a valid token (user JWT or service role)
+  // verify_jwt is false for this function (it must accept the service-role key
+  // from server-to-server callers), so the Supabase gateway does NOT validate
+  // the token — we MUST do it here. A bare presence check would let anyone POST
+  // `Authorization: Bearer x` and trigger service-role cross-user writes.
   const authHeader = req.headers.get('Authorization')
-  if (!authHeader) {
+  const token = authHeader?.replace(/^Bearer\s+/i, '').trim()
+  if (!token) {
     return new Response(JSON.stringify({ error: 'Missing authorization header' }), { status: 401 })
   }
 
@@ -37,11 +50,28 @@ Deno.serve(async (req: Request) => {
     return new Response(JSON.stringify({ error: 'Invalid payload' }), { status: 400 })
   }
 
+  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
   // Always use service role for DB operations — yoda-score touches multiple users' data
   const supabase = createClient(
     Deno.env.get('SUPABASE_URL')!,
-    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
+    serviceRoleKey,
   )
+
+  // Authorize the caller. Server-to-server callers (practice-log, DB triggers)
+  // present the service-role key and may drive any event. Client callers
+  // (algorithm.js applyPracticeLog) present a real user JWT and may ONLY drive
+  // their own 'practice_log' event — the cross-user 'class_input' re-scoring
+  // path is service-role only.
+  const isServiceRole = safeEqual(token, serviceRoleKey)
+  if (!isServiceRole) {
+    const { data: { user }, error: authErr } = await supabase.auth.getUser(token)
+    if (authErr || !user) {
+      return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401 })
+    }
+    if (payload.event !== 'practice_log') {
+      return new Response(JSON.stringify({ error: 'Forbidden' }), { status: 403 })
+    }
+  }
 
   try {
     if (payload.event === 'class_input') {

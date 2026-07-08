@@ -277,11 +277,12 @@ export default function LocalUploadScreen({ navigation }) {
         return;
       }
 
-      // Build MicFiles (DJI name → index/timestamp; duration from size) and
-      // a lookup back to each picked file's cache uri + size for upload.
-      const assetByName = new Map();
+      // Build MicFiles (DJI name → index/timestamp; duration from size). Each
+      // MicFile carries its own uri + sizeBytes, so upload parts are resolved
+      // straight off the part (below) rather than keyed by filename — two
+      // picked files can share a name (e.g. after a card reformat) and a
+      // name-keyed lookup would attach the wrong audio to a class.
       const micFiles = files.map((f, i) => {
-        assetByName.set(f.name, { uri: f.uri, size: f.size });
         const meta = parseDjiFileName(f.name);
         return {
           fileName: f.name,
@@ -372,10 +373,9 @@ export default function LocalUploadScreen({ navigation }) {
             onPress: async () => {
               try {
                 for (const a of assignments) {
-                  const parts = a.session.parts.map((p) => {
-                    const asset = assetByName.get(p.fileName) ?? {};
-                    return { uri: asset.uri, name: p.fileName, size: asset.size ?? p.sizeBytes };
-                  });
+                  const parts = a.session.parts.map((p) => (
+                    { uri: p.uri, name: p.fileName, size: p.sizeBytes }
+                  ));
                   // Manual picks always go through admin review — the coach
                   // landed here because auto-sync didn't disambiguate cleanly.
                   await attachSessionToClass({
