@@ -125,13 +125,14 @@ function currentWeekRange() {
   return `${months[mon.getMonth()]} ${mon.getDate()} – ${months[sun.getMonth()]} ${sun.getDate()}`;
 }
 
-function CategoryToggle({ category, onPress }) {
+function CategoryToggle({ category, onPress, disabled }) {
   const label = category === 'latin' ? 'Latin' : 'Ballroom';
   return (
     <TouchableOpacity
-      style={s.toggle}
+      style={[s.toggle, disabled && { opacity: 0.4 }]}
       onPress={onPress}
       activeOpacity={0.75}
+      disabled={disabled}
     >
       <Text style={s.toggleLabel}>{label}</Text>
       <Ionicons name="chevron-down" size={16} color={Colors.black} />
@@ -1163,6 +1164,7 @@ export default function HomeScreen({ navigation }) {
             <CategoryToggle
               category={category}
               onPress={() => setPickerVisible(true)}
+              disabled={anyInProgress}
             />
           ) : null
         }
