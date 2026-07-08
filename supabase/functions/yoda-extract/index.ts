@@ -291,7 +291,7 @@ async function logAnthropicCallSafe(
 const SYSTEM_PROMPT = `You are Yoda Extract, a specialized AI that processes coaching lesson transcripts. Your sole job is to output a single structured JSON object — nothing else. No explanation, no preamble, no markdown.
 
 ## INPUTS YOU RECEIVE
-- lesson_type: "private", "public", or "couple"
+- lesson_type: "private", "group", "public", or "couple" ("group" and "public" are both multi-student classes and follow the same rules)
 - coach_name: string
 - coach_speaker_id: string (e.g. "A")
 - students: array of { id, name }
@@ -312,11 +312,12 @@ NOT a focus point:
 
 ## ASSIGNMENT RULES
 - Private lesson → assign all focus points to the student they are directed at
-- Public lesson → only assign a focus point to a student if their name is explicitly mentioned, OR if the coach uses directed language like "work on this for next class" / "you need to practice this"
-- Public lesson with a directive aimed at the whole class ("you guys", "everyone", "the class") that includes a concrete corrective action, drill, or priority → put it in "shared_focus_points" (applies to every student in the class). Same structure as a regular focus point, no student_id.
+- Group / public lesson (multiple students) → a PERSONAL focus point (in a student's focus_points, with their student_id) is created ONLY when that student's name is stated CLEARLY and EXPLICITLY in the transcript together with the correction (e.g. "Alexandra, keep your frame"). Do NOT guess who a correction is for from speaker order, tone, "you"/"you guys", which student it "feels" like, or their existing focus points. If the name is not clearly said, DO NOT create a personal focus point for anyone. Names are frequently absent in these recordings — that is expected; in that case simply create no personal focus point.
+- Group / public lesson → corrections addressed to the whole class ("you guys", "everyone", "the class"), and any genuinely class-wide teaching point, go into "shared_focus_points" (applies to every student, no student_id). HARD LIMIT: at most 2 shared_focus_points for a group/public lesson — keep only the 2 most important by the SELECTING criteria; the rest go to other_focus_points.
+- Group / public lesson → a correction that is clearly aimed at ONE individual but whose student is NOT clearly named is neither personal nor shared → put it in other_focus_points (do not surface it, do not guess a name, do not force it onto the whole class).
 - Couple lesson (the two students are dance partners): a correction about how the pair moves TOGETHER — shared timing, connection, frame as a couple, spatial awareness as a unit, lead/follow communication → put it in "shared_focus_points" (it belongs to the couple, no student_id). A correction aimed at ONE dancer's own technique ("Alex, your individual posture") → that dancer's focus_points using their student_id. When in doubt on a couple lesson, default a partnering correction to shared_focus_points.
 - Generic motivational talk, admin, or vague observations → coach_knowledge only, no focus point created
-- If you cannot confidently assign a correction to a specific student or the whole class, do not create a focus point
+- If you cannot confidently assign a correction to a specific NAMED student or the whole class, do not create a focus point
 
 ## SELECTING FOCUS POINTS
 Extract all corrections first. Then select the most important ones as focus_points based on these criteria, in order of weight:
@@ -835,6 +836,30 @@ async function processRecord(record: ClassInputRecord): Promise<void> {
     Deno.env.get('SUPABASE_URL')!,
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
   )
+
+  // DEFER extraction for an uncertain DJI-mic match: while its linked recording
+  // is admin_review_status='pending', an admin hasn't yet confirmed WHO the
+  // class is for / the type / the style in the Audio Matching dashboard.
+  // Extracting now would attribute focus points to a possibly-wrong student and
+  // burn Anthropic tokens on a class we might re-assign. The dashboard's confirm
+  // sets the recording to 'approved' AND updates this class_input, which re-fires
+  // this INSERT-OR-UPDATE trigger — and this time the gate passes. Non-DJI
+  // classes (no linked recording, or status null/approved) are unaffected.
+  const { data: recReview } = await supabase
+    .from('class_recordings')
+    .select('admin_review_status')
+    .eq('class_input_id', id)
+    .maybeSingle()
+  const review = recReview?.admin_review_status
+  // Extract ONLY on an affirmative go: no linked recording (normal class),
+  // status null, or 'approved'. 'pending' = awaiting review; 'rejected' = wrong
+  // audio the admin withheld — both must NOT extract (a reject also re-fires
+  // this trigger via its class_inputs UPDATE, and would otherwise extract the
+  // exact wrong-audio transcript the reject meant to hold back).
+  if (review === 'pending' || review === 'rejected') {
+    console.log(`[yoda-extract] Deferring ${id}: audio match is ${review}`)
+    return
+  }
 
   // Atomic claim: the webhook payload above is a snapshot. Concurrent
   // deliveries (Supabase has at-least-once semantics) would each pass the

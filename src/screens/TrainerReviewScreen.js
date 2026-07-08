@@ -15,6 +15,7 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 import { Fonts, Spacing } from '../theme';
 import { supabase } from '../services/supabase/client';
 import { clearUserCaches } from '../storage/userCaches';
+import { clearPushToken } from '../services/notifications';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -940,6 +941,9 @@ export default function TrainerReviewScreen({ navigation }) {
 
   async function handleLogout() {
     await clearUserCaches();
+    // Drop this device's push token before sign-out (shared-device hygiene).
+    const { data: { session } } = await supabase.auth.getSession();
+    clearPushToken(session?.user?.id);
     await supabase.auth.signOut();
   }
 
@@ -985,7 +989,7 @@ export default function TrainerReviewScreen({ navigation }) {
   return (
     <SafeAreaView style={styles.safe}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Yoda Review</Text>
+        <Text style={styles.headerTitle}>Class Review</Text>
         <TouchableOpacity onPress={handleLogout} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
           <Text style={styles.logoutText}>Log out</Text>
         </TouchableOpacity>

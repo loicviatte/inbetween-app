@@ -10,6 +10,14 @@
 ALTER TABLE public.class_recordings
   ADD COLUMN IF NOT EXISTS couple_id uuid REFERENCES public.couples(id) ON DELETE SET NULL;
 
+-- 20260429_finalize_recording_fn.sql created this function RETURNS uuid.
+-- PostgreSQL forbids changing a function's return type via CREATE OR REPLACE
+-- ('cannot change return type of existing function'), so a fresh apply of this
+-- migration would fail without dropping the old signature first. Prod already
+-- carries the TABLE-returning version (patched out-of-band), so this DROP is a
+-- no-op there but makes a clean `supabase db reset` / CI apply succeed.
+DROP FUNCTION IF EXISTS public.finalize_recording_atomic(uuid, text, text);
+
 CREATE OR REPLACE FUNCTION public.finalize_recording_atomic(
   p_recording_id uuid,
   p_transcript   text,

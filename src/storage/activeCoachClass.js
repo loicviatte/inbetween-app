@@ -17,6 +17,7 @@ let _class = null;
 //   startedAt: number (ms since epoch),
 //   studentId?: string,
 //   studentName?: string,
+//   category?: 'latin' | 'ballroom' | null,  // picked style (scopes restore's debrief)
 //   liveActivityId?: string,
 //   lastHeartbeatAt?: number,  // updated every ~1s while recording
 // }

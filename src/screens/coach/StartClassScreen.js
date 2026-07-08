@@ -29,10 +29,11 @@ import * as Notifications from 'expo-notifications';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Colors, Fonts, Spacing } from '../../theme';
 import { useCoachData } from '../../context/CoachDataContext';
-import { getStudentFocusPoints, getStudentQuestions, getStudentOpenQuestions, getStudentRecentActivity, getStartClassRoster, markQuestionCovered, linkCoveredQuestionsToClass } from '../../storage/coachStorage';
+import { getStudentFocusPoints, getStudentQuestions, getStudentOpenQuestions, getStudentRecentActivity, getStartClassRoster, markQuestionCovered, linkCoveredQuestionsToClass, getCoachStudentDetailBundle } from '../../storage/coachStorage';
 import { getLessonReadiness } from '../../storage/storage';
 import { getMyCouples, getCoupleReadiness, getCoupleFocusPoints, getCoupleActivity } from '../../storage/coupleStorage';
 import QuestionDetailSheet from '../../components/QuestionDetailSheet';
+import MicCueSheet from '../../components/MicCueSheet';
 import {
   getActiveCoachClass,
   setActiveCoachClass,
@@ -51,6 +52,7 @@ import {
   startCoachRecording as laStartCoachRecording,
   updateCoachRecording as laUpdateCoachRecording,
   endCoachRecording as laEndCoachRecording,
+  endAllCoachRecordings as laEndAllCoachRecordings,
 } from 'live-activities';
 import { isNewRecordingPipelineEnabled, isNativeRecorderEnabled, isLocalRecordingMode } from '../../services/featureFlags';
 import { enqueueChunk } from '../../storage/recordingQueue';
@@ -398,6 +400,11 @@ export default function StartClassScreen({ navigation }) {
   };
   const [selectedStudent, setSelectedStudent] = useState(null);
   const [selectedCouple, setSelectedCouple] = useState(null); // couple class context
+  // Picked Latin/Ballroom style for the current private briefing. Read by
+  // startClassNow when it stamps the active class (was referenced there via an
+  // undeclared ref → threw and silently aborted setActiveCoachClass, so the
+  // Dashboard never learned a class was running).
+  const briefingCategoryRef = useRef(null);
   const [couples, setCouples] = useState([]);
   useEffect(() => {
     let alive = true;
@@ -492,9 +499,19 @@ export default function StartClassScreen({ navigation }) {
   // src/services/featureFlags.js.
   const [authUser, setAuthUser] = useState(null);
   useEffect(() => {
+    let cancelled = false;
+    // Hydrate from the locally-cached session FIRST (synchronous read from
+    // AsyncStorage, no network) so isLocalMode is correct on the very first
+    // render — otherwise the legacy Bluetooth UI flashes during the cold-start
+    // window while the network getUser() below is still resolving. Then refresh
+    // from getUser() to validate the token / pick up any role change.
+    supabase.auth.getSession()
+      .then(({ data: { session } }) => { if (!cancelled && session?.user) setAuthUser(session.user); })
+      .catch(() => {});
     supabase.auth.getUser()
-      .then(({ data: { user } }) => setAuthUser(user))
-      .catch(() => setAuthUser(null));
+      .then(({ data: { user } }) => { if (!cancelled && user) setAuthUser(user); })
+      .catch(() => {});
+    return () => { cancelled = true; };
   }, []);
   const isLocalMode = isLocalRecordingMode(authUser);
 
@@ -531,6 +548,42 @@ export default function StartClassScreen({ navigation }) {
   const newPipelineRef = useRef(false);     // captured at startClassNow
   const recordingIdRef = useRef(null);      // class_recordings.id when on new pipeline
   const userIdRef = useRef(null);           // captured at startClassNow
+  const localModeRef = useRef(false);       // captured at startClassNow — read by stopClass
+
+  // Screen-level back (iOS edge-swipe / hardware back) while in a sub-view but
+  // NOT recording should return to the roster, not pop StartClass to the coach
+  // home. Once a class is recording, let the default back happen so the coach
+  // lands back on the Dashboard, where the running class shows as a live
+  // "class in progress" chrono (tap it to jump back in). Depend on
+  // view/classStartedAt so the listener closure always reads current values —
+  // no refs that could go stale (which sent back to the roster mid-recording).
+  useEffect(() => {
+    const unsub = navigation.addListener('beforeRemove', (e) => {
+      if (view !== 'select' && !classStartedAt) {
+        e.preventDefault();
+        setView('select');
+        setSearchQuery('');
+        setSelectedCouple(null);
+      }
+    });
+    return unsub;
+  }, [navigation, view, classStartedAt]);
+
+  // Back arrow inside a briefing. If a class is recording, leave to the
+  // Dashboard (where the running class lives as a "class in progress" chrono)
+  // rather than dropping onto the roster — otherwise the coach lands on the
+  // student list mid-recording and can start a SECOND class. Not recording →
+  // return to the roster as before.
+  function backFromBriefing() {
+    if (classStartedAt) {
+      navigation.goBack();
+    } else {
+      setView('select');
+      setSearchQuery('');
+      setSelectedCouple(null);
+    }
+  }
+
   // Append-only journal of session events (AppState transitions, rotation
   // failures, audio route changes) flushed into class_recordings.meta.events.
   // Lets us tell after the fact what really happened during a class that
@@ -591,19 +644,75 @@ export default function StartClassScreen({ navigation }) {
       );
   }, []);
 
-  // Load the readiness roster (per-student focus briefings) every time the
-  // select view is shown. Cheap enough to refresh — single batched query.
+  // Load the readiness roster (per-student focus briefings) whenever the select
+  // view is shown. Cache-first: paint the last roster instantly from disk, then
+  // refresh in the background. The full fetch is a slow sequential staircase on
+  // the free-tier pooler (~15-25s), so without the cache the coach stares at a
+  // spinner every single time they open Start Class.
   useEffect(() => {
     if (view !== 'select') return;
     let active = true;
-    setRosterLoading(true);
+    // Warm each student's briefing detail in the background so tapping one is
+    // near-instant instead of another 20-30s cold staircase. Core (fps +
+    // readiness) first so the briefing can render + the coach can start; the
+    // rest fills in after. getOrFetch dedups in-flight, so a tap mid-prefetch
+    // awaits the same request rather than firing a second one.
+    const prefetchDetails = (students) => {
+      // Build the warm-up tasks, then drain them with a small concurrency cap.
+      // Firing N×requests at once starves the coach's own tap of the RN socket
+      // pool (~6-8 per host) — that self-inflicted storm is what turned a tap
+      // into a 48s wait. getOrFetch still dedups, so a tap mid-prefetch shares
+      // the in-flight request. NOTE: no readiness prefetch — the roster already
+      // batch-loaded every student's readiness (getStudentsReadiness), and a tap
+      // always requests a CONCRETE style key (readiness:latin/ballroom), so the
+      // old `readiness:all` warmed a key no tap ever reads.
+      const tasks = [];
+      for (const st of (students || [])) {
+        if (!st?.id) continue;
+        const sk = `student:${st.id}`;
+        // Warm the SAME bundle key the tap will use: pickStudent passes a
+        // CONCRETE style (coachStyles[0], or the picked one for a 2-style
+        // student), never 'all' for a coached style — so warm one bundle per
+        // style the coach could open (both for 2-style students so either pick
+        // is instant; 'all' only for a style-less student).
+        const styles = (Array.isArray(st.coachStyles) && st.coachStyles.length) ? st.coachStyles : [null];
+        for (const style of styles) {
+          tasks.push(() => getOrFetch(`${sk}:bundle:${style || 'all'}`, () => getCoachStudentDetailBundle(st.id, style).catch(() => null)));
+        }
+      }
+      let idx = 0;
+      const PREFETCH_CONCURRENCY = 3;
+      const worker = async () => {
+        while (idx < tasks.length) {
+          const task = tasks[idx++];
+          try { await task(); } catch {}
+        }
+      };
+      for (let w = 0; w < PREFETCH_CONCURRENCY; w++) worker();
+    };
     (async () => {
+      let hadCache = false;
+      try {
+        const raw = await AsyncStorage.getItem('startClassRoster.v1');
+        const cached = raw ? JSON.parse(raw) : null;
+        if (active && Array.isArray(cached) && cached.length) {
+          setRoster(cached);
+          setRosterLoading(false);
+          hadCache = true;
+          prefetchDetails(cached); // start warming immediately from cache
+        }
+      } catch {}
+      if (active && !hadCache) setRosterLoading(true);
       try {
         const { students: list } = await getStartClassRoster();
-        if (active) setRoster(list || []);
+        if (active) {
+          setRoster(list || []);
+          AsyncStorage.setItem('startClassRoster.v1', JSON.stringify(list || [])).catch(() => {});
+          if (!hadCache) prefetchDetails(list); // no cache → warm from the fresh roster
+        }
       } catch (err) {
         console.warn('[StartClass] roster load failed:', err);
-        if (active) setRoster([]);
+        if (active && !hadCache) setRoster([]);
       } finally {
         if (active) setRosterLoading(false);
       }
@@ -804,7 +913,12 @@ export default function StartClassScreen({ navigation }) {
   useEffect(() => {
     if (restoredRef.current) return;
     const active = getActiveCoachClass();
-    if (!active) return;
+    if (!active) {
+      // No class to resume → clear any orphan "class in progress" Live Activity
+      // left behind by a stop that was killed before it could tear down.
+      laEndAllCoachRecordings().catch(() => {});
+      return;
+    }
     restoredRef.current = true;
     setClassStartedAt(active.startedAt);
     const elapsed = Date.now() - active.startedAt;
@@ -813,9 +927,14 @@ export default function StartClassScreen({ navigation }) {
     if (active.kind === 'private' && active.studentId) {
       const match = students.find((s) => s.id === active.studentId);
       if (match) {
-        // Reuse the existing loader so detail data is consistent with a
-        // fresh pick (focus points, questions, last class).
-        loadStudentDetail(match);
+        // Reuse the existing loader so detail data is consistent with a fresh
+        // pick (focus points, questions, last class). Use the style persisted
+        // when the class started (so the debrief stays scoped to it); fall back
+        // to the single coached style, else null.
+        loadStudentDetail(
+          match,
+          active.category ?? ((match.coachStyles && match.coachStyles.length === 1) ? match.coachStyles[0] : null),
+        );
       } else {
         // Fallback: at least land on the briefing view with what we have.
         setSelectedStudent({
@@ -1042,13 +1161,31 @@ export default function StartClassScreen({ navigation }) {
   }
 
   async function openAudioModal() {
+    // Resolve local-recording mode as late as possible. The component-mount
+    // auth fetch (supabase.auth.getUser, a NETWORK call) can still be in
+    // flight on a cold free-tier start; if the coach taps Start before it
+    // resolves, `isLocalMode` is stale-false and a DJI coach gets misrouted
+    // into the legacy "Connect a Bluetooth mic" flow (the modal David Yates
+    // wrongly saw). Fall back to the locally-cached session (no network, so
+    // Start stays instant) to decide, and backfill authUser so the rest of
+    // the screen agrees.
+    let localMode = isLocalMode;
+    if (!authUser?.id) {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.user) {
+          localMode = isLocalRecordingMode(session.user);
+          setAuthUser(session.user);
+        }
+      } catch {}
+    }
     // Local-recording mode: phone captures no audio, so the "Choose your
     // mic" modal is meaningless. Short-circuit through a "press REC on
     // your DJI mic" confirmation — we just need a timestamp + a
     // class_recordings row; the DJI mic file is imported later via USB-C.
     // The confirmation prevents the silent-failure case where the coach
     // starts the class in the app but never presses REC on the mic.
-    if (isLocalMode) {
+    if (localMode) {
       setMicPermGranted(false);
       setRecStartConfirmOpen(true);
       return;
@@ -1312,6 +1449,28 @@ export default function StartClassScreen({ navigation }) {
 
   async function startClassNow() {
     setAudioModalOpen(false);
+
+    // Start the chrono + active-class store IMMEDIATELY — before the slow async
+    // setup below (preview-meter stop, auth fetch, class_recordings insert) — so
+    // the timer appears the instant the coach confirms Start instead of after a
+    // cold DB round-trip that races the still-loading briefing (coach taps Start
+    // and nothing happens for ~30s). The recording rows/refs are created below
+    // in the background; nothing here depends on them.
+    const now = Date.now();
+    const kind = view === 'private-briefing' ? 'private' : 'group';
+    setClassStartedAt(now);
+    setChronoMs(0);
+    chronoMsRef.current = 0;
+    setActiveCoachClass({
+      kind,
+      startedAt: now,
+      studentId: selectedStudent?.id ?? null,
+      studentName: selectedStudent?.name ?? null,
+      // Picked Latin/Ballroom style — a restore after app-kill re-scopes the
+      // debrief to it (else default-retire could touch the OTHER style's
+      // focuses for a 2-style student).
+      category: briefingCategoryRef.current ?? null,
+    });
     if (inputRefreshIntervalRef.current) {
       clearInterval(inputRefreshIntervalRef.current);
       inputRefreshIntervalRef.current = null;
@@ -1342,6 +1501,7 @@ export default function StartClassScreen({ navigation }) {
       // Resolve local mode from the freshly-fetched user so we don't race
       // with the component-mount auth fetch.
       localMode = isLocalRecordingMode(user);
+      localModeRef.current = localMode; // read by stopClass to stamp ended_at at Stop
       if (user && isNewRecordingPipelineEnabled(user)) {
         const isPrivate = view === 'private-briefing';
         const isCouple = view === 'couple-briefing';
@@ -1368,17 +1528,25 @@ export default function StartClassScreen({ navigation }) {
           .from('class_recordings')
           .update({ audio_folder: `${user.id}/${recordingId}/` })
           .eq('id', recordingId);
+        // MUST check the error: supabase-js resolves a failed insert as
+        // { error } (FK/RLS/DB error), it doesn't throw. If we swallowed it the
+        // recording would proceed with an EMPTY class_recording_students set →
+        // finalize_recording_atomic propagates zero students → yoda-extract
+        // attributes the whole couple/group lesson to the COACH. Throw so the
+        // catch resets newPipelineRef and we don't run a half-initialized class.
         if (isCouple && selectedCouple) {
-          await supabase
+          const { error: csErr } = await supabase
             .from('class_recording_students')
             .insert([
               { recording_id: recordingId, student_id: selectedCouple.dancerA.id },
               { recording_id: recordingId, student_id: selectedCouple.dancerB.id },
             ]);
+          if (csErr) throw csErr;
         } else if (!isPrivate && Array.isArray(students) && students.length > 0) {
-          await supabase
+          const { error: csErr } = await supabase
             .from('class_recording_students')
             .insert(students.map((s) => ({ recording_id: recordingId, student_id: s.id })));
+          if (csErr) throw csErr;
         }
         newPipelineRef.current = true;
         recordingIdRef.current = recordingId;
@@ -1479,18 +1647,6 @@ export default function StartClassScreen({ navigation }) {
       }
     }
 
-    const now = Date.now();
-    const kind = view === 'private-briefing' ? 'private' : 'group';
-    setClassStartedAt(now);
-    setChronoMs(0);
-    chronoMsRef.current = 0;
-    setActiveCoachClass({
-      kind,
-      startedAt: now,
-      studentId: selectedStudent?.id ?? null,
-      studentName: selectedStudent?.name ?? null,
-    });
-
     try {
       const id = await laStartCoachRecording({
         kind,
@@ -1532,6 +1688,21 @@ export default function StartClassScreen({ navigation }) {
     // disabling it during the async work below.
     if (stoppingRef.current) return;
     stoppingRef.current = true;
+
+    // Tear down the "class in progress" surfaces FIRST — before the async
+    // recorder teardown below — so quitting the app mid-stop (or before
+    // finishing the debrief) never leaves a stale Live Activity widget or a
+    // false "class interrupted, please try again" on next launch. Safe to do
+    // now: the recording is over and its chunks upload independently of this
+    // screen; finishDebrief's clearActiveCoachClass() then no-ops.
+    stopHeartbeat();
+    // End EVERY coach-recording Live Activity (not only the id we tracked) so a
+    // stale/lost activity id can't leave a "class in progress" widget stuck on
+    // the lock screen. Native, immediate dismissal.
+    try { await laEndAllCoachRecordings(); } catch {}
+    liveActivityIdRef.current = null;
+    clearActiveCoachClass();
+
     logRecordingEvent({
       type: 'session_stopping',
       appState: AppState.currentState,
@@ -1577,12 +1748,6 @@ export default function StartClassScreen({ navigation }) {
       }
     }
 
-    stopHeartbeat();
-    if (liveActivityIdRef.current) {
-      try { await laEndCoachRecording(liveActivityIdRef.current); } catch {}
-      liveActivityIdRef.current = null;
-    }
-
     // If the recording was interrupted, the freeze duration is the truth.
     // Otherwise read from the ref (NOT from the captured chronoMs state)
     // so we get the latest tick — important when stopClass is called via
@@ -1617,6 +1782,23 @@ export default function StartClassScreen({ navigation }) {
           trigger,
         }).catch(() => {});
       } catch {}
+    }
+
+    // Local-recording (DJI) mode: stamp ended_at NOW, at Stop — not only when
+    // the debrief is finished. Otherwise a coach who stops but abandons the
+    // debrief (closes the app, navigates away) leaves the row stuck in
+    // status='recording' with ended_at=null forever, so the class never shows
+    // in the upload list and never triggers a sync reminder. finishDebrief
+    // re-stamps harmlessly. Non-local classes keep stamping at debrief-finish
+    // (their audio + class_input are created there).
+    if (localModeRef.current && recordingIdRef.current) {
+      supabase
+        .from('class_recordings')
+        .update({ ended_at: new Date().toISOString() })
+        .eq('id', recordingIdRef.current)
+        .then(() => {}, (err) => {
+          console.warn('[StartClass] stop-time ended_at update failed:', err);
+        });
     }
 
     setDebriefOpen(true);
@@ -1715,29 +1897,29 @@ export default function StartClassScreen({ navigation }) {
     const localMode = isLocalMode;
 
     // Persist coach verdicts on the readiness focuses (fire-and-forget).
-    //   "good"    → archive the focus (status = past)
-    //   "not yet" → flag as held; the focus stops appearing in the
-    //               readiness checklist until the student finishes the
-    //               new class's primary focuses (then it re-enters with
-    //               a 15-minute training target)
+    // Default-retire is the core of the rework: a focus point lives only until
+    // the coach validates it at a debrief (or the student archives it).
+    //   "not yet"  → held; carried over to be reconciled with the new class's
+    //                focuses (+2 target on merge, server-side).
+    //   everything else (marked "Good" OR left untouched) → status = past:
+    //                retired by default, disappears from the student's plan.
     // Couple debriefs write to couple_focus_points (the verdict ids are couple
     // FP ids); the recording coach is the couple coach so RLS allows it.
     const verdictTable = view === 'couple-briefing' ? 'couple_focus_points' : 'focus_points';
-    const goodIds = Object.entries(readinessVerdicts)
-      .filter(([, verdict]) => verdict === 'good')
-      .map(([id]) => id);
-    if (goodIds.length > 0) {
-      supabase
-        .from(verdictTable)
-        .update({ status: 'past' })
-        .in('id', goodIds)
-        .then(() => {}, (err) => {
-          console.warn('[StartClass] readiness verdict persist failed:', err);
-        });
-    }
-    const notYetIds = Object.entries(readinessVerdicts)
-      .filter(([, verdict]) => verdict === 'not_yet')
-      .map(([id]) => id);
+    // The same carryover list the debrief UI built from readiness — the old
+    // class's still-active, non-held focuses the coach just reviewed.
+    const carryoverList =
+      view === 'couple-briefing'
+        ? (coupleReadinessDetail?.focuses || [])
+        : (view === 'private-briefing' && studentReadiness)
+          ? (studentReadiness.focuses || [])
+          : [];
+    const notYetIds = carryoverList
+      .map((f) => f.focusPointId)
+      .filter((id) => readinessVerdicts[id] === 'not_yet');
+    const retireIds = carryoverList
+      .map((f) => f.focusPointId)
+      .filter((id) => readinessVerdicts[id] !== 'not_yet');
     if (notYetIds.length > 0) {
       supabase
         .from(verdictTable)
@@ -1745,6 +1927,15 @@ export default function StartClassScreen({ navigation }) {
         .in('id', notYetIds)
         .then(() => {}, (err) => {
           console.warn('[StartClass] not-yet hold persist failed:', err);
+        });
+    }
+    if (retireIds.length > 0) {
+      supabase
+        .from(verdictTable)
+        .update({ status: 'past' })
+        .in('id', retireIds)
+        .then(() => {}, (err) => {
+          console.warn('[StartClass] default-retire persist failed:', err);
         });
     }
     setReadinessVerdicts({});
@@ -1912,34 +2103,44 @@ export default function StartClassScreen({ navigation }) {
   // Load student detail when picked. Per-student reads go through the
   // shared context cache so tapping the same student twice is instant
   // (60s TTL — long enough for a select→briefing→back→briefing trip).
-  const loadStudentDetail = useCallback(async (student) => {
+  // When a coach teaches the SAME student both styles, they pick Latin/Ballroom
+  // before the briefing opens — so the readiness AND the end-of-class debrief are
+  // scoped to that style (the right focus points show, and default-retire only
+  // touches that style's focuses).
+  const [stylePicker, setStylePicker] = useState(null); // student awaiting style choice
+  const loadStudentDetail = useCallback(async (student, category = null) => {
     setSelectedStudent(student);
+    briefingCategoryRef.current = category ?? null; // read by startClassNow
+    // Clear the previous student's data so it can't flash before this one's
+    // bundle (cache or network) lands.
+    setFocusPoints([]);
+    setStudentReadiness(null);
+    setQuestions([]);
+    setOpenQuestions([]);
+    setLastClass(null);
+    setReadinessVerdicts({});
+    setQuestionVerdicts({});
     setDetailLoading(true);
     setView('private-briefing');
-    try {
-      const sk = `student:${student.id}`;
-      const [fps, qs, openQs, activity, readiness] = await Promise.all([
-        getOrFetch(`${sk}:fps`, () => getStudentFocusPoints(student.id).catch(() => [])),
-        getOrFetch(`${sk}:questions`, () => getStudentQuestions(student.id).catch(() => [])),
-        getOrFetch(`${sk}:openQuestions`, () => getStudentOpenQuestions(student.id).catch(() => [])),
-        getOrFetch(`${sk}:activity:40`, () => getStudentRecentActivity(student.id, 40).catch(() => [])),
-        getOrFetch(`${sk}:readiness`, () => getLessonReadiness(student.id).catch(() => null)),
-      ]);
-      setFocusPoints(fps || []);
-      setQuestions(qs || []);
-      setOpenQuestions(openQs || []);
-      setStudentReadiness(readiness);
-      setReadinessVerdicts({});
-      setQuestionVerdicts({});
+    const sk = `student:${student.id}`;
+    const bkey = `startClass.bundle.v1:${student.id}:${category || 'all'}`;
 
-      // Find most recent class logged with THIS coach (has a summary)
-      const lastCls = (activity || []).find(
+    // Push a bundle into the briefing UI: focus points, readiness, questions,
+    // then the last-class recap + per-focus "trained since last class" counts.
+    // bundle.activity has the identical event shape as getStudentRecentActivity.
+    const applyBundle = (b) => {
+      setFocusPoints(b?.focusPoints || []);
+      setStudentReadiness(b?.readiness ?? null);
+      setQuestions(b?.questions || []);
+      setOpenQuestions(b?.openQuestions || []);
+      const activity = b?.activity || [];
+      const lastCls = activity.find(
         (ev) => ev.type === 'class' && ev.withCurrentCoach && ev.classSummary
       );
       if (lastCls) {
         const clsTime = new Date(lastCls.date).getTime();
         const trainCounts = {};
-        for (const ev of activity || []) {
+        for (const ev of activity) {
           if (ev.type === 'training' && ev.focusPointId && new Date(ev.date).getTime() > clsTime) {
             trainCounts[ev.focusPointId] = (trainCounts[ev.focusPointId] || 0) + 1;
           }
@@ -1954,9 +2155,91 @@ export default function StartClassScreen({ navigation }) {
       } else {
         setLastClass(null);
       }
+    };
+
+    // 1. Instant paint from the PERSISTED bundle (survives cold launch, unlike
+    // the in-memory getOrFetch cache) so the coach sees the last-known briefing
+    // immediately instead of the ~10s cold-connection wait. Refreshed below.
+    try {
+      const raw = await AsyncStorage.getItem(bkey);
+      if (raw) { applyBundle(JSON.parse(raw)); setDetailLoading(false); }
     } catch {}
+
+    // 2. Fresh fetch (ONE category-scoped bundle RPC — replaces the old ~8
+    // round-trips). Refreshes the UI in place and re-persists for next launch.
+    let bundle = null;
+    try {
+      bundle = await getOrFetch(
+        `${sk}:bundle:${category || 'all'}`,
+        () => getCoachStudentDetailBundle(student.id, category).catch(() => null),
+      );
+    } catch {}
+
+    if (bundle) {
+      applyBundle(bundle);
+      AsyncStorage.setItem(bkey, JSON.stringify(bundle)).catch(() => {});
+    }
     setDetailLoading(false);
   }, []);
+
+  // Open a student's briefing. If this coach teaches them BOTH styles, ask which
+  // one first (so readiness/debrief are scoped to it); otherwise open directly
+  // on the single style this coach coaches them in.
+  const pickStudent = useCallback((student) => {
+    const styles = student?.coachStyles || [];
+    if (styles.includes('latin') && styles.includes('ballroom')) {
+      setStylePicker(student);
+    } else {
+      loadStudentDetail(student, styles[0] || null);
+    }
+  }, [loadStudentDetail]);
+
+  // "Latin or Ballroom?" picker — shown when the coach taps a student they teach
+  // both styles. The choice scopes the briefing readiness AND the debrief focuses.
+  function renderStylePicker() {
+    return (
+      <Modal
+        visible={!!stylePicker}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setStylePicker(null)}
+      >
+        {stylePicker && (
+          <Pressable style={notYet.backdrop} onPress={() => setStylePicker(null)}>
+            <Pressable style={notYet.card} onPress={() => { /* swallow */ }}>
+              <HeroCardGradient />
+              <View style={notYet.iconWrap}>
+                <Ionicons name="albums-outline" size={22} color="#F6D27A" />
+              </View>
+              <Text style={notYet.title}>Latin or Ballroom?</Text>
+              <Text style={notYet.body}>
+                <Text>You coach </Text>
+                <Text style={notYet.bodyAccent}>{stylePicker.name}</Text>
+                <Text> in both — which class are you starting?</Text>
+              </Text>
+              <TouchableOpacity
+                style={notYet.primaryBtn}
+                activeOpacity={0.85}
+                onPress={() => { const st = stylePicker; setStylePicker(null); loadStudentDetail(st, 'latin'); }}
+              >
+                <Text style={notYet.primaryBtnText}>Latin</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[notYet.primaryBtn, { marginTop: 8 }]}
+                activeOpacity={0.85}
+                onPress={() => { const st = stylePicker; setStylePicker(null); loadStudentDetail(st, 'ballroom'); }}
+              >
+                <Text style={notYet.primaryBtnText}>Ballroom</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={notYet.secondaryBtn} activeOpacity={0.7} onPress={() => setStylePicker(null)}>
+                <Text style={notYet.secondaryBtnText}>Cancel</Text>
+              </TouchableOpacity>
+            </Pressable>
+          </Pressable>
+        )}
+      </Modal>
+    );
+  }
 
   // Couple equivalent of loadStudentDetail — loads the same kinds of data so the
   // couple briefing can mirror the solo layout. (Couples have no "class recap"
@@ -2186,17 +2469,16 @@ export default function StartClassScreen({ navigation }) {
     const questionsToAddress = view === 'private-briefing' ? (openQuestions || []) : [];
     const coveredCount = Object.values(questionVerdicts).filter(v => v === 'covered').length;
 
-    // Focus-verdict gating: the coach must pick Good or Not yet for every
-    // carryover focus before Done becomes enabled. The point is to force
-    // a moment of reflection on each one — no autopilot Done.
+    // Carryover focuses from the student's last class. Each can be marked
+    // "Not yet" to keep training it (carried over, reconciled with the new
+    // class's focuses). Anything left unmarked is retired by default on Done —
+    // a focus point lives only until the coach validates it. Done is never gated.
     const carryoverFocuses =
       view === 'couple-briefing'
         ? (coupleReadinessDetail?.focuses || [])
         : (view === 'private-briefing' && studentReadiness)
           ? (studentReadiness.focuses || [])
           : [];
-    const allFocusesVerdicted = carryoverFocuses.length === 0
-      || carryoverFocuses.every(f => !!readinessVerdicts[f.focusPointId]);
 
     return (
       <Modal
@@ -2259,6 +2541,10 @@ export default function StartClassScreen({ navigation }) {
             {carryoverFocuses.length > 0 && (
               <>
                 <Text style={db.secLabel}>How did it go?</Text>
+                <Text style={db.verdictHint}>
+                  Tap “Not yet” to keep training a focus. Anything you leave
+                  unmarked is retired when you tap Done.
+                </Text>
                 <View style={db.verdictList}>
                   {carryoverFocuses.map((f) => {
                     const verdict = readinessVerdicts[f.focusPointId];
@@ -2437,14 +2723,11 @@ export default function StartClassScreen({ navigation }) {
 
             <View style={db.bottomBar}>
               <TouchableOpacity
-                style={[db.btnDone, !allFocusesVerdicted && db.btnDoneDisabled]}
-                activeOpacity={allFocusesVerdicted ? 0.88 : 1}
-                onPress={allFocusesVerdicted ? finishDebrief : undefined}
-                disabled={!allFocusesVerdicted}
+                style={db.btnDone}
+                activeOpacity={0.88}
+                onPress={finishDebrief}
               >
-                <Text style={[db.btnDoneText, !allFocusesVerdicted && db.btnDoneTextDisabled]}>
-                  {allFocusesVerdicted ? 'Done' : 'Rate every focus to finish'}
-                </Text>
+                <Text style={db.btnDoneText}>Done</Text>
               </TouchableOpacity>
             </View>
 
@@ -2779,84 +3062,39 @@ export default function StartClassScreen({ navigation }) {
     );
   }
 
-  // Local-recording confirmations. Dedicated visual treatment (ad.recModal*)
-  // because these are high-stakes gates — getting the coach to physically
-  // press REC / STOP on the DJI mic before the in-app action proceeds. The
-  // hero icons are custom shapes (red dot for REC, ink square for STOP)
-  // rather than Ionicons, which look thin at these sizes. Overlay is non-
-  // dismissible — the coach must explicitly Cancel or confirm.
+  // Local-recording confirmations — high-stakes gates that get the coach to
+  // physically press REC / STOP on the DJI mic before the in-app action
+  // proceeds. Rendered as the dark MicCueSheet bottom sheet (non-dismissible:
+  // the coach must Cancel or confirm).
 
   function renderRecStartConfirmPrompt() {
-    if (!recStartConfirmOpen) return null;
     return (
-      <Pressable style={ad.recModalOverlay}>
-        <Pressable style={ad.recModalCard} onPress={(e) => e.stopPropagation()}>
-          <View style={[ad.recModalIconRing, ad.recModalIconRingRec]}>
-            <View style={ad.recModalIconDot} />
-          </View>
-          <Text style={ad.recModalTitle}>Press REC on your mic</Text>
-          <Text style={ad.recModalBody}>
-            Your DJI mic records on its own storage. Make sure it's on and
-            recording before you start the class.
-          </Text>
-          <View style={ad.recModalActions}>
-            <TouchableOpacity
-              style={ad.recModalBtnGhost}
-              activeOpacity={0.85}
-              onPress={() => setRecStartConfirmOpen(false)}
-            >
-              <Text style={ad.recModalBtnGhostText}>Cancel</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={ad.recModalBtnPrimary}
-              activeOpacity={0.88}
-              onPress={() => {
-                setRecStartConfirmOpen(false);
-                startClassNow();
-              }}
-            >
-              <Text style={ad.recModalBtnPrimaryText}>Start class</Text>
-            </TouchableOpacity>
-          </View>
-        </Pressable>
-      </Pressable>
+      <MicCueSheet
+        visible={recStartConfirmOpen}
+        mode="start"
+        onCancel={() => setRecStartConfirmOpen(false)}
+        onConfirm={() => {
+          setRecStartConfirmOpen(false);
+          startClassNow();
+        }}
+      />
     );
   }
 
   function renderRecStopConfirmPrompt() {
-    if (!recStopConfirmOpen) return null;
     return (
-      <Pressable style={ad.recModalOverlay}>
-        <Pressable style={ad.recModalCard} onPress={(e) => e.stopPropagation()}>
-          <View style={[ad.recModalIconRing, ad.recModalIconRingStop]}>
-            <View style={ad.recModalIconSquare} />
-          </View>
-          <Text style={ad.recModalTitle}>Press STOP on your mic</Text>
-          <Text style={ad.recModalBody}>
-            Stop the recording on your DJI mic first. That finalizes the WAV
-            file so we can match it when you sync later.
-          </Text>
-          <View style={ad.recModalActions}>
-            <TouchableOpacity
-              style={ad.recModalBtnGhost}
-              activeOpacity={0.85}
-              onPress={() => setRecStopConfirmOpen(false)}
-            >
-              <Text style={ad.recModalBtnGhostText}>Cancel</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={ad.recModalBtnPrimary}
-              activeOpacity={0.88}
-              onPress={() => {
-                setRecStopConfirmOpen(false);
-                stopClass();
-              }}
-            >
-              <Text style={ad.recModalBtnPrimaryText}>End class</Text>
-            </TouchableOpacity>
-          </View>
-        </Pressable>
-      </Pressable>
+      <MicCueSheet
+        visible={recStopConfirmOpen}
+        mode="stop"
+        onCancel={() => setRecStopConfirmOpen(false)}
+        onConfirm={() => {
+          setRecStopConfirmOpen(false);
+          // Let the sheet's Modal finish dismissing before stopClass opens the
+          // debrief Modal — iOS won't present a second modal while the first is
+          // still animating out, so the debrief would silently fail to appear.
+          setTimeout(() => stopClass(), 350);
+        }}
+      />
     );
   }
 
@@ -2981,7 +3219,7 @@ export default function StartClassScreen({ navigation }) {
                 <PrivateCard
                   key={st.id}
                   st={st}
-                  onPress={() => loadStudentDetail(students.find(x => x.id === st.id) || st)}
+                  onPress={() => pickStudent(students.find(x => x.id === st.id) || st)}
                 />
               ))
             )}
@@ -3094,6 +3332,7 @@ export default function StartClassScreen({ navigation }) {
               </View>
             </TouchableOpacity>
           </ScrollView>
+          {renderStylePicker()}
         </SafeAreaView>
       </View>
     );
@@ -3133,7 +3372,7 @@ export default function StartClassScreen({ navigation }) {
                 key={st.id}
                 style={s.studentRow}
                 activeOpacity={0.7}
-                onPress={() => loadStudentDetail(st)}
+                onPress={() => pickStudent(st)}
               >
                 <View style={s.studentAvatar}>
                   <Text style={s.studentAvatarText}>{initials(st.name)}</Text>
@@ -3152,6 +3391,7 @@ export default function StartClassScreen({ navigation }) {
             );
           })}
         </ScrollView>
+        {renderStylePicker()}
       </SafeAreaView>
     );
   }
@@ -3191,7 +3431,7 @@ export default function StartClassScreen({ navigation }) {
         <View style={{ flex: 1 }}>
         <Animated.ScrollView
           style={{ flex: 1 }}
-          contentContainerStyle={{ paddingTop: HERO_FULL + 76, paddingBottom: 120 }}
+          contentContainerStyle={{ paddingTop: HERO_FULL + 76, paddingBottom: 200 }}
           scrollEventThrottle={16}
           onScroll={Animated.event(
             [{ nativeEvent: { contentOffset: { y: pbScrollY } } }],
@@ -3391,7 +3631,7 @@ export default function StartClassScreen({ navigation }) {
 
         {/* Floating back arrow */}
         <TouchableOpacity
-          onPress={() => { setView('select'); setSearchQuery(''); }}
+          onPress={backFromBriefing}
           style={pb.floatingBack}
           activeOpacity={0.7}
           hitSlop={12}
@@ -3507,7 +3747,7 @@ export default function StartClassScreen({ navigation }) {
         <View style={{ flex: 1 }}>
         <Animated.ScrollView
           style={{ flex: 1 }}
-          contentContainerStyle={{ paddingTop: HERO_FULL + 76, paddingBottom: 120 }}
+          contentContainerStyle={{ paddingTop: HERO_FULL + 76, paddingBottom: 200 }}
           scrollEventThrottle={16}
           onScroll={Animated.event(
             [{ nativeEvent: { contentOffset: { y: pbScrollY } } }],
@@ -3607,7 +3847,7 @@ export default function StartClassScreen({ navigation }) {
 
         {/* Floating back arrow */}
         <TouchableOpacity
-          onPress={() => { setView('select'); setSelectedCouple(null); }}
+          onPress={backFromBriefing}
           style={pb.floatingBack}
           activeOpacity={0.7}
           hitSlop={12}
@@ -3691,7 +3931,7 @@ export default function StartClassScreen({ navigation }) {
         <View style={{ flex: 1 }}>
           <Animated.ScrollView
             style={{ flex: 1 }}
-            contentContainerStyle={{ paddingTop: HERO_FULL + 76, paddingBottom: 120 }}
+            contentContainerStyle={{ paddingTop: HERO_FULL + 76, paddingBottom: 200 }}
             scrollEventThrottle={16}
             onScroll={Animated.event(
               [{ nativeEvent: { contentOffset: { y: gbScrollY } } }],
@@ -3812,7 +4052,7 @@ export default function StartClassScreen({ navigation }) {
 
           {/* Floating back arrow */}
           <TouchableOpacity
-            onPress={() => setView('select')}
+            onPress={backFromBriefing}
             style={pb.floatingBack}
             activeOpacity={0.7}
             hitSlop={12}
@@ -5200,6 +5440,10 @@ const s = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
+    // Pushed to the right edge of the running row. In local-recording mode the
+    // audio-route badge (which normally fills the space) is hidden, so without
+    // this the Stop button sits glued to the timer digits.
+    marginLeft: 'auto',
     backgroundColor: '#D44545',
     borderRadius: 10,
     paddingHorizontal: 14,
@@ -5503,110 +5747,6 @@ const ad = StyleSheet.create({
     textTransform: 'uppercase',
   },
 
-  // ─── Local-recording REC / STOP confirmation modals ────────────────────
-  // Visually distinct from the existing popup* styles (used for "no mic
-  // selected"). Higher-stakes gate, so generous breathing room, a hero
-  // icon ring, ink-dark primary CTA, and a non-dismissible overlay.
-  recModalOverlay: {
-    position: 'absolute',
-    top: 0, left: 0, right: 0, bottom: 0,
-    backgroundColor: 'rgba(13, 13, 18, 0.62)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 24,
-    zIndex: 1000,
-  },
-  recModalCard: {
-    width: '100%',
-    maxWidth: 340,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 26,
-    paddingTop: 28,
-    paddingHorizontal: 24,
-    paddingBottom: 20,
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOpacity: 0.22,
-    shadowRadius: 28,
-    shadowOffset: { width: 0, height: 14 },
-    elevation: 14,
-  },
-  recModalIconRing: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 18,
-  },
-  recModalIconRingRec: {
-    backgroundColor: 'rgba(212, 69, 69, 0.12)',
-  },
-  recModalIconRingStop: {
-    backgroundColor: 'rgba(13, 13, 18, 0.06)',
-  },
-  recModalIconDot: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: '#D44545',
-  },
-  recModalIconSquare: {
-    width: 24,
-    height: 24,
-    borderRadius: 6,
-    backgroundColor: '#0D0D12',
-  },
-  recModalTitle: {
-    fontFamily: Fonts.ttDemiBold,
-    fontSize: 20,
-    color: '#0D0D12',
-    textAlign: 'center',
-    letterSpacing: -0.3,
-    marginBottom: 8,
-  },
-  recModalBody: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 13.5,
-    color: '#818898',
-    textAlign: 'center',
-    lineHeight: 19,
-    marginBottom: 22,
-    paddingHorizontal: 6,
-  },
-  recModalActions: {
-    flexDirection: 'row',
-    gap: 10,
-    width: '100%',
-  },
-  recModalBtnGhost: {
-    flex: 1,
-    backgroundColor: '#F2F2F4',
-    borderRadius: 14,
-    paddingVertical: 15,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  recModalBtnGhostText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 13.5,
-    color: '#818898',
-    letterSpacing: 0.2,
-  },
-  recModalBtnPrimary: {
-    flex: 1.4,
-    backgroundColor: '#0D0D12',
-    borderRadius: 14,
-    paddingVertical: 15,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  recModalBtnPrimaryText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 13.5,
-    color: '#FFFFFF',
-    letterSpacing: 0.3,
-  },
 });
 
 // ── End-of-class debrief sheet styles ──────────────────────────────────────
@@ -5747,6 +5887,15 @@ const db = StyleSheet.create({
     color: '#CCC',
     marginTop: 6,
     paddingLeft: 2,
+  },
+  verdictHint: {
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 11,
+    color: '#8A8A8A',
+    marginHorizontal: 24,
+    marginTop: -2,
+    marginBottom: 10,
+    lineHeight: 15,
   },
   // Focus point validation list — dark brown cards matching the rest of
   // the debrief surface.

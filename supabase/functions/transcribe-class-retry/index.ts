@@ -24,7 +24,8 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { identifyCoachSpeaker } from '../_shared/transcript.ts'
-import { finalizeRecording } from '../_shared/finalize-recording.ts'
+import { finalizeRecording, composeAndFinalize } from '../_shared/finalize-recording.ts'
+import { isEnglishLang, translateUtterancesToEnglish, translateTextToEnglish } from '../_shared/translate.ts'
 
 declare global {
   const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void }
@@ -34,6 +35,7 @@ const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 const ASSEMBLYAI_API_KEY = Deno.env.get('ASSEMBLYAI_API_KEY')!
 const ASSEMBLYAI_WEBHOOK_SECRET = Deno.env.get('ASSEMBLYAI_WEBHOOK_SECRET')!
+const ANTHROPIC_API_KEY = Deno.env.get('ANTHROPIC_API_KEY')
 const FUNCTIONS_PUBLIC_URL =
   Deno.env.get('FUNCTIONS_PUBLIC_URL') ?? `${SUPABASE_URL}/functions/v1`
 const ASSEMBLYAI_API = 'https://api.assemblyai.com/v2'
@@ -43,10 +45,33 @@ const MAX_RECORDINGS_PER_RUN = 50
 
 const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY)
 
-Deno.serve(async (_req: Request) => {
-  // Always do the actual work in waitUntil so the cron caller (pg_net) gets
-  // an instant response — pg_net keeps responses for only 6 hours and we
-  // don't want backlogged work to drag the cron poke timeout.
+function jwtRoleIs(authHeader: string | null, expectedRole: string): boolean {
+  const m = (authHeader ?? '').match(/^\s*Bearer\s+(.+)$/i)
+  if (!m) return false
+  const parts = m[1].trim().split('.')
+  if (parts.length !== 3) return false
+  try {
+    let payload = parts[1].replace(/-/g, '+').replace(/_/g, '/')
+    const pad = payload.length % 4
+    if (pad) payload += '='.repeat(4 - pad)
+    return JSON.parse(atob(payload))?.role === expectedRole
+  } catch {
+    return false
+  }
+}
+
+Deno.serve(async (req: Request) => {
+  // Only the cron (service role) may trigger this global sweep. Without the
+  // gate any authenticated coach could POST their own Bearer JWT and repeatedly
+  // kick the whole AssemblyAI-poll + Claude-translation sweep on demand — a
+  // cost/abuse vector. Sibling fns already gate (finalize-class on service_role,
+  // assemblyai-webhook on the webhook secret); this one had none.
+  if (!jwtRoleIs(req.headers.get('Authorization'), 'service_role')) {
+    return new Response(JSON.stringify({ error: 'forbidden' }), {
+      status: 403,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
   const result = await sweep()
   return new Response(JSON.stringify(result), {
     status: 200,
@@ -93,19 +118,51 @@ async function healOne(recordingId: string) {
     .eq('status', 'transcribing')
 
   for (const chunk of transcribingChunks ?? []) {
-    if (!chunk.assemblyai_job_id) continue
+    if (!chunk.assemblyai_job_id) {
+      // Crashed between the atomic claim (uploaded→transcribing) and the
+      // AssemblyAI POST: the chunk is 'transcribing' with NO job_id, so no
+      // webhook or poll can ever advance it and the recording would strand
+      // forever (the cron just re-sweeps it every 5 min). Reset it to 'uploaded'
+      // — guarded to only fire while it's still stuck + jobless so we can't
+      // clobber a chunk a concurrent run just POSTed — so the finalizeRecording
+      // claim below re-POSTs it (idempotent).
+      await supabase
+        .from('class_recording_chunks')
+        .update({ status: 'uploaded', error: 'reset: transcribing with no job_id' })
+        .eq('recording_id', recordingId)
+        .eq('idx', chunk.idx)
+        .eq('status', 'transcribing')
+        .is('assemblyai_job_id', null)
+      continue
+    }
     const job = await pollAssemblyAI(chunk.assemblyai_job_id)
     if (!job) continue
     if (job.status === 'completed') {
-      const utterances = Array.isArray(job.utterances) ? job.utterances : []
+      // Normalize to English exactly like the primary webhook — otherwise a
+      // non-English class recovered on this path lands as an untranslated
+      // transcript (and without source_language/translated markers).
+      const rawUtterances = Array.isArray(job.utterances) ? job.utterances : []
+      const rawText = typeof job.text === 'string' ? job.text : ''
+      const language = String(job.language_code || '').toLowerCase()
+      const english = isEnglishLang(language)
+      let utterances = rawUtterances
+      let text = rawText
+      if (!english) {
+        const tu = await translateUtterancesToEnglish(ANTHROPIC_API_KEY, rawUtterances, language)
+        if (tu) utterances = tu
+        const tt = await translateTextToEnglish(ANTHROPIC_API_KEY, rawText, language)
+        if (tt) text = tt
+      }
       await supabase
         .from('class_recording_chunks')
         .update({
           status: 'transcribed',
           transcript_json: {
             utterances,
-            text: job.text ?? '',
+            text,
             audio_duration: job.audio_duration,
+            source_language: language || null,
+            translated: !english,
           },
           speaker_labels: identifyCoachSpeaker(utterances),
           duration_ms: Math.round((Number(job.audio_duration) || 0) * 1000),
@@ -137,6 +194,13 @@ async function healOne(recordingId: string) {
     assemblyaiWebhookSecret: ASSEMBLYAI_WEBHOOK_SECRET,
     functionsPublicUrl: FUNCTIONS_PUBLIC_URL,
   })
+
+  // finalizeRecording only CREATES AssemblyAI jobs. When the completion webhook
+  // was lost (failure modes #2/#3 above) every chunk is already terminal, so
+  // there are no jobs to create and the recording would sit in 'transcribing'
+  // forever. Compose the transcript + create the class_input here too — the
+  // finalize RPC is idempotent, so racing a late webhook is safe.
+  await composeAndFinalize(recordingId, supabase)
 }
 
 async function pollAssemblyAI(jobId: string): Promise<any | null> {

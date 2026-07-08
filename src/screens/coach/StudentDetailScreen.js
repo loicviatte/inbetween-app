@@ -45,9 +45,12 @@ import {
   editAndApproveFocusPoint,
   rejectPendingFocusPoint,
   updateFocusPoint,
+  getReconcileNeeded,
+  applyReconcile,
 } from '../../storage/coachStorage';
 import PendingFocusCard from '../../components/coach/PendingFocusCard';
 import RejectFocusSheet from '../../components/coach/RejectFocusSheet';
+import ReconcileFocusSheet from '../../components/coach/ReconcileFocusSheet';
 import QuestionCard from '../../components/coach/QuestionCard';
 import MergeCompareCard from '../../components/coach/MergeCompareCard';
 import NameMatchCard from '../../components/coach/NameMatchCard';
@@ -425,10 +428,18 @@ export default function StudentDetailScreen({ route, navigation }) {
   const [activity, setActivity] = useState([]);
   const [questions, setQuestions] = useState([]);
   const [pendingFPs, setPendingFPs] = useState([]);
+  const [reconcileGroup, setReconcileGroup] = useState(null);
+  const [showReconcile, setShowReconcile] = useState(false);
   const [mergeRequests, setMergeRequests] = useState([]);
   const [nameMatches, setNameMatches] = useState([]);
   const [lastClassDate, setLastClassDate] = useState(null);
   const [readiness, setReadiness] = useState(null);
+  // Dance style the readiness card is scoped to. A single-style coach uses their
+  // own style automatically; a dual ('Latin & Ballroom') coach gets a toggle so
+  // they don't see the wrong style for a 2-style student.
+  const [viewCategory, setViewCategory] = useState(null);
+  const [isDualCoach, setIsDualCoach] = useState(false);
+  const viewCategoryRef = useRef(null);
   const [metrics, setMetrics] = useState({ progression: 0, retention: 100, global: 0 });
   // Coach's dance category, used to filter metrics. Held in a ref because the
   // realtime subscription closure (set up once per studentId) needs the latest
@@ -498,6 +509,11 @@ export default function StudentDetailScreen({ route, navigation }) {
           const me = await getUser().catch(() => null);
           const cat = categoryFromStyle(me?.dance_style);
           coachCategoryRef.current = cat;
+          // Readiness/Train are per dance category. Scope the readiness card to
+          // the coach's style; a dual ('Latin & Ballroom') coach starts on Latin
+          // and can toggle (see the segmented control on the readiness card).
+          const initialView = cat || 'latin';
+          viewCategoryRef.current = initialView;
 
           // All per-student reads go through the context cache so a
           // back→tap→back round-trip is instant (60s TTL). Mutations on
@@ -508,7 +524,7 @@ export default function StudentDetailScreen({ route, navigation }) {
           // readiness) come from ONE bundled RPC instead of 6 serialized queries.
           // Heavier analytics (activity, metrics) + coach-global (notifications,
           // merges) stay separate. invalidateCache(`${sk}:`) covers `${sk}:bundle`.
-          const [bundle, act, m, notifs, mergesRes] = await Promise.all([
+          const [bundle, act, m, notifs, mergesRes, rdScoped] = await Promise.all([
             getOrFetch(`${sk}:bundle`, () => getCoachStudentDetail(studentId)),
             getOrFetch(`${sk}:activity:30`, () => getStudentRecentActivity(studentId, 30)),
             getOrFetch(`${sk}:metrics:${cat || 'all'}`, () => getAllStudentMetrics(studentId, cat)),
@@ -521,6 +537,7 @@ export default function StudentDetailScreen({ route, navigation }) {
                 .eq('status', 'pending_coach')
                 .order('created_at', { ascending: false })
             ),
+            getOrFetch(`${sk}:readiness:${initialView}`, () => getLessonReadiness(studentId, initialView).catch(() => null)),
           ]);
           const b = bundle || {};
           const p = b.profile ?? null;
@@ -528,7 +545,10 @@ export default function StudentDetailScreen({ route, navigation }) {
           const qs = b.questions ?? [];
           const pfp = b.pendingFps ?? [];
           const lcd = b.lastClassDate ?? null;
-          const rd = b.readiness ?? null;
+          // Category-scoped readiness (replaces the bundle's all-styles readiness,
+          // which anchored on the most recent class of EITHER style → wrong style
+          // for a 2-style student).
+          const rd = rdScoped ?? null;
           const { data: merges } = mergesRes || {};
           if (active) {
             setProfile(p);
@@ -536,10 +556,13 @@ export default function StudentDetailScreen({ route, navigation }) {
             setActivity(act);
             setQuestions(qs);
             setPendingFPs(pfp);
+            getReconcileNeeded([studentId]).then((g) => { if (active) setReconcileGroup(g[0] || null); }).catch(() => {});
             // Prefer the readiness reference (most recent private with active
             // focus points) so the activity timeline filter matches the
             // "LAST CLASS WITH YOU" recap card. Falls back to the raw
             // last-private date if readiness has no reference yet.
+            setViewCategory(initialView);
+            setIsDualCoach(cat == null);
             setLastClassDate(rd?.lastClassDate ?? lcd);
             setReadiness(rd);
             setMetrics(m);
@@ -591,7 +614,7 @@ export default function StudentDetailScreen({ route, navigation }) {
           getStudentFocusPoints(studentId),
           getStudentQuestions(studentId),
           getStudentRecentActivity(studentId, 30),
-          getLessonReadiness(studentId).catch(() => null),
+          getLessonReadiness(studentId, viewCategoryRef.current).catch(() => null),
         ]);
         if (active) {
           setFocusPoints(fp);
@@ -626,7 +649,7 @@ export default function StudentDetailScreen({ route, navigation }) {
                 getStudentRecentActivity(studentId, 30),
                 getStudentLastClassDate(studentId),
                 getAllStudentMetrics(studentId, coachCategoryRef.current),
-                getLessonReadiness(studentId).catch(() => null),
+                getLessonReadiness(studentId, viewCategoryRef.current).catch(() => null),
               ]);
               if (active) {
                 setActivity(act);
@@ -646,6 +669,22 @@ export default function StudentDetailScreen({ route, navigation }) {
       };
     }, [studentId])
   );
+
+  // Dual-style coaches toggle the readiness card between Latin and Ballroom so
+  // they always see the style they're coaching (not whichever class was last).
+  const switchReadinessCategory = useCallback((c) => {
+    setViewCategory((prev) => {
+      if (prev === c) return prev;
+      viewCategoryRef.current = c;
+      getLessonReadiness(studentId, c)
+        .then((rd) => {
+          setReadiness(rd);
+          if (rd?.lastClassDate) setLastClassDate(rd.lastClassDate);
+        })
+        .catch(() => {});
+      return c;
+    });
+  }, [studentId]);
 
   // ── Derived data ──────────────────────────────────────────────────────────
   const displayName = profile?.name || studentName || 'Student';
@@ -743,8 +782,9 @@ export default function StudentDetailScreen({ route, navigation }) {
     nameMatches.forEach((nm) => {
       list.push({ kind: 'name', id: `name_${nm.id}`, notif: nm });
     });
+    if (reconcileGroup) list.push({ kind: 'reconcile', id: 'reconcile' });
     return list;
-  }, [pendingFPs, questions, mergeRequests, nameMatches]);
+  }, [pendingFPs, questions, mergeRequests, nameMatches, reconcileGroup]);
 
   const hasUrgent = questions.length > 0;
   const badgeColor = hasUrgent ? C.red : C.orange;
@@ -1117,6 +1157,32 @@ export default function StudentDetailScreen({ route, navigation }) {
                  exactly what the student sees. */}
             <Card style={styles.readyCardOverride}>
               <Text style={styles.readyEyebrow}>Student's readiness for next class</Text>
+              {isDualCoach && (
+                <View style={{ flexDirection: 'row', gap: 8, marginTop: 6, marginBottom: 14 }}>
+                  {['latin', 'ballroom'].map((c) => {
+                    const on = viewCategory === c;
+                    return (
+                      <TouchableOpacity
+                        key={c}
+                        onPress={() => switchReadinessCategory(c)}
+                        activeOpacity={0.8}
+                        style={{
+                          paddingVertical: 5,
+                          paddingHorizontal: 14,
+                          borderRadius: 999,
+                          borderWidth: 1,
+                          borderColor: on ? '#E8B530' : 'rgba(255,255,255,0.22)',
+                          backgroundColor: on ? 'rgba(232,181,48,0.18)' : 'transparent',
+                        }}
+                      >
+                        <Text style={{ fontSize: 12, fontWeight: '700', color: on ? '#F6D27A' : 'rgba(255,255,255,0.6)' }}>
+                          {c === 'latin' ? 'Latin' : 'Ballroom'}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              )}
               <View style={styles.readyHeaderRow}>
                 <ReadinessRing percent={readiness?.percent ?? 0} />
                 <View style={{ flex: 1, minWidth: 0, marginLeft: 14 }}>
@@ -1305,6 +1371,25 @@ export default function StudentDetailScreen({ route, navigation }) {
               </View>
             ) : (
               <>
+                {/* 0. Too many focus points — pick one to drop (max 3) */}
+                {reconcileGroup && (
+                  <>
+                    <Text style={styles.actionsSectionLabel}>TOO MANY FOCUS POINTS</Text>
+                    <TouchableOpacity
+                      activeOpacity={0.85}
+                      onPress={() => setShowReconcile(true)}
+                      style={{ flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#fff', borderWidth: 1, borderColor: C.red, borderRadius: 14, padding: 14, marginBottom: 8 }}
+                    >
+                      <Ionicons name="alert-circle" size={20} color={C.red} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ fontFamily: Fonts.jakartaExtraBold, fontSize: 15, color: C.text }}>{1 + reconcileGroup.candidates.length} focus points · keep 3</Text>
+                        <Text style={{ fontFamily: Fonts.travelsRegular, fontSize: 12.5, color: Colors.secondary, marginTop: 2 }}>Pick one to drop</Text>
+                      </View>
+                      <Ionicons name="chevron-forward" size={18} color={Colors.secondary} />
+                    </TouchableOpacity>
+                  </>
+                )}
+
                 {/* 1. Focus points pending validation after a class */}
                 {pendingFPs.length > 0 && (
                   <>
@@ -1707,6 +1792,22 @@ export default function StudentDetailScreen({ route, navigation }) {
             fp={rejectingPendingFp}
             onConfirm={handleConfirmRejectPendingFp}
             onClose={() => setRejectingPendingFp(null)}
+          />
+        )}
+      </Modal>
+
+      <Modal visible={showReconcile} transparent animationType="slide" onRequestClose={() => setShowReconcile(false)}>
+        {reconcileGroup && (
+          <ReconcileFocusSheet
+            student={{ name: displayName, initials: (displayName || '?').split(' ').map((w) => w[0]).slice(0, 2).join('').toUpperCase() }}
+            kept={reconcileGroup.kept}
+            candidates={reconcileGroup.candidates}
+            onConfirm={async (removedId) => {
+              await applyReconcile(removedId);
+              setShowReconcile(false);
+              getReconcileNeeded([studentId]).then((g) => setReconcileGroup(g[0] || null)).catch(() => {});
+            }}
+            onClose={() => setShowReconcile(false)}
           />
         )}
       </Modal>

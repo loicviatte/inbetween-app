@@ -29,63 +29,19 @@ export function urgencyToTier(score) {
   return 'supporting';
 }
 
-// ─── Priority Score Engine ────────────────────────────────────────────────────
-// Formula: priority = base_score - (practice_count × practiceWeight[tier])
-//                   + recency + tierModifier[tier] + coach_signal + inactionPenalty
-// All data lives on focus_points — no focus_metrics join needed.
-// Clamped to [0..20]
+// ─── Display ordering ─────────────────────────────────────────────────────────
+// Tier is a display RANK only now (critical first), no longer a score. There is
+// no priority/decay engine: focus points sort by tier, then most-recently
+// addressed first. base_score / coach_signal / recency / inaction are all gone.
+const TIER_RANK = { critical: 0, important: 1, supporting: 2 };
 
-const TIER_MODIFIER   = { critical: 3, important: 2, supporting: 1 };
-const PRACTICE_WEIGHT = { critical: 0.8, important: 1.0, supporting: 1.2 };
-const GRACE_DAYS      = { critical: 4, important: 7, supporting: 999 };
-const INACTION_DELTA  = { critical: 1.0, important: 0.5, supporting: 0.0 };
-const BASE_SCORE      = { critical: 10, important: 7, supporting: 5 };
-
-function computeRecency(daysSince) {
-  if (daysSince === 0) return 3;
-  if (daysSince <= 3)  return 2;
-  if (daysSince <= 6)  return 1;
-  return 0;
-}
-
-function computeInactionPenalty(tier, daysSincePractice) {
-  const grace = GRACE_DAYS[tier] ?? 999;
-  const delta = INACTION_DELTA[tier] ?? 0;
-  const weeks = Math.floor(Math.max(0, daysSincePractice - grace) / 7);
-  return Math.min(3, delta * weeks);
-}
-
-// focus_points now holds all needed fields: base_score, practice_count,
-// coach_signal, last_exposed_at, last_mentioned_at, tier
-function computePriority(focus, now) {
-  const tier = focus.tier || 'important';
-
-  const refDate = focus.last_mentioned_at
-    ? new Date(focus.last_mentioned_at)
-    : new Date(focus.created_at);
-  const daysSinceMentioned = Math.floor((now - refDate) / 86400000);
-
-  const lastPracticed = focus.last_exposed_at
-    ? new Date(focus.last_exposed_at)
-    : null;
-  const daysSincePractice = lastPracticed
-    ? Math.floor((now - lastPracticed) / 86400000)
-    : 999;
-
-  const recency  = computeRecency(daysSinceMentioned);
-  const tierMod  = TIER_MODIFIER[tier] ?? 2;
-  const w        = PRACTICE_WEIGHT[tier] ?? 1.0;
-  const inaction = computeInactionPenalty(tier, daysSincePractice);
-
-  const raw =
-    (focus.base_score      ?? BASE_SCORE[tier] ?? 7)
-    - ((focus.practice_count ?? 0) * w)
-    + recency
-    + tierMod
-    + (focus.coach_signal  ?? 0)
-    + inaction;
-
-  return Math.max(0, Math.min(20, raw));
+function byTierThenRecent(a, b) {
+  const ra = TIER_RANK[a.tier] ?? 1;
+  const rb = TIER_RANK[b.tier] ?? 1;
+  if (ra !== rb) return ra - rb;
+  const ta = new Date(a.last_mentioned_at || a.created_at || 0).getTime();
+  const tb = new Date(b.last_mentioned_at || b.created_at || 0).getTime();
+  return tb - ta; // newest first
 }
 
 // ─── All focus points ranked by priority ──────────────────────────────────────
@@ -96,7 +52,6 @@ function computePriority(focus, now) {
 export async function getAllFocusPointsRanked(category = null) {
   try {
     const userId = await getUserId();
-    const now = new Date();
 
     const { data: points } = await supabase
       .from('focus_points')
@@ -112,11 +67,125 @@ export async function getAllFocusPointsRanked(category = null) {
 
     return points
       .filter((p) => focusMatchesCategory(p, category))
-      .map((p) => ({ ...p, _priority: computePriority(p, now) }))
-      .sort((a, b) => b._priority - a._priority);
+      .sort(byTierThenRecent);
   } catch (e) {
     console.error('getAllFocusPointsRanked error:', e);
     return [];
+  }
+}
+
+// ─── Solo "in progress" focuses (current readiness checklist) ──────────────────
+// The focus points from the student's most recent private lesson — the same set
+// the readiness meter tracks — returned as full ranked rows, each tagged with
+// its {_target,_done} progress. Powers the All-focus-points "Solo" tab, which
+// shows only what's currently in progress rather than the full lifetime list.
+export async function getSoloReadinessFocuses(category = null) {
+  try {
+    const [ranked, readiness] = await Promise.all([
+      getAllFocusPointsRanked(category),
+      getLessonReadiness(null, category).catch(() => null),
+    ]);
+    const focuses = readiness?.focuses || [];
+    if (focuses.length === 0) return [];
+    const prog = new Map(focuses.map((f) => [f.focusPointId, f]));
+    // Intersect with the active/ranked set so a not-yet-published (pending_coach)
+    // readiness focus is naturally dropped — we only ever surface practiceable FPs.
+    return ranked
+      .filter((p) => prog.has(p.id))
+      .map((p) => ({ ...p, _target: prog.get(p.id).target, _done: prog.get(p.id).done }));
+  } catch (e) {
+    console.error('getSoloReadinessFocuses error:', e);
+    return [];
+  }
+}
+
+// ─── Group focuses from the last N group classes ───────────────────────────────
+// Active group focus points the student owns, restricted to the `classLimit`
+// most recent group classes they attended. Each row gets `class_inputs` meta
+// (for the card). Powers the All-focus-points "Group" tab.
+export async function getGroupFocusPointsRecent(category = null, classLimit = 2) {
+  try {
+    const userId = await getUserId();
+
+    const { data: points } = await supabase
+      .from('focus_points')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('group_fp', true)
+      .eq('is_deleted', false)
+      .eq('is_archived', false)
+      .eq('status', 'active')
+      .eq('is_other', false)
+      .is('alias_of', null);
+    if (!points || points.length === 0) return [];
+
+    // A group FP's originating class is `source_class_input_id` (set when it was
+    // created); fall back to `class_input_id` for older rows.
+    const classOf = (p) => p.source_class_input_id || p.class_input_id || null;
+    const classIds = Array.from(new Set(points.map(classOf).filter(Boolean)));
+    if (classIds.length === 0) return [];
+
+    const { data: classes } = await supabase
+      .from('class_inputs')
+      .select('id, created_at, teacher_name, dance, class_summary, lesson_type')
+      .in('id', classIds)
+      .in('lesson_type', ['group', 'public'])
+      .not('is_deleted', 'is', true)
+      .order('created_at', { ascending: false });
+    if (!classes || classes.length === 0) return [];
+
+    const recent = classes.slice(0, classLimit);
+    const recentIds = new Set(recent.map((c) => c.id));
+    const clsById = new Map(classes.map((c) => [c.id, c]));
+    const classRank = new Map(recent.map((c, i) => [c.id, i])); // 0 = newest class
+
+    return points
+      .filter((p) => recentIds.has(classOf(p)))
+      .filter((p) => focusMatchesCategory(p, category))
+      .map((p) => ({ ...p, class_inputs: clsById.get(classOf(p)) || null }))
+      .sort((a, b) => {
+        const ra = classRank.get(classOf(a)) ?? 99;
+        const rb = classRank.get(classOf(b)) ?? 99;
+        if (ra !== rb) return ra - rb;          // newest class first
+        return byTierThenRecent(a, b);           // then by tier rank within a class
+      });
+  } catch (e) {
+    console.error('getGroupFocusPointsRecent error:', e);
+    return [];
+  }
+}
+
+// ─── All-focus-points bundle (one round-trip) ──────────────────────────────────
+// Server-side equivalent of getSoloReadinessFocuses + getCoupleReadinessFocuses +
+// getGroupFocusPointsRecent + getMyCouple + getUser — collapsed into ONE RPC so
+// the screen doesn't pay the free-tier pooler's serial-round-trip staircase.
+// Returns { danceStyle, couple: {coupleId}|null, solo[], couple_pts[], group[] }.
+export async function getAllFocusPointsBundle(category = null) {
+  try {
+    const userId = await getUserId();
+    const { data } = await supabase.rpc('get_all_focus_points', { p_user: userId, p_category: category });
+    return data || null;
+  } catch (e) {
+    console.error('getAllFocusPointsBundle error:', e);
+    return null;
+  }
+}
+
+// ─── Train per-style bundle (one round-trip) ───────────────────────────────────
+// Solo slots + readiness, couple slots + readiness, and slot1/slot2 session
+// counts for ONE dance category — collapses the getSlots + getCoupleSlots + 2×
+// count staircase the free-tier pooler serialized (the ~20s timeout that left
+// Train with 0 focus points). Returns null on failure (callers keep what's on
+// screen). Shape: { solo:{slots[],readiness}, couple:{slots[],readiness}|null,
+// sessionCounts:{slot1,slot2} }.
+export async function getTrainFocus(category = null) {
+  try {
+    const userId = await getUserId();
+    const { data } = await supabase.rpc('get_train_focus', { p_user: userId, p_category: category });
+    return data || null;
+  } catch (e) {
+    console.error('getTrainFocus error:', e);
+    return null;
   }
 }
 
@@ -125,7 +194,6 @@ export async function getAllFocusPointsRanked(category = null) {
 export async function getSlots(category = null, readinessOnly = false) {
   try {
     const userId = await getUserId();
-    const now    = new Date();
 
     // Fetch the user's focus_points and the lesson readiness in parallel.
     // Readiness tells us which focuses come from the last private and still
@@ -158,28 +226,21 @@ export async function getSlots(category = null, readinessOnly = false) {
       return { slot1: list[0] || null, slot2: list[1] || null, slot3: list[2] || null, readiness };
     }
 
-    // Only consider active/cooling_down/past_candidate focuses, and within
-    // the selected dance category if one is provided. Held focuses are
-    // filtered out here — they re-enter the Train queue as pinned slots
-    // only once the primary readiness list is done (see below).
+    // Only consider active/cooling_down focuses, and within the selected dance
+    // category if one is provided. "Not yet" carry-overs (is_held) are normal
+    // active focuses now — they stay in the readiness/Train list until the coach
+    // validates them or they're reconciled into a new class (no auto-graduation).
     const visible = points.filter(
       (p) =>
-        (!p.status || p.status === 'active' || p.status === 'cooling_down' || p.status === 'past_candidate') &&
-        !p.is_held &&
+        (!p.status || p.status === 'active' || p.status === 'cooling_down') &&
         focusMatchesCategory(p, category)
     );
 
-    const scored = visible
-      .map((p) => ({ ...p, _priority: computePriority(p, now) }))
-      .sort((a, b) => b._priority - a._priority);
+    const scored = [...visible].sort(byTierThenRecent);
 
-    // Slot pinning has two modes:
-    //   1) readiness < 100% → pin uncompleted readiness focuses at top
-    //      (carry the new class's checklist into the slots)
-    //   2) readiness == 100% → pin held focuses ("Not yet" carryovers
-    //      from a prior debrief) so they're the first thing the student
-    //      sees before the normal ranking resumes. After 15 min of
-    //      cumulative practice each, they auto-archive.
+    // Pin the uncompleted readiness focuses at the top — the current class's
+    // checklist, which now includes "Not yet" carry-overs (held focuses are in
+    // readiness like any other active focus).
     const pinned = [];
     if (readiness && readiness.percent < 100) {
       const pointById = new Map(points.map((p) => [p.id, p]));
@@ -188,14 +249,7 @@ export async function getSlots(category = null, readinessOnly = false) {
         const fp = pointById.get(f.focusPointId);
         if (!fp) continue;
         if (!focusMatchesCategory(fp, category)) continue;
-        pinned.push({ ...fp, _priority: computePriority(fp, now), _pinned: true });
-      }
-    } else if (readiness && readiness.percent >= 100) {
-      for (const p of points) {
-        if (!p.is_held) continue;
-        if (p.status === 'past') continue;
-        if (!focusMatchesCategory(p, category)) continue;
-        pinned.push({ ...p, _priority: computePriority(p, now), _pinned: true });
+        pinned.push({ ...fp, _pinned: true });
       }
     }
 
@@ -269,55 +323,17 @@ export async function getCoupleSlots(coupleId, category = null) {
   }
 }
 
-// ─── Question multiplier (14-day behaviour window) ────────────────────────────
-
-export async function getQuestionMultiplier(userId) {
-  try {
-    const windowStart = new Date(Date.now() - 14 * 86400000).toISOString();
-    const [qRes, sRes, lRes] = await Promise.all([
-      supabase
-        .from('coach_messages')
-        .select('id', { count: 'exact', head: true })
-        .eq('student_id', userId)
-        .gte('created_at', windowStart),
-      supabase
-        .from('practice_logs')
-        .select('id')
-        .eq('student_id', userId)
-        .not('completed_at', 'is', null)
-        .gte('started_at', windowStart),
-      supabase
-        .from('class_inputs')
-        .select('id')
-        .eq('user_id', userId)
-        .eq('is_deleted', false)
-        .gte('created_at', windowStart),
-    ]);
-    const Q        = qRes.count || 0;
-    const S        = (sRes.data || []).length;
-    const L        = (lRes.data || []).length;
-    const activity = S + 0.5 * L;
-    const ratio    = Q / (activity + 1);
-    if (ratio < 0.3) return 1.2;
-    if (ratio > 2)   return 0.7;
-    return 1.0;
-  } catch {
-    return 1.0;
-  }
-}
-
 // ─── Apply focus event → update focus_points directly ────────────────────────
-// All metrics now live on focus_points:
-//   struggle / importance → base_score
-//   practice              → practice_count
-//   coach_signal          → coach_signal
-//   last_practiced_at     → last_exposed_at
-
+// Tier is target-count only now, so the only events that change anything are
+// practice logs (they advance the X/N count). Question events are kept as
+// no-ops so AI-chat / ask-coach callers don't error. There is no score,
+// coach_signal, decay or lifecycle transition: a focus point stays active until
+// the coach validates it at a debrief or the student archives it.
 export async function applyFocusEvent(focusId, eventType, userId) {
   try {
     const { data: fp } = await supabase
       .from('focus_points')
-      .select('base_score, practice_count, coach_signal, tier, status')
+      .select('practice_count')
       .eq('id', focusId)
       .single();
 
@@ -333,56 +349,16 @@ export async function applyFocusEvent(focusId, eventType, userId) {
       case 'PRACTICE_QUICK_LOG':
         update = { practice_count: (fp.practice_count || 0) + 1, last_exposed_at: now };
         break;
-      case 'QUESTION_CONFIRMATION': {
-        const mult = userId ? await getQuestionMultiplier(userId) : 1.0;
-        update = { base_score: Math.min(20, (fp.base_score || 5) + 0.5 * mult) };
-        break;
-      }
-      case 'QUESTION_CLARIFICATION': {
-        const mult = userId ? await getQuestionMultiplier(userId) : 1.0;
-        update = { base_score: Math.min(20, (fp.base_score || 5) + 1.0 * mult) };
-        break;
-      }
-      case 'QUESTION_CONFUSION': {
-        const mult = userId ? await getQuestionMultiplier(userId) : 1.0;
-        update = { base_score: Math.min(20, (fp.base_score || 5) + 2.0 * mult) };
-        break;
-      }
-      case 'COACH_IMPROVED_MODERATE':
-        update = { coach_signal: (fp.coach_signal || 0) - 2 };
-        break;
-      case 'COACH_IMPROVED_STRONG':
-        update = { coach_signal: (fp.coach_signal || 0) - 4 };
-        break;
-      case 'COACH_FIXED':
-        update = { coach_signal: (fp.coach_signal || 0) - 5 };
-        break;
-      case 'COACH_ESCALATION':
-        update = {
-          coach_signal: (fp.coach_signal || 0) + 2,
-          base_score:   Math.min(20, (fp.base_score || 5) + 2),
-        };
-        break;
-      case 'FOCUS_REMENTIONED':
-        update = { base_score: Math.min(20, (fp.base_score || 5) + 2), last_mentioned_at: new Date().toISOString() };
-        break;
+      // Questions no longer move any score or lifecycle — no-op.
+      case 'QUESTION_CONFIRMATION':
+      case 'QUESTION_CLARIFICATION':
+      case 'QUESTION_CONFUSION':
+        return;
       default:
         return;
     }
 
     await supabase.from('focus_points').update(update).eq('id', focusId);
-
-    // Lifecycle: coach_signal <= -5 and priority low → past_candidate
-    const merged = { ...fp, ...update };
-    if ((merged.coach_signal || 0) <= -5) {
-      const priority = computePriority(merged, new Date());
-      if (priority <= 5 && (!merged.status || merged.status === 'active')) {
-        await supabase
-          .from('focus_points')
-          .update({ status: 'past_candidate' })
-          .eq('id', focusId);
-      }
-    }
   } catch (e) {
     console.error('applyFocusEvent error:', e);
   }
@@ -463,60 +439,12 @@ export async function completeTrainingSession(sessionId, feeling = null, session
         },
       }).catch(err => console.error('yoda-score invoke error:', err));
 
-      // Map feeling → score update on the active focus point only
-      // Hard/Struggled → base_score increases (still difficult)
-      // Great → coach_signal decreases (self-assessed improvement)
-      if (feeling) {
-        const { data: fp } = await supabase
-          .from('focus_points')
-          .select('base_score, coach_signal')
-          .eq('id', activeFid)
-          .single();
-        if (fp) {
-          let update = null;
-          if (feeling === 'Hard')      update = { base_score: Math.min(20, (fp.base_score || 5) + 1.5) };
-          if (feeling === 'Struggled') update = { base_score: Math.min(20, (fp.base_score || 5) + 1.0) };
-          if (feeling === 'Great')     update = { coach_signal: (fp.coach_signal || 0) - 1 };
-          if (update) {
-            await supabase.from('focus_points').update(update).eq('id', activeFid);
-          }
-        }
-      }
+      // Feeling no longer moves any score — tier is target-count only now. The
+      // feeling is still recorded on the practice_logs row inserted above.
 
-      // Auto-archive ONLY for held focuses — the ones the coach marked
-      // "Not yet" in a prior debrief. They re-enter the readiness once
-      // the primary list is done and need 15 cumulative minutes of
-      // practice to graduate. Fresh focuses (is_held=false) stay on the
-      // student's roster until the coach explicitly validates them with
-      // a "Good" verdict at the next debrief — no count-based shortcut.
-      (async () => {
-        try {
-          const { data: fpRow } = await supabase
-            .from('focus_points')
-            .select('id, is_held, status')
-            .eq('id', activeFid)
-            .maybeSingle();
-          if (!fpRow || !fpRow.is_held || fpRow.status === 'past') return;
-          const { data: dlogs } = await supabase
-            .from('practice_logs')
-            .select('duration_minutes')
-            .eq('student_id', userId)
-            .eq('focus_point_id', activeFid)
-            .not('completed_at', 'is', null);
-          const totalMin = (dlogs || []).reduce(
-            (sum, l) => sum + (l.duration_minutes || 0),
-            0,
-          );
-          if (totalMin >= 15) {
-            await supabase
-              .from('focus_points')
-              .update({ status: 'past' })
-              .eq('id', activeFid);
-          }
-        } catch (e) {
-          console.warn('[completeTrainingSession] held-archive failed:', e);
-        }
-      })();
+      // No count-based graduation: "Not yet" carry-overs (is_held) are normal
+      // active focuses now — they stay until the coach validates them at a
+      // debrief or they're reconciled into a new class. No 15-min auto-archive.
     }
 
     // Update user stats

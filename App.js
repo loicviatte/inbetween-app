@@ -14,6 +14,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { View, AppState, StyleSheet, Animated } from 'react-native';
 import { NavigationContainer, DefaultTheme, createNavigationContainerRef } from '@react-navigation/native';
 import * as Notifications from 'expo-notifications';
+import { registerPushToken } from './src/services/notifications';
 import { useFonts } from 'expo-font';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -32,6 +33,7 @@ import AuthNavigator from './src/navigation/AuthNavigator';
 import StudentAppNavigator from './src/navigation/StudentAppNavigator';
 import { isFirstScreenReady, onFirstScreenReady } from './src/utils/firstPaint';
 import InBetweenLoader from './src/components/InBetweenLoader';
+import RootErrorBoundary from './src/components/RootErrorBoundary';
 
 const navigationRef = createNavigationContainerRef();
 
@@ -87,7 +89,15 @@ function handleNotificationTap(data) {
   if (!navigationRef.isReady()) return;
   const type = data?.type;
   if (type === 'transcript_ready') {
-    navigationRef.navigate('Dashboard');
+    // Recipient may be a coach or a student (separate navigators, and there is
+    // no 'Dashboard' route in either — the old target was a dead no-op). Land on
+    // the Notifications list, which is registered in both navigators.
+    navigationRef.navigate('Notifications');
+    return;
+  }
+  if (type === 'sync_reminder') {
+    // Coach-only nudge → the DJI audio upload screen.
+    navigationRef.navigate('LocalUpload');
     return;
   }
   if (type === 'coach_request_received') {
@@ -143,6 +153,22 @@ export default function App() {
   // Buffer for a notification tap that arrived before the navigator was
   // mounted (cold launch via push). Drained from NavigationContainer.onReady.
   const pendingNotifTapRef = useRef(null);
+
+  // Push-token registration lives here (not just at password login) so a session
+  // restored on cold launch — or any SIGNED_IN — (re)writes users.push_token.
+  // Deduped per user per app run; the rotation listener below forces a refresh.
+  const currentUserIdRef = useRef(null);
+  const registeredPushUsersRef = useRef(new Set());
+  function maybeRegisterPush(userId) {
+    if (!userId) {
+      currentUserIdRef.current = null;
+      return;
+    }
+    currentUserIdRef.current = userId;
+    if (registeredPushUsersRef.current.has(userId)) return;
+    registeredPushUsersRef.current.add(userId);
+    registerPushToken(userId).catch(() => {}); // fire-and-forget
+  }
 
   // TT Travels Next powers the onboarding / auth flow. In dev & production
   // builds these are embedded natively (expo-font config plugin) so they
@@ -215,6 +241,7 @@ export default function App() {
       await reconcileAuthUser(s?.user?.id ?? null);
       setSession(s ?? null);
       setUserEmail(s?.user?.email ?? null);
+      maybeRegisterPush(s?.user?.id ?? null);
       loadRoleFor(s);
     });
 
@@ -222,6 +249,7 @@ export default function App() {
       await reconcileAuthUser(s?.user?.id ?? null);
       setSession(s ?? null);
       setUserEmail(s?.user?.email ?? null);
+      maybeRegisterPush(s?.user?.id ?? null);
       loadRoleFor(s);
     });
 
@@ -248,6 +276,12 @@ export default function App() {
     });
     return () => sub.remove();
   }, []);
+
+  // NOTE: no Notifications.addPushTokenListener here. Calling getExpoPushTokenAsync
+  // (inside registerPushToken) itself fires that listener, so re-registering from
+  // it creates an infinite loop. Token rotation is rare and is covered by
+  // re-registering on the next SIGNED_IN + send-push nulling DeviceNotRegistered
+  // tokens, so we deliberately don't listen for rotation.
 
   function drainPendingNotifTap() {
     const data = pendingNotifTapRef.current;
@@ -281,6 +315,7 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
+      <RootErrorBoundary>
       <View style={{ flex: 1 }}>
         <NavigationContainer
           theme={AppTheme}
@@ -309,6 +344,7 @@ export default function App() {
             signalling screen, so it resolves done=true and never shows. */}
         <ColdStartOverlay done={(firstReady && minElapsed) || !session} />
       </View>
+      </RootErrorBoundary>
     </SafeAreaProvider>
   );
 }

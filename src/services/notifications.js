@@ -58,6 +58,23 @@ export async function registerPushToken(userId) {
   return token;
 }
 
+// Null the stored push token for a user. Call on logout so a shared device
+// stops receiving pushes tied to the ended session, and so a rotated/dead
+// token doesn't linger. Fire-and-forget from the caller: it issues the write
+// with the still-valid session before sign-out drops it.
+export async function clearPushToken(userId) {
+  if (!userId) return;
+  try {
+    const { error } = await supabase
+      .from('users')
+      .update({ push_token: null })
+      .eq('id', userId);
+    if (error) console.warn('[Push] clearPushToken failed:', error.message);
+  } catch (err) {
+    console.warn('[Push] clearPushToken error:', err?.message ?? err);
+  }
+}
+
 // Listen for notification taps (app in background/killed)
 export function setupNotificationListeners({ onNotificationTap }) {
   const subscription = Notifications.addNotificationResponseReceivedListener((response) => {

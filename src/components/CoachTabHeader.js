@@ -6,8 +6,8 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useNavigation } from '@react-navigation/native';
 import { Fonts, Spacing } from '../theme';
 import { useCoachData } from '../context/CoachDataContext';
-import RecordingProcessingIndicator from './RecordingProcessingIndicator';
 import DjiSetupBanner from './DjiSetupBanner';
+import DjiSyncPill from './DjiSyncPill';
 
 // May 2026 design refresh — gold/ink scale aligned with DashboardScreen.
 const GOLD_500 = '#E8B530';
@@ -39,10 +39,6 @@ export default function CoachTabHeader() {
             </View>
           )}
         </TouchableOpacity>
-
-        {/* Tiny pill that surfaces when an upload/transcription is in
-            flight in the background. Self-hides when nothing's pending. */}
-        <RecordingProcessingIndicator />
       </View>
 
       {/* First-run DJI auto-sync prompt. Only visible when a coach in
@@ -50,6 +46,13 @@ export default function CoachTabHeader() {
           bookmark yet. Tap → guided setup modal. Self-hides once the
           bookmark is set. */}
       <DjiSetupBanner />
+
+      {/* Sync-status pill (folder already set up). 4 states — red "Sync
+          files" / orange "Syncing %" / green "Synced" / "! Error". Tap
+          opens the full-screen flow. Mutually exclusive with the setup
+          banner above (that one requires NO bookmark). Self-hides when
+          there's nothing to sync. */}
+      <DjiSyncPill />
 
       {/* Avatar with white inner ring + gold halo via shadow. The
           borderWidth on the wrap acts as the white ring, the shadow

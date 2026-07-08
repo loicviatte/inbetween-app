@@ -100,6 +100,49 @@ export interface AutoSyncResult {
   unmatchedSessions?: OrphanSessionRef[];
   /** How many unmatched sessions were uploaded this run. */
   unmatchedUploaded?: number;
+  /** True if a mic read timed out mid-import (receiver unplugged). */
+  micDisconnected?: boolean;
+  /** True if an upload failed for a network reason and items are held. */
+  offline?: boolean;
+  /**
+   * Files fully prepared (copied off the mic + transcoded to m4a on disk) but
+   * NOT yet uploaded because the network dropped. The provider holds these and
+   * retries uploading them on reconnect — no re-copy / re-transcode needed.
+   */
+  offlinePending?: PreparedUpload[];
+}
+
+/** One part of a recording, already transcoded to m4a and sitting on disk. */
+export interface PreparedM4aPart {
+  /** Local file:// URI of the transcoded m4a in the app's cache. */
+  m4aUri: string;
+  /** Original DJI WAV filename (used for dedup + mic_file_names). */
+  name: string;
+  /** Original WAV byte size (for mic_file_size_bytes + summary). */
+  sizeBytes: number;
+}
+
+/**
+ * A recording that's been copied off the mic + transcoded, ready to upload.
+ * Carries everything the upload step needs so it can run later (on reconnect)
+ * without the mic. `kind` picks the destination: a class (pair) or the
+ * unmatched safety-net table (orphan).
+ */
+export interface PreparedUpload {
+  kind: 'pair' | 'orphan';
+  /** "Recording 2/5" — for progress labels. */
+  label: string;
+  m4aParts: PreparedM4aPart[];
+  /** Total original duration (for the completion summary). */
+  durationSec: number;
+  /** Total original WAV bytes (for the completion summary). */
+  sizeBytes: number;
+  // kind === 'pair'
+  classId?: string;
+  matched?: { confidence: MatchConfidence; actualDurationSec: number };
+  adminReviewStatus?: AdminReviewStatus;
+  // kind === 'orphan'
+  session?: OrphanSessionRef;
 }
 
 export interface AutoSyncCallbacks {
@@ -115,6 +158,13 @@ export interface AutoSyncCallbacks {
    * (matched pairs + unmatched uploads) to drive a progress bar.
    */
   onProgress?: (status: string, fraction?: number) => void;
+  /**
+   * Fires when a new recording (matched pair OR unmatched session) starts
+   * importing, carrying its 1-based position across the WHOLE run and its
+   * total byte size. Lets the UI show "Recording 7 of 12 · 128 MB" without
+   * exposing raw DJI filenames.
+   */
+  onFile?: (info: { idx: number; total: number; sizeBytes: number }) => void;
 }
 
 export interface AutoSyncOptions extends AutoSyncCallbacks {
@@ -135,6 +185,42 @@ export interface AutoSyncOptions extends AutoSyncCallbacks {
   uploadUnmatched?: boolean;
 }
 
+// ─── Error classification ────────────────────────────────────────────────
+//
+// Heuristic bucketing of a sync failure into the three UX-relevant kinds the
+// v2 mic-sync flow renders distinctly. Pure string-matching (no NetInfo dep)
+// — good enough to pick the right screen; the raw message is still shown.
+
+export type SyncErrorKind = 'disconnect' | 'offline' | 'generic';
+
+/**
+ * `disconnect` — the mic's USB-C volume went away mid-import (bookmark still
+ * resolves but the folder/file can't be read).
+ * `offline`   — the upload leg failed for a network reason.
+ * `generic`   — anything else.
+ * Order matters: a read failure after unmount can superficially look generic,
+ * so we test the disconnect/offline signatures first.
+ */
+export function classifySyncError(message?: string | null): SyncErrorKind {
+  const m = (message ?? '').toLowerCase();
+  if (!m) return 'generic';
+  if (
+    /unmount|not mounted|no such file|couldn.?t be read|couldn.?t read|no folder|folder access|e_no_folder|e_enumerate|enumerate|bookmark|resolve|volume|disconnect|nsfileread|cfurl|the file .* couldn|operation not permitted/.test(
+      m,
+    )
+  ) {
+    return 'disconnect';
+  }
+  if (
+    /network|offline|internet|fetch failed|failed to fetch|timed ?out|timeout|enotfound|econnreset|econnrefused|unreachable|connection|could not connect|nsurlerror|socket|tls|dns|no address/.test(
+      m,
+    )
+  ) {
+    return 'offline';
+  }
+  return 'generic';
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────
 
 /**
@@ -146,6 +232,32 @@ export interface AutoSyncOptions extends AutoSyncCallbacks {
 function approximateWavDurationSec(sizeBytes: number): number {
   const BYTES_PER_SEC = 144_000;
   return Math.max(0, Math.round((sizeBytes - 44) / BYTES_PER_SEC));
+}
+
+/**
+ * Count LOGICAL recordings (sessions) among raw mic-folder entries. The DJI mic
+ * splits one continuous recording into multiple ~30-min parts that share an
+ * index, so a raw parseable-file count over-reports (a 90-min class = 3 files =
+ * 1 recording). Groups parts into sessions exactly like the sync pipeline does.
+ * Used by the setup success screen so "Found N recordings" matches reality.
+ */
+export function countMicSessions(
+  entries: Array<{ name: string; sizeBytes: number }>,
+): number {
+  const micFiles: MicFile[] = [];
+  for (const entry of entries) {
+    const meta = parseDjiFileName(entry.name);
+    if (!meta) continue;
+    micFiles.push({
+      fileName: entry.name,
+      index: meta.index,
+      timestamp: meta.timestamp,
+      durationSec: approximateWavDurationSec(entry.sizeBytes),
+      sizeBytes: entry.sizeBytes,
+      uri: '',
+    });
+  }
+  return groupMicFilesIntoSessions(micFiles).length;
 }
 
 /**
@@ -184,6 +296,18 @@ const ORPHAN_RECENCY_DAYS = 14;
 // storage pressure — that's an acceptable upper-bound-only guarantee.
 const M4A_BACKUP_DIR = `${FileSystem.cacheDirectory ?? ''}dji-m4a-backup/`;
 const M4A_BACKUP_RETENTION_MS = 3 * 24 * 60 * 60 * 1000; // 3 days
+
+// Where transcoded m4a live between the PREPARE and UPLOAD phases (and while an
+// upload is held waiting for the network to come back). Cache survives
+// backgrounding; lost on app kill (then the file re-prepares next launch).
+const PREPARE_DIR = `${FileSystem.cacheDirectory ?? ''}dji-prepared/`;
+// A prepared m4a normally lives in PREPARE_DIR for seconds (until its upload
+// commits and it's retired to backup) — or minutes while an offline hold
+// retries. Anything older than this window is a leftover from a hard failure or
+// an app kill (the in-memory hold that referenced it is gone), safe to sweep.
+// Comfortably longer than any single continuous offline hold so an active
+// retry's freshly-written file is never reclaimed out from under it.
+const PREPARE_STALE_MS = 24 * 60 * 60 * 1000; // 1 day
 
 function deriveAdminReviewStatus(
   sessionStatus: MatchSession['status'],
@@ -238,52 +362,81 @@ export async function fetchPendingUploads(userId: string): Promise<PendingClassR
     .filter((p) => p.durationSec >= MIN_VALID_DURATION_SEC);
 }
 
+const DEDUP_PAGE = 1000;
+
+function isMissingTableError(err: any): boolean {
+  const code = err?.code;
+  return (
+    code === '42P01' ||
+    code === 'PGRST205' ||
+    /relation .* does not exist|could not find the table/i.test(err?.message ?? '')
+  );
+}
+
 async function fetchImportedFilenames(userId: string): Promise<Set<string>> {
   // Dedup by EXACT filename (e.g. "DJI_03_20260514_123159.WAV"), not by
-  // mic_file_index. The mic's index counter restarts at 1 whenever it
-  // gets reformatted (firmware behaviour, or user-triggered reset),
-  // which would otherwise make every "new" file appear < the max we'd
-  // already imported and get silently filtered out. The filename
-  // includes a precise timestamp from the mic's RTC so collisions
-  // across reformats are vanishingly unlikely.
-  //
-  // Failed / discarded rows are excluded so a stuck upload doesn't
+  // mic_file_index. The mic's index counter restarts at 1 whenever it gets
+  // reformatted, which would otherwise make every "new" file appear < the max
+  // we'd already imported and get silently filtered out. The filename includes
+  // a precise mic-RTC timestamp so collisions across reformats are vanishingly
+  // unlikely. Failed/discarded rows are excluded so a stuck upload doesn't
   // permanently block re-syncing the same file.
-  const { data } = await supabase
-    .from('class_recordings')
-    .select('mic_file_name, meta')
-    .eq('user_id', userId)
-    .eq('local_recording_mode', true)
-    .not('mic_file_name', 'is', null)
-    .not('status', 'in', '(failed,discarded)')
-    .limit(500);
+  //
+  // We PAGINATE (not a fixed .limit) — a coach with >500 lifetime imports would
+  // otherwise get a truncated, non-deterministic dedup set and re-import the
+  // filenames that fell outside the cap. A failed read throws (an empty/partial
+  // Set derived from a failure would drive mass re-upload).
   const names = new Set<string>();
-  for (const r of (data ?? []) as any[]) {
-    if (r.mic_file_name) names.add(r.mic_file_name as string);
-    // A split recording stores every part's filename in meta.mic_file_names
-    // (mic_file_name only holds the first part). Collect them all so the
-    // 2nd/3rd part of an already-imported session isn't re-offered as new.
-    const partNames = r.meta?.mic_file_names;
-    if (Array.isArray(partNames)) {
-      for (const n of partNames) if (typeof n === 'string') names.add(n);
+
+  for (let from = 0; ; from += DEDUP_PAGE) {
+    const { data, error } = await supabase
+      .from('class_recordings')
+      .select('mic_file_name, meta')
+      .eq('user_id', userId)
+      .eq('local_recording_mode', true)
+      .not('mic_file_name', 'is', null)
+      .not('status', 'in', '(failed,discarded)')
+      .order('id', { ascending: true })
+      .range(from, from + DEDUP_PAGE - 1);
+    if (error) throw error;
+    const batch = (data ?? []) as any[];
+    for (const r of batch) {
+      if (r.mic_file_name) names.add(r.mic_file_name as string);
+      // A split recording stores every part's filename in meta.mic_file_names
+      // (mic_file_name only holds the first part) — collect them all.
+      const partNames = r.meta?.mic_file_names;
+      if (Array.isArray(partNames)) {
+        for (const n of partNames) if (typeof n === 'string') names.add(n);
+      }
     }
+    if (batch.length < DEDUP_PAGE) break;
   }
-  // Also dedup against files already uploaded via the unmatched safety net,
-  // so they're never re-offered or re-uploaded on a later sync. (Table may
-  // not exist on older deployments — the optional chain + null guard keep
-  // this a no-op rather than throwing in that case.)
-  const { data: orphans } = await supabase
-    .from('unmatched_recordings')
-    .select('part_filenames')
-    .eq('user_id', userId)
-    .neq('status', 'discarded')
-    .limit(500);
-  for (const r of (orphans ?? []) as any[]) {
-    const parts = r.part_filenames;
-    if (Array.isArray(parts)) {
-      for (const n of parts) if (typeof n === 'string') names.add(n);
+
+  // Also dedup against files already uploaded via the unmatched safety net.
+  // Table may not exist on older deployments — that specific error is a no-op;
+  // any other error means an incomplete dedup set → throw.
+  for (let from = 0; ; from += DEDUP_PAGE) {
+    const { data: orphans, error: orphansError } = await supabase
+      .from('unmatched_recordings')
+      .select('part_filenames')
+      .eq('user_id', userId)
+      .neq('status', 'discarded')
+      .order('id', { ascending: true })
+      .range(from, from + DEDUP_PAGE - 1);
+    if (orphansError) {
+      if (isMissingTableError(orphansError)) break;
+      throw orphansError;
     }
+    const batch = (orphans ?? []) as any[];
+    for (const r of batch) {
+      const parts = r.part_filenames;
+      if (Array.isArray(parts)) {
+        for (const n of parts) if (typeof n === 'string') names.add(n);
+      }
+    }
+    if (batch.length < DEDUP_PAGE) break;
   }
+
   return names;
 }
 
@@ -313,15 +466,59 @@ async function uploadFileToStorage(
   };
   // createUploadTask streams byte progress via the callback; uploadAsync()
   // resolves the same { status, body } shape as the plain upload.
+  let lastProgressAt = Date.now();
+  let allBytesSentAt = 0; // when the final byte hit the wire (0 = not yet)
+  let stallTimer: ReturnType<typeof setInterval> | undefined;
   const task = FileSystem.createUploadTask(url, localUri, options, (p: any) => {
+    lastProgressAt = Date.now();
     const total = p?.totalBytesExpectedToSend ?? 0;
+    const sent = p?.totalBytesSent ?? 0;
     if (onProgress && total > 0) {
-      onProgress(Math.min(1, (p?.totalBytesSent ?? 0) / total));
+      onProgress(Math.min(1, sent / total));
+    }
+    // Mark when every byte is on the wire. After this the only wait is the
+    // SERVER forming its response, which the watchdog bounds with a SEPARATE,
+    // longer ack timeout (not the short no-progress stall) — so a slow ack isn't
+    // misread as a lost connection (false offline) while STILL capping a hung/
+    // half-open socket that never acks. Fully clearing the watchdog here (an
+    // earlier bug) let such a socket hang the upload — and the whole offline
+    // retry loop — forever.
+    if (total > 0 && sent >= total && !allBytesSentAt) {
+      allBytesSentAt = Date.now();
     }
   });
-  const upRes = await task.uploadAsync();
-  if (!upRes || upRes.status < 200 || upRes.status >= 300) {
-    throw new Error(`Storage upload ${upRes?.status}: ${(upRes?.body ?? '').slice(0, 200)}`);
+
+  // If the connection drops MID-upload, the in-flight request does NOT error —
+  // it hangs until the OS socket timeout (can be minutes), freezing the bar.
+  // Two-phase watchdog, both cancel + reject with a network error so the caller
+  // holds the file offline and retries once we're back online:
+  //   • mid-transfer: no byte progress for UPLOAD_STALL_MS ⇒ lost connection.
+  //   • after all bytes sent: bound the server-ack wait to ACK_TIMEOUT_MS.
+  const UPLOAD_STALL_MS = 15_000;
+  const ACK_TIMEOUT_MS = 60_000;
+  const uploadPromise = task.uploadAsync();
+  // Keep it handled — cancelAsync() below can make it reject after we've raced away.
+  uploadPromise.catch(() => {});
+  const stallGuard = new Promise<never>((_, reject) => {
+    stallTimer = setInterval(() => {
+      const now = Date.now();
+      const stalled = allBytesSentAt
+        ? now - allBytesSentAt > ACK_TIMEOUT_MS
+        : now - lastProgressAt > UPLOAD_STALL_MS;
+      if (stalled) {
+        try { task.cancelAsync?.(); } catch {}
+        reject(new Error('E_UPLOAD_STALL: network stalled mid-upload — connection lost'));
+      }
+    }, 3000);
+  });
+
+  try {
+    const upRes = await Promise.race([uploadPromise, stallGuard]);
+    if (!upRes || upRes.status < 200 || upRes.status >= 300) {
+      throw new Error(`Storage upload ${upRes?.status}: ${(upRes?.body ?? '').slice(0, 200)}`);
+    }
+  } finally {
+    if (stallTimer) clearInterval(stallTimer);
   }
 }
 
@@ -386,6 +583,21 @@ export async function attachSessionToClass(args: {
       await FileSystem.makeDirectoryAsync(M4A_BACKUP_DIR, { intermediates: true });
       await FileSystem.moveAsync({ from: m4aUri, to: `${M4A_BACKUP_DIR}${classId}_${idx}.m4a` });
     } catch { /* leave it in tmp */ }
+  }
+
+  // Drop any stale chunk rows left by an earlier, LARGER import of this class.
+  // Chunks are keyed by (recording_id, idx) and only ever upserted, never
+  // deleted, while expected_chunks is re-set to the current part count. If a
+  // re-import produces fewer parts, a leftover higher-idx chunk would otherwise
+  // survive — and finalize gates on chunk COUNT, not idx completeness — so a
+  // stale part could be transcribed into the final transcript.
+  {
+    const { error: pruneErr } = await supabase
+      .from('class_recording_chunks')
+      .delete()
+      .eq('recording_id', classId)
+      .gte('idx', parts.length);
+    if (pruneErr) throw pruneErr;
   }
 
   const first = parts[0];
@@ -490,6 +702,162 @@ export async function purgeExpiredM4aBackups(): Promise<void> {
   } catch { /* best-effort */ }
 }
 
+/**
+ * Sweep the PREPARE_DIR staging folder. Prepared m4a are retired to the backup
+ * folder on a successful upload; any file left here past PREPARE_STALE_MS is a
+ * leftover from a hard failure, a failed retire-move, or an app kill (the
+ * in-memory offline hold that referenced it no longer exists), so it will never
+ * be uploaded and is safe to delete. Best-effort: never throws. Call alongside
+ * purgeExpiredM4aBackups() on a surface the coach opens regularly.
+ */
+export async function purgeExpiredPreparedFiles(): Promise<void> {
+  try {
+    const info = await FileSystem.getInfoAsync(PREPARE_DIR);
+    if (!info.exists) return;
+    const names = await FileSystem.readDirectoryAsync(PREPARE_DIR);
+    const now = Date.now();
+    for (const name of names) {
+      const path = `${PREPARE_DIR}${name}`;
+      try {
+        const fi = await FileSystem.getInfoAsync(path);
+        const ageMs = fi.exists && fi.modificationTime
+          ? now - fi.modificationTime * 1000
+          : Infinity;
+        if (ageMs > PREPARE_STALE_MS) {
+          await FileSystem.deleteAsync(path, { idempotent: true });
+        }
+      } catch { /* skip this file */ }
+    }
+  } catch { /* best-effort */ }
+}
+
+// ─── Orphan → class reconciliation ───────────────────────────────────────
+// An orphan (unmatched_recordings) is created when a mic file matched no PENDING
+// class at sync time; its filenames then enter the dedup set, so if the class
+// appears LATER (coach synced before ending it), the mic file can never re-match
+// and the class stays pending forever, focus points never released. This
+// resolves that by matching an already-uploaded orphan to a pending class on
+// duration + date and ATTACHING it (chunks point at the orphan's m4a — no
+// re-upload). Always admin_review_status='pending' — a duration match with no
+// mic re-read is a guess, so a human confirms before focus points go live.
+
+async function kickFinalizeClass(classId: string): Promise<void> {
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const url = `${process.env.EXPO_PUBLIC_SUPABASE_URL}/functions/v1/finalize-class`;
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token ?? ''}` },
+      body: JSON.stringify({ recording_id: classId }),
+    }).catch(() => {});
+  } catch { /* fire-and-forget */ }
+}
+
+// Idempotent orphan write: upsert on the natural key so a lost-ACK retry is a
+// no-op, not a duplicate row. If the unique constraint isn't present yet (a
+// client OTA that landed before the migration), Postgres raises 42P10 on the
+// ON CONFLICT — fall back to a plain insert so the recording still gets off the
+// mic (a rare duplicate beats a stuck upload). Once the migration is live the
+// upsert path dedups as intended.
+async function insertOrphanRow(row: Record<string, unknown>): Promise<void> {
+  const { error } = await supabase.from('unmatched_recordings').upsert(row, {
+    onConflict: 'user_id,dji_index,mic_timestamp',
+    ignoreDuplicates: true,
+  });
+  if (!error) return;
+  if ((error as any).code === '42P10') {
+    const { error: insErr } = await supabase.from('unmatched_recordings').insert(row);
+    if (insErr) throw insErr;
+    return;
+  }
+  throw error;
+}
+
+async function attachOrphanToClass(
+  _userId: string,
+  cls: PendingClassRow,
+  orphan: any,
+): Promise<boolean> {
+  // The attach touches 3 tables (chunks, class, orphan) and must be ATOMIC +
+  // concurrency-safe against a racing mic-match or a second device. Doing it as
+  // separate client statements is neither (an earlier client-side version left
+  // a class pointing at the wrong orphan's audio when a guard failed AFTER the
+  // chunk delete). Delegate the whole thing to a single transactional RPC with
+  // row locks: it re-checks the orphan is still 'uploaded' and the class is
+  // still pending (mic_file_name IS NULL) under lock and rolls the entire
+  // transaction back otherwise — so no partial/wrong-audio state is possible.
+  const { data, error } = await supabase.rpc('reconcile_attach_orphan', {
+    p_orphan_id: orphan.id,
+    p_class_id: cls.id,
+  });
+  if (error) throw error;
+  if (data !== true) return false; // orphan already claimed / class no longer pending
+  await kickFinalizeClass(cls.id);
+  return true;
+}
+
+/**
+ * Attach already-uploaded orphans to pending classes they plausibly belong to.
+ * Returns the set of class IDs that got an orphan attached (the caller drops
+ * them from the working set so they're not also matched against the mic).
+ */
+async function reconcileOrphansToClasses(
+  userId: string,
+  pendingClasses: PendingClassRow[],
+): Promise<Set<string>> {
+  const reconciled = new Set<string>();
+  if (pendingClasses.length === 0) return reconciled;
+
+  const { data: orphans, error } = await supabase
+    .from('unmatched_recordings')
+    .select('id, dji_index, mic_timestamp, duration_sec, size_bytes, part_filenames, storage_paths')
+    .eq('user_id', userId)
+    .eq('status', 'uploaded');
+  if (error) {
+    if (isMissingTableError(error)) return reconciled;
+    throw error;
+  }
+  if (!orphans || orphans.length === 0) return reconciled;
+
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const RECONCILE_DATE_TOLERANCE_DAYS = 2; // same window planAutoSync admits files by
+  const used = new Set<string>();
+  // Oldest class first — deterministic, and pairs the earliest orphan to the
+  // earliest class when several are duration-close.
+  const classes = [...pendingClasses].sort((a, b) => +a.startedAt - +b.startedAt);
+  for (const cls of classes) {
+    const expected = cls.durationSec;
+    if (!expected) continue;
+    let best: any = null;
+    let bestScore = Infinity;
+    for (const o of orphans) {
+      if (used.has(o.id)) continue;
+      if (!o.duration_sec || !o.mic_timestamp) continue;
+      if (!Array.isArray(o.storage_paths) || o.storage_paths.length === 0) continue;
+      const ratio = o.duration_sec / expected;
+      if (ratio < 0.5 || ratio > 1.5) continue; // ±50% (matcher's medium band)
+      const oDay = Math.floor(Date.parse(o.mic_timestamp) / DAY_MS);
+      const cDay = Math.floor(+cls.startedAt / DAY_MS);
+      if (Math.abs(oDay - cDay) > RECONCILE_DATE_TOLERANCE_DAYS) continue;
+      const score = Math.abs(ratio - 1);
+      if (score < bestScore) { bestScore = score; best = o; }
+    }
+    if (!best) continue;
+    // Reserve this orphan for the rest of THIS run regardless of outcome — a
+    // lost claim or a failed attach shouldn't let the same orphan be tried for
+    // another class in the same pass; the next run re-evaluates from fresh DB
+    // state (a reverted claim is back to 'uploaded' and re-selectable then).
+    used.add(best.id);
+    try {
+      const attached = await attachOrphanToClass(userId, cls, best);
+      if (attached) reconciled.add(cls.id);
+    } catch (err) {
+      console.warn('[autoSync] orphan reconcile failed for class', cls.id, err);
+    }
+  }
+  return reconciled;
+}
+
 // ─── Planning: figure out what to import without uploading yet ──────────
 
 /**
@@ -513,6 +881,19 @@ export async function planAutoSync(
     };
   }
 
+  // First resolve any already-uploaded orphans to these pending classes (reuse
+  // the audio, no re-upload). Reconciled classes drop out of the working set so
+  // a mic file can't ALSO get matched to a class we just attached an orphan to.
+  let reconciledIds = new Set<string>();
+  try {
+    reconciledIds = await reconcileOrphansToClasses(userId, pendingClasses);
+  } catch (err) {
+    console.warn('[autoSync] orphan reconciliation failed (non-fatal):', err);
+  }
+  const workingClasses = reconciledIds.size
+    ? pendingClasses.filter((p) => !reconciledIds.has(p.id))
+    : pendingClasses;
+
   const allEntries = await DjiFiles.listFiles();
   const importedFilenames = await fetchImportedFilenames(userId);
 
@@ -525,7 +906,7 @@ export async function planAutoSync(
   // recordings" even though the right files were sitting right there.
   const DATE_TOLERANCE_DAYS = 2;
   const acceptableDates = new Set<string>();
-  for (const p of pendingClasses) {
+  for (const p of workingClasses) {
     const base = new Date(Date.UTC(
       p.startedAt.getUTCFullYear(),
       p.startedAt.getUTCMonth(),
@@ -595,7 +976,7 @@ export async function planAutoSync(
     };
   }
 
-  const classesForMatcher = pendingClasses.map((p) => ({
+  const classesForMatcher = workingClasses.map((p) => ({
     id: p.id,
     startedAt: p.startedAt,
     endedAt: p.endedAt,
@@ -619,7 +1000,26 @@ export async function planAutoSync(
 
   if (result.status === 'matched') {
     for (const m of result.matches) {
-      const cls = pendingClasses.find((p) => p.id === m.class.id);
+      const cls = workingClasses.find((p) => p.id === m.class.id);
+      let adminReviewStatus = deriveAdminReviewStatus(result.status, m.confidence);
+      // Auto-approval ALSO requires the paired file's date to be plausibly near
+      // the class date. Equal session/class counts force a positional 1:1
+      // pairing even when the sets are actually mis-aligned — a class with no
+      // file plus a stray orphan gives equal counts, and a duration coincidence
+      // would otherwise auto-release focus points to the WRONG student. We reuse
+      // the SAME ±DATE_TOLERANCE_DAYS *calendar-date* window the candidate gate
+      // admits files by, so a legitimate high-RTC-drift match that was admitted
+      // is never over-held — only a pair whose date lands outside that window
+      // (a genuine mis-alignment) drops to admin review instead of auto-approve.
+      if (adminReviewStatus === 'approved' && cls?.startedAt) {
+        const DAY_MS = 24 * 60 * 60 * 1000;
+        const utcDay = (d: Date) =>
+          Math.floor(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) / DAY_MS);
+        const dayGap = Math.abs(utcDay(m.session.startTimestamp) - utcDay(cls.startedAt));
+        if (!(dayGap <= DATE_TOLERANCE_DAYS)) {
+          adminReviewStatus = 'pending';
+        }
+      }
       pairs.push({
         classId: m.class.id,
         parts: sessionToParts(m.session),
@@ -628,7 +1028,7 @@ export async function planAutoSync(
         confidence: m.confidence,
         actualDurationSec: m.actualDurationSec,
         studentName: cls?.studentName ?? null,
-        adminReviewStatus: deriveAdminReviewStatus(result.status, m.confidence),
+        adminReviewStatus,
       });
     }
   } else if (result.status === 'count_mismatch') {
@@ -640,7 +1040,7 @@ export async function planAutoSync(
       const scored = matchSessionsToClasses([cls], [session]);
       const m = scored.matches[0];
       if (!m) continue;
-      const pendingRow = pendingClasses.find((p) => p.id === cls.id);
+      const pendingRow = workingClasses.find((p) => p.id === cls.id);
       pairs.push({
         classId: cls.id,
         parts: sessionToParts(session),
@@ -764,7 +1164,9 @@ export async function uploadUnmatchedSession(args: {
     } catch { /* leave it in tmp */ }
   }
 
-  const { error } = await supabase.from('unmatched_recordings').insert({
+  // Idempotent on the natural key — a lost-ACK retry re-runs this whole
+  // function and must not create a duplicate row (see insertOrphanRow).
+  await insertOrphanRow({
     user_id: userId,
     dji_index: session.index,
     mic_timestamp: session.startTimestamp.toISOString(),
@@ -774,10 +1176,213 @@ export async function uploadUnmatchedSession(args: {
     storage_paths: storagePaths,
     status: 'uploaded',
   });
-  if (error) throw error;
 }
 
-// ─── Execute: upload the planned pairs ──────────────────────────────────
+// ─── Upload a prepared (already-transcoded) recording ────────────────────
+//
+// These take m4a already on disk and ONLY talk to the network + DB — no mic,
+// no transcode. Split out from attach/uploadUnmatchedSession so the two-phase
+// engine (and the offline-retry path) can upload without re-preparing.
+
+async function uploadPreparedPair(
+  userId: string,
+  item: PreparedUpload,
+  onPartProgress?: (partIndex: number, partCount: number, fraction: number) => void,
+): Promise<void> {
+  const classId = item.classId as string;
+  const { m4aParts, matched } = item;
+  for (let idx = 0; idx < m4aParts.length; idx++) {
+    const storagePath = `${userId}/${classId}/${idx}.m4a`;
+    // Upload straight from PREPARE_DIR and leave the file there. Re-uploading a
+    // chunk is idempotent (x-upsert), so if a LATER part fails mid-item and the
+    // whole item is retried, every part's m4a is still readable at its original
+    // path. We only retire them to backup once the whole item commits (below).
+    await uploadFileToStorage(
+      m4aParts[idx].m4aUri,
+      storagePath,
+      (frac) => onPartProgress?.(idx + 1, m4aParts.length, frac),
+      'audio/mp4',
+    );
+    const { error: chunkErr } = await supabase
+      .from('class_recording_chunks')
+      .upsert({ recording_id: classId, idx, storage_path: storagePath, status: 'uploaded' });
+    if (chunkErr) throw chunkErr;
+  }
+
+  // Drop stale chunk rows from an earlier, larger import of this class (see the
+  // matching prune in attachSessionToClass) so a shrunk re-import can't leave a
+  // leftover higher-idx chunk that finalize would fold into the transcript.
+  {
+    const { error: pruneErr } = await supabase
+      .from('class_recording_chunks')
+      .delete()
+      .eq('recording_id', classId)
+      .gte('idx', m4aParts.length);
+    if (pruneErr) throw pruneErr;
+  }
+
+  const first = m4aParts[0];
+  const djiMeta = parseDjiFileName(first.name);
+  const totalSizeBytes = m4aParts.reduce((sum, p) => sum + (p.sizeBytes || 0), 0);
+  const partNames = m4aParts.map((p) => p.name);
+  const { data: existing } = await supabase
+    .from('class_recordings')
+    .select('meta')
+    .eq('id', classId)
+    .maybeSingle();
+  const mergedMeta = { ...((existing?.meta as Record<string, unknown>) ?? {}), mic_file_names: partNames };
+
+  const { error: updErr } = await supabase
+    .from('class_recordings')
+    .update({
+      status: 'ready',
+      expected_chunks: m4aParts.length,
+      audio_folder: `${userId}/${classId}/`,
+      last_heartbeat_at: new Date().toISOString(),
+      mic_file_name: first.name,
+      mic_file_index: djiMeta?.index ?? null,
+      mic_file_timestamp: djiMeta?.timestamp?.toISOString() ?? null,
+      mic_file_duration_sec: matched?.actualDurationSec ?? item.durationSec,
+      mic_file_size_bytes: totalSizeBytes,
+      file_imported_at: new Date().toISOString(),
+      match_confidence: matched?.confidence,
+      admin_review_status: item.adminReviewStatus,
+      admin_reviewed_at: item.adminReviewStatus === 'approved' ? new Date().toISOString() : null,
+      meta: mergedMeta,
+    })
+    .eq('id', classId);
+  if (updErr) throw updErr;
+
+  // Whole item committed — retire the prepared m4a to the short-lived backup.
+  for (let idx = 0; idx < m4aParts.length; idx++) {
+    try {
+      await FileSystem.makeDirectoryAsync(M4A_BACKUP_DIR, { intermediates: true });
+      await FileSystem.moveAsync({ from: m4aParts[idx].m4aUri, to: `${M4A_BACKUP_DIR}${classId}_${idx}.m4a` });
+    } catch { /* leave it in the prepare dir; the purge sweeps it later */ }
+  }
+
+  // Best-effort kick of finalize-class. The cron picks up stragglers.
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const url = `${process.env.EXPO_PUBLIC_SUPABASE_URL}/functions/v1/finalize-class`;
+    fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token ?? ''}` },
+      body: JSON.stringify({ recording_id: classId }),
+    }).catch(() => {});
+  } catch { /* fire-and-forget */ }
+}
+
+async function uploadPreparedOrphan(
+  userId: string,
+  item: PreparedUpload,
+  onPartProgress?: (partIndex: number, partCount: number, fraction: number) => void,
+): Promise<void> {
+  const session = item.session as OrphanSessionRef;
+  const { m4aParts } = item;
+  const tsCompact = session.startTimestamp.toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
+  const folder = `unmatched/${session.index}_${tsCompact}`;
+  const storagePaths: string[] = [];
+  for (let idx = 0; idx < m4aParts.length; idx++) {
+    const storagePath = `${userId}/${folder}/${idx}.m4a`;
+    // Upload from PREPARE_DIR, leave the file there until the whole item's DB
+    // row commits (below) so a mid-item retry can re-read every part.
+    await uploadFileToStorage(
+      m4aParts[idx].m4aUri,
+      storagePath,
+      (frac) => onPartProgress?.(idx + 1, m4aParts.length, frac),
+      'audio/mp4',
+    );
+    storagePaths.push(storagePath);
+  }
+  // Idempotent on the natural key — a lost-ACK retry re-runs the whole function
+  // and must not create a duplicate row (see insertOrphanRow).
+  await insertOrphanRow({
+    user_id: userId,
+    dji_index: session.index,
+    mic_timestamp: session.startTimestamp.toISOString(),
+    duration_sec: session.durationSec,
+    size_bytes: m4aParts.reduce((n, p) => n + (p.sizeBytes || 0), 0),
+    part_filenames: m4aParts.map((p) => p.name),
+    storage_paths: storagePaths,
+    status: 'uploaded',
+  });
+
+  // Committed — retire the prepared m4a to the short-lived backup.
+  for (let idx = 0; idx < m4aParts.length; idx++) {
+    try {
+      await FileSystem.makeDirectoryAsync(M4A_BACKUP_DIR, { intermediates: true });
+      await FileSystem.moveAsync({ from: m4aParts[idx].m4aUri, to: `${M4A_BACKUP_DIR}unmatched_${session.index}_${idx}.m4a` });
+    } catch { /* leave it in the prepare dir; the purge sweeps it later */ }
+  }
+}
+
+/**
+ * Upload a list of already-prepared recordings. Stops at the first NETWORK
+ * failure and returns the not-yet-uploaded remainder in `stillPending` so the
+ * caller (offline retry) can pick up from there. Non-network per-item failures
+ * are recorded and skipped. Emits onFile / onProgress like executeAutoSync.
+ */
+export async function uploadPreparedItems(
+  userId: string,
+  items: PreparedUpload[],
+  opts: {
+    onFile?: (info: { idx: number; total: number; sizeBytes: number }) => void;
+    onProgress?: (status: string, fraction?: number) => void;
+  } = {},
+): Promise<{
+  imported: number;
+  unmatchedUploaded: number;
+  offline: boolean;
+  stillPending: PreparedUpload[];
+  errors: Array<{ classId: string; error: string }>;
+}> {
+  let imported = 0;
+  let unmatchedUploaded = 0;
+  let offline = false;
+  const stillPending: PreparedUpload[] = [];
+  const errors: Array<{ classId: string; error: string }> = [];
+  const total = items.length;
+  const partsTotal = items.reduce((n, it) => n + it.m4aParts.length, 0);
+  let basePartsDone = 0;
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    if (offline) {
+      stillPending.push(item);
+      basePartsDone += item.m4aParts.length;
+      continue;
+    }
+    opts.onFile?.({ idx: i + 1, total, sizeBytes: item.sizeBytes });
+    const onPart = (partIdx: number, partCount: number, frac: number) =>
+      opts.onProgress?.(
+        `${item.label} · uploading part ${partIdx}/${partCount} · ${Math.round(frac * 100)}%`,
+        partsTotal > 0 ? Math.min(1, (basePartsDone + (partIdx - 1) + frac) / partsTotal) : 0,
+      );
+    try {
+      if (item.kind === 'pair') {
+        await uploadPreparedPair(userId, item, onPart);
+        imported += 1;
+      } else {
+        await uploadPreparedOrphan(userId, item, onPart);
+        unmatchedUploaded += 1;
+      }
+    } catch (err: any) {
+      const msg = err?.message ?? String(err);
+      if (classifySyncError(msg) === 'offline') {
+        offline = true;
+        stillPending.push(item);
+      } else {
+        console.warn(`[autoSync] prepared upload failed: ${msg}`);
+        errors.push({ classId: item.classId ?? `unmatched:${item.session?.index}`, error: msg });
+      }
+    }
+    basePartsDone += item.m4aParts.length;
+  }
+  return { imported, unmatchedUploaded, offline, stillPending, errors };
+}
+
+// ─── Execute: prepare (copy + transcode) then upload the planned pairs ────
 
 export async function executeAutoSync(
   userId: string,
@@ -809,6 +1414,11 @@ export async function executeAutoSync(
   let imported = 0;
   let unmatchedUploaded = 0;
   const total = pairsToImport.length;
+  // 1-based position denominator spanning matched pairs + orphan uploads, so
+  // the UI's "N of M" matches the same run the progress bar reports.
+  const combinedTotal = pairsToImport.length + orphanSessions.length;
+  const sumPartBytes = (parts: Array<{ sizeBytes: number }>) =>
+    parts.reduce((n, p) => n + (p.sizeBytes || 0), 0);
 
   // Overall progress across every part of every session (pairs + orphans), so
   // the coach sees one continuous 0→100% bar.
@@ -822,76 +1432,234 @@ export async function executeAutoSync(
       totalParts > 0 ? Math.min(1, (basePartsDone + withinFrac) / totalParts) : 0,
     );
 
+  // A receiver unplugged mid-import makes the native security-scoped read hang
+  // with no error — the progress bar just freezes. Bound each mic read so a
+  // vanished mic surfaces as a disconnect (caught below) instead of hanging.
+  let micDisconnected = false;
+  const COPY_TIMEOUT_MS = 60_000;
+  const copyFromMic = async (relativePath: string): Promise<string> => {
+    let timer: ReturnType<typeof setTimeout>;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        // Ask the native side to abort the chunked read so it can release the
+        // security scope early. Best-effort: it only lands promptly if the file
+        // provider is still returning reads — a fully-dead volume can block
+        // in-kernel until iOS gives up. This 60s timeout is the hard backstop.
+        try { DjiFiles.cancelCopy?.(); } catch {}
+        reject(new Error('E_MIC_TIMEOUT: mic read timed out — receiver likely unplugged'));
+      }, COPY_TIMEOUT_MS);
+    });
+    try {
+      return (await Promise.race([DjiFiles.copyFileToCache(relativePath), timeout])) as string;
+    } finally {
+      clearTimeout(timer!);
+    }
+  };
+
+  // Bound the transcode too — AVAssetExportSession can hang on a corrupt or
+  // partially-copied WAV, which would otherwise freeze the whole sync in
+  // "compressing" forever with no error.
+  const TRANSCODE_TIMEOUT_MS = 90_000;
+  const transcodeWithTimeout = async (wavUri: string): Promise<string> => {
+    let timer: ReturnType<typeof setTimeout>;
+    let timedOut = false;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        timedOut = true;
+        // Stop AVAssetExportSession from encoding a result we've abandoned.
+        try { DjiFiles.cancelTranscode?.(); } catch {}
+        reject(new Error('E_TRANSCODE: compression stalled — the recording may be corrupt'));
+      }, TRANSCODE_TIMEOUT_MS);
+    });
+    const native = DjiFiles.transcodeToM4A(wavUri);
+    // Late-arrival cleanup: if cancelExport() lost the race and the export still
+    // finished AFTER our timeout already rejected, JS never consumes this path —
+    // delete it so the m4a doesn't orphan in the native temp dir. The second
+    // handler swallows a late rejection so it isn't an unhandled promise.
+    native.then(
+      (path: string) => {
+        if (timedOut && path) FileSystem.deleteAsync(path, { idempotent: true }).catch(() => {});
+      },
+      () => {},
+    );
+    try {
+      return (await Promise.race([native, timeout])) as string;
+    } finally {
+      clearTimeout(timer!);
+    }
+  };
+
+  let offline = false;
+  const offlinePending: PreparedUpload[] = [];
+
+  // PREPARE one recording: copy each part off the mic + transcode to m4a in a
+  // stable cache dir (so it survives a wait for the network). Throws (and flips
+  // micDisconnected) if a mic read times out — reading only touches the mic.
+  const prepareParts = async (
+    parts: SyncPartRef[],
+    labelPrefix: string,
+  ): Promise<PreparedM4aPart[]> => {
+    const out: PreparedM4aPart[] = [];
+    try {
+      for (let p = 0; p < parts.length; p++) {
+        emit(`${labelPrefix} · reading part ${p + 1}/${parts.length}…`, p);
+        let wavUri: string;
+        try {
+          wavUri = await copyFromMic(parts[p].relativePath);
+        } catch (copyErr) {
+          micDisconnected = true;
+          throw copyErr;
+        }
+        emit(`${labelPrefix} · compressing part ${p + 1}/${parts.length}…`, p);
+        // Always free the ~266 MB copied WAV, even if the transcode times out or
+        // throws — its original still lives on the mic, so the cache copy is pure
+        // scratch. Without the finally it would leak on every E_TRANSCODE.
+        let m4aTmp: string;
+        try {
+          m4aTmp = await transcodeWithTimeout(wavUri);
+        } finally {
+          try { await FileSystem.deleteAsync(wavUri, { idempotent: true }); } catch {}
+        }
+        // Guard against a transcode that reports success but produced an empty /
+        // near-empty m4a — a subtly-corrupt WAV that AVFoundation opens with no
+        // readable audio can still export .completed. Uploading it would
+        // transcribe silence into the class. A real ≥60s recording is hundreds
+        // of KB, so anything under a few KB is broken → fail the part (the WAV is
+        // already freed; a later sync re-copies the original from the mic).
+        const outInfo = await FileSystem.getInfoAsync(m4aTmp);
+        if (!outInfo.exists || outInfo.size < 4096) {
+          try { await FileSystem.deleteAsync(m4aTmp, { idempotent: true }); } catch {}
+          throw new Error('E_TRANSCODE_EMPTY');
+        }
+        let m4aUri = m4aTmp;
+        try {
+          await FileSystem.makeDirectoryAsync(PREPARE_DIR, { intermediates: true });
+          m4aUri = `${PREPARE_DIR}${parts[p].fileName}_${p}.m4a`;
+          await FileSystem.moveAsync({ from: m4aTmp, to: m4aUri });
+        } catch { m4aUri = m4aTmp; }
+        out.push({ m4aUri, name: parts[p].fileName, sizeBytes: parts[p].sizeBytes });
+      }
+      return out;
+    } catch (err) {
+      // A later part failed (e.g. mic unplugged mid-session): the earlier parts'
+      // m4a are already staged in PREPARE_DIR but this whole recording won't
+      // upload. Delete them so they don't strand until the periodic sweep.
+      for (const part of out) {
+        try { await FileSystem.deleteAsync(part.m4aUri, { idempotent: true }); } catch {}
+      }
+      throw err;
+    }
+  };
+
+  // ── Matched pairs: PREPARE (copy+transcode) then UPLOAD, holding on a
+  //    network drop so we can retry the upload later without re-preparing. ──
   for (let i = 0; i < pairsToImport.length; i++) {
     const pair = pairsToImport[i];
-    const ci = i + 1;
+    const label = `Recording ${i + 1}/${combinedTotal}`;
     opts.onPairStart?.(pair, i, total);
+    opts.onFile?.({ idx: i + 1, total: combinedTotal, sizeBytes: sumPartBytes(pair.parts) });
+
+    let m4aParts: PreparedM4aPart[];
     try {
-      // Copy every part out of the mic's security-scoped folder into the
-      // app cache, preserving order, then upload them as ordered chunks.
-      const fileParts: Array<{ uri: string; name: string; size: number }> = [];
-      for (let p = 0; p < pair.parts.length; p++) {
-        emit(`Recording ${ci}/${total} · reading part ${p + 1}/${pair.parts.length}…`, p);
-        const cacheUri = await DjiFiles.copyFileToCache(pair.parts[p].relativePath);
-        fileParts.push({ uri: cacheUri, name: pair.parts[p].fileName, size: pair.parts[p].sizeBytes });
-      }
-      await attachSessionToClass({
-        classId: pair.classId,
-        userId,
-        parts: fileParts,
-        matched: {
-          confidence: pair.confidence,
-          actualDurationSec: pair.actualDurationSec,
-        },
-        adminReviewStatus: pair.adminReviewStatus,
-        onUploadProgress: (partIndex, partCount, frac, phase) =>
-          emit(
-            phase === 'compressing'
-              ? `Recording ${ci}/${total} · compressing part ${partIndex}/${partCount}…`
-              : `Recording ${ci}/${total} · uploading part ${partIndex}/${partCount} · ${Math.round(frac * 100)}%`,
-            (partIndex - 1) + (phase === 'uploading' ? frac : 0),
-          ),
-      });
+      m4aParts = await prepareParts(pair.parts, label);
+    } catch (err: any) {
+      const msg = err?.message ?? String(err);
+      console.warn(`[autoSync] prepare failed for class ${pair.classId}: ${msg}`);
+      errors.push({ classId: pair.classId, error: msg });
+      opts.onPairDone?.(pair, i, total, err instanceof Error ? err : new Error(msg));
+      basePartsDone += pair.parts.length;
+      if (micDisconnected) break;
+      continue;
+    }
+
+    const item: PreparedUpload = {
+      kind: 'pair',
+      label,
+      m4aParts,
+      durationSec: pair.actualDurationSec,
+      sizeBytes: sumPartBytes(pair.parts),
+      classId: pair.classId,
+      matched: { confidence: pair.confidence, actualDurationSec: pair.actualDurationSec },
+      adminReviewStatus: pair.adminReviewStatus,
+    };
+
+    if (offline) {
+      offlinePending.push(item); // network already down — prepared, upload later
+      opts.onPairDone?.(pair, i, total);
+      basePartsDone += pair.parts.length;
+      continue;
+    }
+    try {
+      await uploadPreparedPair(userId, item, (partIdx, partCount, frac) =>
+        emit(`${label} · uploading part ${partIdx}/${partCount} · ${Math.round(frac * 100)}%`, (partIdx - 1) + frac),
+      );
       imported += 1;
       opts.onPairDone?.(pair, i, total);
     } catch (err: any) {
       const msg = err?.message ?? String(err);
-      console.warn(`[autoSync] import failed for class ${pair.classId} (${pair.parts.length} part(s)): ${msg}`);
-      errors.push({ classId: pair.classId, error: msg });
-      opts.onPairDone?.(pair, i, total, err instanceof Error ? err : new Error(msg));
+      if (classifySyncError(msg) === 'offline') {
+        offline = true;
+        offlinePending.push(item);
+      } else {
+        console.warn(`[autoSync] upload failed for class ${pair.classId}: ${msg}`);
+        errors.push({ classId: pair.classId, error: msg });
+        opts.onPairDone?.(pair, i, total, err instanceof Error ? err : new Error(msg));
+      }
     }
     basePartsDone += pair.parts.length;
   }
 
-  // Safety-net uploads (couldn't pair → still get them off the mic).
+  // ── Safety-net orphans: same PREPARE → UPLOAD → hold flow ──
   for (let j = 0; j < orphanSessions.length; j++) {
+    if (micDisconnected) break;
     const session = orphanSessions[j];
-    const oc = j + 1;
-    const oTotal = orphanSessions.length;
+    const label = `Recording ${pairsToImport.length + j + 1}/${combinedTotal}`;
+    opts.onFile?.({
+      idx: pairsToImport.length + j + 1,
+      total: combinedTotal,
+      sizeBytes: sumPartBytes(session.parts),
+    });
+
+    let m4aParts: PreparedM4aPart[];
     try {
-      const fileParts: Array<{ uri: string; name: string; size: number }> = [];
-      for (let p = 0; p < session.parts.length; p++) {
-        emit(`Unmatched ${oc}/${oTotal} · reading part ${p + 1}/${session.parts.length}…`, p);
-        const cacheUri = await DjiFiles.copyFileToCache(session.parts[p].relativePath);
-        fileParts.push({ uri: cacheUri, name: session.parts[p].fileName, size: session.parts[p].sizeBytes });
-      }
-      await uploadUnmatchedSession({
-        userId,
-        session,
-        parts: fileParts,
-        onPartProgress: (partIndex, partCount, frac, phase) =>
-          emit(
-            phase === 'compressing'
-              ? `Saving unmatched ${oc}/${oTotal} · part ${partIndex}/${partCount}…`
-              : `Saving unmatched ${oc}/${oTotal} · part ${partIndex}/${partCount} · ${Math.round(frac * 100)}%`,
-            (partIndex - 1) + (phase === 'uploading' ? frac : 0),
-          ),
-      });
+      m4aParts = await prepareParts(session.parts, label);
+    } catch (err: any) {
+      const msg = err?.message ?? String(err);
+      console.warn(`[autoSync] prepare failed (unmatched idx ${session.index}): ${msg}`);
+      errors.push({ classId: `unmatched:${session.index}`, error: msg });
+      basePartsDone += session.parts.length;
+      if (micDisconnected) break;
+      continue;
+    }
+
+    const item: PreparedUpload = {
+      kind: 'orphan',
+      label,
+      m4aParts,
+      durationSec: session.durationSec,
+      sizeBytes: sumPartBytes(session.parts),
+      session,
+    };
+
+    if (offline) {
+      offlinePending.push(item);
+      basePartsDone += session.parts.length;
+      continue;
+    }
+    try {
+      await uploadPreparedOrphan(userId, item, (partIdx, partCount, frac) =>
+        emit(`${label} · uploading part ${partIdx}/${partCount} · ${Math.round(frac * 100)}%`, (partIdx - 1) + frac),
+      );
       unmatchedUploaded += 1;
     } catch (err: any) {
       const msg = err?.message ?? String(err);
-      console.warn(`[autoSync] unmatched upload failed (idx ${session.index}): ${msg}`);
-      errors.push({ classId: `unmatched:${session.index}`, error: msg });
+      if (classifySyncError(msg) === 'offline') {
+        offline = true;
+        offlinePending.push(item);
+      } else {
+        console.warn(`[autoSync] unmatched upload failed (idx ${session.index}): ${msg}`);
+        errors.push({ classId: `unmatched:${session.index}`, error: msg });
+      }
     }
     basePartsDone += session.parts.length;
   }
@@ -903,6 +1671,9 @@ export async function executeAutoSync(
     importedCount: imported,
     unmatchedSessions: orphanSessions,
     unmatchedUploaded,
+    micDisconnected,
+    offline,
+    offlinePending,
   };
 }
 

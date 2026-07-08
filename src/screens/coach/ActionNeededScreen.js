@@ -41,6 +41,8 @@ import {
   editAndApproveFocusPoint,
   approveAllPendingForStudent,
   rejectPendingFocusPoint,
+  getReconcileNeeded,
+  applyReconcile,
 } from '../../storage/coachStorage';
 import {
   getPendingCoupleFocusPoints,
@@ -55,6 +57,7 @@ import MergeCompareCard from '../../components/coach/MergeCompareCard';
 import NameMatchCard from '../../components/coach/NameMatchCard';
 import PendingFocusCard from '../../components/coach/PendingFocusCard';
 import RejectFocusSheet from '../../components/coach/RejectFocusSheet';
+import ReconcileFocusSheet from '../../components/coach/ReconcileFocusSheet';
 import { SkeletonBox } from '../../components/Skeleton';
 import { getNotifications, deleteNotification } from '../../storage/notificationsStorage';
 import { supabase } from '../../services/supabase/client';
@@ -98,6 +101,9 @@ export default function ActionNeededScreen({ navigation }) {
 
   // Name matching
   const [nameMatches, setNameMatches] = useState([]);
+  const [reconcileGroups, setReconcileGroups] = useState([]);
+  const [reconciling, setReconciling] = useState(null);
+  const [coachName, setCoachName] = useState('your coach');
 
   const studentMap = {};
   for (const s of students) studentMap[s.id] = s;
@@ -146,6 +152,23 @@ export default function ActionNeededScreen({ navigation }) {
   }, []);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  // Reconciliation groups (students with >3 active focus points → keep 3).
+  const loadReconcile = useCallback(() => {
+    const ids = students.map((s) => s.id);
+    if (ids.length === 0) { setReconcileGroups([]); return; }
+    getReconcileNeeded(ids).then(setReconcileGroups).catch(() => setReconcileGroups([]));
+  }, [students]);
+  useEffect(() => { loadReconcile(); }, [loadReconcile]);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      const uid = data?.session?.user?.id;
+      if (!uid) return;
+      supabase.from('users').select('name').eq('id', uid).single()
+        .then(({ data: u }) => { if (u?.name) setCoachName(u.name); });
+    }).catch(() => {});
+  }, []);
 
   // Auto-select the right tab on first landing based on priority:
   // Names > Merge > Focus. Once the coach manually changes tab, we never
@@ -373,14 +396,18 @@ export default function ActionNeededScreen({ navigation }) {
     return sharedIds.size + solo;
   })();
   const focusTabCount = reviewCount + pendingCoupleFPs.length;
+  // The Focus tab ALSO surfaces reconciliation cards ("Too many focus points"),
+  // so the tab badge and the overall count include them — but the "X to review"
+  // bulk label below uses focusTabCount (reconciles aren't a review action).
+  const focusTabBadge = focusTabCount + reconcileGroups.length;
 
   const tabs = [
-    { key: 'focus', label: 'Focus points', count: focusTabCount },
+    { key: 'focus', label: 'Focus points', count: focusTabBadge },
     { key: 'merge', label: 'Merge', count: mergeRequests.length },
     { key: 'name', label: 'Names', count: nameMatches.length },
   ];
 
-  const totalCount = focusTabCount + mergeRequests.length + nameMatches.length;
+  const totalCount = focusTabBadge + mergeRequests.length + nameMatches.length;
 
   // Horizontal pager: sync tab selection <-> swipe gesture, drive a moving underline.
   const screenWidth = Dimensions.get('window').width;
@@ -519,6 +546,31 @@ export default function ActionNeededScreen({ navigation }) {
                   <Text style={s.bulkBtnText}>Approve all</Text>
                 </TouchableOpacity>
               </View>
+            )}
+
+            {reconcileGroups.length > 0 && (
+              <>
+                <Text style={s.sectionHeader}>Too many focus points · {reconcileGroups.length}</Text>
+                {reconcileGroups.map((g) => {
+                  const st = studentMap[g.userId];
+                  const total = 1 + g.candidates.length;
+                  return (
+                    <TouchableOpacity
+                      key={`${g.userId}:${g.category || 'all'}`}
+                      activeOpacity={0.8}
+                      onPress={() => setReconciling(g)}
+                      style={{ flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: C.card, borderWidth: 1, borderColor: C.lightGray, borderRadius: 14, padding: 14, marginBottom: 8 }}
+                    >
+                      <Ionicons name="alert-circle" size={20} color={C.orange} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ fontFamily: Fonts.jakartaExtraBold, fontSize: 15, color: C.text }} numberOfLines={1}>{st?.name || 'Student'}</Text>
+                        <Text style={{ fontFamily: Fonts.travelsRegular, fontSize: 12.5, color: C.gray, marginTop: 2 }}>{g.category ? `${g.category === 'latin' ? 'Latin' : 'Ballroom'} · ` : ''}{total} focus points · keep 3</Text>
+                      </View>
+                      <Ionicons name="chevron-forward" size={18} color={C.gray} />
+                    </TouchableOpacity>
+                  );
+                })}
+              </>
             )}
 
             {(() => {
@@ -724,6 +776,22 @@ export default function ActionNeededScreen({ navigation }) {
           <ClassContextSheet
             fp={contextFp}
             onClose={() => setContextFp(null)}
+          />
+        )}
+      </Modal>
+
+      <Modal visible={!!reconciling} transparent animationType="slide" onRequestClose={() => setReconciling(null)}>
+        {reconciling && (
+          <ReconcileFocusSheet
+            student={{
+              name: studentMap[reconciling.userId]?.name || 'Student',
+              initials: (studentMap[reconciling.userId]?.name || '?').split(' ').map((w) => w[0]).slice(0, 2).join('').toUpperCase(),
+            }}
+            coachName={coachName}
+            kept={reconciling.kept}
+            candidates={reconciling.candidates}
+            onConfirm={async (removedId) => { await applyReconcile(removedId); setReconciling(null); loadReconcile(); loadData(); }}
+            onClose={() => setReconciling(null)}
           />
         )}
       </Modal>

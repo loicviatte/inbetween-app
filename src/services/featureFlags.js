@@ -38,34 +38,45 @@ export function isNativeRecorderEnabled(user) {
 }
 
 // ─── Local recording mode (DJI mic on-device storage) ────────────────────
-// New architecture being beta-tested with a single coach: the mic records
-// to its own internal storage during class, then the coach plugs the mic
-// via USB-C and InBetween imports + matches files to pending classes by
-// chronological order + duration. Phone never captures audio during class,
-// so the coach can use Spotify/Apple Music freely on a Bluetooth speaker
-// without iOS audio-session conflicts.
+// The "new" recording flow: the mic records to its own internal storage
+// during class, then the coach plugs the mic via USB-C and InBetween imports
+// + matches files to pending classes by chronological order + duration. The
+// phone never captures audio during class, so the coach can use Spotify/Apple
+// Music freely on a Bluetooth speaker without iOS audio-session conflicts.
 //
-// Gated by email because:
-//   - We need to validate end-to-end before flipping for other coaches
-//   - The flow changes UX significantly (no live waveform, manual import
-//     of audio files) — needs onboarding before rolling out broadly
-//   - Admin review (isAdminReviewer) is the safety net for early matching
-//     errors — at 5-20 classes/day, Loic can hand-verify each one
+// Rollout: after end-to-end validation this is now the DEFAULT for coaches.
+// Every coach gets the new flow automatically — including newly onboarded
+// ones, with no change needed here — EXCEPT the legacy coaches listed below,
+// who stay on the old live phone-capture flow until they migrate their setup.
+//
+// Safety net for early matching errors: the inbetween-admin dashboard gates
+// focus-point propagation on class_recordings.admin_review_status (stamped
+// 'pending' for anything below high-confidence), so a human can catch a
+// mis-matched file before it ever reaches a student.
 
-const LOCAL_RECORDING_BETA_EMAILS = new Set([
-  'viatteloic@gmail.com',
-  'kuzmenkotatyan@gmail.com', // Tanya
+// Coaches kept on the OLD live phone-capture flow. Add an email here to opt a
+// specific coach OUT of the new DJI-mic + USB-C sync flow.
+const LOCAL_RECORDING_LEGACY_EMAILS = new Set([
+  'testmarius@gmail.com', // Marius — still on the old Bluetooth / live-capture setup
 ]);
 
 export function isLocalRecordingMode(user) {
   // iOS-only: the DJI import flow (folder picker, file copy, WAV→m4a
   // transcode) is backed by the local-recording-files native module, which
-  // is iOS-only and throws off-iOS. Gating here disables the entire DJI UI
-  // (auto-sync hook, setup banner, upload screen) on Android so a beta coach
-  // signing in on Android never reaches a crashing native call.
+  // is iOS-only and throws off-iOS. Now that local recording is the DEFAULT
+  // for every coach, this guard is what stops any coach signing in on Android
+  // from reaching a crashing native call (disables the whole DJI UI there).
   if (Platform.OS !== 'ios') return false;
-  if (!user?.email) return false;
-  return LOCAL_RECORDING_BETA_EMAILS.has(user.email.toLowerCase());
+  if (!user?.id) return false;
+  // Coach-only capture path — students never record classes. Mirrors the
+  // app's role convention (see services/auth/role.js): role lives in
+  // user_metadata.role and anything that isn't 'coach' is treated as a student.
+  const role = (user.user_metadata?.role ?? '').toString().toLowerCase();
+  if (role !== 'coach') return false;
+  // Legacy coaches explicitly held on the old live-capture flow.
+  const email = user.email?.toLowerCase();
+  if (email && LOCAL_RECORDING_LEGACY_EMAILS.has(email)) return false;
+  return true;
 }
 
 // ─── Admin reviewer ──────────────────────────────────────────────────────

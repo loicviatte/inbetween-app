@@ -3,13 +3,13 @@ import {
   type FocusPoint,
   type Tier,
   STARTING_SCORES,
+  TRAIN_TARGET_BY_TIER,
   MERGE_NOTIFY_STUDENT_DAYS,
+  RECONCILE_TIER_RANK,
   applyMerge,
-  applyCoachSignal,
-  applyStateTransition,
-  applyCoachInaction,
   applyPracticeLog,
-  clearReactivatedFlag,
+  autoResolveCarryover,
+  focusInCategory,
   dbRowToFocusPoint,
   focusPointToDbUpdate,
 } from '../_shared/yoda-score.ts'
@@ -119,6 +119,7 @@ async function publishExpiredFocusPoints(supabase: any): Promise<void> {
     }
   }
 
+  const publishedStudentIds = new Set<string>()
   for (const fp of eligible) {
     const isGroup = !!(fp.group_fp && fp.source_class_input_id)
     const attended = !isGroup || attendedKeys.has(`${fp.source_class_input_id}:${fp.user_id}`)
@@ -126,10 +127,19 @@ async function publishExpiredFocusPoints(supabase: any): Promise<void> {
       await supabase.from('focus_points').update({ is_deleted: true, status: 'past', coach_review_deadline: null }).eq('id', fp.id)
     } else {
       await supabase.from('focus_points').update({ status: 'active', coach_review_deadline: null }).eq('id', fp.id)
+      if (!isGroup) publishedStudentIds.add(fp.user_id)
     }
   }
   if (eligible.length > 0) {
     console.log(`[yoda-score] Auto-published ${eligible.length} expired pending_coach FPs (${expired.length - eligible.length} gated by admin)`)
+  }
+
+  // #autoResolve: any student a just-published focus left over 3 active private
+  // focuses (because a "not yet" carry-over was never reconciled) is resolved in
+  // favour of the carry-over now that the 18h window has closed.
+  for (const sid of publishedStudentIds) {
+    const dropped = await autoResolveCarryover(supabase, sid)
+    if (dropped > 0) console.log(`[yoda-score] 18h auto-resolved carry-over for ${sid}: dropped ${dropped}`)
   }
 
   // Couple focus points — same 18h auto-publish (no per-dancer attendance).
@@ -185,10 +195,23 @@ async function processClassInput(supabase: any, payload: any): Promise<void> {
   // linked by shared_group_id so the coach can aggregate across students.
   const sharedFps = aiData.shared_focus_points ?? []
   if (isGroupClass && sharedFps.length > 0) {
-    const studentIds: string[] = (aiData.students ?? [])
-      .map((s: any) => s.student_id)
-      .filter((x: string) => !!x)
-    for (const sfp of sharedFps) {
+    // Shared focus points are CLASS-WIDE → give them to every attendee (the
+    // class_input_students roster), not just the students the AI happened to
+    // return. The AI omits students it had nothing individual to say about, so
+    // keying off aiData.students silently dropped shared FPs for quiet
+    // attendees. Fall back to the AI's list only if the roster is empty.
+    const { data: rosterRows } = await supabase
+      .from('class_input_students')
+      .select('student_id')
+      .eq('class_input_id', class_input_id)
+    let studentIds: string[] = [
+      ...new Set((rosterRows ?? []).map((r: any) => r.student_id).filter((x: string) => !!x)),
+    ]
+    if (studentIds.length === 0) {
+      studentIds = (aiData.students ?? []).map((s: any) => s.student_id).filter((x: string) => !!x)
+    }
+    // Group classes surface at most 2 shared focus points.
+    for (const sfp of sharedFps.slice(0, 2)) {
       const sharedGroupId = crypto.randomUUID()
       const tier = (sfp.tier ?? 'supporting') as Tier
       const sharedDance = (sfp.dance && sfp.dance.length > 0) ? sfp.dance : classDance
@@ -203,6 +226,7 @@ async function processClassInput(supabase: any, payload: any): Promise<void> {
         tier,
         category: sfp.category ?? null,
         base_score: STARTING_SCORES[tier],
+        train_target: TRAIN_TARGET_BY_TIER[tier],
         mention_count: sfp.mention_count ?? 0,
         explicit_priority: sfp.explicit_priority ?? false,
         first_timestamp: sfp.timestamp ?? null,
@@ -271,6 +295,7 @@ async function processClassInput(supabase: any, payload: any): Promise<void> {
         tier,
         category: sfp.category ?? null,
         base_score: STARTING_SCORES[tier],
+        train_target: TRAIN_TARGET_BY_TIER[tier],
         mention_count: sfp.mention_count ?? 0,
         explicit_priority: sfp.explicit_priority ?? false,
         first_timestamp: sfp.timestamp ?? null,
@@ -305,7 +330,7 @@ async function processClassInput(supabase: any, payload: any): Promise<void> {
           user_id: cid,
           type: 'focus_points_added',
           title: 'New couple focus points',
-          body: `Yoda added ${coupleCreated} couple focus point${coupleCreated > 1 ? 's' : ''}. Review before they publish.`,
+          body: `${coupleCreated} new couple focus point${coupleCreated > 1 ? 's' : ''}. Review before they publish.`,
           data: { couple_id: classInput.couple_id, class_input_id: class_input_id },
         })
       }
@@ -468,6 +493,7 @@ async function processStudentFocusPoints(
             tier,
             category: fpJson.category ?? null,
             base_score: STARTING_SCORES[tier],
+        train_target: TRAIN_TARGET_BY_TIER[tier],
             mention_count: fpJson.mention_count ?? 0,
             explicit_priority: fpJson.explicit_priority ?? false,
             first_timestamp: fpJson.timestamp ?? null,
@@ -530,6 +556,7 @@ async function processStudentFocusPoints(
           tier,
           category: fpJson.category ?? null,
           base_score: STARTING_SCORES[tier],
+        train_target: TRAIN_TARGET_BY_TIER[tier],
           mention_count: fpJson.mention_count ?? 0,
           explicit_priority: fpJson.explicit_priority ?? false,
           first_timestamp: fpJson.timestamp ?? null,
@@ -559,30 +586,9 @@ async function processStudentFocusPoints(
       }
     }
 
-    // b. Apply coach_signal if present
-    if (fpJson.coach_signal && fpJson.existing_focus_point_id) {
-      const existing = existingFPs.find(f => f.id === fpJson.existing_focus_point_id)
-      if (existing) {
-        const updated = applyCoachSignal(existing, fpJson.coach_signal as 'positive' | 'negative')
-        await supabase
-          .from('focus_points')
-          .update(focusPointToDbUpdate(updated))
-          .eq('id', existing.id)
-        if (fpJson.coach_signal === 'positive') {
-          decisions.push({
-            action: 'signal_positive',
-            fp_name: existing.name,
-            reasoning: `Coach explicitly signaled positive progress on '${existing.name}'.`,
-          })
-        } else if (fpJson.coach_signal === 'negative') {
-          decisions.push({
-            action: 'signal_negative',
-            fp_name: existing.name,
-            reasoning: `Coach explicitly signaled regression on '${existing.name}'.`,
-          })
-        }
-      }
-    }
+    // (Coach-signal handling removed: tier is target-count only — a coach
+    // signal no longer moves any score or lifecycle, so the AI's coach_signal
+    // hint is ignored.)
   }
 
   // Store decisions for trainer review
@@ -621,50 +627,8 @@ async function processStudentFocusPoints(
     if (otherError) console.error('[yoda-score] Error inserting other_focus_points:', otherError.message)
   }
 
-  // ── CAP TO 3 ACTIVE PER STUDENT PER CLASS ────────────────────────────────────
-  // Keep only the 3 most important new FPs from this class in pending_coach/
-  // active state. Demote the rest to 'past' (they stay in the audit trail for
-  // the feedback loop). Ranking: tier > explicit_priority > base_score >
-  // mention_count > created_at desc.
-  {
-    const { data: classFps } = await supabase
-      .from('focus_points')
-      .select('id, tier, status, explicit_priority, base_score, mention_count, created_at, name')
-      .eq('user_id', studentId)
-      .eq('class_input_id', classInputId)
-      .eq('is_deleted', false)
-      .eq('is_archived', false)
-      .in('status', ['pending_coach', 'active'])
-
-    if (classFps && classFps.length > 3) {
-      const tierRank: Record<string, number> = { critical: 1, important: 2, supporting: 3 }
-      const sorted = [...classFps].sort((a: any, b: any) => {
-        const tA = tierRank[a.tier] ?? 4
-        const tB = tierRank[b.tier] ?? 4
-        if (tA !== tB) return tA - tB
-        const epA = a.explicit_priority ? 1 : 0
-        const epB = b.explicit_priority ? 1 : 0
-        if (epA !== epB) return epB - epA
-        const bsA = a.base_score ?? 0
-        const bsB = b.base_score ?? 0
-        if (bsA !== bsB) return bsB - bsA
-        const mcA = a.mention_count ?? 0
-        const mcB = b.mention_count ?? 0
-        if (mcA !== mcB) return mcB - mcA
-        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-      })
-      const toDemote = sorted.slice(3) as any[]
-      for (const fp of toDemote) {
-        await supabase
-          .from('focus_points')
-          .update({ status: 'past', coach_review_deadline: null })
-          .eq('id', fp.id)
-      }
-      console.log(
-        `[yoda-score] cap-to-3: kept ${sorted.slice(0, 3).map((f: any) => f.name).join(', ')}; demoted ${toDemote.length} for student ${studentId}`,
-      )
-    }
-  }
+  // (No cap-to-3 and no score-based retirement: focus points stay active until
+  // the coach validates/rejects or the student archives. Tier is target-count only.)
 
   // Notify coach only for focus points that were actually created (pending_coach), not merges
   const newFPCount = decisions.filter((d: any) => d.action === 'create').length
@@ -673,58 +637,118 @@ async function processStudentFocusPoints(
       user_id: coachId,
       type: 'focus_points_added',
       title: 'New focus points added',
-      body: `Yoda added ${newFPCount} focus point${newFPCount > 1 ? 's' : ''} for ${studentName}. Review before they publish to the student.`,
+      body: `${newFPCount} new focus point${newFPCount > 1 ? 's' : ''} for ${studentName}. Review before they publish to the student.`,
       data: { student_id: studentId, class_input_id: classInputId },
     })
     console.log(`[yoda-score] Notified coach ${coachId} of ${newFPCount} new FPs for ${studentId}`)
   }
 
-  // d. Increment lessons_since_mentioned for FPs not mentioned in this lesson
-  const unmentioned = existingFPs.filter(f => f.status === 'active' && !mentionedFPIds.has(f.id))
-  for (const fp of unmentioned) {
-    await supabase
-      .from('focus_points')
-      .update({ lessons_since_mentioned: fp.lessons_since_mentioned + 1 })
-      .eq('id', fp.id)
+  // Reconciliation (private lessons only): a "not yet" carry-over from the last
+  // debrief plus this class's new focuses can push the student past 3 — checked
+  // PER dance category (handles tagged + untagged classes).
+  if (!isGroupClass && newFPCount > 0) {
+    await reconcilePrivateFocusPoints(supabase, studentId, classInputId, coachId, studentName)
   }
 
-  // e. Run state transitions for all active focus points
-  const { data: updatedRows } = await supabase
-    .from('focus_points')
-    .select('*')
-    .eq('user_id', studentId)
-    .eq('status', 'active')
-    .eq('is_other', false)
+  // (Steps d/e/f removed: no lessons_since_mentioned increment, no score-based
+  // state transitions, and no inaction sweep. A focus point never decays from
+  // score/practice/inaction — only the coach or the student change its status.)
+}
 
-  for (const row of updatedRows ?? []) {
-    const fp = dbRowToFocusPoint(row)
-    const transitioned = applyStateTransition(fp)
-    if (transitioned.status !== fp.status) {
-      await supabase
-        .from('focus_points')
-        .update({ status: transitioned.status })
-        .eq('id', fp.id)
-      console.log(`[yoda-score] FP ${fp.id} transitioned ${fp.status} → ${transitioned.status}`)
+// ─── Reconciliation: keep a student at ≤3 active private focuses per category ──
+// After a private class creates new focuses, a "not yet" carry-over from the
+// last debrief (is_held=true, active) can push the student over 3:
+//   • carry-over is critical/important → SILENT auto: it outranks a new
+//     supporting, so drop the lowest-ranked new focus(es) down to 3. No notif.
+//   • carry-over is only supporting → the coach must choose which to keep
+//     (ReconcileFocusSheet). Notify once; if they don't act, the 18h publish
+//     auto-resolves in favour of the carry-over (see autoResolveCarryover).
+// Checked PER dance category (untagged focuses count in both, focusInCategory).
+// A category only acts if THIS class created fresh focuses in it, so e.g. a Latin
+// class never reconciles Ballroom — and an UNTAGGED class is handled correctly
+// (each category evaluated independently, never merged into one bucket).
+// Group/couple classes are out of scope (own ≤2 caps; couple reconcile is not
+// surfaced client-side yet). Merge candidates are left to the merge flow.
+async function reconcilePrivateFocusPoints(
+  supabase: any,
+  studentId: string,
+  classInputId: string,
+  coachId: string | null,
+  studentName: string,
+): Promise<void> {
+  const { data: rows } = await supabase
+    .from('focus_points')
+    .select('id, tier, status, is_held, class_input_id, created_at, merge_candidate_id, dance')
+    .eq('user_id', studentId)
+    .eq('is_other', false)
+    .eq('is_deleted', false)
+    .or('group_fp.is.null,group_fp.eq.false')
+    .in('status', ['active', 'pending_coach'])
+
+  const all = (rows ?? []) as any[]
+  const droppedIds = new Set<string>()
+  let notifyNeeded = false
+
+  for (const category of ['latin', 'ballroom'] as const) {
+    const fps = all.filter((f) => !droppedIds.has(f.id) && focusInCategory(f.dance, category))
+    if (fps.length <= 3) continue
+    const carried = fps.filter((f) => f.is_held === true && f.status === 'active')
+    if (carried.length === 0) continue // >3 without a carry-over isn't a reconcile case
+    const fresh = fps.filter(
+      (f) => f.status === 'pending_coach' && f.class_input_id === classInputId && !f.merge_candidate_id,
+    )
+    if (fresh.length === 0) continue // this class added nothing in this category
+
+    const topCarriedRank = Math.min(...carried.map((f) => RECONCILE_TIER_RANK[f.tier] ?? 2))
+    const keepFresh = Math.max(0, 3 - carried.length)
+    // Lowest-ranked new focuses (supporting first, then newest) to drop to reach 3.
+    const dropCandidates = [...fresh]
+      .sort((a, b) =>
+        (RECONCILE_TIER_RANK[b.tier] ?? 2) - (RECONCILE_TIER_RANK[a.tier] ?? 2)
+        || new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      .slice(0, fresh.length - keepFresh)
+
+    // SILENT auto-resolve only when (a) the carry-over outranks (critical/important),
+    // (b) keeping every carry-over still leaves room (≤3), AND (c) the dropped
+    // focuses are ALL supporting — the spec auto-drops "the new supporting" only.
+    const allDroppedSupporting = dropCandidates.length > 0
+      && dropCandidates.every((f) => (RECONCILE_TIER_RANK[f.tier] ?? 2) >= 2)
+    if (topCarriedRank <= 1 && carried.length <= 3 && allDroppedSupporting) {
+      for (const f of dropCandidates) droppedIds.add(f.id)
+    } else {
+      notifyNeeded = true // coach must choose (ReconcileFocusSheet)
     }
   }
 
-  // f. Run coach inaction check for past_candidate focus points
-  const { data: candidateRows } = await supabase
-    .from('focus_points')
-    .select('*')
-    .eq('user_id', studentId)
-    .eq('status', 'past_candidate')
-    .eq('is_other', false)
+  if (droppedIds.size > 0) {
+    await supabase
+      .from('focus_points')
+      .update({ status: 'past', coach_review_deadline: null })
+      .in('id', [...droppedIds])
+    console.log(`[yoda-score] Auto-reconciled ${droppedIds.size} new supporting FP(s) for ${studentId} (carry-over outranks)`)
+  }
 
-  for (const row of candidateRows ?? []) {
-    const fp = dbRowToFocusPoint(row)
-    const inactioned = applyCoachInaction(fp, now)
-    if (inactioned.status !== fp.status) {
-      await supabase
-        .from('focus_points')
-        .update({ status: inactioned.status })
-        .eq('id', fp.id)
-      console.log(`[yoda-score] FP ${fp.id} moved to past (inaction)`)
+  // Notify ONCE if any category needs a manual pick — skip if an unread reconcile
+  // notification for this student already exists.
+  if (notifyNeeded && coachId) {
+    const { data: existing } = await supabase
+      .from('notifications')
+      .select('id')
+      .eq('user_id', coachId)
+      .eq('type', 'focus_reconcile_needed')
+      .eq('read', false)
+      .contains('data', { student_id: studentId })
+      .limit(1)
+      .maybeSingle()
+    if (!existing) {
+      await supabase.from('notifications').insert({
+        user_id: coachId,
+        type: 'focus_reconcile_needed',
+        title: 'Too many focus points',
+        body: `${studentName} has more than 3 focus points after carrying one over. Pick which to keep.`,
+        data: { student_id: studentId, class_input_id: classInputId },
+      })
+      console.log(`[yoda-score] Notified coach ${coachId} to reconcile ${studentName}`)
     }
   }
 }
@@ -757,21 +781,15 @@ async function processPracticeLog(supabase: any, payload: any): Promise<void> {
   }
 
   const fp = dbRowToFocusPoint(row)
-  const wasReactivated = fp.reactivated
 
-  // 3. Apply practice log
-  let updated = applyPracticeLog(fp, {
+  // 3. Apply practice log (advances the X/N train count only — no score/decay)
+  const updated = applyPracticeLog(fp, {
     focus_point_id: log.focus_point_id,
     duration_minutes: log.duration_minutes,
     rating: log.rating,
   })
 
-  // 4. Clear reactivated flag after first practice
-  if (wasReactivated) {
-    updated = clearReactivatedFlag(updated)
-  }
-
-  // 5. Update focus point in DB
+  // 4. Update focus point in DB
   const { error: updateError } = await supabase
     .from('focus_points')
     .update({

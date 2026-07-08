@@ -10,7 +10,7 @@
 // poked multiple times safely.
 
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { DANCE_PROMPT } from './transcript.ts'
+import { DANCE_PROMPT, composeTranscript } from './transcript.ts'
 
 const ASSEMBLYAI_API = 'https://api.assemblyai.com/v2'
 const SIGNED_URL_TTL = 12 * 60 * 60 // 12 hours
@@ -84,7 +84,17 @@ export async function finalizeRecording(
   const ready = all.filter((c) =>
     ['uploaded', 'transcribing', 'transcribed'].includes(c.status),
   )
-  if (ready.length < rec.expected_chunks) {
+  // Completeness counts terminally-FAILED chunks too, matching the webhook's
+  // terminal = transcribed|failed rule. Otherwise a chunk that failed
+  // permanently (e.g. missing storage_path, marked 'failed' below) drops the
+  // ready-count under expected_chunks forever and the recording strands in
+  // 'waiting' — never re-entering the retry sweep, never finalizing on the
+  // chunks that DID transcribe. Jobs are still only created for `ready` chunks
+  // (a failed chunk can't be transcribed); the gate just stops blocking on it.
+  const resolved = all.filter((c) =>
+    ['uploaded', 'transcribing', 'transcribed', 'failed'].includes(c.status),
+  )
+  if (resolved.length < rec.expected_chunks) {
     return {
       status: 'waiting',
       total_chunks: rec.expected_chunks,
@@ -223,5 +233,104 @@ export async function finalizeRecording(
     status: 'transcribing',
     created_jobs: createdJobs,
     total_chunks: rec.expected_chunks,
+  }
+}
+
+/**
+ * Compose the stitched transcript and create the class_input — the finalize
+ * step that the assemblyai-webhook runs after each chunk callback. Extracted so
+ * the retry cron can run it too: `finalizeRecording` above only CREATES
+ * AssemblyAI jobs, so a recording whose completion webhook was lost would sit in
+ * 'transcribing' forever (the cron polled the chunks to terminal state but had
+ * no path to compose + finalize). Idempotent via finalize_recording_atomic
+ * (row lock + class_input_id guard), so it's safe to call alongside a live
+ * webhook — the loser sees was_created=false and skips the push.
+ */
+export async function composeAndFinalize(
+  recordingId: string,
+  supabase: SupabaseClient,
+): Promise<void> {
+  const { data: rec, error: recErr } = await supabase
+    .from('class_recordings')
+    .select('*')
+    .eq('id', recordingId)
+    .maybeSingle()
+  if (recErr || !rec) return
+  if (['completed', 'discarded', 'failed'].includes(rec.status)) return
+  if (rec.expected_chunks == null) return
+
+  const { data: chunks } = await supabase
+    .from('class_recording_chunks')
+    .select('idx, status, transcript_json, speaker_labels, duration_ms')
+    .eq('recording_id', recordingId)
+    .order('idx', { ascending: true })
+  const all = chunks ?? []
+
+  // Only finalize once every expected chunk has a terminal outcome.
+  const terminal = all.filter((c) => ['transcribed', 'failed'].includes(c.status))
+  if (terminal.length < rec.expected_chunks) return
+
+  const composed = composeTranscript(
+    all.map((c) => ({
+      utterances: (c.transcript_json as any)?.utterances ?? [],
+      text: (c.transcript_json as any)?.text ?? '',
+      durationMs: c.duration_ms ?? null,
+      speakerLabels: (c.speaker_labels as Record<string, string>) ?? null,
+      failed: c.status === 'failed',
+    })),
+  )
+
+  if (!composed) {
+    await supabase
+      .from('class_recordings')
+      .update({
+        status: 'failed',
+        error: 'all chunks failed transcription',
+        last_heartbeat_at: new Date().toISOString(),
+      })
+      .eq('id', recordingId)
+      .in('status', ['ready', 'transcribing'])
+    return
+  }
+
+  const { data: rpcRows, error: rpcErr } = await supabase.rpc('finalize_recording_atomic', {
+    p_recording_id: recordingId,
+    p_transcript: composed,
+    p_audio_folder: rec.audio_folder,
+  })
+  const rpcRow = Array.isArray(rpcRows) ? rpcRows[0] : rpcRows
+  if (rpcErr || !rpcRow?.class_input_id) {
+    console.error('[finalize] compose RPC failed:', rpcErr?.message)
+    await supabase
+      .from('class_recordings')
+      .update({ error: `finalize RPC: ${rpcErr?.message ?? 'unknown'}` })
+      .eq('id', recordingId)
+    return
+  }
+
+  // Only the row's actual creator sends the push (idempotent under concurrent
+  // callers — a live webhook racing the cron sees was_created=false).
+  if (rpcRow.was_created) {
+    try {
+      // Skip for coaches — their actionable signal is 'focus_points_added'
+      // (after scoring). Keep transcript_ready only for a student who records
+      // their own class (recording owner isn't a coach).
+      const { data: owner } = await supabase
+        .from('users')
+        .select('role')
+        .eq('id', rec.user_id)
+        .maybeSingle()
+      if ((owner?.role ?? '').toLowerCase() !== 'coach') {
+        await supabase.from('notifications').insert({
+          user_id: rec.user_id,
+          type: 'transcript_ready',
+          title: 'Class transcribed',
+          body: 'Your class is ready to review.',
+          data: { class_input_id: rpcRow.class_input_id },
+        })
+      }
+    } catch (err) {
+      console.warn('[finalize] push notif failed:', err instanceof Error ? err.message : err)
+    }
   }
 }

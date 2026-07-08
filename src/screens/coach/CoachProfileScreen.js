@@ -31,6 +31,7 @@ import {
   getTotalCoachedMinutes,
 } from '../../storage/coachStorage';
 import { clearUserCaches } from '../../storage/userCaches';
+import { clearPushToken } from '../../services/notifications';
 import { supabase } from '../../services/supabase/client';
 import { CoachProfileScreenSkeleton } from '../../components/Skeleton';
 import StudioPicker from '../../components/StudioPicker';
@@ -281,6 +282,9 @@ export default function CoachProfileScreen({ navigation }) {
 
   async function handleLogout() {
     await clearUserCaches();
+    // Drop this device's push token before sign-out (shared-device hygiene).
+    const { data: { session } } = await supabase.auth.getSession();
+    clearPushToken(session?.user?.id);
     // scope:'local' → instant on-device sign-out, no network token-revoke wait.
     await supabase.auth.signOut({ scope: 'local' });
   }

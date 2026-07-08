@@ -5,6 +5,7 @@
 
 import { supabase } from '../services/supabase/client';
 import { getOrCreateInviteCode } from './coachStorage';
+import { focusMatchesCategory } from '../utils/danceCategory';
 
 async function getUserId() {
   // getSession() is local (no network round-trip); getUser() hits the auth server.
@@ -35,24 +36,26 @@ export async function getMyCouple() {
   if (!c) return null;
 
   const partnerId = c.user_a_id === userId ? c.user_b_id : c.user_a_id;
-  const { data: partner } = await supabase
-    .from('users').select('id, name, avatar_url').eq('id', partnerId).maybeSingle();
 
-  // Resolve couple-coach names best-effort. RLS may block a dancer from reading
-  // the coach's user row (the couple-read policy only exposes the two dancers),
-  // in which case the lookup simply returns no row and we fall back to a plain
-  // "Linked" label — never an error.
+  // Partner row + couple-coach names don't depend on each other — one round-trip
+  // instead of two (this whole call is on the Train/Profile cold-start path).
+  // Coach names are best-effort: RLS may block a dancer from reading the coach's
+  // user row, in which case the lookup returns nothing and we fall back to a
+  // plain "Linked" label — never an error.
   const coupleCoach = { latin: null, ballroom: null };
   const coachIds = [c.latin_couple_coach_id, c.ballroom_couple_coach_id].filter(Boolean);
-  if (coachIds.length) {
-    const { data: coaches } = await supabase.from('users').select('id, name').in('id', coachIds);
-    const nameById = Object.fromEntries((coaches || []).map((u) => [u.id, u.name]));
-    if (c.latin_couple_coach_id) {
-      coupleCoach.latin = { id: c.latin_couple_coach_id, name: nameById[c.latin_couple_coach_id] || null };
-    }
-    if (c.ballroom_couple_coach_id) {
-      coupleCoach.ballroom = { id: c.ballroom_couple_coach_id, name: nameById[c.ballroom_couple_coach_id] || null };
-    }
+  const [{ data: partner }, coachRes] = await Promise.all([
+    supabase.from('users').select('id, name, avatar_url').eq('id', partnerId).maybeSingle(),
+    coachIds.length
+      ? supabase.from('users').select('id, name').in('id', coachIds)
+      : Promise.resolve({ data: [] }),
+  ]);
+  const nameById = Object.fromEntries((coachRes?.data || []).map((u) => [u.id, u.name]));
+  if (c.latin_couple_coach_id) {
+    coupleCoach.latin = { id: c.latin_couple_coach_id, name: nameById[c.latin_couple_coach_id] || null };
+  }
+  if (c.ballroom_couple_coach_id) {
+    coupleCoach.ballroom = { id: c.ballroom_couple_coach_id, name: nameById[c.ballroom_couple_coach_id] || null };
   }
 
   return {
@@ -459,6 +462,32 @@ export async function getCoupleFocusPoints(coupleId) {
   return data || [];
 }
 
+// ─── Couple "in progress" focuses (current couple readiness checklist) ─────────
+// Mirror of the solo readiness tab for the couple's shared focus points: the
+// focuses from the couple's most recent lesson, each tagged with {_target,_done}.
+// Powers the All-focus-points "Couple" tab.
+export async function getCoupleReadinessFocuses(coupleId, category = null) {
+  if (!coupleId) return [];
+  const [ptsRes, readiness] = await Promise.all([
+    supabase
+      .from('couple_focus_points')
+      .select('*')
+      .eq('couple_id', coupleId)
+      .eq('is_deleted', false)
+      .eq('is_other', false)
+      .neq('status', 'past')
+      .neq('status', 'pending_coach'),
+    getCoupleReadiness(coupleId, category).catch(() => null),
+  ]);
+  const pts = ptsRes.data || [];
+  const focuses = readiness?.focuses || [];
+  if (focuses.length === 0) return [];
+  const prog = new Map(focuses.map((f) => [f.focusPointId, f]));
+  return pts
+    .filter((p) => prog.has(p.id) && focusMatchesCategory(p, category))
+    .map((p) => ({ ...p, _target: prog.get(p.id).target, _done: prog.get(p.id).done }));
+}
+
 // ─── Couple focus point — coach review (mirror of solo pending_coach flow) ──────
 // New couple FP from a class land in `pending_coach`; the couple-coach reviews
 // them here and approves → `active` (or rejects → `past`). RLS `cfp_update` is
@@ -495,7 +524,8 @@ async function markCoupleFocusAddedRead(coupleId) {
     .from('notifications')
     .update({ read: true })
     .eq('user_id', coachId)
-    .eq('type', 'focus_points_added')
+    // Match singular + plural (see markFocusAddedNotificationsReadForStudent).
+    .in('type', ['focus_points_added', 'focus_point_added'])
     .eq('read', false)
     .contains('data', { couple_id: coupleId })
     .then(() => {}, () => {});

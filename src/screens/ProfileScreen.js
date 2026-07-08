@@ -49,6 +49,7 @@ import RadarChart, { RADAR_LABELS } from '../components/RadarChart';
 import BottomSheet from '../components/BottomSheet';
 import { useProfile } from '../context/ProfileContext';
 import { clearUserCaches } from '../storage/userCaches';
+import { clearPushToken } from '../services/notifications';
 import {
   getMyCouple,
   getMyPartnerCode,
@@ -882,8 +883,12 @@ export default function ProfileScreen({ navigation, route }) {
     // + avatar stay local. couple / partner requests keep the `undefined` =
     // "bundle failed, keep what we have" sentinel so a transient failure never
     // blanks the partnership.
+    // Mirror Train's last-selected Latin/Ballroom style so readiness matches the
+    // toggle (a 2-style dancer's Profile otherwise anchored on the most-recent
+    // private of any style). null = single-style / unset.
+    const trainCat = await AsyncStorage.getItem('train_category_filter').catch(() => null);
     const [bundle, { data: { session } }, savedPhoto] = await Promise.all([
-      withTimeout(getStudentProfileBundle(), null),
+      withTimeout(getStudentProfileBundle(null, trainCat), null),
       supabase.auth.getSession(),                          // local — no network hang
       AsyncStorage.getItem(AVATAR_KEY).catch(() => null),  // local
     ]);
@@ -1203,6 +1208,11 @@ export default function ProfileScreen({ navigation, route }) {
     setAvatarUri(null);
     setInitials(null);
     await clearUserCaches();
+    // Drop this device's push token from the user's row BEFORE sign-out so a
+    // shared device stops receiving pushes tied to the ended session. Fire-and-
+    // forget: the write is dispatched with the still-valid session.
+    const { data: { session } } = await supabase.auth.getSession();
+    clearPushToken(session?.user?.id);
     // scope:'local' drops the session on-device immediately (no network token
     // revoke round-trip), so the UI flips to the login screen instantly instead
     // of hanging ~5s on a slow connection. The refresh token expires on its own.

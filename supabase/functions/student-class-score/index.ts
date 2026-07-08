@@ -176,7 +176,7 @@ async function process(supabase: any, payload: Payload): Promise<void> {
 
   const { data: existing } = await supabase
     .from('focus_points')
-    .select('id, name, normalized_name, count, tier, base_score, drill, status, subtitle, context')
+    .select('id, name, normalized_name, count, tier, base_score, train_target, drill, status, subtitle, context')
     .eq('user_id', studentId)
     .eq('is_deleted', false)
     .eq('is_archived', false)
@@ -221,6 +221,8 @@ async function process(supabase: any, payload: Payload): Promise<void> {
           count: (match.count ?? 0) + 1,
           tier,
           base_score: fp.priority_score,
+          // Re-logged focus = redo → grow the train target (+2), like a merge.
+          train_target: (match.train_target ?? (match.tier === 'critical' ? 3 : 2)) + 2,
           last_mentioned_at: now.toISOString(),
           class_input_id: class_input_id,
           ...(fp.drill ? { drill: fp.drill } : {}),
@@ -245,6 +247,7 @@ async function process(supabase: any, payload: Payload): Promise<void> {
         count: 1,
         tier,
         base_score: fp.priority_score,
+        train_target: tier === 'critical' ? 3 : 2,
         drill: fp.drill ?? null,
         dance: fpDance,
         status: targetStatus,

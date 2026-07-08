@@ -10,12 +10,18 @@ const DRAG_THRESHOLD = 8;
 
 export default function CustomTabBar({ state, navigation }) {
   const insets = useSafeAreaInsets();
-  const visibleRoutes = state.routes.filter((r) => !HIDDEN_TABS.includes(r.name));
+  // `state` is always supplied by React Navigation while mounted, but guard the
+  // access so a teardown-time render (e.g. the tab navigator unmounting on
+  // logout) can never throw on a transiently-absent state — an uncaught throw
+  // here is fatal under New Arch + distribution signing (no error boundary
+  // historically existed to catch it).
+  const routes = state?.routes ?? [];
+  const visibleRoutes = routes.filter((r) => !HIDDEN_TABS.includes(r.name));
   const [containerWidth, setContainerWidth] = useState(0);
   const [dragIndex, setDragIndex] = useState(-1);
 
   const activeIndex = visibleRoutes.findIndex(
-    (r) => r.key === state.routes[state.index]?.key
+    (r) => r.key === routes[state?.index]?.key
   );
 
   const tabCount = visibleRoutes.length;
@@ -179,7 +185,7 @@ export default function CustomTabBar({ state, navigation }) {
     },
   }), []);
 
-  if (HIDDEN_TABS.includes(state.routes[state.index]?.name)) return null;
+  if (HIDDEN_TABS.includes(routes[state?.index]?.name)) return null;
 
   // Glass opacity: 1 when dragging (frosted), 0 when idle (solid white)
   const solidOpacity = glassOpacity.interpolate({
@@ -221,8 +227,8 @@ export default function CustomTabBar({ state, navigation }) {
 
         {/* Tab labels */}
         {visibleRoutes.map((route, visIdx) => {
-          const routeIdx = state.routes.findIndex((r) => r.key === route.key);
-          const isFocused = dragIndex >= 0 ? dragIndex === visIdx : state.index === routeIdx;
+          const routeIdx = routes.findIndex((r) => r.key === route.key);
+          const isFocused = dragIndex >= 0 ? dragIndex === visIdx : state?.index === routeIdx;
 
           return (
             <Pressable

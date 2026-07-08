@@ -18,6 +18,7 @@ const ACTIONABLE_TYPES = new Set(['attendance_check', 'group_class_attendance', 
 const COACH_ACTION_TYPES = new Set([
   'focus_points_added',
   'focus_point_added',
+  'focus_reconcile_needed',
   'merge_request',
   'name_match_confirm',
 ]);
@@ -38,10 +39,12 @@ const TYPE_CONFIG = {
   group_class_attendance:  { label: 'Attendance',  color: Colors.orange, cta: 'Confirm attendance' },
   focus_points_added:      { label: 'Review',      color: Colors.orange },
   focus_point_added:       { label: 'Review',      color: Colors.orange },
+  focus_reconcile_needed:  { label: 'Reconcile',   color: '#FF3B30', cta: 'Pick which to keep' },
   focus_point_rejected:    { label: 'Declined',    color: '#FF3B30' },
   merge_request:           { label: 'Merge',       color: '#5788E6' },
   merge_request_student:   { label: 'Merge',       color: '#5788E6', cta: 'Review' },
   name_match_confirm:      { label: 'Name match',  color: '#FF9500', cta: 'Confirm' },
+  sync_reminder:           { label: 'Sync',        color: Colors.orange, cta: 'Import audio' },
 };
 
 function formatTime(dateStr) {
@@ -253,12 +256,19 @@ export default function NotificationsScreen({ navigation }) {
       } else {
         navigation.navigate('ActionNeeded');
       }
-    } else if (notif.type === 'merge_request_student' && notif.data?.merge_request_id) {
-      navigation.navigate('MergeReview', { mergeRequestId: notif.data.merge_request_id });
+    } else if (notif.type === 'merge_request_student') {
+      // No dedicated merge-review screen exists; TrainerReview surfaces the
+      // student's focus points with the merge-request badge, so it's the
+      // actionable landing spot. (Was navigating to an unregistered
+      // 'MergeReview' route → dead no-op.)
+      navigation.navigate('TrainerReview');
     } else if (notif.type === 'coach_request_received') {
       // CoachHomeScreen is the STUDENTS tab inside CoachMainTabs and surfaces
       // pending requests at the top of the list with accept/reject buttons.
       navigation.navigate('CoachMainTabs', { screen: 'STUDENTS' });
+    } else if (notif.type === 'sync_reminder') {
+      // Coach-only nudge to import unsynced DJI audio → the upload screen.
+      navigation.navigate('LocalUpload');
     } else {
       // Fallback for any unknown type — at least show the content rather than no-op.
       setActiveNotif(notif);
