@@ -28,6 +28,15 @@ BEGIN
   -- Style « Latin & Ballroom » → fait apparaître le toggle Latin/Ballroom
   UPDATE public.users SET dance_style = 'Latin & Ballroom' WHERE id = kev;
 
+  -- Nettoyage des lignes de démo précédentes (ciblé par nom/titre) pour que le
+  -- script soit relançable sans doublonner.
+  DELETE FROM public.focus_points
+   WHERE user_id = kev
+     AND normalized_name IN ('rise and fall','level frame','staccato footwork','standing leg drive','hip timing');
+  DELETE FROM public.class_inputs
+   WHERE user_id = kev
+     AND title IN ('Ballroom — Waltz','Ballroom — Tango','Latin — Rumba');
+
   ------------------------------------------------------------------------------
   -- 2. Cours (class_inputs). status 'scored' = cours traité (pas "en analyse").
   ------------------------------------------------------------------------------
@@ -68,15 +77,33 @@ BEGIN
   -- 3. Focus points (liés aux cours). category ∈ Stability/Technicality/
   --    Strength/Creativity/Musicality. status 'active' = visible à l'élève.
   ------------------------------------------------------------------------------
+  -- dance = text[] : catégorise Latin/Ballroom (Rumba→Latin, Waltz/Tango→Ballroom).
+  -- tier ∈ critical/important/supporting. subtitle = accroche courte, context =
+  -- explication du coach.
   INSERT INTO public.focus_points
     (user_id, name, normalized_name, category, count, status, is_deleted,
-     class_input_id, created_at)
+     class_input_id, created_at, subtitle, context, dance, tier)
   VALUES
-    (kev, 'Rise and fall',      'rise and fall',      'Technicality', 3, 'active', false, c1, now() - interval '7 days'),
-    (kev, 'Level frame',        'level frame',        'Stability',    2, 'active', false, c1, now() - interval '7 days'),
-    (kev, 'Staccato footwork',  'staccato footwork',  'Technicality', 2, 'active', false, c2, now() - interval '3 days'),
-    (kev, 'Standing-leg drive', 'standing leg drive', 'Strength',     1, 'active', false, c2, now() - interval '3 days'),
-    (kev, 'Hip timing',         'hip timing',         'Musicality',   2, 'active', false, c3, now() - interval '1 days');
+    (kev, 'Rise and fall', 'rise and fall', 'Technicality', 3, 'active', false, c1, now() - interval '7 days',
+     'Lengthen the up, control the down',
+     'Your rise starts too late and collapses early. Stretch the body upward through the middle of the figure and lower with control on the last beat.',
+     ARRAY['Waltz'], 'important'),
+    (kev, 'Level frame', 'level frame', 'Stability', 2, 'active', false, c1, now() - interval '7 days',
+     'Keep the top line quiet through turns',
+     'The frame lifts and drops as you rotate. Hold a steady, level topline so the turn travels from the feet, not the shoulders.',
+     ARRAY['Waltz'], 'critical'),
+    (kev, 'Staccato footwork', 'staccato footwork', 'Technicality', 2, 'active', false, c2, now() - interval '3 days',
+     'Sharpen the placement, not the speed',
+     'Tango steps are landing flat. Place the foot with a clear, deliberate action into the floor to get the staccato character.',
+     ARRAY['Tango'], 'important'),
+    (kev, 'Standing-leg drive', 'standing leg drive', 'Strength', 1, 'active', false, c2, now() - interval '3 days',
+     'Push the walks from the supporting leg',
+     'Momentum is coming from the moving leg reaching. Drive from the standing leg so the walks have weight and intention.',
+     ARRAY['Tango'], 'supporting'),
+    (kev, 'Hip timing', 'hip timing', 'Musicality', 2, 'active', false, c3, now() - interval '1 days',
+     'Settle the hip at the end of the beat',
+     'The hip action arrives early and rushes. Delay the settle to the very end of the beat to get the slow, grounded Rumba quality.',
+     ARRAY['Rumba'], 'important');
 
   ------------------------------------------------------------------------------
   -- 4. Coach David Yates + liaison en Ballroom (le toggle)
