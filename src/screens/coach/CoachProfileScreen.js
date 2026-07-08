@@ -32,6 +32,8 @@ import {
 } from '../../storage/coachStorage';
 import { clearUserCaches } from '../../storage/userCaches';
 import { clearPushToken } from '../../services/notifications';
+import { getActiveCoachClass, clearActiveCoachClass } from '../../storage/activeCoachClass';
+import { useDjiSync } from '../../context/DjiSyncContext';
 import { supabase } from '../../services/supabase/client';
 import { CoachProfileScreenSkeleton } from '../../components/Skeleton';
 import StudioPicker from '../../components/StudioPicker';
@@ -50,6 +52,9 @@ const GOLD_500 = '#E8B530';
 export default function CoachProfileScreen({ navigation }) {
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const hasLoadedRef = useRef(false);
+  // DJI import phase — used to warn before logging out mid-upload. Defensive
+  // read: null if ever rendered outside DjiSyncProvider.
+  const djiPhase = useDjiSync()?.phase;
 
   const [isLoading, setIsLoading] = useState(true);
   const [user, setUser] = useState(null);
@@ -280,7 +285,32 @@ export default function CoachProfileScreen({ navigation }) {
     setSaving(false);
   }
 
-  async function handleLogout() {
+  // Warn before signing out if a class recording is still active or a DJI
+  // import is uploading — logging out discards the in-flight work, and the
+  // active-class holder (like activeSession) survives clearUserCaches() and
+  // would otherwise bleed into the next account on this device.
+  function handleLogout() {
+    const activeClass = getActiveCoachClass();
+    const djiUploading = djiPhase === 'syncing';
+    if (activeClass || djiUploading) {
+      const what = activeClass ? 'a class is still recording' : 'a DJI import is still uploading';
+      Alert.alert(
+        'In progress',
+        `You have ${what}. Logging out will discard it. Continue?`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Discard & log out', style: 'destructive', onPress: () => { performLogout(); } },
+        ],
+      );
+      return;
+    }
+    performLogout();
+  }
+
+  async function performLogout() {
+    // Clear the active-class holder (memory + storage) so a running class can't
+    // survive into the next account on this device.
+    clearActiveCoachClass();
     await clearUserCaches();
     // Drop this device's push token before sign-out (shared-device hygiene).
     const { data: { session } } = await supabase.auth.getSession();
