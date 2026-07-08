@@ -560,7 +560,7 @@ export default function LogModal({ visible, onClose, onSubmitted, initialDraft }
   return (
     <Modal visible={visible} animationType="fade" transparent onRequestClose={handleClose}>
       <View style={styles.overlay}>
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.kvContainer}>
+        <KeyboardAvoidingView behavior="padding" style={styles.kvContainer}>
           <Animated.View style={[styles.sheet, { transform: [{ translateY }] }]}>
 
             {/* ── Header ─────────────────────────────────────────── */}

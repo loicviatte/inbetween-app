@@ -1949,12 +1949,19 @@ const s = StyleSheet.create({
     // Soft gold outline — ties the card to the yellow progress bar inside
     borderWidth: 1,
     borderColor: 'rgba(232,181,48,0.32)',
-    // Subtle elevation — sits one layer above the page gradient
-    shadowColor: '#E8B530',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 12,
-    elevation: 1,
+    // Subtle elevation — sits one layer above the page gradient.
+    // iOS only: Android ignores the gold shadowColor and draws a grey
+    // elevation halo that clashes with the rounded gold border (the "weird
+    // border" artifact). The gold borderWidth alone reads cleanly on Android.
+    ...Platform.select({
+      ios: {
+        shadowColor: '#E8B530',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.1,
+        shadowRadius: 12,
+      },
+      android: {},
+    }),
   },
   readyHeaderRow: {
     flexDirection: 'row',
