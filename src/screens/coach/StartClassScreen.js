@@ -29,6 +29,7 @@ import * as Notifications from 'expo-notifications';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Colors, Fonts, Spacing } from '../../theme';
 import { useCoachData } from '../../context/CoachDataContext';
+import { useDjiSync } from '../../context/DjiSyncContext';
 import { getStudentFocusPoints, getStudentQuestions, getStudentOpenQuestions, getStudentRecentActivity, getStartClassRoster, markQuestionCovered, linkCoveredQuestionsToClass, getCoachStudentDetailBundle } from '../../storage/coachStorage';
 import { getLessonReadiness } from '../../storage/storage';
 import { getMyCouples, getCoupleReadiness, getCoupleFocusPoints, getCoupleActivity } from '../../storage/coupleStorage';
@@ -393,6 +394,10 @@ function PrivateCard({ st, onPress }) {
 
 export default function StartClassScreen({ navigation }) {
   const { students, getOrFetch } = useCoachData();
+  // Lets us refresh the DJI awaiting-audio count the moment a local class ends,
+  // so the sync pill / setup banner appears immediately instead of only on the
+  // next app foreground.
+  const { refreshPending: refreshDjiUploads } = useDjiSync() ?? {};
 
   const [view, setView] = useState('select');
   const [pickMode, setPickMode] = useState('solo'); // 'solo' | 'couple' — landing list toggle
@@ -2005,7 +2010,12 @@ export default function StartClassScreen({ navigation }) {
         .from('class_recordings')
         .update({ ended_at: new Date().toISOString() })
         .eq('id', recordingId)
-        .then(() => {}, (err) => {
+        .then(() => {
+          // Row is now "awaiting audio" — refresh the DJI context so the sync
+          // pill / setup banner shows up right away (it otherwise only recounts
+          // on app foreground, so a coach who just finished a class saw nothing).
+          refreshDjiUploads?.();
+        }, (err) => {
           console.warn('[StartClass] local mode ended_at update failed:', err);
         });
       setClassRecorded(true);

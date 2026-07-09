@@ -1080,6 +1080,7 @@ export function DjiSyncProvider({ children }) {
       pickFolderFromInstructions,
       devResetFolder,
       refreshFolderAccess,
+      refreshPending,
     }),
     [
       enabled,
@@ -1109,6 +1110,7 @@ export function DjiSyncProvider({ children }) {
       pickFolderFromInstructions,
       devResetFolder,
       refreshFolderAccess,
+      refreshPending,
     ],
   );
 
