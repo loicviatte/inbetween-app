@@ -919,13 +919,29 @@ async function processRecord(record: ClassInputRecord): Promise<void> {
     : SYSTEM_PROMPT) + NO_HYPHEN_RULE
 
   try {
-    // Resolve coach name
+    // Resolve coach name + registered dance style
     const { data: coachRow } = await supabase
       .from('users')
-      .select('name')
+      .select('name, dance_style')
       .eq('id', user_id)
       .single()
     const coachName = coachRow?.name ?? 'Unknown'
+
+    // Style guard: a SINGLE-style coach can only teach their style, so every
+    // focus point's dance must belong to it. Prevents cross-style dance tags
+    // (e.g. a "rumba cross" figure or a stray "cha cha" mention in a Ballroom
+    // lesson being tagged Latin — which would wrongly count toward the
+    // student's Latin readiness). Dual-style ('Latin & Ballroom') and unset
+    // coaches are left unconstrained.
+    const coachStyle = (coachRow?.dance_style ?? '').trim().toLowerCase()
+    let styleConstraint = ''
+    if (coachStyle === 'ballroom') {
+      styleConstraint =
+        'coach_style_constraint: This coach ONLY teaches BALLROOM. Every focus point\'s "dance" MUST be a Ballroom dance (Waltz, Tango, Viennese Waltz, Foxtrot, Quickstep). NEVER tag a Latin dance (Cha Cha, Samba, Rumba, Paso Doble, Jive) — if the transcript mentions one it is a comparison or a figure name (e.g. "rumba cross"), NOT the lesson dance, so ignore it for dance tagging.'
+    } else if (coachStyle === 'latin') {
+      styleConstraint =
+        'coach_style_constraint: This coach ONLY teaches LATIN. Every focus point\'s "dance" MUST be a Latin dance (Cha Cha, Samba, Rumba, Paso Doble, Jive). NEVER tag a Ballroom dance (Waltz, Tango, Viennese Waltz, Foxtrot, Quickstep) — if the transcript mentions one it is a comparison or a figure name, NOT the lesson dance, so ignore it for dance tagging.'
+    }
 
     // Resolve student names — private (student_id) or group (class_input_students)
     // Fallback: if no explicit student_id, treat user_id as the student
@@ -979,6 +995,7 @@ async function processRecord(record: ClassInputRecord): Promise<void> {
     const userMessage = [
       `lesson_type: ${lesson_type ?? 'private'}`,
       `coach_name: ${coachName}`,
+      ...(styleConstraint ? [styleConstraint] : []),
       `coach_speaker_id: A`,
       `students: ${JSON.stringify(studentsWithFPs)}`,
       `transcript: ${transcript}`,
