@@ -81,6 +81,14 @@ export function DjiSyncProvider({ children }) {
       .getUser()
       .then(({ data: { user } }) => setAuthUser(user))
       .catch(() => setAuthUser(null));
+    // React to sign-in / token refresh so a role change (e.g. a coach onboarded
+    // or promoted AFTER their last sign-in) enables the DJI flow immediately,
+    // without a manual re-login. App.js forces a refresh at launch → the
+    // TOKEN_REFRESHED here carries the fresh user_metadata.
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session?.user) setAuthUser(session.user);
+    });
+    return () => subscription.unsubscribe();
   }, []);
 
   const enabled = isLocalRecordingMode(authUser);

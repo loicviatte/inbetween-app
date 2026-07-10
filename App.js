@@ -252,6 +252,13 @@ export default function App() {
       setUserEmail(s?.user?.email ?? null);
       maybeRegisterPush(s?.user?.id ?? null);
       loadRoleFor(s);
+      // Refresh the token in the background so the session's user_metadata
+      // (esp. `role`) reflects any change made AFTER the user last signed in —
+      // e.g. a student later promoted to coach. Otherwise they keep running on
+      // a stale JWT (misrouted to the legacy recording flow) until a manual
+      // re-login. Fires TOKEN_REFRESHED → the onAuthStateChange handler below
+      // re-applies the fresh session. Non-blocking, so it never delays paint.
+      if (s?.user) supabase.auth.refreshSession().catch(() => {});
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, s) => {
