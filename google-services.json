@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "709905743737",
+    "project_id": "inbetween-27e23",
+    "storage_bucket": "inbetween-27e23.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:709905743737:android:99fff36c723ed918a139a8",
+        "android_client_info": {
+          "package_name": "com.loicviatte.inbetweenapp"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC3E5LRsk7N3TemE4d9m5mwBAoBK-XTIio"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

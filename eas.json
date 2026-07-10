@@ -9,7 +9,11 @@
       "distribution": "internal"
     },
     "preview": {
-      "distribution": "internal"
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_SUPABASE_URL": "https://hhhvsjpgiehljfktevns.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImhoaHZzanBnaWVobGpma3Rldm5zIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQxODIwNzQsImV4cCI6MjA4OTc1ODA3NH0.hfm6MCkVuPW0DU6-zcSrTTHpCiXIEIw9o4zN8AUhqGE"
+      }
     },
     "production": {
       "autoIncrement": true,
@@ -24,6 +28,10 @@
     "production": {
       "ios": {
         "ascAppId": "6761638062"
+      },
+      "android": {
+        "serviceAccountKeyPath": "./play-service-account.json",
+        "track": "internal"
       }
     }
   }

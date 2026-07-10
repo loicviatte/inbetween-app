@@ -1,0 +1,83 @@
+name: Android Build (local, no EAS queue)
+
+# Builds an Android APK on the GitHub runner itself (`eas build --local`),
+# which bypasses the EAS cloud build queue entirely. Manual trigger — pick the
+# profile:
+#   - development → dev-client APK (hot-reloads JS from Metro; build once)
+#   - preview     → standalone internal APK (JS bundled in)
+# Download the resulting APK from the run's Artifacts and install it on device.
+
+on:
+  # Manual button — only visible once this workflow is on the default branch.
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: EAS build profile
+        type: choice
+        options: [development, preview, production]
+        default: development
+  # Feature-branch escape hatch: build on demand by pushing a commit whose
+  # message contains "[android-build]" (guarded in the job `if` below), so we
+  # can trigger a build before this file is merged to main. Defaults to the
+  # development profile.
+  push:
+    branches: [claude/android-app-status-vn75se]
+
+jobs:
+  build:
+    name: Local Android build
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[android-build]')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # Expo SDK 54 / RN 0.81 Gradle build needs JDK 17.
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Setup EAS
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      # --local builds on this runner (no cloud queue). The Android signing
+      # keystore is fetched from EAS's remote credentials (created during the
+      # first `eas build --profile preview`), so no interactive prompt.
+      # --local builds on this runner (no cloud queue). production → .aab (for
+      # the Play Store); development/preview → .apk (sideload / dev client).
+      - name: Build Android locally (no EAS queue)
+        env:
+          EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
+          EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
+          EXPO_PUBLIC_ASSEMBLYAI_API_KEY: ${{ secrets.EXPO_PUBLIC_ASSEMBLYAI_API_KEY }}
+          PROFILE: ${{ inputs.profile || 'development' }}
+        run: |
+          EXT=apk
+          [ "$PROFILE" = "production" ] && EXT=aab
+          eas build \
+            --platform android \
+            --profile "$PROFILE" \
+            --local \
+            --non-interactive \
+            --output "${{ github.workspace }}/app.$EXT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-${{ inputs.profile || 'development' }}-${{ github.sha }}
+          path: ${{ github.workspace }}/app.*
+          retention-days: 7

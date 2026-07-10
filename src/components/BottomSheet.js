@@ -92,7 +92,12 @@ export default function BottomSheet({
     <Modal visible transparent animationType="none" onRequestClose={onClose} statusBarTranslucent>
       {avoidKeyboard ? (
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          // 'padding' on BOTH platforms: this sheet lives inside a
+          // statusBarTranslucent Modal, and Android Modals don't auto-resize
+          // for the keyboard — leaving Android with no behavior meant the
+          // keyboard covered the sheet's inputs. 'padding' lifts the
+          // flex-end sheet by the keyboard height on Android too.
+          behavior="padding"
           style={styles.fill}
         >
           {body}

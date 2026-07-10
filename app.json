@@ -2,7 +2,8 @@
   "expo": {
     "name": "InBetween",
     "slug": "inbetween-app",
-    "version": "1.7.4",
+    "scheme": "inbetween",
+    "version": "1.7.5",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -26,6 +27,9 @@
       }
     },
     "android": {
+      "package": "com.loicviatte.inbetweenapp",
+      "versionCode": 1,
+      "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -33,7 +37,8 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "permissions": [
-        "android.permission.RECORD_AUDIO"
+        "android.permission.RECORD_AUDIO",
+        "android.permission.POST_NOTIFICATIONS"
       ]
     },
     "web": {
@@ -95,7 +100,8 @@
         }
       ],
       "expo-asset",
-      "@bacons/apple-targets"
+      "@bacons/apple-targets",
+      "./plugins/withGradleMemory.js"
     ],
     "extra": {
       "eas": {

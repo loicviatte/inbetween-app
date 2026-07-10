@@ -1,3 +1,5 @@
+import { Platform } from 'react-native';
+
 // ─── Feature flags ───────────────────────────────────────────────────────
 // Lightweight gate for incrementally rolling out the new recording pipeline.
 //
@@ -59,6 +61,12 @@ const LOCAL_RECORDING_LEGACY_EMAILS = new Set([
 ]);
 
 export function isLocalRecordingMode(user) {
+  // iOS-only: the DJI import flow (folder picker, file copy, WAV→m4a
+  // transcode) is backed by the local-recording-files native module, which
+  // is iOS-only and throws off-iOS. Now that local recording is the DEFAULT
+  // for every coach, this guard is what stops any coach signing in on Android
+  // from reaching a crashing native call (disables the whole DJI UI there).
+  if (Platform.OS !== 'ios') return false;
   if (!user?.id) return false;
   // Coach-only capture path — students never record classes. Mirrors the
   // app's role convention (see services/auth/role.js): role lives in
