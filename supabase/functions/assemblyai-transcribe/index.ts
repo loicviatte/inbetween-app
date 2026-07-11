@@ -147,7 +147,10 @@ Deno.serve(async (req: Request) => {
   // 2. Create the transcript job (same config the client used).
   const createBody: Record<string, unknown> = {
     audio_url: upload_url,
-    speech_models: ['universal-3-pro'],
+    // universal-3-5-pro (best English accuracy) with universal-2 fallback for
+    // languages outside its 18-language set (e.g. Russian). See the A/B in
+    // reference: low-confidence words 12% → 5% on a real English lesson.
+    speech_models: ['universal-3-5-pro', 'universal-2'],
     speaker_labels: true,
     punctuate: true,
     format_text: true,

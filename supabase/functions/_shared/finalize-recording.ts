@@ -200,7 +200,10 @@ export async function finalizeRecording(
       },
       body: JSON.stringify({
         audio_url: signed.signedUrl,
-        speech_models: ['universal-3-pro', 'universal-2'],
+        // universal-3-5-pro (18 langs incl. English) → falls back to
+        // universal-2 for other languages (e.g. Russian). A/B on a real
+        // English lesson: low-confidence words 12% → 5% vs universal-3-pro.
+        speech_models: ['universal-3-5-pro', 'universal-2'],
         prompt: DANCE_PROMPT,
         speaker_labels: true,
         ...(speakersExpected ? { speakers_expected: speakersExpected } : {}),
