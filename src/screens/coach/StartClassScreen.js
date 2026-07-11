@@ -200,7 +200,7 @@ function identifyCoachSpeaker(utterances) {
   return labels;
 }
 
-async function transcribeAudio(uri) {
+async function transcribeAudio(uri, speakersExpected) {
   // Proxied through supabase/functions/assemblyai-transcribe so the AssemblyAI
   // key stays server-side. The job is created server-side; we then poll the
   // same function for status (a single call can't block for the whole
@@ -215,6 +215,11 @@ async function transcribeAudio(uri) {
   const formData = new FormData();
   formData.append('file', { uri, type: 'audio/m4a', name: 'chunk.m4a' });
   formData.append('prompt', DANCE_PROMPT);
+  // Diarization hint (coach + dancers). Lets the server sharpen the
+  // Coach/Élève split — AssemblyAI's default over/under-segments otherwise.
+  if (speakersExpected && speakersExpected > 1) {
+    formData.append('speakers_expected', String(speakersExpected));
+  }
   const createRes = await fetch(fnUrl, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}` },
@@ -1843,9 +1848,17 @@ export default function StartClassScreen({ navigation }) {
         // independently in each chunk.
         const parts = [];
         let offsetMs = 0;
+        // Voices to expect for diarization: private = coach + 1, couple =
+        // coach + 2, group = coach + N students. Mirrors the DJI/server path
+        // (finalize-recording.ts) so both flows get the clean Coach/Élève split.
+        const speakersExpected = isPrivate
+          ? 2
+          : coupleCtx
+            ? 3
+            : (Array.isArray(allStudents) && allStudents.length > 0 ? 1 + allStudents.length : null);
         for (let i = 0; i < list.length; i++) {
           try {
-            const result = await transcribeAudio(list[i]);
+            const result = await transcribeAudio(list[i], speakersExpected);
             const utterances = result?.utterances || [];
             const speakerLabels = identifyCoachSpeaker(utterances);
             const formatted = formatUtterances(utterances, offsetMs, speakerLabels);
