@@ -119,6 +119,23 @@ export async function finalizeRecording(
     }
   }
 
+  // Speaker-count hint for diarization. AssemblyAI's default over-segments a
+  // 1-on-1 lesson into ~6 speakers, which defeats the top-talker Coach/Élève
+  // heuristic in transcript.ts (the coach's own second cluster gets mislabeled
+  // Élève → the "everyone Élève" bug). Telling it how many voices to expect
+  // yields a clean split. private → coach + 1 = 2 | couple → coach + 2 = 3 |
+  // group → coach + N recorded students.
+  let speakersExpected: number | null = null
+  if (rec.lesson_type === 'private') speakersExpected = 2
+  else if (rec.lesson_type === 'couple') speakersExpected = 3
+  else if (rec.lesson_type === 'group') {
+    const { count } = await supabase
+      .from('class_recording_students')
+      .select('student_id', { count: 'exact', head: true })
+      .eq('recording_id', recordingId)
+    if (count && count > 0) speakersExpected = 1 + count
+  }
+
   let createdJobs = 0
   for (const chunk of ready) {
     if (chunk.assemblyai_job_id) continue
@@ -186,6 +203,7 @@ export async function finalizeRecording(
         speech_models: ['universal-3-pro', 'universal-2'],
         prompt: DANCE_PROMPT,
         speaker_labels: true,
+        ...(speakersExpected ? { speakers_expected: speakersExpected } : {}),
         punctuate: true,
         format_text: true,
         webhook_url: webhookUrl,

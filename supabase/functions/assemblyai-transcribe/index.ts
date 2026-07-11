@@ -117,6 +117,12 @@ Deno.serve(async (req: Request) => {
   }
   const promptRaw = form.get('prompt')
   const prompt = typeof promptRaw === 'string' && promptRaw.length > 0 ? promptRaw : null
+  // Optional diarization hint (coach + students). Forward-compatible: the
+  // client may not send it yet; when it does, it sharpens the Coach/Élève
+  // split (see finalize-recording.ts for the same lever on the DJI path).
+  const seRaw = form.get('speakers_expected')
+  const speakersExpected =
+    typeof seRaw === 'string' && /^\d+$/.test(seRaw) ? parseInt(seRaw, 10) : null
 
   // 1. Upload raw audio bytes to AssemblyAI.
   const bytes = new Uint8Array(await file.arrayBuffer())
@@ -147,6 +153,7 @@ Deno.serve(async (req: Request) => {
     format_text: true,
   }
   if (prompt) createBody.prompt = prompt
+  if (speakersExpected && speakersExpected > 1) createBody.speakers_expected = speakersExpected
 
   const createRes = await fetch(`${ASSEMBLYAI_API}/transcript`, {
     method: 'POST',
