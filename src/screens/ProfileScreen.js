@@ -42,6 +42,7 @@ import {
   getMyCoachQuestions,
   getProfileActivityStats,
 } from '../storage/storage';
+import { getClassPendingValidation } from '../utils/algorithm';
 import { supabase } from '../services/supabase/client';
 import HeroCardGradient from '../components/HeroCardGradient';
 import QuestionDetailSheet from '../components/QuestionDetailSheet';
@@ -838,6 +839,10 @@ export default function ProfileScreen({ navigation, route }) {
   const [activityStats, setActivityStats] = useState({ bestStreakDays: 0, monthMinutes: 0 });
   const [radarScores, setRadarScores] = useState([0, 0, 0, 0, 0]);
   const [readiness, setReadiness] = useState(null);
+  // Latest class awaiting admin validation — its focus points are RLS-hidden
+  // until approved, so the readiness card must say so instead of implying the
+  // student never logged a class.
+  const [pendingValidation, setPendingValidation] = useState(null);
   const [coupleReadinessP, setCoupleReadinessP] = useState(null);
   const [readinessMode, setReadinessMode] = useState('solo'); // 'solo' | 'couple'
   const [coachQuestions, setCoachQuestions] = useState([]);
@@ -889,11 +894,13 @@ export default function ProfileScreen({ navigation, route }) {
     // toggle (a 2-style dancer's Profile otherwise anchored on the most-recent
     // private of any style). null = single-style / unset.
     const trainCat = await AsyncStorage.getItem('train_category_filter').catch(() => null);
-    const [bundle, { data: { session } }, savedPhoto] = await Promise.all([
+    const [bundle, { data: { session } }, savedPhoto, pendingCls] = await Promise.all([
       withTimeout(getStudentProfileBundle(null, trainCat), null),
       supabase.auth.getSession(),                          // local — no network hang
       AsyncStorage.getItem(AVATAR_KEY).catch(() => null),  // local
+      getClassPendingValidation().catch(() => null),
     ]);
+    setPendingValidation(pendingCls);
     const ok = !!bundle;
     const b = bundle || {};
     const userData = b.user ?? null;
@@ -1480,7 +1487,11 @@ export default function ProfileScreen({ navigation, route }) {
   const activeReadiness = (paired && readinessMode === 'couple') ? coupleReadinessP : readiness;
 
   const readinessTitle = (() => {
-    if (!activeReadiness) return 'Log your last private to start.';
+    if (!activeReadiness) {
+      return pendingValidation
+        ? 'Your latest class is still being reviewed.'
+        : 'Log your last private to start.';
+    }
     if (activeReadiness.percent >= 100) return 'Ready for your next private.';
     if (activeReadiness.percent >= 50) return 'Almost ready for your next private.';
     return 'Train your focus points to get ready.';

@@ -13,6 +13,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Colors, Fonts, Spacing } from '../theme';
 import {
   getAllFocusPointsBundle,
+  getActiveSoloFocusPoints,
+  getPastFocusPoints,
   getSessionCountForFocus,
   startTrainingSession,
 } from '../utils/algorithm';
@@ -126,6 +128,15 @@ export default function AllFocusPointsScreen({ navigation, route }) {
   const [couplePts, setCouplePts] = useState([]);
   const [group, setGroup] = useState([]);
   const [starting, setStarting] = useState(false);
+  // Active / Past toggle (Solo tab). "Past" = retired focus points — still
+  // trainable. Train deep-links straight here with view:'past' when a pending
+  // class has left the student with no active focus points to work on.
+  const [view, setView] = useState(route?.params?.view === 'past' ? 'past' : 'active');
+  const [past, setPast] = useState([]);
+  // Past is fetched separately from the bundle, so it needs its own loading
+  // flag — otherwise the warm AsyncStorage cache flips `loading` false in ms
+  // and tapping Past shows "no past focus points" before the query even lands.
+  const [pastLoading, setPastLoading] = useState(true);
 
   useFocusEffect(useCallback(() => {
     let active = true;
@@ -154,15 +165,39 @@ export default function AllFocusPointsScreen({ navigation, route }) {
     // 2) ONE round-trip — get_all_focus_points returns solo + couple_pts + group
     //    (category-scoped) + couple meta + dance_style. Replaces the old
     //    ~11-query staircase (getMyCouple alone was 4 serial queries).
-    getAllFocusPointsBundle(cat).then((b) => {
+    // Drop the previous category's Past rows so a category switch can't paint
+    // stale content while the new query is in flight.
+    setPast([]);
+    setPastLoading(true);
+
+    getAllFocusPointsBundle(cat).then(async (b) => {
       if (!active) return;
       if (b) {
         freshPainted = true;
         apply(b);
         AsyncStorage.setItem(key, JSON.stringify(b)).catch(() => {});
+        // The bundle's `solo` array is the last private's readiness CHECKLIST —
+        // it INNER JOINs get_lesson_readiness, so it comes back EMPTY whenever
+        // readiness collapses (newest class awaiting admin approval → its focus
+        // points are RLS-hidden). The student still has active focus points;
+        // fall back to them so they stay reachable instead of seeing a bogus
+        // "nothing in progress".
+        if (!(b.solo || []).length) {
+          try {
+            const fallback = await getActiveSoloFocusPoints(cat);
+            if (active && fallback.length) setSolo(fallback);
+          } catch { /* keep the empty list */ }
+        }
       }
       setLoading(false);
     }).catch(() => { if (active) setLoading(false); });
+
+    // 3) Retired focus points for the Past toggle — a separate light query (the
+    //    bundle RPC only returns active ones). Never blocks the first paint.
+    getPastFocusPoints(cat)
+      .then((p) => { if (active) setPast(p || []); })
+      .catch(() => { if (active) setPast([]); })
+      .finally(() => { if (active) setPastLoading(false); });
 
     return () => { active = false; };
   }, [filter]));
@@ -174,19 +209,31 @@ export default function AllFocusPointsScreen({ navigation, route }) {
   tabs.push({ key: 'group', label: 'Group' });
   const activeTab = (tab === 'couple' && !couple) ? 'solo' : tab;
   const accent = activeTab === 'couple' ? CBLUE : GOLD;
-  const list = activeTab === 'solo' ? solo : activeTab === 'couple' ? couplePts : group;
+  // The Active/Past toggle only applies to Solo — couple and group always show
+  // their active sets.
+  const showViewToggle = activeTab === 'solo';
+  const pastView = showViewToggle && view === 'past';
+  const list = activeTab === 'solo'
+    ? (pastView ? past : solo)
+    : activeTab === 'couple' ? couplePts : group;
 
-  const emptyCopy = {
-    solo:   { title: 'Nothing in progress', body: 'Log a private lesson to get your next focus points.' },
-    couple: { title: 'No couple focus points', body: 'Your shared focus points from couple lessons show up here.' },
-    group:  { title: 'No recent group focus', body: 'Focus points from your last group classes show up here.' },
-  }[activeTab];
+  const emptyCopy = pastView
+    ? { title: 'No retired focus points', body: 'Focus points that leave your active set show up here.' }
+    : {
+        solo:   { title: 'Nothing in progress', body: 'Log a private lesson to get your next focus points.' },
+        couple: { title: 'No couple focus points', body: 'Your shared focus points from couple lessons show up here.' },
+        group:  { title: 'No recent group focus', body: 'Focus points from your last group classes show up here.' },
+      }[activeTab];
 
-  const countLabel = {
-    solo:   `${list.length} in progress · from your last private`,
-    couple: `${list.length} shared · from your last couple lesson`,
-    group:  `${list.length} · from your last 2 group classes`,
-  }[activeTab];
+  // "past" is not the same as "graduated": a coach can retire a focus point,
+  // and the carry-over reconcile drops untrained ones here too. Say retired.
+  const countLabel = pastView
+    ? `${list.length} retired · no longer in your active set`
+    : {
+        solo:   `${list.length} in progress · from your last private`,
+        couple: `${list.length} shared · from your last couple lesson`,
+        group:  `${list.length} · from your last 2 group classes`,
+      }[activeTab];
 
   // ── Practice launch ──
   async function handlePractice(item) {
@@ -288,7 +335,31 @@ export default function AllFocusPointsScreen({ navigation, route }) {
         </View>
       )}
 
-      {loading ? (
+      {/* Active / Past toggle — lets a student revisit and keep training focus
+          points they've graduated from (and gives them something to train while
+          a new class waits on validation). Solo only. */}
+      {showViewToggle && !loading && (
+        <View style={s.filterRow}>
+          {[
+            { key: 'active', label: 'Active' },
+            { key: 'past', label: 'Past' },
+          ].map((opt) => {
+            const on = view === opt.key;
+            return (
+              <TouchableOpacity
+                key={opt.key}
+                style={[s.filterPill, on && s.filterPillOn]}
+                activeOpacity={0.75}
+                onPress={() => setView(opt.key)}
+              >
+                <Text style={[s.filterPillText, on && s.filterPillTextOn]}>{opt.label}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      )}
+
+      {loading || (pastView && pastLoading) ? (
         <GenericListSkeleton rows={6} showHeader={false} showTitle={false} />
       ) : list.length === 0 ? (
         <View style={s.center}>

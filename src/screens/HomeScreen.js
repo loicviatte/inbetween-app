@@ -36,7 +36,12 @@ import {
   getTopFocusPointsWithCounts,
   getTeacherContextForAI,
 } from '../storage/storage';
-import { getTrainFocus, startTrainingSession } from '../utils/algorithm';
+import {
+  getTrainFocus,
+  startTrainingSession,
+  getClassPendingValidation,
+  getSoloFocusCounts,
+} from '../utils/algorithm';
 import { markFirstScreenReady } from '../utils/firstPaint';
 import { getMyCouple, getCoupleReadiness, mostTrainedMode, getCoupleLock } from '../storage/coupleStorage';
 import { supabase } from '../services/supabase/client';
@@ -243,7 +248,7 @@ function CategoryPicker({ visible, current, onSelect, onClose }) {
 // Mini version of the Profile readiness card — one glanceable line so the
 // student sees their progress without leaving the Train tab. Taps through to
 // the full breakdown on Profile.
-function NextClassReadinessCard({ readiness, onPress }) {
+function NextClassReadinessCard({ readiness, onPress, pendingValidation }) {
   const hasData = !!readiness;
   const percent = hasData ? Math.max(0, Math.min(100, readiness.percent || 0)) : 0;
   const focusCount = hasData ? (readiness.focuses?.length || 0) : 0;
@@ -276,7 +281,11 @@ function NextClassReadinessCard({ readiness, onPress }) {
           </View>
         </View>
       ) : (
-        <Text style={s.readyEmpty}>Log your last private to start tracking.</Text>
+        <Text style={s.readyEmpty}>
+          {pendingValidation
+            ? 'Your new focus points are being reviewed.'
+            : 'Log your last private to start tracking.'}
+        </Text>
       )}
     </TouchableOpacity>
   );
@@ -409,7 +418,7 @@ function ProgRing({ done = 0, target = 0, color = '#E8B530', size = 17, sw = 2.6
 function FocusCard({
   theme, expanded, focus, count, idx, onDot, pill, sub, progress, headerAvatar,
   onStart, starting, onExpand, sessionActive, onResume, timerNode, emptyText, lockedLabel,
-  locked, compact, onViewPartner,
+  locked, compact, onViewPartner, emptyCta,
 }) {
   const isCouple = theme === 'couple';
   const empty = !focus;
@@ -494,7 +503,19 @@ function FocusCard({
             {headerAvatar}
           </View>
           {empty ? (
-            <Text style={cc.emptyTxt}>{emptyText}</Text>
+            <View>
+              <Text style={cc.emptyTxt}>{emptyText}</Text>
+              {emptyCta ? (
+                <TouchableOpacity
+                  onPress={emptyCta.onPress}
+                  activeOpacity={0.7}
+                  style={cc.emptyCtaBtn}
+                >
+                  <Text style={cc.emptyCtaTxt}>{emptyCta.label}</Text>
+                  <Ionicons name="chevron-forward" size={14} color="#fff" />
+                </TouchableOpacity>
+              ) : null}
+            </View>
           ) : (
             <View>
               <Animated.View style={{ opacity: infoT, transform: [{ translateX: infoT.interpolate({ inputRange: [0, 1], outputRange: [14, 0] }) }] }}>
@@ -578,6 +599,12 @@ export default function HomeScreen({ navigation }) {
   const [focusTrainedThisWeek, setFocusTrainedThisWeek] = useState(0);
   const [weekActivity, setWeekActivity] = useState({});
   const [readiness, setReadiness] = useState(null);
+  // Latest class still awaiting admin validation. Its focus points are hidden
+  // by RLS until approved, so the Train cards would otherwise fall into the
+  // misleading "log your next class" empty state. `soloCounts` says whether we
+  // can offer anything to train meanwhile — and which tab to send them to.
+  const [pendingValidation, setPendingValidation] = useState(null);
+  const [soloCounts, setSoloCounts] = useState({ active: 0, past: 0 });
   const [metrics, setMetrics] = useState({ progression: 0, retention: 100, global: 0 });
   const [showFilter, setShowFilter] = useState(false);
   const [category, setCategory] = useState(null); // global: 'latin' | 'ballroom' | null
@@ -701,10 +728,12 @@ export default function HomeScreen({ navigation }) {
     // nothing to toggle. A card is later hidden if its owner doesn't do the
     // selected style (handled in render). Couple is fetched up-front (parallel
     // with the user) because the toggle's default depends on it.
-    const [u, coupleV] = await Promise.all([
+    const [u, coupleV, pendingCls] = await Promise.all([
       getUser(),
       getMyCouple().catch(() => null),
+      getClassPendingValidation().catch(() => null),
     ]);
+    setPendingValidation(pendingCls);
     const soloLatin = (u?.dance_style || '').includes('Latin');
     const soloBallroom = (u?.dance_style || '').includes('Ballroom');
     const availLatin = soloLatin || !!coupleV?.doesLatin;
@@ -721,6 +750,9 @@ export default function HomeScreen({ navigation }) {
     }
     setShowFilter(both);
     setCategory(cat);
+    // Counts are category-scoped, so they can only be fetched once `cat` is
+    // resolved. Non-blocking: they only gate the pending-validation CTA.
+    getSoloFocusCounts(cat).then(setSoloCounts).catch(() => {});
 
     // Pre-warm the AI assistant context so the chat in FocusSessionScreen
     // has a warm cache. Deferred 2s so it doesn't compete with the
@@ -1285,7 +1317,30 @@ export default function HomeScreen({ navigation }) {
               timerNode={timerNode}
               locked={anyInProgress}
               compact={SMALL_SCREEN}
-              emptyText="Log your next class to see your focus points appear."
+              emptyText={
+                pendingValidation
+                  ? "Your latest class is still being reviewed. Your new focus points will appear once it's approved."
+                  : 'Log your next class to see your focus points appear.'
+              }
+              // Only offer a CTA if there is genuinely something on the other
+              // side — otherwise it lands on an empty screen showing the very
+              // dead-end copy this state exists to replace. Prefer active; fall
+              // back to the Past tab; offer nothing if both are empty.
+              emptyCta={
+                !pendingValidation
+                  ? null
+                  : soloCounts.active > 0
+                    ? {
+                        label: 'Train your current focus points',
+                        onPress: () => navigation.navigate('AllFocusPoints', { category }),
+                      }
+                    : soloCounts.past > 0
+                      ? {
+                          label: 'Revisit your past focus points',
+                          onPress: () => navigation.navigate('AllFocusPoints', { category, view: 'past' }),
+                        }
+                      : null
+              }
             />
           );
 
@@ -1431,7 +1486,11 @@ export default function HomeScreen({ navigation }) {
                 {sideOnLeft ? sideEl : null}
                 <View style={rdl.main}>
                   {mainF.length === 0 ? (
-                    <Text style={rdl.empty}>Log your last private to start.</Text>
+                    <Text style={rdl.empty}>
+                      {pendingValidation
+                        ? 'Your new focus points are being reviewed.'
+                        : 'Log your last private to start.'}
+                    </Text>
                   ) : mainF.map((f) => {
                     const todo = (f.done ?? 0) === 0;
                     return (
@@ -2184,6 +2243,8 @@ const cc = StyleSheet.create({
   expNavRowSmall: { marginTop: 8, marginBottom: 8 },
   swipeHint: { fontFamily: Fonts.jakartaBold, fontSize: 9.5, letterSpacing: 1.4, color: 'rgba(255,255,255,0.45)' },
   emptyTxt: { fontFamily: Fonts.jakartaRegular, fontSize: 14, color: 'rgba(255,255,255,0.72)', lineHeight: 20, marginTop: 14, marginBottom: 6 },
+  emptyCtaBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start', paddingVertical: 10, marginBottom: 2 },
+  emptyCtaTxt: { fontFamily: Fonts.jakartaBold, fontSize: 13, color: '#fff' },
 
   // Start
   startBtnSolo: { backgroundColor: Colors.orange, borderRadius: 13, paddingVertical: 15, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10 },

@@ -171,6 +171,105 @@ export async function getAllFocusPointsBundle(category = null) {
   }
 }
 
+// Solo focus-point rows, by status. Shared by the Past toggle and the active
+// fallback below. Group focus points are excluded — they have their own tab.
+// Throws on a query error so callers can tell "none" apart from "failed"
+// (supabase-js resolves with { data: null, error } rather than rejecting).
+async function fetchSoloFocusPoints(status, category, orderCol) {
+  const userId = await getUserId();
+  const { data, error } = await supabase
+    .from('focus_points')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('is_deleted', false)
+    .eq('is_archived', false)
+    .eq('is_other', false)
+    .is('alias_of', null)
+    .or('group_fp.is.null,group_fp.eq.false')
+    .eq('status', status)
+    .order(orderCol, { ascending: orderCol === 'created_at', nullsFirst: false });
+  if (error) throw new Error(`focus_points(${status}): ${error.message}`);
+  return (data || []).filter((fp) => focusMatchesCategory(fp, category));
+}
+
+// Retired ("Past") focus points — the Past toggle on All Focus Points. NB these
+// are not necessarily "graduated": a coach can retire one, and the carry-over
+// reconcile drops untrained ones here too. Copy should say "retired".
+export async function getPastFocusPoints(category = null) {
+  return fetchSoloFocusPoints('past', category, 'last_mentioned_at');
+}
+
+// The student's real active SOLO focus points.
+//
+// get_all_focus_points builds its `solo` array by INNER JOINing the last
+// private's readiness checklist (get_lesson_readiness). When that readiness
+// collapses to NULL — which is exactly what happens while the newest class is
+// still awaiting admin approval, since the focus_points_require_admin_approval
+// RLS policy hides that class's focus points — the join yields nothing and the
+// Solo tab renders EMPTY even though the student still has active focus points.
+// This is the fallback that keeps them reachable in that state.
+export async function getActiveSoloFocusPoints(category = null) {
+  return fetchSoloFocusPoints('active', category, 'created_at');
+}
+
+// Counts behind the "being reviewed" empty state: they decide whether we can
+// offer a CTA at all, and which tab it should land on. One lean query.
+export async function getSoloFocusCounts(category = null) {
+  try {
+    const userId = await getUserId();
+    const { data, error } = await supabase
+      .from('focus_points')
+      .select('status, dance')
+      .eq('user_id', userId)
+      .eq('is_deleted', false)
+      .eq('is_archived', false)
+      .eq('is_other', false)
+      .is('alias_of', null)
+      .or('group_fp.is.null,group_fp.eq.false')
+      .in('status', ['active', 'past']);
+    if (error || !data) return { active: 0, past: 0 };
+    const inCat = data.filter((fp) => focusMatchesCategory(fp, category));
+    return {
+      active: inCat.filter((fp) => fp.status === 'active').length,
+      past: inCat.filter((fp) => fp.status === 'past').length,
+    };
+  } catch {
+    return { active: 0, past: 0 };
+  }
+}
+
+// Is the student's most recent PRIVATE class still waiting on admin validation?
+// Its focus points stay hidden by the focus_points_require_admin_approval RLS
+// policy until the class is approved, which otherwise makes Train render the
+// "log your next class" empty state as if the student had never trained.
+//
+// Scoped to match what actually anchors solo readiness:
+//   • user_id OR student_id — a coach-recorded class carries the student on
+//     student_id, but a self-logged one (saveClassInput) only sets user_id.
+//   • private / NULL lesson_type — get_lesson_readiness only anchors on those,
+//     so a pending GROUP class must NOT flip the solo card into this state.
+// Returns the pending class row, or null.
+export async function getClassPendingValidation() {
+  try {
+    const userId = await getUserId();
+    const { data, error } = await supabase
+      .from('class_inputs')
+      .select('id, created_at')
+      .or(`user_id.eq.${userId},student_id.eq.${userId}`)
+      .or('lesson_type.eq.private,lesson_type.is.null')
+      .not('is_deleted', 'is', true)
+      .in('status', ['extracted', 'scored'])
+      .is('admin_approved_at', null)
+      .is('admin_rejected_at', null)
+      .order('created_at', { ascending: false })
+      .limit(1);
+    if (error || !data) return null;
+    return data[0] || null;
+  } catch {
+    return null;
+  }
+}
+
 // ─── Train per-style bundle (one round-trip) ───────────────────────────────────
 // Solo slots + readiness, couple slots + readiness, and slot1/slot2 session
 // counts for ONE dance category — collapses the getSlots + getCoupleSlots + 2×
