@@ -6,6 +6,8 @@ import {
   ScrollView,
   TouchableOpacity,
   ActivityIndicator,
+  Linking,
+  AppState,
 } from 'react-native';
 import { Image } from 'expo-image';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -25,6 +27,9 @@ import {
 import { supabase } from '../../services/supabase/client';
 import { isLocalRecordingMode } from '../../services/featureFlags';
 import * as DjiFiles from 'local-recording-files';
+import * as Notifications from 'expo-notifications';
+import { registerPushToken } from '../../services/notifications';
+import { useDjiSync } from '../../context/DjiSyncContext';
 
 // ── Palette ─────────────────────────────────────────────────────────────────
 // Gold scale + ink + paper, aligned with the May 2026 design refresh.
@@ -260,6 +265,56 @@ export default function DashboardScreen({ navigation }) {
   }, []);
   const isLocalMode = isLocalRecordingMode(authUser);
 
+  // ── Notifications-off nudge ──────────────────────────────────────────────
+  // A denied iOS permission is invisible: the nightly sync-reminder rows are
+  // still created server-side, but no push can ever be delivered because
+  // users.push_token stays NULL (registerPushToken bails on 'denied' and iOS
+  // never re-prompts). Surface it — only when it actually matters: permission
+  // not granted AND at least one class still waiting for its audio.
+  const { pendingUploadCount } = useDjiSync() ?? {};
+  const [notifPerm, setNotifPerm] = useState('granted'); // optimistic — no flash
+  const notifPermRef = useRef('granted');
+  useEffect(() => {
+    let alive = true;
+    const check = async () => {
+      try {
+        const { status } = await Notifications.getPermissionsAsync();
+        if (!alive) return;
+        const prev = notifPermRef.current;
+        notifPermRef.current = status;
+        setNotifPerm(status);
+        // Came back granted (from Settings or the native prompt): register the
+        // token right away so the very next reminder arrives as a real push.
+        if (status === 'granted' && prev !== 'granted' && authUser?.id) {
+          registerPushToken(authUser.id).catch(() => {});
+        }
+      } catch { /* keep the last known state */ }
+    };
+    check();
+    const sub = AppState.addEventListener('change', (s) => {
+      if (s === 'active') check();
+    });
+    return () => { alive = false; sub.remove(); };
+  }, [authUser?.id]);
+
+  const showNotifNudge = notifPerm !== 'granted' && (pendingUploadCount ?? 0) > 0;
+  const onNotifNudgePress = async () => {
+    if (notifPerm === 'undetermined') {
+      // Never asked on this install — the native prompt can show in-app.
+      // registerPushToken requests the permission and saves the token itself.
+      if (authUser?.id) await registerPushToken(authUser.id).catch(() => {});
+      try {
+        const { status } = await Notifications.getPermissionsAsync();
+        notifPermRef.current = status;
+        setNotifPerm(status);
+      } catch { /* recheck happens on next foreground */ }
+    } else {
+      // Denied — only the system Settings can flip it. Opens the app's own
+      // settings page; the AppState listener re-checks on the way back.
+      Linking.openSettings();
+    }
+  };
+
   useEffect(() => subscribeToActiveCoachClass(setActiveClass), []);
   // Warm the Start-class roster cache in the background so the coach's FIRST
   // open of Start Class is instant too (the fetch is a slow cold-start on the
@@ -432,6 +487,22 @@ export default function DashboardScreen({ navigation }) {
           <View style={styles.emptyStudents}>
             <Text style={styles.emptyStudentsText}>No students yet</Text>
           </View>
+        )}
+
+        {/* ── Notifications-off nudge (one line, tap → enable) ── */}
+        {showNotifNudge && (
+          <TouchableOpacity
+            style={styles.notifNudge}
+            onPress={onNotifNudgePress}
+            activeOpacity={0.85}
+          >
+            <Ionicons name="notifications-off-outline" size={15} color={GOLD_300} />
+            <Text style={styles.notifNudgeText} numberOfLines={1}>
+              Notifications off.{' '}
+              <Text style={styles.notifNudgeAction}>Enable upload reminders</Text>
+            </Text>
+            <Ionicons name="chevron-forward" size={14} color={GOLD_500} />
+          </TouchableOpacity>
         )}
 
         {/* ── Hero overview card ── */}
@@ -753,6 +824,31 @@ const styles = StyleSheet.create({
   // ── Hero card ─────────────────────────────────────────────────────────
   // Dark warm-ink ground with a faint gold border. The mockup's CSS
   // radial-gradient corner glow is approximated via the shadow + border.
+  // One-line "notifications off" strip — hero's ink + gold family, slimmer.
+  notifNudge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 18,
+    marginBottom: 12,
+    paddingVertical: 9,
+    paddingHorizontal: 12,
+    backgroundColor: HERO_BG,
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(232,181,48,0.5)',
+  },
+  notifNudgeText: {
+    flex: 1,
+    fontFamily: Fonts.jakartaMedium,
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.8)',
+  },
+  notifNudgeAction: {
+    fontFamily: Fonts.jakartaExtraBold,
+    color: GOLD_500,
+  },
+
   hero: {
     marginHorizontal: 18,
     backgroundColor: HERO_BG,
