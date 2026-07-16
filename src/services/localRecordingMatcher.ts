@@ -87,30 +87,88 @@ export interface MatchSession {
 // Example: DJI_21_20260512_132205.WAV
 const DJI_NAME_RE = /^DJI_(\d+)_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})\.wav$/i;
 
+// Generic voice-recorder pattern: a bare timestamp, no index.
+// Example: 20260116011342.WAV  (drive "VOICE", folder RECORD — the test mic).
+// One file = one recording for these devices: at their 32 kB/s rate FAT32's
+// 4 GB cap is ~37 h of audio, so they never split a class the way the DJI
+// does. The synthesized index is the numeric timestamp itself — unique per
+// file and time-monotonic (≈2e13, comfortably below 2^53) — so
+// groupMicFilesIntoSessions keeps every file as its own session.
+const TS_NAME_RE = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})\.wav$/i;
+
 /**
- * Parse a DJI Mic filename. Returns null if the name doesn't match the
- * expected DJI_NN_YYYYMMDD_HHMMSS.WAV pattern (e.g. for unrelated files
- * dropped in the same folder).
+ * Parse a mic filename — DJI (DJI_NN_YYYYMMDD_HHMMSS.WAV) or bare-timestamp
+ * (YYYYMMDDHHMMSS.WAV). Returns null for anything else (e.g. unrelated files
+ * dropped in the same folder). The two patterns are mutually exclusive, and
+ * each coach bookmarks their own mic's folder, so the formats never mix
+ * within one import.
  */
 export function parseDjiFileName(name: string): {
   index: number;
   timestamp: Date;
 } | null {
   const m = name.match(DJI_NAME_RE);
-  if (!m) return null;
+  if (m) {
+    const [, idxStr, yyyy, mm, dd, hh, mi, ss] = m;
+    return {
+      index: parseInt(idxStr, 10),
+      timestamp: new Date(
+        parseInt(yyyy, 10),
+        parseInt(mm, 10) - 1, // JS months are 0-indexed
+        parseInt(dd, 10),
+        parseInt(hh, 10),
+        parseInt(mi, 10),
+        parseInt(ss, 10),
+      ),
+    };
+  }
 
-  const [, idxStr, yyyy, mm, dd, hh, mi, ss] = m;
-  return {
-    index: parseInt(idxStr, 10),
-    timestamp: new Date(
-      parseInt(yyyy, 10),
-      parseInt(mm, 10) - 1, // JS months are 0-indexed
-      parseInt(dd, 10),
-      parseInt(hh, 10),
-      parseInt(mi, 10),
-      parseInt(ss, 10),
-    ),
-  };
+  const t = name.match(TS_NAME_RE);
+  if (t) {
+    const [, yyyy, mm, dd, hh, mi, ss] = t;
+    const year = parseInt(yyyy, 10);
+    const month = parseInt(mm, 10);
+    const day = parseInt(dd, 10);
+    const hour = parseInt(hh, 10);
+    const min = parseInt(mi, 10);
+    const sec = parseInt(ss, 10);
+    // Plausibility gate so a random 14-digit filename doesn't sneak in.
+    if (
+      year < 2000 || year > 2099 ||
+      month < 1 || month > 12 ||
+      day < 1 || day > 31 ||
+      hour > 23 || min > 59 || sec > 59
+    ) {
+      return null;
+    }
+    return {
+      index: parseInt(`${yyyy}${mm}${dd}${hh}${mi}${ss}`, 10),
+      timestamp: new Date(year, month - 1, day, hour, min, sec),
+    };
+  }
+
+  return null;
+}
+
+// ─── Duration estimation ──────────────────────────────────────────────────
+
+// Bytes/sec by recorder format, keyed off the filename. The WAV header isn't
+// readable at list time (the native module only returns name + size before
+// copy), so the estimate has to assume the device's fixed encoding:
+//   - DJI Mic 1/2:            48 kHz × 24-bit mono = 144 000 B/s
+//   - bare-timestamp recorder: 16 kHz × 16-bit mono =  32 000 B/s
+//     (measured from real files off the device — see the WAV fmt chunk)
+const DJI_BYTES_PER_SEC = 144_000;
+const TS_BYTES_PER_SEC = 32_000;
+
+/**
+ * Approximate a WAV's duration from its size, using the byte rate implied by
+ * the filename's format. Good enough for matcher scoring; the true duration
+ * is measured server-side by AssemblyAI after upload.
+ */
+export function estimateWavDurationSec(name: string, sizeBytes: number): number {
+  const rate = TS_NAME_RE.test(name) ? TS_BYTES_PER_SEC : DJI_BYTES_PER_SEC;
+  return Math.max(0, Math.round((sizeBytes - 44) / rate));
 }
 
 // ─── Duration scoring ────────────────────────────────────────────────────

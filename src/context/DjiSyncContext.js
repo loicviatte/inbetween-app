@@ -839,7 +839,7 @@ export function DjiSyncProvider({ children }) {
         setHasFolderAccess(false);
         setErrorInfo({
           kind: 'no-access',
-          message: "That folder has no DJI recordings. Pick NO NAME at the root of your mic — not a sub-folder.",
+          message: "That folder has no mic recordings. Pick your mic's drive at the root (e.g. NO NAME or VOICE) — not an unrelated folder.",
         });
         setPhase('error');
         return;

@@ -40,6 +40,7 @@ import { Colors as C, Fonts, Spacing } from '../../theme';
 import { supabase } from '../../services/supabase/client';
 import {
   parseDjiFileName,
+  estimateWavDurationSec,
   groupMicFilesIntoSessions,
   matchSessionsToClasses,
 } from '../../services/localRecordingMatcher';
@@ -88,14 +89,9 @@ async function pickAudioFiles() {
   }));
 }
 
-// Approximate WAV duration from file size (works only for known sample
-// rates + bit depths). For DJI Mic 1/2: 48 kHz, 24-bit, mono = 144000
-// bytes/sec. We use this as a fallback — for the MVP, asking the audio
-// engine for the actual duration via expo-audio would be more accurate.
-function approximateWavDurationSec(sizeBytes) {
-  const BYTES_PER_SEC = 144000;
-  return Math.max(0, Math.round((sizeBytes - 44) / BYTES_PER_SEC));
-}
+// WAV duration is estimated by localRecordingMatcher.estimateWavDurationSec,
+// which picks the byte rate from the filename format (DJI 48kHz/24bit vs the
+// bare-timestamp 16kHz/16bit recorder).
 
 // ─── Screen ──────────────────────────────────────────────────────────────
 
@@ -290,7 +286,7 @@ export default function LocalUploadScreen({ navigation }) {
           // timestamp so they never group together by accident.
           index: meta?.index ?? -(i + 1),
           timestamp: meta?.timestamp ?? new Date(2000, 0, 1, 0, 0, i),
-          durationSec: approximateWavDurationSec(f.size),
+          durationSec: estimateWavDurationSec(f.name, f.size),
           sizeBytes: f.size,
           uri: f.uri,
         };

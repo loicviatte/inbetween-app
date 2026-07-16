@@ -27,6 +27,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { supabase } from './supabase/client';
 import {
   parseDjiFileName,
+  estimateWavDurationSec,
   matchFilesToClasses,
   groupMicFilesIntoSessions,
   matchSessionsToClasses,
@@ -223,16 +224,9 @@ export function classifySyncError(message?: string | null): SyncErrorKind {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────
 
-/**
- * Approximate WAV duration from raw bytes. Calibrated for the DJI Mic 1/2
- * default format (48 kHz × 24-bit × mono = 144000 bytes/sec). Good enough
- * for matcher scoring; the actual duration is queried from AssemblyAI on
- * the server.
- */
-function approximateWavDurationSec(sizeBytes: number): number {
-  const BYTES_PER_SEC = 144_000;
-  return Math.max(0, Math.round((sizeBytes - 44) / BYTES_PER_SEC));
-}
+// WAV duration estimation lives in localRecordingMatcher.estimateWavDurationSec
+// — it picks the byte rate from the filename format (DJI vs bare-timestamp
+// recorder), so both mic types score correctly in the matcher.
 
 /**
  * Count LOGICAL recordings (sessions) among raw mic-folder entries. The DJI mic
@@ -252,7 +246,7 @@ export function countMicSessions(
       fileName: entry.name,
       index: meta.index,
       timestamp: meta.timestamp,
-      durationSec: approximateWavDurationSec(entry.sizeBytes),
+      durationSec: estimateWavDurationSec(entry.name as string, entry.sizeBytes),
       sizeBytes: entry.sizeBytes,
       uri: '',
     });
@@ -954,7 +948,7 @@ export async function planAutoSync(
       fileName: entry.name as string,
       index: meta.index,
       timestamp: meta.timestamp,
-      durationSec: approximateWavDurationSec(entry.sizeBytes),
+      durationSec: estimateWavDurationSec(entry.name as string, entry.sizeBytes),
       sizeBytes: entry.sizeBytes as number,
       uri: '',
     };
@@ -1096,7 +1090,7 @@ export async function scanUnmatchedSessions(
       fileName: entry.name as string,
       index: meta.index,
       timestamp: meta.timestamp,
-      durationSec: approximateWavDurationSec(entry.sizeBytes),
+      durationSec: estimateWavDurationSec(entry.name as string, entry.sizeBytes),
       sizeBytes: entry.sizeBytes as number,
       uri: '',
     });
