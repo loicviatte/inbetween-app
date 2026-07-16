@@ -128,6 +128,30 @@ export async function copyFileToCache(relativePath: string): Promise<string> {
 }
 
 /**
+ * Deletes a file from the bookmarked mic folder. Called once a recording's
+ * chunks are confirmed in Supabase Storage — the mic is treated as an upload
+ * queue ("only what still awaits upload lives on it"), which keeps the
+ * matcher's candidate pool clean and immune to recorder RTC drift.
+ *
+ * Resolves true when deleted, false when the file was already gone OR when
+ * the installed build predates the native method (older TestFlight builds:
+ * safe no-op — the imported-filename dedup ignores leftovers anyway).
+ * Real failures (volume unplugged mid-delete…) reject; callers should treat
+ * the whole thing as best-effort.
+ */
+export async function deleteFile(relativePath: string): Promise<boolean> {
+  const mod = getMod();
+  if (!mod || typeof mod.deleteFile !== 'function') return false;
+  return await mod.deleteFile(relativePath);
+}
+
+/** True iff the installed native build supports deleteFile(). */
+export function canDeleteFiles(): boolean {
+  const mod = getMod();
+  return !!mod && typeof mod.deleteFile === 'function';
+}
+
+/**
  * Compresses a (large, uncompressed) WAV into a small AAC/.m4a in the app
  * cache and returns its local file:// URI. The DJI mic records 48 kHz /
  * 24-bit WAV (~8.6 MB/min) — far too big for Supabase's 50 MB free-tier

@@ -355,6 +355,69 @@ public class LocalRecordingFilesModule: Module {
     // AVAssetExportSession + the AppleM4A preset: robust, Apple-maintained,
     // runs off the main thread. A 30-min part lands ~25-30 MB, well under
     // the 50 MB cap.
+    // ─── deleteFile(relativePath) ─────────────────────────────────────
+    // Removes a file from the bookmarked mic folder. Called after a
+    // recording's chunks are confirmed uploaded to Supabase Storage: the
+    // mic is treated as an upload queue — only files still awaiting
+    // upload live on it — which keeps the matcher's candidate pool clean
+    // and makes imports immune to the recorder's RTC drift. Resolves
+    // true when deleted, false when the file was already gone
+    // (idempotent); rejects on real failures so JS can log them.
+    AsyncFunction("deleteFile") { (relativePath: String, promise: Promise) in
+      guard let folderURL = LocalRecordingFilesModule.resolveFolderURL() else {
+        promise.reject("E_NO_FOLDER", "No folder access")
+        return
+      }
+      let started = folderURL.startAccessingSecurityScopedResource()
+      defer { if started { folderURL.stopAccessingSecurityScopedResource() } }
+
+      // Walk components like copyFileToCache — multi-level path strings
+      // are fragile on USB-mounted volumes.
+      var targetURL = folderURL
+      for component in relativePath.split(separator: "/") {
+        targetURL = targetURL.appendingPathComponent(String(component))
+      }
+      targetURL = targetURL.standardizedFileURL
+
+      // Cheap blast-radius guard: only ever delete plain audio files.
+      let ext = targetURL.pathExtension.lowercased()
+      guard ["wav", "m4a", "aac", "mp3", "flac"].contains(ext) else {
+        promise.reject("E_NOT_AUDIO", "Refusing to delete non-audio path: \(relativePath)")
+        return
+      }
+
+      let fm = FileManager.default
+      guard fm.fileExists(atPath: targetURL.path) else {
+        promise.resolve(false) // already gone — treat as success
+        return
+      }
+
+      let coordinator = NSFileCoordinator()
+      var coordErr: NSError?
+      var innerErr: Error?
+      coordinator.coordinate(
+        writingItemAt: targetURL,
+        options: [.forDeleting],
+        error: &coordErr
+      ) { (resolvedURL) in
+        do {
+          try fm.removeItem(at: resolvedURL)
+          NSLog("[LocalRecordingFiles] deleted \(resolvedURL.path)")
+        } catch {
+          innerErr = error
+        }
+      }
+      if let coordErr = coordErr {
+        promise.reject("E_COORD", "File coordinator failed: \(coordErr.localizedDescription)")
+        return
+      }
+      if let innerErr = innerErr {
+        promise.reject("E_DELETE", "Failed to delete: \(innerErr.localizedDescription)")
+        return
+      }
+      promise.resolve(true)
+    }
+
     AsyncFunction("transcodeToM4A") { (inputUri: String, promise: Promise) in
       let inputURL = URL(string: inputUri) ?? URL(fileURLWithPath: inputUri)
       let asset = AVURLAsset(url: inputURL)

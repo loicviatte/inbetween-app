@@ -28,6 +28,7 @@ import { supabase } from './supabase/client';
 import {
   parseDjiFileName,
   estimateWavDurationSec,
+  isBareTimestampName,
   matchFilesToClasses,
   groupMicFilesIntoSessions,
   matchSessionsToClasses,
@@ -891,6 +892,25 @@ export async function planAutoSync(
   const allEntries = await DjiFiles.listFiles();
   const importedFilenames = await fetchImportedFilenames(userId);
 
+  // Mic-as-queue sweep: any file already durably uploaded (its name is in the
+  // imported set, which is only written AFTER every chunk landed in Supabase
+  // Storage) is deleted from the mic. This is the single cleanup path — it
+  // retro-cleans files uploaded before this feature existed, and catches
+  // whatever an earlier run couldn't delete (offline hold, mic unplugged,
+  // builds predating the native deleteFile, where it's a safe no-op).
+  // Best-effort: a leftover is invisible to matching anyway (name dedup).
+  if (DjiFiles.canDeleteFiles?.()) {
+    for (const entry of allEntries as any[]) {
+      if (!importedFilenames.has(entry.name)) continue;
+      if (!parseDjiFileName(entry.name)) continue; // only touch files we manage
+      try {
+        await DjiFiles.deleteFile(entry.relativePath ?? entry.name);
+      } catch (err: any) {
+        console.warn('[autoSync] mic cleanup failed for', entry.name, err?.message ?? err);
+      }
+    }
+  }
+
   // Acceptable file dates: each pending class's date ± a couple of days.
   // The DJI mic's RTC is frequently unset/wrong (we've seen it a full day
   // off), and parseDjiFileName builds the timestamp in local time, so a tz
@@ -923,8 +943,14 @@ export async function planAutoSync(
       const meta = parseDjiFileName(entry.name);
       if (!meta) return null;
       if (importedFilenames.has(entry.name)) return null;
-      const fileDate = meta.timestamp.toISOString().slice(0, 10);
-      if (!acceptableDates.has(fileDate)) return null;
+      // Bare-timestamp recorders skip the date window: their RTC can be months
+      // off (resets when the battery drains), so absolute dates are noise. The
+      // mic-as-queue sweep above keeps their folder to pending-only, and the
+      // per-session <60s filter + chronological ORDER still guard the matching.
+      if (!isBareTimestampName(entry.name)) {
+        const fileDate = meta.timestamp.toISOString().slice(0, 10);
+        if (!acceptableDates.has(fileDate)) return null;
+      }
       return { entry, meta };
     })
     .filter(Boolean) as Array<{ entry: any; meta: { index: number; timestamp: Date } }>;
@@ -1084,7 +1110,10 @@ export async function scanUnmatchedSessions(
     if (!meta) continue;
     if (imported.has(entry.name)) continue;
     if (excludeFilenames.has(entry.name)) continue;
-    if (+meta.timestamp < cutoffMs) continue;
+    // Same RTC caveat as planAutoSync: a bare-timestamp recorder's file dates
+    // can be months off, so the orphan recency cutoff would wrongly mark every
+    // file "ancient". Their folder is queue-swept instead.
+    if (!isBareTimestampName(entry.name) && +meta.timestamp < cutoffMs) continue;
     relPathByName.set(entry.name as string, (entry.relativePath ?? entry.name) as string);
     micFiles.push({
       fileName: entry.name as string,

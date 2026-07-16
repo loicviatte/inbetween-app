@@ -171,6 +171,16 @@ export function estimateWavDurationSec(name: string, sizeBytes: number): number 
   return Math.max(0, Math.round((sizeBytes - 44) / rate));
 }
 
+/**
+ * True iff the name is the bare-timestamp recorder format. Those devices'
+ * RTC can be months off (it resets when the battery drains), so absolute
+ * file dates are meaningless for them — date-window filters must be skipped
+ * and the mic treated as an upload queue instead (see planAutoSync).
+ */
+export function isBareTimestampName(name: string): boolean {
+  return TS_NAME_RE.test(name);
+}
+
 // ─── Duration scoring ────────────────────────────────────────────────────
 
 // Tolerance bands: how close must the audio file's duration be to the
