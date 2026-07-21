@@ -42,6 +42,7 @@ import { isLocalRecordingMode } from '../services/featureFlags';
 import { parseDjiFileName } from '../services/localRecordingMatcher';
 import {
   fetchPendingUploads,
+  abandonPendingUploads,
   planAutoSync,
   executeAutoSync,
   scanUnmatchedSessions,
@@ -50,6 +51,22 @@ import {
   purgeExpiredPreparedFiles,
   purgeExpiredM4aBackups,
 } from '../services/localRecordingAutoSync';
+import { getActiveCoachClass } from '../storage/activeCoachClass';
+import {
+  evaluateReminder,
+  nightsWaiting,
+  isInEveningWindow,
+  MAX_TIER,
+  loadGateState,
+  setGateScope,
+  markShown,
+  clearShown,
+  setSnooze,
+  scheduleSnoozeNotification,
+  scheduleMorningNotification,
+  cancelAllReminderNotifications,
+  subscribeReminderOpen,
+} from '../services/syncReminder';
 
 const POLL_INTERVAL_MS = 2000;
 // Keeps the screen (and thus the app process) awake while a sync is actively
@@ -62,6 +79,15 @@ const KEEP_AWAKE_TAG = 'dji-sync';
 // Cadence of the simulated progress creep during the no-byte-progress phases
 // (mic read + transcode). ~700ms so the bar visibly ticks up ~each second.
 const CREEP_INTERVAL_MS = 700;
+// How often we re-ask "should the evening reminder be up?" while the app sits
+// open. Cheap (pure local check) and slow enough to be invisible; it exists so
+// a coach who already had the app open at 19:58 still gets it at 20:00.
+const REMINDER_GATE_INTERVAL_MS = 60000;
+// Default "later tonight" push-back.
+const REMINDER_SNOOZE_HOURS = 2;
+// Phases that own the screen themselves — the evening reminder stands down for
+// these (see reminderBlocked). 'idle' and 'done' are NOT here on purpose.
+const REMINDER_BLOCKING_PHASES = new Set(['waiting', 'granting', 'syncing', 'error']);
 // How often we re-attempt uploading the prepared-but-unsent recordings while
 // waiting for the network to come back. Retrying the real upload IS the
 // connectivity test — it fails instantly (cheap) when offline.
@@ -118,6 +144,12 @@ export function DjiSyncProvider({ children }) {
   // ─── Pill-gating state (folder access + how many classes await audio) ──
   const [hasFolderAccess, setHasFolderAccess] = useState(false);
   const [pendingUploadCount, setPendingUploadCount] = useState(0);
+  // The rows behind that count — the evening reminder names the classes it's
+  // asking about, so it needs more than a number. Replaced only when the set
+  // actually changes (see pendingSigRef) to keep every consumer of this
+  // context from re-rendering on each foreground refresh.
+  const [pendingRows, setPendingRows] = useState([]);
+  const pendingSigRef = useRef('');
 
   // ─── Refs shared across the poll loop ─────────────────────────────────
   const syncRunningRef = useRef(false);
@@ -167,16 +199,26 @@ export function DjiSyncProvider({ children }) {
     }
   }, []);
 
+  /** Returns the rows it fetched (empty when disabled or on failure). */
   const refreshPending = useCallback(async () => {
     if (!enabled || !userId) {
       setPendingUploadCount(0);
-      return;
+      setPendingRows([]);
+      pendingSigRef.current = '';
+      return [];
     }
     try {
       const rows = await fetchPendingUploads(userId);
       setPendingUploadCount(rows.length);
+      const sig = rows.map((r) => `${r.id}:${r.abandonedAt ? 1 : 0}`).join(',');
+      if (sig !== pendingSigRef.current) {
+        pendingSigRef.current = sig;
+        setPendingRows(rows);
+      }
+      return rows;
     } catch {
       /* keep previous */
+      return [];
     }
   }, [enabled, userId]);
 
@@ -1049,6 +1091,303 @@ export function DjiSyncProvider({ children }) {
     refreshPending();
   }, [refreshFolderAccess, refreshPending, stopOfflineRetry]);
 
+  // ─── Evening upload reminder ──────────────────────────────────────────
+  // The nightly push (notify-sync-reminders) is easy to swipe away; this is
+  // the half that's hard to miss. All the scheduling rules live in
+  // services/syncReminder.js — here we only feed it the state it can't see
+  // (what's pending, what already owns the screen) and turn the verdict into
+  // the modal.
+  //
+  // Abandoned classes ("audio lost") drop out here exactly as they drop out of
+  // the server-side query — but they stay in pendingRows, so the pill still
+  // counts them and the matcher can still attach a file that turns up later.
+  // __DEV__ preview rows (devPreviewReminder) stand in for the real pending
+  // list so the screen can be reviewed at 10am with an empty queue.
+  const [devPreviewRows, setDevPreviewRows] = useState(null);
+  const reminderPending = useMemo(
+    () => devPreviewRows ?? pendingRows.filter((r) => !r.abandonedAt),
+    [devPreviewRows, pendingRows],
+  );
+  const reminderPendingRef = useRef(reminderPending);
+  useEffect(() => {
+    reminderPendingRef.current = reminderPending;
+  }, [reminderPending]);
+
+  // Bumping this asks the sibling DjiSetupBanner (mounted in the coach header)
+  // to open its onboarding wizard. A counter rather than a boolean so a second
+  // request re-opens it without needing a reset in between.
+  const [micSetupRequest, setMicSetupRequest] = useState(0);
+  const requestMicSetup = useCallback(() => setMicSetupRequest((n) => n + 1), []);
+  // DjiSetupBanner mirrors its wizard's visibility here so the reminder gate
+  // knows to stand down while it's up — without this, re-arming the evening on
+  // the CTA (see reminderImportNow) would pop the wall straight back over the
+  // wizard we just opened.
+  const [micSetupOpen, setMicSetupOpen] = useState(false);
+  const micSetupOpenRef = useRef(false);
+  useEffect(() => {
+    micSetupOpenRef.current = micSetupOpen;
+  }, [micSetupOpen]);
+
+  const [reminderOpen, setReminderOpen] = useState(false);
+  const [reminderTier, setReminderTier] = useState(1);
+  const [reminderNights, setReminderNights] = useState(1);
+  const reminderOpenRef = useRef(false);
+  useEffect(() => {
+    reminderOpenRef.current = reminderOpen;
+  }, [reminderOpen]);
+
+  // Something else already owns the screen: a class being taught (never
+  // interrupt a lesson), the sync flow itself, or a phase that has its own
+  // answer to "your audio is missing" — a run in flight, the guided grant, or
+  // an error (an offline hold's message is "waiting for a connection", not
+  // "plug in your mic").
+  //
+  // 'done' deliberately does NOT block: a partial silent sync leaves the phase
+  // parked on 'done' (green pill, never acknowledged) while classes are still
+  // waiting, and that must not swallow the evening reminder.
+  const reminderBlocked = useCallback(
+    () =>
+      flowOpenRef.current ||
+      micSetupOpenRef.current ||
+      REMINDER_BLOCKING_PHASES.has(phaseRef.current) ||
+      !!getActiveCoachClass(),
+    [],
+  );
+
+  const evaluateGate = useCallback(async () => {
+    if (!enabled || !userId) return;
+    if (reminderOpenRef.current) return;
+    if (AppState.currentState !== 'active') return;
+    setGateScope(userId);
+    const state = await loadGateState();
+    const verdict = evaluateReminder({
+      now: new Date(),
+      pending: reminderPendingRef.current,
+      state,
+      blocked: reminderBlocked(),
+    });
+    if (!verdict.show) return;
+    // Marked on APPEARANCE, not on dismissal: a force-quit while the reminder
+    // is up must not turn the evening into a re-open loop.
+    markShown();
+    setReminderTier(verdict.tier);
+    setReminderNights(verdict.nights);
+    setReminderOpen(true);
+  }, [enabled, userId, reminderBlocked]);
+
+  // Heartbeat, so a coach who already had the app open at 19:58 still gets it.
+  useEffect(() => {
+    if (!enabled || !userId) return undefined;
+    const id = setInterval(evaluateGate, REMINDER_GATE_INTERVAL_MS);
+    const sub = AppState.addEventListener('change', (s) => {
+      if (s === 'active') evaluateGate();
+    });
+    return () => {
+      clearInterval(id);
+      sub.remove();
+    };
+  }, [enabled, userId, evaluateGate]);
+
+  // Re-check the moment any input changes (pending list loaded/refreshed, a
+  // sync finished, the flow closed) instead of waiting out the heartbeat.
+  useEffect(() => {
+    evaluateGate();
+  }, [evaluateGate, reminderPending, phase, flowOpen, micSetupOpen]);
+
+  // The reminder must never outlive its own premise. Two ways that happens:
+  //   • the coach plugged the mic in while the wall was up, so the SILENT
+  //     auto-import already started behind it → hand over to the flow, which
+  //     shows the progress they'd otherwise be waiting for blindly;
+  //   • the classes it names got synced from somewhere else → just close.
+  useEffect(() => {
+    if (!reminderOpen) return;
+    if (REMINDER_BLOCKING_PHASES.has(phase)) {
+      setReminderOpen(false);
+      // Same iOS modal-swap race as reminderImportNow: let one finish
+      // dismissing before the next presents.
+      if (phase === 'syncing') setTimeout(() => setFlowOpen(true), 350);
+      return;
+    }
+    if (reminderPending.length === 0) setReminderOpen(false);
+  }, [reminderOpen, phase, reminderPending]);
+
+  // Everything synced → drop the "later tonight" notification we may have
+  // scheduled, so it can't fire about work that's already done.
+  const hadReminderPendingRef = useRef(false);
+  useEffect(() => {
+    const has = reminderPending.length > 0;
+    if (hadReminderPendingRef.current && !has) cancelAllReminderNotifications();
+    hadReminderPendingRef.current = has;
+  }, [reminderPending]);
+
+  // Tapping the nightly push routes here (via the syncReminder bus). An
+  // explicit request skips the window + once-per-evening rules — the coach
+  // asked — but still refuses to cover a lesson or an active sync, and falls
+  // back to the plain sync flow when there's nothing left to nag about.
+  const openReminderNow = useCallback(async () => {
+    if (!enabled || !userId) return;
+    setGateScope(userId);
+    await loadGateState();
+    // Cold-started BY the tap: the provider has only just mounted and the
+    // first refreshPending hasn't landed, so fetch before deciding — otherwise
+    // we'd read an empty list and dead-end on a Connect spinner. Going through
+    // refreshPending also populates the state the modal renders from.
+    let rows = reminderPendingRef.current;
+    if (!rows.length) rows = (await refreshPending()).filter((r) => !r.abandonedAt);
+    if (!rows.length || reminderBlocked()) {
+      openFlow();
+      return;
+    }
+    const oldest = rows.reduce((acc, p) => {
+      const end = p.endedAt ?? p.startedAt;
+      return !acc || end < acc ? end : acc;
+    }, null);
+    const now = new Date();
+    const nights = nightsWaiting(oldest, now);
+    // Opening it by hand at 10am (tapping the row in the notifications list)
+    // must NOT burn tonight's automatic reminder — only an in-window open
+    // counts as this evening's. Marking it in-window is what stops the gate
+    // from immediately re-opening the wall the coach just dismissed.
+    if (isInEveningWindow(now)) markShown(now);
+    setReminderTier(Math.min(MAX_TIER, nights));
+    setReminderNights(nights);
+    setReminderOpen(true);
+  }, [enabled, userId, openFlow, reminderBlocked, refreshPending]);
+
+  // Subscribe only once we could actually act on it: the bus latches a request
+  // that arrives before anyone is listening (a tap that cold-starts the app),
+  // and subscribing consumes that latch — so subscribing too early, while the
+  // auth user is still resolving, would silently swallow the tap.
+  useEffect(() => {
+    if (!enabled || !userId) return undefined;
+    return subscribeReminderOpen(openReminderNow);
+  }, [enabled, userId, openReminderNow]);
+
+  // Primary CTA. A coach who never granted folder access would just watch the
+  // Connect screen spin, so send them to the guided grant instead.
+  const reminderImportNow = useCallback(() => {
+    setReminderOpen(false);
+    cancelAllReminderNotifications();
+    // Taking the action path does NOT spend the evening. Otherwise "Set up the
+    // mic" → close the wizard is a free dodge: the coach never imported and
+    // never deferred, yet the wall is gone until tomorrow. Only "later" and
+    // "not tonight" defer; abandoning the flow brings it straight back.
+    clearShown();
+    // Let the reminder finish dismissing before the next screen presents: two
+    // <Modal>s swapping in the same frame race on iOS ("attempt to present
+    // while a presentation is in progress") and the second silently drops.
+    setTimeout(() => {
+      if (!hasFolderAccess) {
+        // Never configured the mic → the FULL onboarding wizard (DjiSetupBanner:
+        // "takes 2 minutes" → power on → record test → plug in → pick the
+        // folder), not MicSyncFlowModal's bare grant screen. That one is the
+        // RECOVERY path for a coach who already knows the setup and merely lost
+        // folder access; sending a first-timer there skips everything they
+        // actually need to be told.
+        requestMicSetup();
+        return;
+      }
+      openFlow();
+    }, 350);
+  }, [hasFolderAccess, openFlow, requestMicSetup]);
+
+  /** One line naming what's still waiting — reused by both local reminders. */
+  const pendingBlurb = useCallback((suffix) => {
+    const rows = reminderPendingRef.current;
+    const named = rows.map((r) => r.studentName).filter(Boolean);
+    const who = named.length ? named.slice(0, 2).join(', ') : null;
+    const n = rows.length;
+    const head =
+      n === 1
+        ? `${who ?? 'A class'} is still waiting for ${who ? 'her' : 'its'} audio.`
+        : `${n} classes are still waiting for their audio${who ? ` (${who}…)` : ''}.`;
+    return `${head} ${suffix}`;
+  }, []);
+
+  const snoozeReminder = useCallback(() => {
+    const until = Date.now() + REMINDER_SNOOZE_HOURS * 3600000;
+    setSnooze(until);
+    setReminderOpen(false);
+    scheduleSnoozeNotification(until, pendingBlurb('Plug in your DJI mic (USB-C) to import.'));
+  }, [pendingBlurb]);
+
+  /**
+   * "I'll do it tomorrow" — the evening is done, but we catch them at 08:00,
+   * before the day's first class, while the receiver is still in the bag.
+   */
+  const remindTomorrowMorning = useCallback(() => {
+    setReminderOpen(false);
+    scheduleMorningNotification(pendingBlurb('Import it before today’s classes.'));
+  }, [pendingBlurb]);
+
+  /** "Not tonight" / "the mic isn't with me" — the evening is already marked. */
+  const dismissReminder = useCallback(() => {
+    setReminderOpen(false);
+  }, []);
+
+  // Preview rows only live as long as the modal they were made for.
+  useEffect(() => {
+    if (!reminderOpen) setDevPreviewRows(null);
+  }, [reminderOpen]);
+
+  /**
+   * __DEV__ only — open the reminder on demand, at any hour, at any tier.
+   * The real gate needs the evening window AND a queue of unsynced classes, so
+   * reviewing the screen would otherwise mean waiting until 20:00 with real
+   * pending audio. Synthesises a plausible queue whose oldest class is exactly
+   * `tier` nights old, so the copy ladder reads the way it will in the wild.
+   */
+  const devPreviewReminder = useCallback((tier = 1, count = 1, roster = []) => {
+    if (!__DEV__) return;
+    // Prefer the coach's REAL students so the preview shows real faces and real
+    // names — initials-on-a-colour reads very differently from a photo, and
+    // that difference is exactly what we're reviewing.
+    const people = (roster ?? []).filter((r) => r?.name);
+    const FALLBACK = ['Alexandra', 'Mara', null, 'Tom', null, 'Sara', 'Chloé', 'Ben'];
+    const nights = Math.max(1, tier);
+    const t0 = Date.now();
+    const rows = Array.from({ length: count }, (_, idx) => {
+      // Row 0 is the oldest (nights - 1 days back); the rest fan forward to today.
+      const daysBack = Math.max(0, nights - 1 - idx);
+      const ended = new Date(t0 - daysBack * 86400000 - 2 * 3600000);
+      const durationSec = 40 * 60 + (idx % 4) * 5 * 60;
+      const person = people.length ? people[idx % people.length] : null;
+      const name = person ? person.name : FALLBACK[idx % FALLBACK.length];
+      return {
+        id: `dev-preview-${idx}`,
+        lessonType: name ? 'private' : idx % 3 === 2 ? 'couple' : 'group',
+        studentName: name,
+        studentAvatarUrl:
+          person?.photoUrl ?? person?.photo_url ?? person?.avatar_url ?? null,
+        startedAt: new Date(ended.getTime() - durationSec * 1000),
+        endedAt: ended,
+        durationSec,
+        abandonedAt: null,
+      };
+    });
+    setDevPreviewRows(rows);
+    setReminderTier(Math.min(MAX_TIER, nights));
+    setReminderNights(nights);
+    setReminderOpen(true);
+  }, []);
+
+  /**
+   * "Audio lost" — the only answer that stops the nagging for good. Silences
+   * the reminder + the nightly push for these classes while leaving them
+   * matchable, so a file that resurfaces later still lands on the right class.
+   */
+  const abandonReminderPending = useCallback(async () => {
+    const ids = reminderPendingRef.current.map((r) => r.id);
+    setReminderOpen(false);
+    cancelAllReminderNotifications();
+    try {
+      await abandonPendingUploads(ids, 'audio_lost');
+    } catch {
+      /* next evening's reminder is the retry */
+    }
+    refreshPending();
+  }, [refreshPending]);
+
   // ─── Derived pill state ───────────────────────────────────────────────
   const pillState = useMemo(() => {
     if (!enabled) return 'hidden';
@@ -1078,6 +1417,19 @@ export function DjiSyncProvider({ children }) {
       flowOpen,
       pendingUploadCount,
       hasFolderAccess,
+      micSetupRequest,
+      requestMicSetup,
+      setMicSetupOpen,
+      reminderOpen,
+      reminderTier,
+      reminderNights,
+      reminderPending,
+      reminderImportNow,
+      snoozeReminder,
+      remindTomorrowMorning,
+      dismissReminder,
+      abandonReminderPending,
+      devPreviewReminder,
       openFlow,
       runInBackground,
       cancelFlow,
@@ -1108,6 +1460,19 @@ export function DjiSyncProvider({ children }) {
       flowOpen,
       pendingUploadCount,
       hasFolderAccess,
+      micSetupRequest,
+      requestMicSetup,
+      setMicSetupOpen,
+      reminderOpen,
+      reminderTier,
+      reminderNights,
+      reminderPending,
+      reminderImportNow,
+      snoozeReminder,
+      remindTomorrowMorning,
+      dismissReminder,
+      abandonReminderPending,
+      devPreviewReminder,
       openFlow,
       runInBackground,
       cancelFlow,

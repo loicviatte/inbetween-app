@@ -293,6 +293,23 @@ export default function DjiSetupBanner() {
     setModalOpen(true);
   }
 
+  // The evening reminder's "Set up the mic" routes here rather than to
+  // MicSyncFlowModal's grant screen: a coach who never configured the mic needs
+  // the whole wizard, not just the folder picker. Guarded on 0 so mounting
+  // doesn't count as a request.
+  useEffect(() => {
+    if (!sync?.micSetupRequest) return;
+    handleBannerTap();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sync?.micSetupRequest]);
+
+  // Report visibility so the evening reminder stands down while this is up —
+  // and comes back the moment the coach closes it without finishing.
+  useEffect(() => {
+    sync?.setMicSetupOpen?.(modalOpen);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modalOpen]);
+
   function dismissModal() {
     dismissedRef.current = true;
     pickingRef.current = false;

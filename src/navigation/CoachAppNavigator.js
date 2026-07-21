@@ -24,6 +24,7 @@ import { pokeUploadWorker } from '../services/uploadWorker';
 import { CoachDataProvider } from '../context/CoachDataContext';
 import { DjiSyncProvider } from '../context/DjiSyncContext';
 import MicSyncFlowModal from '../components/MicSyncFlowModal';
+import SyncReminderModal from '../components/SyncReminderModal';
 import CoachTabHeader from '../components/CoachTabHeader';
 import CustomTabBar from '../components/CustomTabBar';
 import CoachHomeScreen from '../screens/coach/CoachHomeScreen';
@@ -194,6 +195,7 @@ export default function CoachAppNavigator({ navigationRef }) {
         />
       </CoachStack.Navigator>
       <MicSyncFlowModal />
+      <SyncReminderModal />
       </DjiSyncProvider>
     </CoachDataProvider>
   );

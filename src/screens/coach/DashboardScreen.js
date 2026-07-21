@@ -244,6 +244,13 @@ export default function DashboardScreen({ navigation }) {
     const t = setTimeout(() => {
       try { navigation.preload?.('STUDENTS'); } catch {}
       try { navigation.preload?.('CLASS'); } catch {}
+      // Warm the student sheet's MODULE too. It's registered with
+      // `getComponent` (CoachAppNavigator), so without this the first tap on a
+      // student pays to parse + evaluate a ~1600-line screen and its imports on
+      // the JS thread — mid-transition, which is exactly when it shows as a
+      // stutter. Doing it here costs nothing: the dashboard is idle by now, and
+      // every later tap was already warm.
+      try { require('./StudentDetailScreen'); } catch {}
     }, 600);
     return () => clearTimeout(t);
   }, [navigation]);
@@ -271,7 +278,7 @@ export default function DashboardScreen({ navigation }) {
   // users.push_token stays NULL (registerPushToken bails on 'denied' and iOS
   // never re-prompts). Surface it — only when it actually matters: permission
   // not granted AND at least one class still waiting for its audio.
-  const { pendingUploadCount } = useDjiSync() ?? {};
+  const { pendingUploadCount, devPreviewReminder } = useDjiSync() ?? {};
   const [notifPerm, setNotifPerm] = useState('granted'); // optimistic — no flash
   const notifPermRef = useRef('granted');
   useEffect(() => {
@@ -503,6 +510,31 @@ export default function DashboardScreen({ navigation }) {
             </Text>
             <Ionicons name="chevron-forward" size={14} color={GOLD_500} />
           </TouchableOpacity>
+        )}
+
+        {/* ── Evening-reminder preview (dev builds only) ──
+            The real gate needs 20:00–02:00 AND unsynced classes, so without
+            this the screen can only be reviewed at night with real pending
+            audio. Stripped from every release bundle by the __DEV__ guard. */}
+        {__DEV__ && devPreviewReminder && (
+          <View style={styles.devRow}>
+            <Text style={styles.devLabel}>REMINDER</Text>
+            {[
+              { label: 'N1', tier: 1, count: 1 },
+              { label: 'N2', tier: 2, count: 2 },
+              { label: 'N3', tier: 3, count: 4 },
+              { label: 'N4·6', tier: 4, count: 6 },
+            ].map((p) => (
+              <TouchableOpacity
+                key={p.label}
+                style={styles.devChip}
+                onPress={() => devPreviewReminder(p.tier, p.count, students)}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.devChipText}>{p.label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
         )}
 
         {/* ── Hero overview card ── */}
@@ -824,6 +856,31 @@ const styles = StyleSheet.create({
   // ── Hero card ─────────────────────────────────────────────────────────
   // Dark warm-ink ground with a faint gold border. The mockup's CSS
   // radial-gradient corner glow is approximated via the shadow + border.
+  // Dev-only preview chips (see the __DEV__ block above).
+  devRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginHorizontal: 18,
+    marginBottom: 12,
+  },
+  devLabel: {
+    fontFamily: Fonts.jakartaExtraBold,
+    fontSize: 8,
+    letterSpacing: 1.4,
+    color: 'rgba(0,0,0,0.3)',
+    marginRight: 2,
+  },
+  devChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+    backgroundColor: 'rgba(0,0,0,0.06)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(0,0,0,0.12)',
+  },
+  devChipText: { fontFamily: Fonts.jakartaBold, fontSize: 10, color: 'rgba(0,0,0,0.55)' },
+
   // One-line "notifications off" strip — hero's ink + gold family, slimmer.
   notifNudge: {
     flexDirection: 'row',

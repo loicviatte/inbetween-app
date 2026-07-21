@@ -269,8 +269,11 @@ export default function NotificationsScreen({ navigation }) {
       // pending requests at the top of the list with accept/reject buttons.
       navigation.navigate('CoachMainTabs', { screen: 'STUDENTS' });
     } else if (notif.type === 'sync_reminder') {
-      // Coach-only nudge to import unsynced DJI audio → the upload screen.
-      navigation.navigate('LocalUpload');
+      // Coach-only nudge to import unsynced DJI audio → the same full-screen
+      // reminder the push opens (it names the waiting classes and leads into
+      // the mic import), rather than the bare upload screen. Requested lazily
+      // so the student build never pulls the coach-only module in.
+      require('../services/syncReminder').requestReminderOpen();
     } else {
       // Fallback for any unknown type — at least show the content rather than no-op.
       setActiveNotif(notif);

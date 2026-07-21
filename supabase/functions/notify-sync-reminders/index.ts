@@ -8,7 +8,10 @@
 // A "class awaiting audio" mirrors LocalUploadScreen / fetchPendingUploads:
 //   local_recording_mode = true AND mic_file_name IS NULL AND ended_at IS NOT
 //   NULL AND (ended_at - started_at) >= 60s  (the <60s filter drops Start/Stop
-//   test taps — same MIN_VALID_DURATION_SEC the matcher uses).
+//   test taps — same MIN_VALID_DURATION_SEC the matcher uses) AND
+//   sync_abandoned_at IS NULL (the coach answered "audio lost" on the evening
+//   full-screen reminder — see 20260721_sync_abandoned.sql; the class stays
+//   matchable, it just stops nagging).
 //
 // Repeats every evening until EITHER the audio is synced (mic_file_name set →
 // the class drops out of the query) OR the class is "superseded": the coach
@@ -84,6 +87,7 @@ Deno.serve(async (req) => {
     .select('id, user_id, student_id, started_at, ended_at')
     .eq('local_recording_mode', true)
     .is('mic_file_name', null)
+    .is('sync_abandoned_at', null)
     .not('ended_at', 'is', null)
     .gte('started_at', lookbackIso)
   if (pErr) return json({ error: pErr.message }, 500)

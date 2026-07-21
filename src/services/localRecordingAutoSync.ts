@@ -46,9 +46,18 @@ export interface PendingClassRow {
   id: string;
   lessonType: string | null;
   studentName: string | null;
+  /** users.avatar_url — the evening reminder leads with the student's face. */
+  studentAvatarUrl: string | null;
   startedAt: Date;
   endedAt: Date | null;
   durationSec: number;
+  /**
+   * Set when the coach answered "audio lost" on the evening reminder. Such a
+   * class is STILL a matcher candidate (a file that shows up later must attach
+   * to it, not land as an orphan) — it only drops out of the reminder
+   * surfaces. See syncReminder.js / 20260721_sync_abandoned.sql.
+   */
+  abandonedAt: Date | null;
 }
 
 export type AdminReviewStatus = 'approved' | 'pending';
@@ -324,7 +333,9 @@ function deriveAdminReviewStatus(
 export async function fetchPendingUploads(userId: string): Promise<PendingClassRow[]> {
   const { data, error } = await supabase
     .from('class_recordings')
-    .select('id, lesson_type, student_id, started_at, ended_at, users:student_id(name)')
+    .select(
+      'id, lesson_type, student_id, started_at, ended_at, sync_abandoned_at, users:student_id(name, avatar_url)',
+    )
     .eq('user_id', userId)
     .eq('local_recording_mode', true)
     .is('mic_file_name', null)
@@ -343,9 +354,11 @@ export async function fetchPendingUploads(userId: string): Promise<PendingClassR
         id: row.id,
         lessonType: row.lesson_type,
         studentName: row.users?.name ?? null,
+        studentAvatarUrl: row.users?.avatar_url ?? null,
         startedAt,
         endedAt,
         durationSec,
+        abandonedAt: row.sync_abandoned_at ? new Date(row.sync_abandoned_at) : null,
       };
     })
     // Symmetric with the file-side <60s filter in planAutoSync: a
@@ -355,6 +368,34 @@ export async function fetchPendingUploads(userId: string): Promise<PendingClassR
     // clean AND keeps count-mismatch logic from being polluted by
     // ghost classes. The class row stays in the DB for forensics.
     .filter((p) => p.durationSec >= MIN_VALID_DURATION_SEC);
+}
+
+/**
+ * "Audio lost" escape hatch from the evening reminder (see syncReminder.js).
+ *
+ * Marks classes as abandoned so the nightly push and the full-screen reminder
+ * stop asking for audio that no longer exists. Deliberately NOT a delete and
+ * NOT a status change: the rows stay in the matcher's candidate pool, so if
+ * the file turns up on the mic later it still attaches to the right class.
+ *
+ * The `mic_file_name IS NULL` guard makes it a no-op on a class whose audio
+ * landed between the reminder rendering and the coach tapping — we never want
+ * to stamp "lost" on a recording that actually arrived.
+ */
+export async function abandonPendingUploads(
+  recordingIds: string[],
+  reason: string = 'audio_lost',
+): Promise<void> {
+  if (!recordingIds.length) return;
+  const { error } = await supabase
+    .from('class_recordings')
+    .update({
+      sync_abandoned_at: new Date().toISOString(),
+      sync_abandoned_reason: reason,
+    })
+    .in('id', recordingIds)
+    .is('mic_file_name', null);
+  if (error) throw error;
 }
 
 const DEDUP_PAGE = 1000;

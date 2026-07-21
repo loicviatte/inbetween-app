@@ -106,8 +106,12 @@ function handleNotificationTap(data) {
     return;
   }
   if (type === 'sync_reminder') {
-    // Coach-only nudge → the DJI audio upload screen.
-    navigationRef.navigate('LocalUpload');
+    // Coach-only nudge → the full-screen evening reminder, which names the
+    // classes and leads straight into the mic import. Required lazily: this
+    // file is the cold-start critical path, and the module is only ever
+    // needed once a reminder is actually tapped. The bus latches the request
+    // when the tap cold-starts the app (DjiSyncProvider subscribes later).
+    require('./src/services/syncReminder').requestReminderOpen();
     return;
   }
   if (type === 'coach_request_received') {
