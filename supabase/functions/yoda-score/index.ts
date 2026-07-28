@@ -188,6 +188,87 @@ async function publishExpiredFocusPoints(supabase: any): Promise<void> {
   }
 }
 
+// ─── Empty-class plan guard ───────────────────────────────────────────────────
+// The end-of-class debrief default-retires the previous private class's carry-over
+// (StartClassScreen "default-retire") the moment the coach taps Done — BEFORE this
+// class is transcribed/scored — on the assumption this class produces replacements.
+// A test / content-less lesson breaks that assumption: it yields 0 focus points, so
+// the student is left with 0 active private focuses and an empty Train (readiness
+// anchors only on private FPs). This restores the carry-over the debrief retired so
+// the invariant "a student is never at 0 private FPs (unless brand-new)" holds.
+async function restorePlanIfClassEmpty(
+  supabase: any,
+  studentId: string,
+  classInputId: string,
+): Promise<void> {
+  // Did THIS class create/re-anchor any (non-past) focus for the student? If so it
+  // had real content — the debrief's retire stands, nothing to heal.
+  const { data: produced } = await supabase
+    .from('focus_points')
+    .select('id')
+    .eq('user_id', studentId)
+    .eq('is_other', false)
+    .eq('is_deleted', false)
+    .neq('status', 'past')
+    .or(`class_input_id.eq.${classInputId},source_class_input_id.eq.${classInputId}`)
+    .limit(1)
+  if (produced && produced.length > 0) return
+
+  // Does the student still have a private readiness plan? If readiness resolves,
+  // an earlier real class's focuses are still active — don't resurrect a stale set.
+  const { data: readiness } = await supabase.rpc('get_lesson_readiness', {
+    p_user: studentId,
+    p_category: null,
+  })
+  if (readiness && Array.isArray(readiness.focuses) && readiness.focuses.length > 0) return
+
+  // Find the most recent PRIOR private class that carries this student's focuses —
+  // its non-held focuses are exactly what this class's debrief just retired.
+  const { data: fpClasses } = await supabase
+    .from('focus_points')
+    .select('class_input_id')
+    .eq('user_id', studentId)
+    .eq('is_other', false)
+    .eq('is_deleted', false)
+    .not('class_input_id', 'is', null)
+  const priorIds = [
+    ...new Set(
+      (fpClasses ?? [])
+        .map((r: any) => r.class_input_id as string)
+        .filter((id: string) => id && id !== classInputId),
+    ),
+  ]
+  if (priorIds.length === 0) return // brand-new student — 0 private FPs is legitimate
+
+  const { data: priorClasses } = await supabase
+    .from('class_inputs')
+    .select('id')
+    .in('id', priorIds)
+    .or('lesson_type.eq.private,lesson_type.is.null')
+    .not('is_deleted', 'is', true)
+    .order('created_at', { ascending: false })
+    .limit(1)
+  const prior = priorClasses?.[0]
+  if (!prior) return
+
+  // Re-activate that class's retired, non-held solo focuses.
+  const { error: restoreErr } = await supabase
+    .from('focus_points')
+    .update({ status: 'active' })
+    .eq('user_id', studentId)
+    .eq('class_input_id', prior.id)
+    .eq('status', 'past')
+    .eq('is_held', false)
+    .eq('is_other', false)
+    .eq('is_deleted', false)
+    .or('group_fp.is.null,group_fp.eq.false')
+  if (restoreErr) {
+    console.error(`[yoda-score] Empty-class plan restore failed for ${studentId}:`, restoreErr.message)
+  } else {
+    console.log(`[yoda-score] Empty class ${classInputId} produced 0 FPs for ${studentId}; restored carry-over from prior private ${prior.id} (debrief default-retire had emptied the plan)`)
+  }
+}
+
 // ─── class_input event ────────────────────────────────────────────────────────
 
 async function processClassInput(supabase: any, payload: any): Promise<void> {
@@ -199,7 +280,7 @@ async function processClassInput(supabase: any, payload: any): Promise<void> {
   // 1. Load class input (also fetch dance to determine coach category)
   const { data: classInput, error: ciError } = await supabase
     .from('class_inputs')
-    .select('id, raw_ai_json, status, dance, lesson_type, couple_id')
+    .select('id, raw_ai_json, status, dance, lesson_type, couple_id, student_id')
     .eq('id', class_input_id)
     .single()
 
@@ -219,6 +300,23 @@ async function processClassInput(supabase: any, payload: any): Promise<void> {
     if (!studentId) continue
 
     await processStudentFocusPoints(supabase, studentId, studentJson, class_input_id, classDance, now, isGroupClass)
+  }
+
+  // 2a. Empty-class guard (private only): the end-of-class debrief default-retires
+  // the previous class's carry-over BEFORE this class is scored, betting this class
+  // produces replacements. If this class yielded ZERO focus points for the student
+  // (a test / content-less lesson), that bet fails and the student is left with 0
+  // active private focuses — which must never happen. Restore the retired carry-over.
+  if (!isGroupClass && classInput.lesson_type !== 'couple') {
+    const privateStudentIds = [
+      ...new Set(
+        [classInput.student_id, ...(aiData.students ?? []).map((s: any) => s.student_id)]
+          .filter((x: string | null): x is string => !!x),
+      ),
+    ]
+    for (const studentId of privateStudentIds) {
+      await restorePlanIfClassEmpty(supabase, studentId, class_input_id)
+    }
   }
 
   // 2b. Process shared_focus_points (group-wide drills) — insert one row per student
