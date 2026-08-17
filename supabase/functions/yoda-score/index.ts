@@ -14,6 +14,47 @@ import {
   focusPointToDbUpdate,
 } from '../_shared/yoda-score.ts'
 import { normalizeFocusName } from '../_shared/normalize.ts'
+import { sendTelegramMessage, escapeHtml } from '../_shared/telegram.ts'
+
+// Base URL of the admin dashboard, for deep links in queue notifications.
+const ADMIN_DASHBOARD_URL =
+  Deno.env.get('ADMIN_DASHBOARD_URL') ?? 'https://inbetween-admin.vercel.app'
+
+// Fire a real-time Telegram alert when a freshly-scored class lands in the
+// admin review queue (coach-recorded + not auto-approved). Best-effort —
+// never throws into the scoring flow.
+async function notifyQueueIfNeeded(
+  supabase: any,
+  classInputId: string,
+  wasAlreadyScored: boolean,
+): Promise<void> {
+  if (wasAlreadyScored) return
+  try {
+    const { data: ci } = await supabase
+      .from('class_inputs')
+      .select('id, title, lesson_type, admin_approved_at, admin_rejected_at, user_id, users!class_inputs_user_id_fkey(name, role)')
+      .eq('id', classInputId)
+      .single()
+    if (!ci) return
+    if (ci.admin_approved_at || ci.admin_rejected_at) return
+    const coach = Array.isArray(ci.users) ? ci.users[0] : ci.users
+    if (coach?.role && coach.role !== 'coach') return
+
+    const coachName = escapeHtml(coach?.name ?? 'Unknown coach')
+    const title = escapeHtml(ci.title ?? '(untitled class)')
+    const lessonType = escapeHtml(ci.lesson_type ?? 'private')
+    const link = `${ADMIN_DASHBOARD_URL}/class/${ci.id}`
+    const text =
+      `🎓 <b>New class to review</b>\n` +
+      `${title}\n` +
+      `Coach: ${coachName} · ${lessonType}\n` +
+      `<a href="${link}">Open in admin queue →</a>`
+    await sendTelegramMessage(text)
+    console.log(`[yoda-score] Queue notification sent for class ${classInputId}`)
+  } catch (err) {
+    console.warn('[yoda-score] notifyQueueIfNeeded failed:', err instanceof Error ? err.message : err)
+  }
+}
 
 // ─── Deno / Supabase Edge Runtime globals ────────────────────────────────────
 
@@ -290,6 +331,8 @@ async function processClassInput(supabase: any, payload: any): Promise<void> {
 
   const aiData = classInput.raw_ai_json as any
   const now = new Date()
+  // Only the first transition into 'scored' should notify the review queue.
+  const wasAlreadyScored = classInput.status === 'scored'
 
   // 2. Process each student
   const classDance: string[] = classInput.dance ?? []
@@ -497,6 +540,9 @@ async function processClassInput(supabase: any, payload: any): Promise<void> {
     .eq('id', class_input_id)
 
   console.log(`[yoda-score] ✓ Scored class_input ${class_input_id}`)
+
+  // 5. Real-time queue alert: coach-recorded class still needing admin review.
+  await notifyQueueIfNeeded(supabase, class_input_id, wasAlreadyScored)
 }
 
 const LATIN_DANCES_TS = ['Cha Cha', 'Samba', 'Rumba', 'Paso Doble', 'Jive']
