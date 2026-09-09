@@ -14,6 +14,14 @@ import { DANCE_PROMPT, composeTranscript } from './transcript.ts'
 
 const ASSEMBLYAI_API = 'https://api.assemblyai.com/v2'
 const SIGNED_URL_TTL = 12 * 60 * 60 // 12 hours
+
+// Past this much heartbeat staleness a recording is treated as abandoned by
+// the client: we stop waiting for a missing chunk (whose upload was lost and
+// will never arrive) and finalize on whatever audio actually resolved. Without
+// this, a single lost chunk keeps resolved_count below expected_chunks forever
+// and the class strands in 'waiting', never finalizing on the chunks that DID
+// upload. The cron retry view has a matching 30-min grace branch.
+const STALE_GRACE_MS = 30 * 60 * 1000 // 30 minutes
 // After this many failed AssemblyAI job-creation attempts, stop rolling the
 // chunk back to 'uploaded' (which the retry sweep re-attempts forever, re-
 // billing each time) and mark it terminally 'failed' so the completeness gate
@@ -40,12 +48,9 @@ export async function finalizeRecording(
 ): Promise<FinalizeResult> {
   const { supabase, assemblyaiApiKey, assemblyaiWebhookSecret, functionsPublicUrl } = deps
 
-  // Refresh heartbeat so cron doesn't sweep us mid-flight.
-  await supabase
-    .from('class_recordings')
-    .update({ last_heartbeat_at: new Date().toISOString() })
-    .eq('id', recordingId)
-
+  // Load current state BEFORE refreshing the heartbeat, so we can measure how
+  // long this recording has been stale — the grace path below relies on the
+  // pre-refresh value (the refresh would otherwise reset it to "now").
   const { data: rec, error: recErr } = await supabase
     .from('class_recordings')
     .select('*')
@@ -53,6 +58,13 @@ export async function finalizeRecording(
     .maybeSingle()
   if (recErr) throw new Error(`load recording: ${recErr.message}`)
   if (!rec) throw new Error('recording not found')
+  const priorHeartbeatAt = rec.last_heartbeat_at as string | null
+
+  // Refresh heartbeat so cron doesn't sweep us mid-flight.
+  await supabase
+    .from('class_recordings')
+    .update({ last_heartbeat_at: new Date().toISOString() })
+    .eq('id', recordingId)
 
   // Processing hold: a recording flagged meta._hold uploads its chunks to
   // Storage normally, but must NOT be transcribed until the flag is cleared
@@ -112,11 +124,46 @@ export async function finalizeRecording(
     ['uploaded', 'transcribing', 'transcribed', 'failed'].includes(c.status),
   )
   if (resolved.length < rec.expected_chunks) {
-    return {
-      status: 'waiting',
-      total_chunks: rec.expected_chunks,
-      uploaded_chunks: ready.length,
+    // Normal case: still collecting chunks — wait for the stragglers, but only
+    // while the client could still be uploading. Staleness is measured from the
+    // heartbeat captured BEFORE our refresh above.
+    const priorMs = priorHeartbeatAt ? Date.parse(priorHeartbeatAt) : 0
+    const staleMs = priorMs > 0 ? Date.now() - priorMs : 0
+    if (staleMs <= STALE_GRACE_MS) {
+      return {
+        status: 'waiting',
+        total_chunks: rec.expected_chunks,
+        uploaded_chunks: ready.length,
+      }
     }
+    // Grace path: stale well past the point a late chunk could still arrive,
+    // yet a chunk is permanently missing (its upload was lost — no row will
+    // ever exist for it). If nothing uploaded at all, give up; otherwise clamp
+    // expected_chunks to what actually resolved so the whole pipeline (this
+    // function AND the webhook's terminal-count completion check) targets the
+    // real count, then process the audio we have.
+    if (resolved.length === 0) {
+      await supabase
+        .from('class_recordings')
+        .update({
+          status: 'failed',
+          error: 'no audio chunks uploaded before timeout',
+          last_heartbeat_at: new Date().toISOString(),
+        })
+        .eq('id', recordingId)
+        .in('status', ['ready', 'transcribing', 'recording'])
+      return { status: 'failed', total_chunks: rec.expected_chunks, uploaded_chunks: 0 }
+    }
+    console.warn(
+      `[finalize-recording] ${recordingId}: proceeding with ${resolved.length}/${rec.expected_chunks} ` +
+        `chunks after ${Math.round(staleMs / 60000)}min stale (a chunk was permanently lost); ` +
+        `clamping expected_chunks to ${resolved.length}`,
+    )
+    await supabase
+      .from('class_recordings')
+      .update({ expected_chunks: resolved.length })
+      .eq('id', recordingId)
+    rec.expected_chunks = resolved.length
   }
 
   // Speaker-count hint for diarization. AssemblyAI's default over-segments a
