@@ -22,6 +22,16 @@ const SIGNED_URL_TTL = 12 * 60 * 60 // 12 hours
 // and the class strands in 'waiting', never finalizing on the chunks that DID
 // upload. The cron retry view has a matching 30-min grace branch.
 const STALE_GRACE_MS = 30 * 60 * 1000 // 30 minutes
+
+// A partial recording is only auto-finalized once at least this fraction of its
+// chunks resolved. Below it the recording is a fragment (most audio never
+// uploaded — e.g. the upload worker stalled when the app backgrounded), and
+// turning it into a class would produce misleading focus points from a sliver
+// of the lesson. Under this bar we keep waiting (a late chunk may still upload)
+// until ABANDON_MS, then FAIL the recording so it is surfaced — never silently
+// stranded, never silently turned into a fragment class.
+const MIN_COVERAGE = 0.75
+const ABANDON_MS = 24 * 60 * 60 * 1000 // 24 hours
 // After this many failed AssemblyAI job-creation attempts, stop rolling the
 // chunk back to 'uploaded' (which the retry sweep re-attempts forever, re-
 // billing each time) and mark it terminally 'failed' so the completeness gate
@@ -124,11 +134,17 @@ export async function finalizeRecording(
     ['uploaded', 'transcribing', 'transcribed', 'failed'].includes(c.status),
   )
   if (resolved.length < rec.expected_chunks) {
-    // Normal case: still collecting chunks — wait for the stragglers, but only
-    // while the client could still be uploading. Staleness is measured from the
-    // heartbeat captured BEFORE our refresh above.
-    const priorMs = priorHeartbeatAt ? Date.parse(priorHeartbeatAt) : 0
-    const staleMs = priorMs > 0 ? Date.now() - priorMs : 0
+    // Staleness is measured from ended_at (stable once the coach hits Done) —
+    // NOT last_heartbeat_at, which this function refreshes on every call and
+    // would reset the clock on each cron sweep. Fall back to the pre-refresh
+    // heartbeat if ended_at is somehow unset.
+    const anchorTs = (rec.ended_at as string | null) ?? priorHeartbeatAt
+    const anchorMs = anchorTs ? Date.parse(anchorTs) : 0
+    const staleMs = anchorMs > 0 ? Date.now() - anchorMs : 0
+    const coverage =
+      rec.expected_chunks > 0 ? resolved.length / rec.expected_chunks : 0
+
+    // Still within the collection window — wait for the stragglers.
     if (staleMs <= STALE_GRACE_MS) {
       return {
         status: 'waiting',
@@ -136,34 +152,50 @@ export async function finalizeRecording(
         uploaded_chunks: ready.length,
       }
     }
-    // Grace path: stale well past the point a late chunk could still arrive,
-    // yet a chunk is permanently missing (its upload was lost — no row will
-    // ever exist for it). If nothing uploaded at all, give up; otherwise clamp
-    // expected_chunks to what actually resolved so the whole pipeline (this
-    // function AND the webhook's terminal-count completion check) targets the
-    // real count, then process the audio we have.
-    if (resolved.length === 0) {
+
+    if (coverage >= MIN_COVERAGE && resolved.length >= 1) {
+      // Enough audio — only a few chunks were permanently lost (their upload
+      // never landed). Clamp expected_chunks to what resolved so the whole
+      // pipeline (this function AND the webhook's terminal-count completion
+      // check) targets the real count, then finalize on the audio we have.
+      console.warn(
+        `[finalize-recording] ${recordingId}: proceeding with ${resolved.length}/${rec.expected_chunks} ` +
+          `chunks (${Math.round(coverage * 100)}%) after ${Math.round(staleMs / 60000)}min stale; ` +
+          `clamping expected_chunks to ${resolved.length}`,
+      )
+      await supabase
+        .from('class_recordings')
+        .update({ expected_chunks: resolved.length })
+        .eq('id', recordingId)
+      rec.expected_chunks = resolved.length
+    } else if (staleMs >= ABANDON_MS) {
+      // Too little audio ever arrived and no more is coming — most chunks were
+      // lost (e.g. the upload worker stalled mid-class). Fail the recording so
+      // it is surfaced, rather than silently stranded OR silently turned into a
+      // fragment class with focus points drawn from a sliver of the lesson.
       await supabase
         .from('class_recordings')
         .update({
           status: 'failed',
-          error: 'no audio chunks uploaded before timeout',
+          error: `audio upload incomplete: only ${resolved.length}/${rec.expected_chunks} chunks (${Math.round(coverage * 100)}%) uploaded`,
           last_heartbeat_at: new Date().toISOString(),
         })
         .eq('id', recordingId)
         .in('status', ['ready', 'transcribing', 'recording'])
-      return { status: 'failed', total_chunks: rec.expected_chunks, uploaded_chunks: 0 }
+      return {
+        status: 'failed',
+        total_chunks: rec.expected_chunks,
+        uploaded_chunks: resolved.length,
+      }
+    } else {
+      // Low coverage but a late chunk could still upload (network recovered /
+      // app reopened). Keep waiting until the abandon window elapses.
+      return {
+        status: 'waiting',
+        total_chunks: rec.expected_chunks,
+        uploaded_chunks: ready.length,
+      }
     }
-    console.warn(
-      `[finalize-recording] ${recordingId}: proceeding with ${resolved.length}/${rec.expected_chunks} ` +
-        `chunks after ${Math.round(staleMs / 60000)}min stale (a chunk was permanently lost); ` +
-        `clamping expected_chunks to ${resolved.length}`,
-    )
-    await supabase
-      .from('class_recordings')
-      .update({ expected_chunks: resolved.length })
-      .eq('id', recordingId)
-    rec.expected_chunks = resolved.length
   }
 
   // Speaker-count hint for diarization. AssemblyAI's default over-segments a
