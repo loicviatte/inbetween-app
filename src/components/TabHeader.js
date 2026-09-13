@@ -8,7 +8,7 @@ import { useProfile } from '../context/ProfileContext';
 import { getNotifications } from '../storage/notificationsStorage';
 import { locallyRespondedAttendance } from '../storage/attendanceState';
 
-export default function TabHeader({ navigation, onProfilePress, editMode = false, center = null }) {
+export default function TabHeader({ navigation, onProfilePress, editMode = false, center = null, right = null }) {
   const { avatarUri, initials: contextInitials } = useProfile();
 
   const [cachedPhoto, setCachedPhoto] = useState(null);
@@ -96,7 +96,9 @@ export default function TabHeader({ navigation, onProfilePress, editMode = false
         </View>
       )}
 
-      {editMode ? (
+      {/* A caller that supplies `right` owns that slot outright — otherwise the
+          avatar would still render and land in the middle of the row. */}
+      {right || (editMode ? (
         <TouchableOpacity
           onPress={handleProfilePress}
           activeOpacity={0.7}
@@ -113,7 +115,7 @@ export default function TabHeader({ navigation, onProfilePress, editMode = false
             <Text style={styles.avatarText}>{initials}</Text>
           )}
         </TouchableOpacity>
-      )}
+      ))}
     </View>
   );
 }

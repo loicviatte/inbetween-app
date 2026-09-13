@@ -56,6 +56,11 @@ export default function StudentAppNavigator() {
       <Stack.Navigator screenOptions={{ headerShown: false, detachInactiveScreens: false }}>
         <Stack.Screen name="MainTabs" component={MainTabs} />
         <Stack.Screen
+          name="StatsDetail"
+          getComponent={() => require('../screens/StatsDetailScreen').default}
+          options={{ animation: 'slide_from_right' }}
+        />
+        <Stack.Screen
           name="ClassDetail"
           getComponent={() => require('../screens/ClassDetailScreen').default}
           options={{ animation: 'slide_from_right' }}
