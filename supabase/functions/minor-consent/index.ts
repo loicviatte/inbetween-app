@@ -146,7 +146,7 @@ async function deliverInvite(mode: 'live' | 'test', row: Row, token: string, cod
     `Hi ${row.parent_first_name},`, '',
     `${child} wants to use InBetween${coach ? ` with their coach ${coach}` : ''}. Because ${child} is under 18, nothing is recorded until you approve.`, '',
     'On your phone, open this link:', `${APP_SCHEME}://consent?token=${formatToken(token)}`, '',
-    'Or open the InBetween app, choose "I have a parent invitation" and enter this code:', formatToken(token), '',
+    'Or open the InBetween app, choose Parent, then "I have an invitation code", and enter:', formatToken(token), '',
     ...(SMS_ENABLED ? ["We've also sent you a text message with a 6-digit code. You'll need both."] : []),
     `This invitation expires in ${INVITE_TTL_H} hours.`,
   ].join('\n')
@@ -311,18 +311,31 @@ async function update(admin: SupabaseClient, b: Row, ip: string) {
 async function verify(admin: SupabaseClient, b: Row, ip: string) {
   if (await limited(admin, `verify:ip:${ip}`, 20, 3600)) return json({ error: 'Too many attempts. Try again later.' }, 429)
   const token = normToken(b.token), code = str(b.code, 12).replace(/\D/g, '')
-  if (token.length !== 12) return json({ error: 'Enter the code from the email.' }, 400)
-  if (SMS_ENABLED && code.length !== 6) return json({ error: 'Enter both codes.' }, 400)
+  // ⚠️ TEST ONLY. While delivery is in test mode (no real email provider, and
+  // CONSENT_TEST_MODE=on), any code opens the most recent pending invitation,
+  // so the flow can be walked without reading the message. Configuring Resend
+  // makes delivery live, which switches this off on its own — in live mode it
+  // would let anyone approve any minor's account.
+  const anyCode = deliveryMode() === 'test'
+  if (!anyCode && token.length !== 12) return json({ error: 'Enter the code from the email.' }, 400)
+  if (!anyCode && SMS_ENABLED && code.length !== 6) return json({ error: 'Enter both codes.' }, 400)
 
-  const { data: row } = await admin.from('parental_consents').select('*')
+  let { data: row } = await admin.from('parental_consents').select('*')
     .eq('email_token_hash', await sha256(token)).eq('status', 'pending').maybeSingle()
-  if (!row || !row.child_id) return json({ error: "That invitation code isn't valid." }, 404)
+  if (!row && anyCode) {
+    ({ data: row } = await admin.from('parental_consents').select('*')
+      .eq('status', 'pending').not('child_id', 'is', null).gt('expires_at', new Date().toISOString())
+      .order('created_at', { ascending: false }).limit(1).maybeSingle())
+  }
+  if (!row || !row.child_id) {
+    return json({ error: anyCode ? 'No invitation is waiting. Send one from the student side first.' : "That invitation code isn't valid." }, 404)
+  }
   if (new Date(row.expires_at) < new Date()) {
     await admin.from('parental_consents').update({ status: 'expired' }).eq('id', row.id)
     return json({ error: 'This invitation has expired. Ask for a new one.' }, 410)
   }
   if (row.verify_attempts >= MAX_VERIFY_ATTEMPTS) return json({ error: 'Too many wrong codes. Ask for a new invitation.' }, 423)
-  if (SMS_ENABLED && row.sms_code_hash !== await sha256(code)) {
+  if (SMS_ENABLED && !anyCode && row.sms_code_hash !== await sha256(code)) {
     await admin.from('parental_consents').update({ verify_attempts: row.verify_attempts + 1 }).eq('id', row.id)
     return json({ error: "The text message code doesn't match." }, 401)
   }

@@ -368,6 +368,9 @@ const toCard = (a) => ({
 
 const COACH_FLOW = ['role', 'style', 'studio', 'recap', 'correct', 'words', 'signature', 'alloc', 'leave', 'who', 'cred'];
 const STUDENT_FLOW = ['role', 'style', 'level', 'age', 'solo', 'lessons', 'studio', 'coach', 'recap'];
+// A parent first says whether their child already invited them: with a code
+// they approve that account, without one they set the child up themselves.
+const PARENT_FLOW = ['role', 'parentEntry', 'style', 'level', 'age', 'solo', 'lessons', 'studio', 'coach', 'recap'];
 // Under 18: the explanation comes straight after the age, the coach is still
 // chosen (their parent is told who it is), and the recall is gone — a minor's
 // account of a lesson is not sent to an AI before a parent has approved.
@@ -382,7 +385,7 @@ function weeklyTarget(a) {
 // ── screen 00 · welcome ─────────────────────────────────────────────────────
 // The comp's one fully authored moment: the gap between two lessons drawn as a
 // rail that fills, then the headline rising line by line out of its own mask.
-function Welcome({ onStart, onSignIn, onInvitation }) {
+function Welcome({ onStart, onSignIn }) {
   const fill = useRef(new Animated.Value(0)).current;      // .rail .fill + .spark
   const lit = useRef(new Animated.Value(0)).current;       // .rail .d.b
   const drift = useRef(new Animated.Value(0)).current;     // .glow
@@ -470,9 +473,6 @@ function Welcome({ onStart, onSignIn, onInvitation }) {
         <TouchableOpacity onPress={onSignIn} style={s.ghost} accessibilityRole="button">
           <Text style={[s.ghostT, s.ghostOnDark]}>I already have an account</Text>
         </TouchableOpacity>
-        <TouchableOpacity onPress={onInvitation} style={s.ghost} accessibilityRole="button">
-          <Text style={[s.ghostT, s.ghostOnDark]}>I have a parent invitation</Text>
-        </TouchableOpacity>
       </Rise>
     </View>
   );
@@ -503,7 +503,7 @@ export default function OnboardingScreen({ navigation }) {
     recall: '', focus: [],
     parentFirstName: '', parentEmail: '', parentPhone: '',
     inviteId: '', deviceSecret: '', maskedEmail: '', inviteStatus: '', inviteNote: '', editingInvite: false, inviteClosed: false,
-    invToken: '', invCode: '', consent: null, checks: [false, false, false], parentPassword: '',
+    invToken: '', invCode: '', consent: null, checks: [false, false, false], parentPassword: '', hasInvite: null,
     alloc: { Technique: 40, Musicality: 25, Mental: 20, Performance: 15 },
     name: '', childName: '', email: '', password: '', slug: '',
   });
@@ -527,7 +527,7 @@ export default function OnboardingScreen({ navigation }) {
   // `them` when a parent is filling this in, `you` otherwise.
   const copy = (key, h1, sub2) => (isParent && PARENT_COPY[key]) || [h1, sub2];
   const isMinor = !isCoach && !isParent && MINOR_AGES.includes(a.age);
-  const flow = isCoach ? COACH_FLOW : isMinor ? MINOR_FLOW : STUDENT_FLOW;
+  const flow = isCoach ? COACH_FLOW : isParent ? PARENT_FLOW : isMinor ? MINOR_FLOW : STUDENT_FLOW;
   const inFlow = flow.indexOf(step);
   const progress = inFlow < 0 ? 1 : (inFlow + 1) / flow.length;
 
@@ -604,6 +604,7 @@ export default function OnboardingScreen({ navigation }) {
 
   function next() {
     const i = flow.indexOf(step);
+    if (step === 'parentEntry' && a.hasInvite) return go('parentCode');
     if (i > -1 && i < flow.length - 1) return go(flow[i + 1]);
     if (step === 'minorParent') return sendInvite();
     if (step === 'parentCode') return runVerify();
@@ -620,7 +621,7 @@ export default function OnboardingScreen({ navigation }) {
   function back() {
     const i = flow.indexOf(step);
     if (step === 'minorParent' && a.editingInvite) { set({ editingInvite: false }); return go('minorWaiting', -1); }
-    if (step === 'parentCode') return go('welcome', -1);
+    if (step === 'parentCode') return go(isParent ? 'parentEntry' : 'welcome', -1);
     if (step === 'parentContext') return go('parentCode', -1);
     if (step === 'parentWhat') return go('parentContext', -1);
     if (step === 'parentConsent') return go('parentWhat', -1);
@@ -834,7 +835,8 @@ export default function OnboardingScreen({ navigation }) {
     minorParent: !!((a.editingInvite || a.name.trim()) && a.parentFirstName.trim()
       && EMAIL_OK.test(a.parentEmail.trim())),
     minorWaiting: true,
-    parentCode: a.invToken.replace(/[^A-Za-z0-9]/g, '').length === 12,
+    parentEntry: a.hasInvite !== null,
+    parentCode: a.invToken.trim().length > 0,
     parentContext: true, parentWhat: true,
     parentConsent: a.checks.every(Boolean),
     parentAccount: !!a.consent && (a.consent.accountExists || a.parentPassword.length >= 8),
@@ -847,7 +849,7 @@ export default function OnboardingScreen({ navigation }) {
   }[step];
 
   const allocLeft = 100 - AXES.reduce((t, k) => t + a.alloc[k], 0);
-  const planLine = [a.role && (isCoach ? 'Coach' : 'Student'), a.style, a.level].filter(Boolean).join(' · ');
+  const planLine = [a.role && (isCoach ? 'Coach' : isParent ? 'Parent' : 'Student'), a.style, a.level].filter(Boolean).join(' · ');
 
   function body() {
     switch (step) {
@@ -1034,6 +1036,16 @@ export default function OnboardingScreen({ navigation }) {
               </View>
             </Rise>
           ))}
+        </Q>
+      );
+
+      case 'parentEntry': return (
+        <Q h1="Do you have an invitation code?"
+          sub="If your child asked you to approve their account, the code is in the email we sent you.">
+          <Opt t="I have an invitation code" d="Approve your child’s account" on={a.hasInvite === true}
+            delay={0.1} onPress={() => { haptic(); set({ hasInvite: true }); }} />
+          <Opt t="I don’t have an invitation code" d="Set up your child’s training yourself" on={a.hasInvite === false}
+            delay={0.16} onPress={() => { haptic(); set({ hasInvite: false }); }} />
         </Q>
       );
 
@@ -1313,8 +1325,7 @@ export default function OnboardingScreen({ navigation }) {
   if (step === 'welcome') {
     return (
       <View style={[s.phone, s.phoneDark, { paddingTop: insets.top, paddingBottom: insets.bottom + 8 }]}>
-        <Welcome onStart={() => go('role')} onSignIn={() => navigation.navigate('Login')}
-          onInvitation={() => { setError(''); go('parentCode'); }} />
+        <Welcome onStart={() => go('role')} onSignIn={() => navigation.navigate('Login')} />
       </View>
     );
   }
