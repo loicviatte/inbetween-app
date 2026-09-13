@@ -54,7 +54,7 @@ export async function getPendingCoachRequests() {
   const coachId = await getCoachId();
   const { data } = await supabase
     .from('coach_requests')
-    .select('id, student_id, category, created_at, users!coach_requests_student_id_fkey(name, dance_style)')
+    .select('id, student_id, category, created_at, users!coach_requests_student_id_fkey(name, dance_style, consent_status)')
     .eq('coach_id', coachId)
     .eq('status', 'pending')
     .order('created_at', { ascending: false });
@@ -65,6 +65,7 @@ export async function getPendingCoachRequests() {
                           // two requests from the same 2-style student.
     name: r.users?.name || 'Unknown',
     danceStyle: r.users?.dance_style || '',
+    consentStatus: r.users?.consent_status || 'not_required',
     createdAt: r.created_at,
   }));
 }
@@ -173,7 +174,7 @@ async function _getMyStudentsImpl() {
   // instead of FK embed, which can get silently dropped by RLS).
   const { data: userRows } = await supabase
     .from('users')
-    .select('id, name, dance_style, last_active_date, avatar_url, latin_coach_id, ballroom_coach_id')
+    .select('id, name, dance_style, last_active_date, avatar_url, latin_coach_id, ballroom_coach_id, consent_status')
     .in('id', wantedIds);
 
   const byId = new Map();

@@ -21,9 +21,10 @@ import { LinearGradient } from 'expo-linear-gradient';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import Svg, { Circle } from 'react-native-svg';
 import TabHeader from '../components/TabHeader';
-import { saveUserPreferences, getAccountUser, saveAccountName } from '../storage/storage';
+import { saveUserPreferences, getAccountUser, saveAccountName, clearSubjectCache, invalidateCache } from '../storage/storage';
 import { isGuardian, listChildren, setActiveChild } from '../storage/guardianStorage';
 import { createChildAccount } from '../services/childAccount';
+import { withdrawChild } from '../services/minorConsent';
 import ProfileDashboard from '../components/ProfileDashboard';
 import ProfileSkeleton from '../components/ProfileSkeleton';
 import StudioPicker from '../components/StudioPicker';
@@ -915,6 +916,7 @@ export default function ProfileScreen({ navigation, route }) {
   // child's name and the generated managed address.
   const [account, setAccount] = useState(null);
   const [addChild, setAddChild] = useState(false);
+  const [withdrawing, setWithdrawing] = useState(null);
   // A partner-linking notification deep-links here with { tab: 'links' }; honor
   // it, then clear the param so a later manual subtab switch isn't overridden.
   useEffect(() => {
@@ -1244,6 +1246,36 @@ export default function ProfileScreen({ navigation, route }) {
     } catch (e) {
       setChildren((prev) => prev.map((c) => ({ ...c, active: c.id === current?.id })));
       Alert.alert('Could not switch', e.message || 'Try again in a moment.');
+    }
+  }
+
+  // Withdrawal is a right, so it is one plain question — asked once because it
+  // erases a child's whole record for good, never argued with or delayed.
+  function confirmWithdraw(child) {
+    Alert.alert(
+      `Delete everything about ${child.name}?`,
+      `This withdraws your permission, stops recording immediately and deletes all of ${child.name}’s data. It can’t be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Withdraw and delete', style: 'destructive', onPress: () => runWithdraw(child) },
+      ],
+    );
+  }
+
+  async function runWithdraw(child) {
+    setWithdrawing(child.id);
+    try {
+      await withdrawChild(child.id);
+      // Everything cached belonged to the child who no longer exists.
+      clearSubjectCache();
+      invalidateCache();
+      await loadChildren();
+      await load();
+      Alert.alert('Deleted', `${child.name}’s data has been deleted and their coach has been told.`);
+    } catch (e) {
+      Alert.alert('Not deleted', e.message || 'Try again in a moment.');
+    } finally {
+      setWithdrawing(null);
     }
   }
 
@@ -1903,6 +1935,28 @@ export default function ProfileScreen({ navigation, route }) {
                       <Ionicons name="add" size={16} color="#8F6410" />
                       <Text style={styles.addChildText}>Add a child</Text>
                     </TouchableOpacity>
+
+                    {/* always here, never behind a menu: withdrawing is a right */}
+                    <SecLabel text="Permission" />
+                    <View style={set.card}>
+                      {children.map((c, i) => (
+                        <TouchableOpacity
+                          key={`withdraw-${c.id}`}
+                          style={[set.row, i < children.length - 1 && set.rowBorder]}
+                          onPress={() => confirmWithdraw(c)}
+                          disabled={withdrawing === c.id}
+                          activeOpacity={0.7}
+                          accessibilityRole="button"
+                        >
+                          <View style={{ flex: 1, minWidth: 0 }}>
+                            <Text style={styles.withdrawText}>
+                              {withdrawing === c.id ? 'Deleting…' : 'Withdraw permission and delete all data'}
+                            </Text>
+                            {children.length > 1 && <Text style={styles.withdrawSub}>{c.name}</Text>}
+                          </View>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
                   </>
                 )}
 
@@ -2257,6 +2311,8 @@ const styles = StyleSheet.create({
   addChildBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
     marginTop: 10, paddingVertical: 12 },
   addChildText: { fontFamily: Fonts.ttDemiBold, fontSize: 13.5, color: '#8F6410' },
+  withdrawText: { fontFamily: Fonts.ttDemiBold, fontSize: 14.5, color: '#A3281B' },
+  withdrawSub: { fontFamily: Fonts.ttRegular, fontSize: 12.5, color: '#6B6656', marginTop: 2 },
 
   fixedTop: {
     paddingHorizontal: Spacing.side,

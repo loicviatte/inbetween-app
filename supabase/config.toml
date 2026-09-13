@@ -24,6 +24,11 @@ verify_jwt = false
 [functions.create-child-account]
 verify_jwt = false
 
+# Used by a student and a parent before either has an account; withdraw
+# verifies the parent's JWT itself.
+[functions.minor-consent]
+verify_jwt = false
+
 [functions.student-class-score]
 verify_jwt = false
 

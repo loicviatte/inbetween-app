@@ -177,6 +177,17 @@ function AlertLine({ alert }) {
 }
 
 // ── Attention student card ──────────────────────────────────────────────────
+// A student under 18 whose parent hasn't approved yet. Shown wherever the
+// student appears, because it is the reason their Start button won't work.
+function ConsentChip({ status }) {
+  if (status !== 'pending') return null;
+  return (
+    <View style={consentStyles.chip}>
+      <Text style={consentStyles.chipText} numberOfLines={1}>Awaiting parent approval</Text>
+    </View>
+  );
+}
+
 function AttentionCard({ student, readinessPercent = 0, onPress }) {
   return (
     <Pressable style={styles.attentionCard} onPress={onPress}>
@@ -192,6 +203,7 @@ function AttentionCard({ student, readinessPercent = 0, onPress }) {
             {student.name}
           </Text>
           <PendingQChip count={student.pendingQuestions} />
+          <ConsentChip status={student.consent_status} />
         </View>
         <AlertLine alert={student.alert} />
       </View>
@@ -219,6 +231,7 @@ function OnTrackRow({ student, readinessPercent = 0, onPress, isLast }) {
             {student.name}
           </Text>
           <PendingQChip count={student.pendingQuestions} />
+          <ConsentChip status={student.consent_status} />
         </View>
         <Text style={styles.onTrackMeta}>
           {student.lastActiveDate ? `${shortRelative(student.lastActiveDate)} ago` : 'No recent practice'}
@@ -257,6 +270,7 @@ function LastPrivateRow({ student, onPress, isLast }) {
             {student.name}
           </Text>
           <PendingQChip count={student.pendingQuestions} />
+          <ConsentChip status={student.consent_status} />
         </View>
         <Text style={styles.onTrackMeta}>
           {student.lastPrivateClassDate ? shortDate(student.lastPrivateClassDate) : 'No private lesson yet'}
@@ -282,6 +296,7 @@ function RequestRow({ student, category, onAccept, onReject }) {
         <Text style={styles.onTrackName} numberOfLines={1}>
           {student.name}
         </Text>
+        <ConsentChip status={student.consentStatus} />
         <Text style={styles.requestSub}>
           {catLabel ? `Wants a ${catLabel} coach` : 'Wants to be coached'}
         </Text>
@@ -649,7 +664,7 @@ export default function CoachHomeScreen({ navigation, route }) {
             {requests.map((r) => (
               <RequestRow
                 key={r.id}
-                student={{ id: r.studentId, name: r.name }}
+                student={{ id: r.studentId, name: r.name, consentStatus: r.consentStatus }}
                 category={r.category}
                 onAccept={() => handleAccept(r.id)}
                 onReject={() => handleReject(r.id)}
@@ -1133,4 +1148,10 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     paddingHorizontal: 40,
   },
+});
+
+const consentStyles = StyleSheet.create({
+  chip: { alignSelf: 'flex-start', marginLeft: 6, borderRadius: 999, paddingVertical: 2, paddingHorizontal: 8,
+    backgroundColor: 'rgba(232,181,48,0.16)' },
+  chipText: { fontFamily: Fonts.ttDemiBold, fontSize: 11, color: '#8A6414' },
 });

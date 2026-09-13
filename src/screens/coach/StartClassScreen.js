@@ -397,6 +397,10 @@ function PrivateCard({ st, onPress }) {
   );
 }
 
+// Consent states in which a student may not be recorded. The database refuses
+// these too (refuse_unconsented_student); checking here stops the mic opening.
+const CONSENT_BLOCKED = ['pending', 'withdrawn'];
+
 export default function StartClassScreen({ navigation }) {
   const { students, getOrFetch } = useCoachData();
   // Lets us refresh the DJI awaiting-audio count the moment a local class ends,
@@ -1467,6 +1471,16 @@ export default function StartClassScreen({ navigation }) {
   }
 
   async function startClassNow() {
+    // The roster's copy of the student can be stale; the row is not.
+    if (view === 'private-briefing' && selectedStudent?.id) {
+      const { data: st } = await supabase.from('users').select('consent_status').eq('id', selectedStudent.id).maybeSingle();
+      if (st && CONSENT_BLOCKED.includes(st.consent_status)) {
+        setAudioModalOpen(false);
+        Alert.alert('Waiting for a parent',
+          `${selectedStudent.name || 'This student'} is under 18. Recording works as soon as their parent gives permission.`);
+        return;
+      }
+    }
     setAudioModalOpen(false);
 
     // Start the chrono + active-class store IMMEDIATELY — before the slow async
@@ -1564,7 +1578,7 @@ export default function StartClassScreen({ navigation }) {
         } else if (!isPrivate && Array.isArray(students) && students.length > 0) {
           const { error: csErr } = await supabase
             .from('class_recording_students')
-            .insert(students.map((s) => ({ recording_id: recordingId, student_id: s.id })));
+            .insert(students.filter((s) => !CONSENT_BLOCKED.includes(s.consent_status)).map((s) => ({ recording_id: recordingId, student_id: s.id })));
           if (csErr) throw csErr;
         }
         newPipelineRef.current = true;
@@ -2958,11 +2972,14 @@ export default function StartClassScreen({ navigation }) {
 
             <View style={ad.actions}>
               <TouchableOpacity
-                style={ad.btnStart}
+                style={[ad.btnStart, view === 'private-briefing' && CONSENT_BLOCKED.includes(selectedStudent?.consent_status) && { opacity: 0.4 }]}
                 activeOpacity={0.88}
                 onPress={() => handleStartTap(phoneMic)}
               >
-                <Text style={ad.btnStartText}>Start class</Text>
+                <Text style={ad.btnStartText}>
+                  {view === 'private-briefing' && CONSENT_BLOCKED.includes(selectedStudent?.consent_status)
+                    ? 'Waiting for parent approval' : 'Start class'}
+                </Text>
               </TouchableOpacity>
             </View>
           </Pressable>
@@ -2974,6 +2991,11 @@ export default function StartClassScreen({ navigation }) {
   }
 
   function handleStartTap(phoneMic) {
+    if (view === 'private-briefing' && CONSENT_BLOCKED.includes(selectedStudent?.consent_status)) {
+      Alert.alert('Waiting for a parent',
+        `${selectedStudent?.name || 'This student'} is under 18. Recording works as soon as their parent gives permission.`);
+      return;
+    }
     // First class ever for this coach → consent gate before anything else.
     if (!consentGiven) {
       pendingPhoneMicRef.current = phoneMic ?? null;

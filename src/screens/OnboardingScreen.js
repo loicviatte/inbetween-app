@@ -18,7 +18,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput,
-  ActivityIndicator, KeyboardAvoidingView, Platform, Animated, Easing,
+  ActivityIndicator, KeyboardAvoidingView, Platform, Animated, Easing, Linking,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -34,6 +34,10 @@ import { recallToFocusPoints, saveOnboardingFocusPoints } from '../services/ai/o
 import { createChildAccount } from '../services/childAccount';
 import { saveCoachCard, slugify, essenceFrom } from '../storage/coachCardStorage';
 import CoachCard from '../components/CoachCard';
+import {
+  inviteParent, getInviteStatus, resendInvite, updateInvite, verifyInvitation, approveInvitation,
+  savePendingInvite, loadPendingInvite, clearPendingInvite, tokenFromUrl,
+} from '../services/minorConsent';
 
 // ── tokens, straight from the comp's stylesheet ──────────────────────────────
 const T = {
@@ -312,6 +316,8 @@ const PARENT_COPY = {
 // Under-18 categories: consent has to come from an adult, so the age screen
 // offers the parent account rather than blocking the person outright.
 const MINOR_AGES = ['Juvenile', 'Junior', 'Youth'];
+const EMAIL_OK = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+const PHONE_OK = (v) => /^\+[0-9]{8,15}$/.test((v || '').replace(/[\s().-]/g, ''));
 const STYLES = [
   { v: 'Latin', t: 'Latin', d: 'Cha Cha · Rumba · Samba · Paso · Jive' },
   { v: 'Ballroom', t: 'Ballroom', d: 'Waltz · Tango · Foxtrot · Quickstep · Viennese' },
@@ -363,6 +369,10 @@ const toCard = (a) => ({
 
 const COACH_FLOW = ['role', 'style', 'studio', 'recap', 'correct', 'words', 'signature', 'alloc', 'leave', 'who', 'cred'];
 const STUDENT_FLOW = ['role', 'style', 'level', 'age', 'solo', 'lessons', 'studio', 'coach', 'recap'];
+// Under 18: the explanation comes straight after the age, the coach is still
+// chosen (their parent is told who it is), and the recall is gone — a minor's
+// account of a lesson is not sent to an AI before a parent has approved.
+const MINOR_FLOW = ['role', 'style', 'level', 'age', 'minorExplain', 'solo', 'lessons', 'studio', 'coach', 'minorParent'];
 
 // The weekly target agreed here IS the goal the Trend view scores against, so
 // it is written to users.weekly_goal_minutes rather than staying in onboarding.
@@ -373,7 +383,7 @@ function weeklyTarget(a) {
 // ── screen 00 · welcome ─────────────────────────────────────────────────────
 // The comp's one fully authored moment: the gap between two lessons drawn as a
 // rail that fills, then the headline rising line by line out of its own mask.
-function Welcome({ onStart, onSignIn }) {
+function Welcome({ onStart, onSignIn, onInvitation }) {
   const fill = useRef(new Animated.Value(0)).current;      // .rail .fill + .spark
   const lit = useRef(new Animated.Value(0)).current;       // .rail .d.b
   const drift = useRef(new Animated.Value(0)).current;     // .glow
@@ -461,6 +471,9 @@ function Welcome({ onStart, onSignIn }) {
         <TouchableOpacity onPress={onSignIn} style={s.ghost} accessibilityRole="button">
           <Text style={[s.ghostT, s.ghostOnDark]}>I already have an account</Text>
         </TouchableOpacity>
+        <TouchableOpacity onPress={onInvitation} style={s.ghost} accessibilityRole="button">
+          <Text style={[s.ghostT, s.ghostOnDark]}>I have a parent invitation</Text>
+        </TouchableOpacity>
       </Rise>
     </View>
   );
@@ -489,6 +502,9 @@ export default function OnboardingScreen({ navigation }) {
     correct: '', signature: '', words: [], leave: [], who: [], cred: '',
     coachId: null, coachName: '', noCoach: false,
     recall: '', focus: [],
+    parentFirstName: '', parentEmail: '', parentPhone: '',
+    inviteId: '', deviceSecret: '', maskedEmail: '', inviteStatus: '', inviteNote: '', editingInvite: false, inviteClosed: false,
+    invToken: '', invCode: '', consent: null, checks: [false, false, false], parentPassword: '',
     alloc: { Technique: 40, Musicality: 25, Mental: 20, Performance: 15 },
     name: '', childName: '', email: '', password: '', slug: '',
   });
@@ -511,12 +527,58 @@ export default function OnboardingScreen({ navigation }) {
   const isParent = a.role === 'parent';
   // `them` when a parent is filling this in, `you` otherwise.
   const copy = (key, h1, sub2) => (isParent && PARENT_COPY[key]) || [h1, sub2];
-  const flow = isCoach ? COACH_FLOW : STUDENT_FLOW;
+  const isMinor = !isCoach && !isParent && MINOR_AGES.includes(a.age);
+  const flow = isCoach ? COACH_FLOW : isMinor ? MINOR_FLOW : STUDENT_FLOW;
   const inFlow = flow.indexOf(step);
   const progress = inFlow < 0 ? 1 : (inFlow + 1) / flow.length;
 
   useEffect(() => { scroller.current?.scrollTo({ y: 0, animated: false }); }, [step]);
   useEffect(() => () => setOnboardingHold(false), []);
+
+  // A student who closed the app while waiting comes back to the wait, not to
+  // a fresh onboarding that would create a second pending profile.
+  useEffect(() => {
+    let alive = true;
+    loadPendingInvite().then((p) => {
+      if (!alive || !p?.inviteId) return;
+      set({
+        inviteId: p.inviteId, deviceSecret: p.deviceSecret, name: p.childName || '',
+        parentFirstName: p.parentFirstName || '', parentEmail: p.parentEmail || '', parentPhone: p.parentPhone || '',
+      });
+      setStep('minorWaiting');
+    });
+    return () => { alive = false; };
+  }, []);
+
+  // The invitation email opens the app on a link carrying the email code.
+  useEffect(() => {
+    const open = (url) => {
+      const token = tokenFromUrl(url);
+      if (token) { set({ invToken: token }); setStep('parentCode'); }
+    };
+    Linking.getInitialURL().then(open).catch(() => {});
+    const sub = Linking.addEventListener('url', ({ url }) => open(url));
+    return () => sub.remove();
+  }, []);
+
+  // The waiting screen notices the approval on its own.
+  useEffect(() => {
+    if (step !== 'minorWaiting' || !a.inviteId || a.inviteClosed
+      || ['approved', 'withdrawn'].includes(a.inviteStatus)) return undefined;
+    let alive = true;
+    const tick = () => getInviteStatus(a.inviteId, a.deviceSecret)
+      .then((r) => { if (alive) set({ inviteStatus: r.status }); })
+      .catch(() => {});
+    tick();
+    const t = setInterval(tick, 8000);
+    return () => { alive = false; clearInterval(t); };
+  }, [step, a.inviteId, a.inviteStatus, a.inviteClosed]);
+  const noticeShowing = (step === 'studio' && noticeFor === 'studio') || (step === 'coach' && noticeFor === 'coach');
+  useEffect(() => {
+    if (!noticeShowing) return undefined;
+    const t = setTimeout(() => scroller.current?.scrollToEnd({ animated: true }), 90);
+    return () => clearTimeout(t);
+  }, [noticeShowing]);
 
   useEffect(() => {
     if (step !== 'coach') return;
@@ -544,6 +606,12 @@ export default function OnboardingScreen({ navigation }) {
   function next() {
     const i = flow.indexOf(step);
     if (i > -1 && i < flow.length - 1) return go(flow[i + 1]);
+    if (step === 'minorParent') return sendInvite();
+    if (step === 'parentCode') return runVerify();
+    if (step === 'parentContext') return go('parentWhat');
+    if (step === 'parentWhat') return go('parentConsent');
+    if (step === 'parentConsent') return go('parentAccount');
+    if (step === 'parentAccount') return runApprove();
     if (step === 'cred') return go('cardLocked');
     if (step === 'recap' && !isCoach) return go('recall');
     if (step === 'recall') return runRecall();
@@ -552,6 +620,12 @@ export default function OnboardingScreen({ navigation }) {
 
   function back() {
     const i = flow.indexOf(step);
+    if (step === 'minorParent' && a.editingInvite) { set({ editingInvite: false }); return go('minorWaiting', -1); }
+    if (step === 'parentCode') return go('welcome', -1);
+    if (step === 'parentContext') return go('parentCode', -1);
+    if (step === 'parentWhat') return go('parentContext', -1);
+    if (step === 'parentConsent') return go('parentWhat', -1);
+    if (step === 'parentAccount') return go('parentConsent', -1);
     if (step === 'account') return go(isCoach ? 'cardLocked' : (a.focus.length ? 'focusLocked' : 'planReady'), -1);
     if (step === 'cardLocked') return go('cred', -1);
     if (step === 'planReady' || step === 'recall') return go('recap', -1);
@@ -580,6 +654,74 @@ export default function OnboardingScreen({ navigation }) {
       Animated.timing(bump, { toValue: 1.22, duration: 136, easing: SPRING, useNativeDriver: true }),
       Animated.timing(bump, { toValue: 1, duration: 204, easing: SPRING, useNativeDriver: true }),
     ]).start();
+  }
+
+  // ── under 18: the student invites a parent ──────────────────────────────
+  async function sendInvite() {
+    setError(''); setBusy(true);
+    const contact = {
+      parentFirstName: a.parentFirstName.trim(), parentEmail: a.parentEmail.trim(), parentPhone: a.parentPhone.trim(),
+    };
+    try {
+      let inviteId = a.inviteId, deviceSecret = a.deviceSecret, maskedEmail;
+      if (a.editingInvite && inviteId) {
+        ({ maskedEmail } = await updateInvite(inviteId, deviceSecret, contact));
+      } else {
+        const res = await inviteParent({
+          childName: a.name.trim(), danceStyle: a.style, level: a.level, ageCategory: a.age,
+          studioId: a.studioId || null, coachId: a.coachId || null,
+          lessonsPerMonth: a.lessons, soloFrequency: a.soloLabel, ...contact,
+        });
+        ({ inviteId, deviceSecret, maskedEmail } = res);
+      }
+      set({ inviteId, deviceSecret, maskedEmail, inviteStatus: 'pending', inviteNote: '', editingInvite: false });
+      await savePendingInvite({ inviteId, deviceSecret, childName: a.name.trim(), ...contact });
+      go('minorWaiting');
+    } catch (e) {
+      if ([404, 409, 410].includes(e.status)) set({ inviteClosed: true, editingInvite: false });
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function refreshInvite() {
+    setError('');
+    try { const r = await getInviteStatus(a.inviteId, a.deviceSecret); set({ inviteStatus: r.status }); }
+    catch (e) { if ([404, 409, 410].includes(e.status)) set({ inviteClosed: true }); else setError(e.message); }
+  }
+
+  async function doResend() {
+    setError(''); set({ inviteNote: '' });
+    try { await resendInvite(a.inviteId, a.deviceSecret); set({ inviteNote: 'Sent again.', inviteStatus: 'pending' }); }
+    catch (e) { if ([404, 409, 410].includes(e.status)) set({ inviteClosed: true }); else setError(e.message); }
+  }
+
+  // ── the parent approves ─────────────────────────────────────────────────
+  async function runVerify() {
+    setError(''); setBusy(true);
+    try {
+      const r = await verifyInvitation(a.invToken, a.invCode);
+      // Every box starts empty, every time the codes are entered.
+      set({ consent: r, checks: [false, false, false], parentPassword: '' });
+      go('parentContext');
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function runApprove() {
+    setError(''); setBusy(true);
+    try {
+      await approveInvitation(a.consent.ticket, a.checks, a.consent.accountExists ? undefined : a.parentPassword);
+      go('parentDone');
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function runRecall() {
@@ -684,10 +826,20 @@ export default function OnboardingScreen({ navigation }) {
   }
 
   const gate = {
-    role: !!a.role, style: !!a.style, level: !!a.level, age: !!a.age, solo: !!a.soloLabel,
+    role: !!a.role, style: !!a.style, level: !!a.level,
+    age: !!a.age, solo: !!a.soloLabel,
     lessons: true, studio: !!a.studioId || a.noStudio || a.createStudio,
     coach: !!a.coachId || a.noCoach, recap: true,
     recall: a.recall.trim().length > 11, analysing: false, focusLocked: true, focusLive: true,
+    minorExplain: true,
+    minorParent: !!((a.editingInvite || a.name.trim()) && a.parentFirstName.trim()
+      && EMAIL_OK.test(a.parentEmail.trim()) && PHONE_OK(a.parentPhone)),
+    minorWaiting: true,
+    parentCode: a.invToken.replace(/[^A-Za-z0-9]/g, '').length === 12 && /^[0-9]{6}$/.test(a.invCode),
+    parentContext: true, parentWhat: true,
+    parentConsent: a.checks.every(Boolean),
+    parentAccount: !!a.consent && (a.consent.accountExists || a.parentPassword.length >= 8),
+    parentDone: true,
     correct: a.correct.trim().length > 2, words: a.words.length > 0,
     signature: a.signature.trim().length > 2, alloc: true, leave: a.leave.length > 0,
     who: a.who.length > 0, cred: true, cardLocked: true, planReady: true, cardLive: true, confirm: true,
@@ -732,15 +884,6 @@ export default function OnboardingScreen({ navigation }) {
             <Opt key={r.v} t={r.t} d={r.d} on={a.age === r.v} delay={0.1 + i * 0.06}
               onPress={() => { haptic(); set({ age: r.v }); }} />
           ))}
-          {!isParent && MINOR_AGES.includes(a.age) && (
-            <Notice
-              lead="You need to be 18 or over."
-              body="Using InBetween means consenting to how your practice data is handled, and that consent has to come from an adult. A parent can hold the account and follow your training from their side."
-              inviteLabel="Switch to parent"
-              onInvite={() => { haptic(); set({ role: 'parent' }); }}
-              onSkip={() => next()}
-            />
-          )}
         </Q>
       );
       case 'solo': return (
@@ -839,11 +982,11 @@ export default function OnboardingScreen({ navigation }) {
       );
 
       case 'recall': return (
-        <Q {...qc(copy('recall', 'Recall your last lesson',
+        <Q grow {...qc(copy('recall', 'Recall your last lesson',
           'Type what your coach worked on. We’ll turn it into focus points you can train tonight.'))}>
-          <Rise delay={0.1}>
+          <Rise delay={0.1} style={s.grow}>
             <TextInput style={s.taTall} value={a.recall} onChangeText={(t) => set({ recall: t })} multiline
-              textAlignVertical="top"
+              textAlignVertical="top" scrollEnabled
               placeholder="She kept saying my hip wasn’t opening on the rumba walk, and my samba bounce dies halfway through the bar…"
               placeholderTextColor={T.ink3} />
           </Rise>
@@ -893,6 +1036,120 @@ export default function OnboardingScreen({ navigation }) {
             </Rise>
           ))}
         </Q>
+      );
+
+      case 'minorExplain': return (
+        <Q h1="This part needs a grown-up"
+          sub="Because you’re under 18, a parent or guardian holds the account and gives permission for your lessons to be captured.">
+          <Rise delay={0.1}>
+            <Text style={s.para}>They’ll get everything you would — your focus points, your progress. You’ll see it all on their account.</Text>
+          </Rise>
+        </Q>
+      );
+
+      case 'minorParent': return (
+        <Q h1={a.editingInvite ? 'Correct their details' : 'Who’s your parent or guardian?'}>
+          <View style={s.fields}>
+            {!a.editingInvite && (
+              <Rise delay={0}><Field label="Your first name" value={a.name} onChange={(t) => set({ name: t })}
+                placeholder="Emma" autoCapitalize="words" /></Rise>
+            )}
+            <Rise delay={0.04}><Field label="Their first name" value={a.parentFirstName}
+              onChange={(t) => set({ parentFirstName: t })} placeholder="Sarah" autoCapitalize="words" /></Rise>
+            <Rise delay={0.08}><Field label="Their email" value={a.parentEmail} onChange={(t) => set({ parentEmail: t })}
+              placeholder="sarah@email.com" autoCapitalize="none" autoCorrect={false} keyboardType="email-address" /></Rise>
+            <Rise delay={0.12}><Field label="Their mobile number" value={a.parentPhone} onChange={(t) => set({ parentPhone: t })}
+              placeholder="+44 7700 900123" keyboardType="phone-pad" /></Rise>
+          </View>
+          <Text style={s.fieldNote}>We’ll send them a link. Nothing is recorded until they approve.</Text>
+          {!!error && <Text style={s.err}>{error}</Text>}
+        </Q>
+      );
+
+      case 'minorWaiting': {
+        if (a.inviteStatus === 'withdrawn' || a.inviteClosed) return (
+          <Q h1="This invitation is closed"
+            sub="It was withdrawn, or it can’t be used any more. You can start again whenever you’re ready." />
+        );
+        if (a.inviteStatus === 'approved') return (
+          <Q h1={`${a.parentFirstName || 'Your parent'} said yes`}
+            sub="Sign in with their account to see your focus points. Your coach can start capturing your lessons." />
+        );
+        return (
+          <Q h1={`Invitation sent to ${a.parentEmail || a.maskedEmail}`} sub="We’ve also texted them.">
+            <Rise delay={0.1}>
+              <Text style={s.para}>Once they approve, your coach can start capturing your lessons.</Text>
+            </Rise>
+            {a.inviteStatus === 'expired' && <Text style={s.err}>This invitation has expired. Send it again.</Text>}
+            {!!a.inviteNote && <Text style={s.fieldNote}>{a.inviteNote}</Text>}
+            {!!error && <Text style={s.err}>{error}</Text>}
+            <View style={s.waitActs}>
+              <TouchableOpacity style={s.later} onPress={doResend} accessibilityRole="button">
+                <Text style={s.laterT}>Resend</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={s.later} accessibilityRole="button"
+                onPress={() => { setError(''); set({ editingInvite: true }); go('minorParent', -1); }}>
+                <Text style={s.laterT}>Correct their details</Text>
+              </TouchableOpacity>
+            </View>
+          </Q>
+        );
+      }
+
+      case 'parentCode': return (
+        <Q h1="Your invitation" sub="Enter the code from the email, then the 6-digit code we texted you. You need both.">
+          <View style={s.fields}>
+            <Rise delay={0}><Field label="Email code" value={a.invToken} onChange={(t) => set({ invToken: t })}
+              placeholder="ABCD-EFGH-JKMN" autoCapitalize="characters" autoCorrect={false} /></Rise>
+            <Rise delay={0.05}><Field label="Text message code" value={a.invCode}
+              onChange={(t) => set({ invCode: t.replace(/\D/g, '').slice(0, 6) })}
+              placeholder="123456" keyboardType="number-pad" textContentType="oneTimeCode" /></Rise>
+          </View>
+          {!!error && <Text style={s.err}>{error}</Text>}
+        </Q>
+      );
+
+      case 'parentContext': return (
+        <Q big h1={a.consent?.copy?.context?.title || ''} sub={a.consent?.copy?.context?.subtitle || undefined} />
+      );
+
+      case 'parentWhat': return (
+        <Q h1="What happens">
+          {(a.consent?.copy?.what || []).map((line, i) => (
+            <Rise key={line} delay={0.08 + i * 0.05}>
+              <View style={s.bullet}><View style={s.bulletDot} /><Text style={s.bulletT}>{line}</Text></View>
+            </Rise>
+          ))}
+        </Q>
+      );
+
+      case 'parentConsent': return (
+        <Q h1="Your permission">
+          {(a.consent?.copy?.checks || []).map((line, i) => (
+            <Rise key={line} delay={0.08 + i * 0.06}>
+              <CheckRow label={line} on={a.checks[i]}
+                onPress={() => { haptic(); set({ checks: a.checks.map((c, k) => (k === i ? !c : c)) }); }} />
+            </Rise>
+          ))}
+        </Q>
+      );
+
+      case 'parentAccount': return a.consent?.accountExists ? (
+        <Q h1="You already have an account" sub={`${a.consent.parentEmail} — you’ll sign in with your existing password.`}>
+          {!!error && <Text style={s.err}>{error}</Text>}
+        </Q>
+      ) : (
+        <Q h1="Create your account"
+          sub={`This account holds ${a.consent?.childName || 'your child'}’s training. You’ll sign in with ${a.consent?.parentEmail || 'your email'}.`}>
+          <Rise delay={0.05}><Field label="Password" value={a.parentPassword} onChange={(t) => set({ parentPassword: t })}
+            placeholder="At least 8 characters" secureTextEntry textContentType="newPassword" /></Rise>
+          {!!error && <Text style={s.err}>{error}</Text>}
+        </Q>
+      );
+
+      case 'parentDone': return (
+        <Q big h1={`${a.consent?.childName || 'Your child'} is set up`}
+          sub="You’ll receive their focus points after every lesson. Manage everything from your account." />
       );
 
       case 'recap': return (
@@ -1062,12 +1319,20 @@ export default function OnboardingScreen({ navigation }) {
   if (step === 'welcome') {
     return (
       <View style={[s.phone, s.phoneDark, { paddingTop: insets.top, paddingBottom: insets.bottom + 8 }]}>
-        <Welcome onStart={() => go('role')} onSignIn={() => navigation.navigate('Login')} />
+        <Welcome onStart={() => go('role')} onSignIn={() => navigation.navigate('Login')}
+          onInvitation={() => { setError(''); go('parentCode'); }} />
       </View>
     );
   }
 
-  const ctaLabel = step === 'focusLive' ? `Start tonight’s session · ${a.focus.reduce((t, f) => t + f.minutes, 0)} min`
+  const ctaLabel = step === 'age' && isMinor ? 'Continue with a parent'
+    : step === 'minorParent' ? (a.editingInvite ? 'Update and resend' : 'Send invitation')
+    : step === 'minorWaiting' ? (a.inviteStatus === 'withdrawn' || a.inviteClosed ? 'Start again'
+      : a.inviteStatus === 'approved' ? 'Go to sign in' : 'Check again')
+    : step === 'parentConsent' ? 'Give permission'
+    : step === 'parentAccount' ? 'Finish'
+    : step === 'parentDone' ? 'Sign in'
+    : step === 'focusLive' ? `Start tonight’s session · ${a.focus.reduce((t, f) => t + f.minutes, 0)} min`
     : step === 'focusLocked' ? 'See it'
     : step === 'recall' ? 'Build my focus points'
     : step === 'cardLocked' ? 'See it'
@@ -1090,6 +1355,19 @@ export default function OnboardingScreen({ navigation }) {
   }[step];
 
   function onCta() {
+    if (step === 'minorWaiting') {
+      if (a.inviteStatus === 'withdrawn' || a.inviteClosed) {
+        clearPendingInvite();
+        set({ inviteId: '', deviceSecret: '', inviteStatus: '', inviteClosed: false, inviteNote: '',
+          parentFirstName: '', parentEmail: '', parentPhone: '' });
+        setError('');
+        return go('welcome', -1);
+      }
+      if (a.inviteStatus !== 'approved') return refreshInvite();
+      clearPendingInvite();
+      return navigation.navigate('Login');
+    }
+    if (step === 'parentDone') return navigation.navigate('Login');
     if (step === 'account') return submit();
     if (step === 'cardLive' || step === 'focusLive') return setOnboardingHold(false);
     if (step === 'confirm') return navigation.navigate('Login');
@@ -1100,10 +1378,10 @@ export default function OnboardingScreen({ navigation }) {
     <View style={[s.phone, { paddingTop: insets.top }]}>
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         keyboardVerticalOffset={insets.top}>
-        {!['cardLive', 'focusLive', 'confirm', 'analysing'].includes(step) && <TopBar onBack={back} progress={progress} />}
+        {!['cardLive', 'focusLive', 'confirm', 'analysing', 'minorWaiting', 'parentDone'].includes(step) && <TopBar onBack={back} progress={progress} />}
         <ScreenIn step={step} dir={dir}>
           <ScrollView ref={scroller} contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}
-            keyboardShouldPersistTaps="handled">
+            keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive">
             {body()}
           </ScrollView>
         </ScreenIn>
@@ -1122,13 +1400,13 @@ export default function OnboardingScreen({ navigation }) {
 // role-aware copy → the two props Q takes
 const qc = ([h1, sub]) => ({ h1, sub });
 
-function Q({ h1, sub, plan, big, children }) {
+function Q({ h1, sub, plan, big, grow, children }) {
   return (
-    <View>
+    <View style={grow && s.grow}>
       {!!plan && <Text style={s.plan}>{plan}</Text>}
       <Rise><Text style={[s.h1, big && s.h1Big]}>{h1}</Text></Rise>
       {!!sub && <Rise delay={0.05}><Text style={s.sub}>{sub}</Text></Rise>}
-      <View style={s.qbody}>{children}</View>
+      <View style={[s.qbody, grow && s.grow]}>{children}</View>
     </View>
   );
 }
@@ -1152,6 +1430,18 @@ function AddRow({ title, sub, onPress }) {
   );
 }
 
+// A consent box. Never ticked on arrival, and the whole row is the target, so
+// a parent is never hunting for a 22-point square.
+function CheckRow({ label, on, onPress }) {
+  return (
+    <TouchableOpacity style={[s.check, on && s.checkOn]} onPress={onPress} activeOpacity={0.85}
+      accessibilityRole="checkbox" accessibilityState={{ checked: on }}>
+      <View style={[s.box, on && s.boxOn]}>{on ? <Check on size={13} width={3} /> : null}</View>
+      <Text style={s.checkT}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
 // .notice — says what continuing without it actually costs, then offers both
 function Notice({ lead, body, inviteLabel, invited, onInvite, onSkip }) {
   return (
@@ -1163,9 +1453,11 @@ function Notice({ lead, body, inviteLabel, invited, onInvite, onSkip }) {
             activeOpacity={0.85} accessibilityRole="button">
             <Text style={s.inviteT}>{invited ? `${inviteLabel} ✓` : inviteLabel}</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={s.later} onPress={onSkip} activeOpacity={0.85} accessibilityRole="button">
-            <Text style={s.laterT}>Continue anyway</Text>
-          </TouchableOpacity>
+          {!!onSkip && (
+            <TouchableOpacity style={s.later} onPress={onSkip} activeOpacity={0.85} accessibilityRole="button">
+              <Text style={s.laterT}>Continue anyway</Text>
+            </TouchableOpacity>
+          )}
         </View>
       </View>
     </Rise>
@@ -1220,7 +1512,7 @@ function Row({ k, v, onPress, first }) {
 const s = StyleSheet.create({
   phone: { flex: 1, backgroundColor: T.screen },
   phoneDark: { backgroundColor: T.dark },
-  scroll: { paddingHorizontal: 24, paddingBottom: 34 },
+  scroll: { flexGrow: 1, paddingHorizontal: 24, paddingBottom: 34 },
 
   // .top / .back / .shelf
   top: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingHorizontal: 24, paddingTop: 8 },
@@ -1235,6 +1527,21 @@ const s = StyleSheet.create({
   h1Big: { fontSize: 29, lineHeight: 32, letterSpacing: -1, textAlign: 'center' },
   sub: { marginTop: 10, fontFamily: Fonts.travelsRegular, fontSize: 14.5, lineHeight: 21, color: T.ink2 },
   qbody: { marginTop: 22 },
+  grow: { flex: 1, minHeight: 0 },
+  para: { fontFamily: Fonts.travelsRegular, fontSize: 15, lineHeight: 23, color: T.ink2 },
+  fieldNote: { marginTop: 14, fontFamily: Fonts.travelsRegular, fontSize: 13, lineHeight: 19, color: T.ink2 },
+  waitActs: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 22 },
+  bullet: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, paddingVertical: 12,
+    borderBottomWidth: 1, borderBottomColor: T.line },
+  bulletDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: T.gold, marginTop: 8 },
+  bulletT: { flex: 1, fontFamily: Fonts.travelsRegular, fontSize: 15, lineHeight: 22, color: T.ink },
+  check: { flexDirection: 'row', alignItems: 'flex-start', gap: 14, backgroundColor: T.card, borderRadius: 14,
+    borderWidth: 1, borderColor: T.line2, paddingVertical: 16, paddingHorizontal: 16, marginBottom: 10 },
+  checkOn: { borderWidth: 2, borderColor: T.gold, paddingVertical: 15, paddingHorizontal: 15 },
+  box: { width: 22, height: 22, borderRadius: 6, borderWidth: 1.5, borderColor: 'rgba(10,10,10,0.30)',
+    alignItems: 'center', justifyContent: 'center', marginTop: 1 },
+  boxOn: { backgroundColor: T.gold, borderColor: T.gold },
+  checkT: { flex: 1, fontFamily: Fonts.travelsRegular, fontSize: 14.5, lineHeight: 21, color: T.ink },
   lead: { marginTop: 14, fontFamily: Fonts.travelsRegular, fontSize: 13.5, lineHeight: 20, color: T.ink2, textAlign: 'center' },
   err: { marginTop: 14, fontFamily: Fonts.travelsMedium, fontSize: 13, lineHeight: 19, color: '#A3281B' },
 
@@ -1363,7 +1670,7 @@ const s = StyleSheet.create({
   inviteT: { fontFamily: Fonts.ttDemiBold, fontSize: 12.5, color: '#fff' },
 
   // screen 09/10/11
-  taTall: { height: 168, borderWidth: 1, borderColor: T.line3, borderRadius: 12, backgroundColor: T.card,
+  taTall: { flex: 1, minHeight: 150, borderWidth: 1, borderColor: T.line3, borderRadius: 12, backgroundColor: T.card,
     padding: 15, fontFamily: Fonts.travelsRegular, fontSize: 15, lineHeight: 22, color: T.ink },
   load: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 30, paddingTop: 90 },
   orb: { width: 72, height: 72, borderRadius: 36, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },

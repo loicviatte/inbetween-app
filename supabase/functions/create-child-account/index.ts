@@ -102,6 +102,10 @@ Deno.serve(async (req: Request) => {
     // Which side the coach teaches follows the style the parent chose.
     const col = body.danceStyle === 'Ballroom' ? 'ballroom_coach_id' : 'latin_coach_id'
     await admin.from('users').update({ [col]: body.coachId }).eq('id', childId)
+    // The coach's roster reads coach_requests, not these columns: without a
+    // request the child never appears in their student list.
+    const cats = body.danceStyle === 'Latin & Ballroom' ? ['latin', 'ballroom'] : [body.danceStyle === 'Ballroom' ? 'ballroom' : 'latin']
+    await admin.from('coach_requests').insert(cats.map((category) => ({ coach_id: body.coachId, student_id: childId, status: 'pending', category })))
   }
 
   const points = (Array.isArray(body.focusPoints) ? body.focusPoints : []).slice(0, 5)
