@@ -27,6 +27,10 @@ const TICKET_TTL_MIN = 30
 const MAX_VERIFY_ATTEMPTS = 5
 const RESEND_MIN_INTERVAL_S = 60
 const MAX_RESENDS = 5
+// SMS is off for now: the parent proves the email channel only and no mobile
+// number is collected. Flip this once Twilio is configured and the app asks for
+// the number again — the code paths below are kept, not deleted.
+const SMS_ENABLED = false
 const MINOR_AGES = ['Juvenile', 'Junior', 'Youth']
 const MANAGED_DOMAIN = 'managed.useinbetween.com'
 // The only URL scheme the installed build registers (not `inbetween`).
@@ -64,7 +68,7 @@ const maskEmail = (e: string) => {
   const [u, d] = e.split('@')
   return `${u.slice(0, 1)}${'•'.repeat(Math.max(1, Math.min(6, u.length - 1)))}@${d}`
 }
-const maskPhone = (p: string) => `${p.slice(0, 3)} ••• ••${p.slice(-2)}`
+const maskPhone = (p: string | null) => (p ? `${p.slice(0, 3)} ••• ••${p.slice(-2)}` : null)
 const ipOf = (req: Request) => req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown'
 const hoursFromNow = (h: number) => new Date(Date.now() + h * 3600000).toISOString()
 
@@ -92,9 +96,10 @@ function consentCopy(child: string, coach: string | null) {
 // ── delivery ────────────────────────────────────────────────────────────────
 function deliveryMode(): 'live' | 'test' | null {
   const env = (k: string) => Deno.env.get(k)
-  const live = env('RESEND_API_KEY') && env('CONSENT_EMAIL_FROM')
-    && env('TWILIO_ACCOUNT_SID') && env('TWILIO_AUTH_TOKEN')
+  const emailLive = env('RESEND_API_KEY') && env('CONSENT_EMAIL_FROM')
+  const smsLive = env('TWILIO_ACCOUNT_SID') && env('TWILIO_AUTH_TOKEN')
     && (env('TWILIO_FROM') || env('TWILIO_MESSAGING_SERVICE_SID'))
+  const live = emailLive && (!SMS_ENABLED || smsLive)
   if (live) return 'live'
   if (env('CONSENT_TEST_MODE') === 'on') return 'test'
   return null
@@ -142,11 +147,11 @@ async function deliverInvite(mode: 'live' | 'test', row: Row, token: string, cod
     `${child} wants to use InBetween${coach ? ` with their coach ${coach}` : ''}. Because ${child} is under 18, nothing is recorded until you approve.`, '',
     'On your phone, open this link:', `${APP_SCHEME}://consent?token=${formatToken(token)}`, '',
     'Or open the InBetween app, choose "I have a parent invitation" and enter this code:', formatToken(token), '',
-    "We've also sent you a text message with a 6-digit code. You'll need both.",
+    ...(SMS_ENABLED ? ["We've also sent you a text message with a 6-digit code. You'll need both."] : []),
     `This invitation expires in ${INVITE_TTL_H} hours.`,
   ].join('\n')
   await sendEmail(mode, row.parent_email, `${child} needs your permission on InBetween`, text)
-  await sendSms(mode, row.parent_phone,
+  if (SMS_ENABLED && row.parent_phone) await sendSms(mode, row.parent_phone,
     `InBetween: your code to approve ${child}'s account is ${code}. It expires in ${INVITE_TTL_H} hours.`)
 }
 
@@ -182,14 +187,14 @@ async function invite(admin: SupabaseClient, b: Row, ip: string) {
   if (!childName) return json({ error: 'Add your first name.' }, 400)
   if (!parentFirst) return json({ error: "Add your parent's first name." }, 400)
   if (!EMAIL_RE.test(parentEmail)) return json({ error: "That email doesn't look right." }, 400)
-  if (!parentPhone) return json({ error: 'Add the mobile number with its country code, like +44 7700 900123.' }, 400)
+  if (SMS_ENABLED && !parentPhone) return json({ error: 'Add the mobile number with its country code, like +44 7700 900123.' }, 400)
   if (!MINOR_AGES.includes(str(b.ageCategory, 20))) return json({ error: 'This invitation is only for students under 18.' }, 400)
 
   const mode = deliveryMode()
   if (!mode) return json({ error: "Parent verification isn't available yet. Try again soon." }, 503)
   if (await limited(admin, `invite:ip:${ip}`, 5, 3600)) return json({ error: 'Too many invitations from here. Try again later.' }, 429)
   if (await limited(admin, `invite:email:${await sha256(parentEmail)}`, 3, 86400)
-    || await limited(admin, `invite:phone:${await sha256(parentPhone)}`, 3, 86400)) {
+    || (parentPhone && await limited(admin, `invite:phone:${await sha256(parentPhone)}`, 3, 86400))) {
     return json({ error: 'This parent has already been invited several times today.' }, 429)
   }
 
@@ -234,8 +239,8 @@ async function invite(admin: SupabaseClient, b: Row, ip: string) {
   const deviceSecret = randomCode(32)
   const { data: row, error: cErr } = await admin.from('parental_consents').insert({
     child_id: childId, child_name: childName, coach_id: coachId, coach_name: coachName,
-    parent_first_name: parentFirst, parent_email: parentEmail, parent_phone: parentPhone,
-    email_token_hash: s.tokenHash, sms_code_hash: s.codeHash, device_secret_hash: await sha256(deviceSecret),
+    parent_first_name: parentFirst, parent_email: parentEmail, parent_phone: parentPhone || null,
+    email_token_hash: s.tokenHash, sms_code_hash: SMS_ENABLED ? s.codeHash : null, device_secret_hash: await sha256(deviceSecret),
     expires_at: hoursFromNow(INVITE_TTL_H), last_sent_at: new Date().toISOString(),
     delivery_mode: mode, terms_version: TERMS_VERSION,
   }).select('*').single()
@@ -276,7 +281,7 @@ async function reissue(admin: SupabaseClient, row: Row, contact: Row = {}) {
   const s = await freshSecrets()
   const { data: next, error } = await admin.from('parental_consents').update({
     ...contact,
-    email_token_hash: s.tokenHash, sms_code_hash: s.codeHash, verify_attempts: 0, status: 'pending',
+    email_token_hash: s.tokenHash, sms_code_hash: SMS_ENABLED ? s.codeHash : null, verify_attempts: 0, status: 'pending',
     expires_at: hoursFromNow(INVITE_TTL_H), last_sent_at: new Date().toISOString(),
     resend_count: row.resend_count + 1, delivery_mode: mode, ticket_hash: null, ticket_expires_at: null,
   }).eq('id', row.id).select('*').single()
@@ -297,16 +302,17 @@ async function update(admin: SupabaseClient, b: Row, ip: string) {
   const parentFirst = str(b.parentFirstName, 60) || row.parent_first_name
   const parentEmail = str(b.parentEmail, 120).toLowerCase(), parentPhone = normPhone(b.parentPhone)
   if (!EMAIL_RE.test(parentEmail)) return json({ error: "That email doesn't look right." }, 400)
-  if (!parentPhone) return json({ error: 'Add the mobile number with its country code, like +44 7700 900123.' }, 400)
+  if (SMS_ENABLED && !parentPhone) return json({ error: 'Add the mobile number with its country code, like +44 7700 900123.' }, 400)
   if (await limited(admin, `invite:ip:${ip}`, 5, 3600)) return json({ error: 'Too many invitations from here. Try again later.' }, 429)
-  return reissue(admin, row, { parent_first_name: parentFirst, parent_email: parentEmail, parent_phone: parentPhone })
+  return reissue(admin, row, { parent_first_name: parentFirst, parent_email: parentEmail, parent_phone: parentPhone || row.parent_phone || null })
 }
 
 // ── the parent ──────────────────────────────────────────────────────────────
 async function verify(admin: SupabaseClient, b: Row, ip: string) {
   if (await limited(admin, `verify:ip:${ip}`, 20, 3600)) return json({ error: 'Too many attempts. Try again later.' }, 429)
   const token = normToken(b.token), code = str(b.code, 12).replace(/\D/g, '')
-  if (token.length !== 12 || code.length !== 6) return json({ error: 'Enter both codes.' }, 400)
+  if (token.length !== 12) return json({ error: 'Enter the code from the email.' }, 400)
+  if (SMS_ENABLED && code.length !== 6) return json({ error: 'Enter both codes.' }, 400)
 
   const { data: row } = await admin.from('parental_consents').select('*')
     .eq('email_token_hash', await sha256(token)).eq('status', 'pending').maybeSingle()
@@ -316,18 +322,18 @@ async function verify(admin: SupabaseClient, b: Row, ip: string) {
     return json({ error: 'This invitation has expired. Ask for a new one.' }, 410)
   }
   if (row.verify_attempts >= MAX_VERIFY_ATTEMPTS) return json({ error: 'Too many wrong codes. Ask for a new invitation.' }, 423)
-  if (row.sms_code_hash !== await sha256(code)) {
+  if (SMS_ENABLED && row.sms_code_hash !== await sha256(code)) {
     await admin.from('parental_consents').update({ verify_attempts: row.verify_attempts + 1 }).eq('id', row.id)
     return json({ error: "The text message code doesn't match." }, 401)
   }
 
-  // Both channels have now answered: the email code found the invitation, the
-  // SMS code matched it.
+  // The email code found the invitation (and, when SMS is on, the SMS code
+  // matched it). A channel that was never used is never stamped as verified.
   const ticket = randomCode(40)
   const now = new Date().toISOString()
   await admin.from('parental_consents').update({
     email_verified_at: row.email_verified_at || now,
-    phone_verified_at: row.phone_verified_at || now,
+    phone_verified_at: SMS_ENABLED ? (row.phone_verified_at || now) : null,
     ticket_hash: await sha256(ticket),
     ticket_expires_at: new Date(Date.now() + TICKET_TTL_MIN * 60000).toISOString(),
   }).eq('id', row.id)

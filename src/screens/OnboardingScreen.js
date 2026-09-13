@@ -317,7 +317,6 @@ const PARENT_COPY = {
 // offers the parent account rather than blocking the person outright.
 const MINOR_AGES = ['Juvenile', 'Junior', 'Youth'];
 const EMAIL_OK = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
-const PHONE_OK = (v) => /^\+[0-9]{8,15}$/.test((v || '').replace(/[\s().-]/g, ''));
 const STYLES = [
   { v: 'Latin', t: 'Latin', d: 'Cha Cha · Rumba · Samba · Paso · Jive' },
   { v: 'Ballroom', t: 'Ballroom', d: 'Waltz · Tango · Foxtrot · Quickstep · Viennese' },
@@ -660,7 +659,7 @@ export default function OnboardingScreen({ navigation }) {
   async function sendInvite() {
     setError(''); setBusy(true);
     const contact = {
-      parentFirstName: a.parentFirstName.trim(), parentEmail: a.parentEmail.trim(), parentPhone: a.parentPhone.trim(),
+      parentFirstName: a.parentFirstName.trim(), parentEmail: a.parentEmail.trim(),
     };
     try {
       let inviteId = a.inviteId, deviceSecret = a.deviceSecret, maskedEmail;
@@ -833,9 +832,9 @@ export default function OnboardingScreen({ navigation }) {
     recall: a.recall.trim().length > 11, analysing: false, focusLocked: true, focusLive: true,
     minorExplain: true,
     minorParent: !!((a.editingInvite || a.name.trim()) && a.parentFirstName.trim()
-      && EMAIL_OK.test(a.parentEmail.trim()) && PHONE_OK(a.parentPhone)),
+      && EMAIL_OK.test(a.parentEmail.trim())),
     minorWaiting: true,
-    parentCode: a.invToken.replace(/[^A-Za-z0-9]/g, '').length === 12 && /^[0-9]{6}$/.test(a.invCode),
+    parentCode: a.invToken.replace(/[^A-Za-z0-9]/g, '').length === 12,
     parentContext: true, parentWhat: true,
     parentConsent: a.checks.every(Boolean),
     parentAccount: !!a.consent && (a.consent.accountExists || a.parentPassword.length >= 8),
@@ -1058,8 +1057,6 @@ export default function OnboardingScreen({ navigation }) {
               onChange={(t) => set({ parentFirstName: t })} placeholder="Sarah" autoCapitalize="words" /></Rise>
             <Rise delay={0.08}><Field label="Their email" value={a.parentEmail} onChange={(t) => set({ parentEmail: t })}
               placeholder="sarah@email.com" autoCapitalize="none" autoCorrect={false} keyboardType="email-address" /></Rise>
-            <Rise delay={0.12}><Field label="Their mobile number" value={a.parentPhone} onChange={(t) => set({ parentPhone: t })}
-              placeholder="+44 7700 900123" keyboardType="phone-pad" /></Rise>
           </View>
           <Text style={s.fieldNote}>We’ll send them a link. Nothing is recorded until they approve.</Text>
           {!!error && <Text style={s.err}>{error}</Text>}
@@ -1076,7 +1073,7 @@ export default function OnboardingScreen({ navigation }) {
             sub="Sign in with their account to see your focus points. Your coach can start capturing your lessons." />
         );
         return (
-          <Q h1={`Invitation sent to ${a.parentEmail || a.maskedEmail}`} sub="We’ve also texted them.">
+          <Q h1={`Invitation sent to ${a.parentEmail || a.maskedEmail}`}>
             <Rise delay={0.1}>
               <Text style={s.para}>Once they approve, your coach can start capturing your lessons.</Text>
             </Rise>
@@ -1097,13 +1094,10 @@ export default function OnboardingScreen({ navigation }) {
       }
 
       case 'parentCode': return (
-        <Q h1="Your invitation" sub="Enter the code from the email, then the 6-digit code we texted you. You need both.">
+        <Q h1="Your invitation" sub="Enter the code from the email we sent you.">
           <View style={s.fields}>
             <Rise delay={0}><Field label="Email code" value={a.invToken} onChange={(t) => set({ invToken: t })}
               placeholder="ABCD-EFGH-JKMN" autoCapitalize="characters" autoCorrect={false} /></Rise>
-            <Rise delay={0.05}><Field label="Text message code" value={a.invCode}
-              onChange={(t) => set({ invCode: t.replace(/\D/g, '').slice(0, 6) })}
-              placeholder="123456" keyboardType="number-pad" textContentType="oneTimeCode" /></Rise>
           </View>
           {!!error && <Text style={s.err}>{error}</Text>}
         </Q>
