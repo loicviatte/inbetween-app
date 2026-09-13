@@ -15,6 +15,7 @@
 //
 // Called with the PARENT's JWT. Everything it writes is scoped to that parent.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { TERMS_VERSION, consentCopy } from '../_shared/consentCopy.ts'
 
 const MANAGED_DOMAIN = 'managed.useinbetween.com'
 
@@ -39,12 +40,24 @@ Deno.serve(async (req: Request) => {
     studioId?: string | null; coachId?: string | null
     lessonsPerMonth?: number; soloFrequency?: string; weeklyGoalMinutes?: number
     focusPoints?: unknown
+    consent?: unknown; parentFirstName?: unknown
   }
   try { body = await req.json() } catch { return json({ error: 'Invalid JSON' }, 400) }
 
   // Called with a JWT, but a signed-in caller can still post nonsense.
   const childName = (typeof body.childName === 'string' ? body.childName : '').trim().slice(0, 80)
   if (childName.length < 1) return json({ error: 'The child needs a name.' }, 400)
+
+  // No child without a permission: the same three statements an invited parent
+  // ticks, in the wording of the version they were actually shown.
+  const consent = body.consent && typeof body.consent === 'object' ? body.consent as Record<string, unknown> : {}
+  const checks = Array.isArray(consent.checks) ? consent.checks : []
+  if (checks.length !== 3 || !checks.every((c) => c === true)) {
+    return json({ error: 'All three boxes need to be ticked.' }, 400)
+  }
+  if (consent.termsVersion !== TERMS_VERSION) {
+    return json({ error: 'The permission wording has changed. Go back and read it again.', termsVersion: TERMS_VERSION }, 409)
+  }
 
   // Same parent, same name → a retry, not a second dancer. Any other name is a
   // sibling and gets their own profile.
@@ -92,6 +105,37 @@ Deno.serve(async (req: Request) => {
   if (linkErr) {
     await admin.auth.admin.deleteUser(childId)
     return json({ error: 'Could not link the child to your account.', detail: linkErr.message }, 500)
+  }
+
+  // The proof first, then the permission it records — and never a child
+  // without its proof: if either write fails, the child is not created.
+  let coachName: string | null = null
+  if (body.coachId) {
+    const { data: coach } = await admin.from('users').select('name, role').eq('id', body.coachId).maybeSingle()
+    if (coach?.role === 'coach') coachName = coach.name || null
+  }
+  const parentFirst = (typeof body.parentFirstName === 'string' && body.parentFirstName.trim())
+    || String(parent.user_metadata?.name || 'Parent')
+  const { error: proofErr } = await admin.from('parental_consents').insert({
+    consent_method: 'parent_signup', status: 'approved',
+    child_id: childId, child_name: childName, coach_id: body.coachId || null, coach_name: coachName,
+    parent_first_name: parentFirst.slice(0, 60), parent_email: parent.email || '',
+    approved_at: new Date().toISOString(),
+    approved_ip: req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown',
+    consent_text: consentCopy(childName, coachName), terms_version: TERMS_VERSION,
+    guardian_id: parent.id,
+    // signed in, but the address was never proven with a code: not stamped verified
+    email_verified_at: null, delivery_mode: null,
+  })
+  if (proofErr) {
+    await admin.auth.admin.deleteUser(childId)
+    return json({ error: "We couldn't record your permission.", detail: proofErr.message }, 500)
+  }
+  const { error: grantErr } = await admin.from('users').update({ consent_status: 'granted' }).eq('id', childId)
+  if (grantErr) {
+    await admin.from('parental_consents').delete().eq('child_id', childId)
+    await admin.auth.admin.deleteUser(childId)
+    return json({ error: "We couldn't record your permission." }, 500)
   }
 
   // The first child becomes the one the app follows; a sibling does not steal

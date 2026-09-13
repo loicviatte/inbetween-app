@@ -39,7 +39,7 @@ import {
 import CoachCard from '../components/CoachCard';
 import {
   inviteParent, getInviteStatus, resendInvite, updateInvite, verifyInvitation, approveInvitation,
-  savePendingInvite, loadPendingInvite, clearPendingInvite, tokenFromUrl,
+  savePendingInvite, loadPendingInvite, clearPendingInvite, tokenFromUrl, getConsentCopy,
 } from '../services/minorConsent';
 
 // ── tokens, straight from the comp's stylesheet ──────────────────────────────
@@ -373,7 +373,7 @@ const COACH_FLOW = ['role', 'style', 'studio', 'recap', 'correct', 'words', 'sig
 const STUDENT_FLOW = ['role', 'style', 'level', 'age', 'solo', 'lessons', 'studio', 'coach', 'recap'];
 // A parent first says whether their child already invited them: with a code
 // they approve that account, without one they set the child up themselves.
-const PARENT_FLOW = ['role', 'parentEntry', 'style', 'level', 'age', 'solo', 'lessons', 'studio', 'coach', 'recap'];
+const PARENT_FLOW = ['role', 'parentEntry', 'childName', 'style', 'level', 'age', 'solo', 'lessons', 'studio', 'coach', 'recap'];
 // Under 18: the explanation comes straight after the age, the coach is still
 // chosen (their parent is told who it is), and the recall is gone — a minor's
 // account of a lesson is not sent to an AI before a parent has approved.
@@ -506,7 +506,7 @@ export default function OnboardingScreen({ navigation }) {
     recall: '', focus: [],
     parentFirstName: '', parentEmail: '', parentPhone: '',
     inviteId: '', deviceSecret: '', maskedEmail: '', inviteStatus: '', inviteNote: '', editingInvite: false, inviteClosed: false,
-    invToken: '', invCode: '', consent: null, checks: [false, false, false], parentPassword: '', hasInvite: null,
+    invToken: '', invCode: '', consent: null, checks: [false, false, false], parentPassword: '', hasInvite: null, signupCopy: null,
     alloc: { Technique: 40, Musicality: 25, Mental: 20, Performance: 15 },
     name: '', childName: '', email: '', password: '', slug: '',
   });
@@ -616,6 +616,11 @@ export default function OnboardingScreen({ navigation }) {
     if (step === 'parentConsent') return go('parentAccount');
     if (step === 'parentAccount') return runApprove();
     if (step === 'cred') return go('cardLocked');
+    // A parent setting their child up gives the permission an invited parent
+    // gives — and before the child's lesson is ever sent anywhere.
+    if (step === 'recap' && isParent) return loadSignupCopy();
+    if (step === 'signupWhat') return go('signupConsent');
+    if (step === 'signupConsent') return go('recall');
     if (step === 'recap' && !isCoach) return go('recall');
     if (step === 'recall') return runRecall();
     if (step === 'cardLocked' || step === 'planReady' || step === 'focusLocked') return go('account');
@@ -631,7 +636,9 @@ export default function OnboardingScreen({ navigation }) {
     if (step === 'parentAccount') return go('parentConsent', -1);
     if (step === 'account') return go(isCoach ? 'cardLocked' : (a.focus.length ? 'focusLocked' : 'planReady'), -1);
     if (step === 'cardLocked') return go('cred', -1);
-    if (step === 'planReady' || step === 'recall') return go('recap', -1);
+    if (step === 'signupConsent') return go('signupWhat', -1);
+    if (step === 'signupWhat') return go('recap', -1);
+    if (step === 'planReady' || step === 'recall') return go(isParent ? 'signupConsent' : 'recap', -1);
     if (step === 'focusLocked' || step === 'analysing') return go('recall', -1);
     if (i > 0) return go(flow[i - 1], -1);
     if (i === 0) return go('welcome', -1);
@@ -727,6 +734,21 @@ export default function OnboardingScreen({ navigation }) {
     }
   }
 
+  async function loadSignupCopy() {
+    setError(''); setBusy(true);
+    try {
+      const r = await getConsentCopy(a.childName.trim(), a.coachId || null);
+      // every box starts empty, every time the wording is shown
+      set({ signupCopy: r, checks: [false, false, false] });
+    } catch (e) {
+      set({ signupCopy: null });
+      setError(e.message);
+    } finally {
+      setBusy(false);
+      go('signupWhat');
+    }
+  }
+
   async function runRecall() {
     setError('');
     go('analysing');
@@ -795,6 +817,8 @@ export default function OnboardingScreen({ navigation }) {
         // row needs an auth account and only the service role can make one.
         const { error: childErr } = await createChildAccount({
           childName: a.childName.trim(),
+          parentFirstName: a.name.trim().split(/\s+/)[0],
+          consent: { checks: a.checks, termsVersion: a.signupCopy?.termsVersion },
           danceStyle: a.style,
           level: a.level,
           ageCategory: a.age,
@@ -841,6 +865,9 @@ export default function OnboardingScreen({ navigation }) {
       && EMAIL_OK.test(a.parentEmail.trim())),
     minorWaiting: true,
     parentEntry: a.hasInvite !== null,
+    childName: a.childName.trim().length > 0,
+    signupWhat: !!a.signupCopy,
+    signupConsent: !!a.signupCopy && a.checks.every(Boolean),
     parentCode: a.invToken.trim().length > 0,
     parentContext: true, parentWhat: true,
     parentConsent: a.checks.every(Boolean),
@@ -1038,6 +1065,35 @@ export default function OnboardingScreen({ navigation }) {
                 <Text style={s.fpB}>{f.name}</Text>
                 <Text style={s.fpS}>{f.drills} drills · {f.minutes} min{f.subtitle ? ` · ${f.subtitle}` : ''}</Text>
               </View>
+            </Rise>
+          ))}
+        </Q>
+      );
+
+      case 'childName': return (
+        <Q plan={planLine} h1="What’s your child’s first name?" sub="Everything from here is about them.">
+          <Rise delay={0.1}><Field label="Their first name" value={a.childName}
+            onChange={(t) => set({ childName: t })} placeholder="Emma" autoCapitalize="words" /></Rise>
+        </Q>
+      );
+
+      case 'signupWhat': return (
+        <Q h1="What happens">
+          {(a.signupCopy?.copy?.what || []).map((line, i) => (
+            <Rise key={line} delay={0.08 + i * 0.05}>
+              <View style={s.bullet}><View style={s.bulletDot} /><Text style={s.bulletT}>{line}</Text></View>
+            </Rise>
+          ))}
+          {!!error && <Text style={s.err}>{error} Go back and try again.</Text>}
+        </Q>
+      );
+
+      case 'signupConsent': return (
+        <Q h1="Your permission">
+          {(a.signupCopy?.copy?.checks || []).map((line, i) => (
+            <Rise key={line} delay={0.08 + i * 0.06}>
+              <CheckRow label={line} on={a.checks[i]}
+                onPress={() => { haptic(); set({ checks: a.checks.map((c, k) => (k === i ? !c : c)) }); }} />
             </Rise>
           ))}
         </Q>
@@ -1317,10 +1373,6 @@ export default function OnboardingScreen({ navigation }) {
           <View style={s.fields}>
             <Rise delay={0}><Field label="Your name" value={a.name} onChange={(t) => set({ name: t })}
               placeholder="Alexandra Lambert" autoCapitalize="words" textContentType="name" /></Rise>
-            {isParent && (
-              <Rise delay={0.03}><Field label="Your child’s name" value={a.childName}
-                onChange={(t) => set({ childName: t })} placeholder="Léa Lambert" autoCapitalize="words" /></Rise>
-            )}
             <Rise delay={0.06}><Field label="Email" value={a.email} onChange={(t) => set({ email: t })}
               placeholder="you@example.com" autoCapitalize="none" keyboardType="email-address" textContentType="emailAddress" /></Rise>
             <Rise delay={0.12}><Field label="Password" value={a.password} onChange={(t) => set({ password: t })}
@@ -1344,7 +1396,7 @@ export default function OnboardingScreen({ navigation }) {
     : step === 'minorParent' ? (a.editingInvite ? 'Update and resend' : 'Send invitation')
     : step === 'minorWaiting' ? (a.inviteStatus === 'withdrawn' || a.inviteClosed ? 'Start again'
       : a.inviteStatus === 'approved' ? 'Go to sign in' : 'Check again')
-    : step === 'parentConsent' ? 'Give permission'
+    : step === 'parentConsent' || step === 'signupConsent' ? 'Give permission'
     : step === 'parentAccount' ? 'Finish'
     : step === 'parentDone' ? 'Sign in'
     : step === 'focusLive' ? `Start tonight’s session · ${a.focus.reduce((t, f) => t + f.minutes, 0)} min`

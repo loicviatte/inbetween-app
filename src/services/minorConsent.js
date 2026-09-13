@@ -30,6 +30,9 @@ export const updateInvite = (inviteId, deviceSecret, contact) => call('update', 
 export const verifyInvitation = (token, code) => call('verify', { token, code });
 export const approveInvitation = (ticket, checks, password) => call('approve', { ticket, checks, password });
 export const withdrawChild = (childId) => call('withdraw', { childId });
+// The permission wording for a parent setting a child up themselves — the same
+// text, from the same place, that an invited parent reads.
+export const getConsentCopy = (childName, coachId) => call('copy', { childName, coachId });
 
 // The waiting student's invitation survives the app being closed, so reopening
 // returns to it instead of starting a second pending profile.

@@ -24,7 +24,7 @@ import TabHeader from '../components/TabHeader';
 import { saveUserPreferences, getAccountUser, saveAccountName, clearSubjectCache, invalidateCache } from '../storage/storage';
 import { isGuardian, listChildren, setActiveChild } from '../storage/guardianStorage';
 import { createChildAccount } from '../services/childAccount';
-import { withdrawChild } from '../services/minorConsent';
+import { withdrawChild, getConsentCopy } from '../services/minorConsent';
 import ProfileDashboard from '../components/ProfileDashboard';
 import ProfileSkeleton from '../components/ProfileSkeleton';
 import StudioPicker from '../components/StudioPicker';
@@ -669,51 +669,102 @@ function SettingSwitch({ label, value, onChange, isLast }) {
 function AddChildModal({ visible, onClose, onCreated }) {
   const [name, setName] = useState('');
   const [style, setStyle] = useState('Latin');
+  const [copy, setCopy] = useState(null);        // the permission wording, once fetched
+  const [checks, setChecks] = useState([false, false, false]);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState('');
 
-  useEffect(() => { if (visible) { setName(''); setStyle('Latin'); setErr(''); } }, [visible]);
+  useEffect(() => {
+    if (visible) { setName(''); setStyle('Latin'); setCopy(null); setChecks([false, false, false]); setErr(''); }
+  }, [visible]);
+
+  // A child added here gets the same permission, in the same words, as one set
+  // up at sign-up or approved from an invitation. The wording names the child,
+  // so it is fetched once the name is in.
+  async function toPermission() {
+    setSaving(true); setErr('');
+    try {
+      setCopy(await getConsentCopy(name.trim(), null));
+      setChecks([false, false, false]);
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setSaving(false);
+    }
+  }
 
   async function save() {
-    if (!name.trim()) return;
     setSaving(true); setErr('');
-    const res = await createChildAccount({ childName: name.trim(), danceStyle: style });
+    const res = await createChildAccount({
+      childName: name.trim(), danceStyle: style,
+      consent: { checks, termsVersion: copy?.termsVersion },
+    });
     setSaving(false);
     if (res.error) { setErr(res.error); return; }
     onCreated();
   }
 
+  const allTicked = checks.every(Boolean);
+
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View style={ac.backdrop}>
         <View style={ac.sheet}>
-          <Text style={ac.title}>Add a child</Text>
-          <Text style={ac.sub}>They get their own training, focus points and coach.</Text>
+          {!copy ? (
+            <>
+              <Text style={ac.title}>Add a child</Text>
+              <Text style={ac.sub}>They get their own training, focus points and coach.</Text>
 
-          <Text style={ac.label}>NAME</Text>
-          <View style={ac.field}>
-            <TextInput style={ac.input} value={name} onChangeText={setName} placeholder="Noah Lambert"
-              placeholderTextColor="rgba(10,10,10,0.42)" autoCapitalize="words" autoFocus />
-          </View>
+              <Text style={ac.label}>NAME</Text>
+              <View style={ac.field}>
+                <TextInput style={ac.input} value={name} onChangeText={setName} placeholder="Noah"
+                  placeholderTextColor="rgba(10,10,10,0.42)" autoCapitalize="words" autoFocus />
+              </View>
 
-          <Text style={ac.label}>DANCE STYLE</Text>
-          <View style={ac.styles}>
-            {['Latin', 'Ballroom', 'Latin & Ballroom'].map((v) => (
-              <TouchableOpacity key={v} style={[ac.chip, style === v && ac.chipOn]} onPress={() => setStyle(v)}
-                activeOpacity={0.85} accessibilityRole="radio" accessibilityState={{ selected: style === v }}>
-                <Text style={[ac.chipT, style === v && ac.chipTOn]}>{v === 'Latin & Ballroom' ? 'Both' : v}</Text>
+              <Text style={ac.label}>DANCE STYLE</Text>
+              <View style={ac.styles}>
+                {['Latin', 'Ballroom', 'Latin & Ballroom'].map((v) => (
+                  <TouchableOpacity key={v} style={[ac.chip, style === v && ac.chipOn]} onPress={() => setStyle(v)}
+                    activeOpacity={0.85} accessibilityRole="radio" accessibilityState={{ selected: style === v }}>
+                    <Text style={[ac.chipT, style === v && ac.chipTOn]}>{v === 'Latin & Ballroom' ? 'Both' : v}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              {!!err && <Text style={ac.err}>{err}</Text>}
+              <TouchableOpacity style={[ac.save, (!name.trim() || saving) && ac.saveOff]} onPress={toPermission}
+                disabled={!name.trim() || saving} activeOpacity={0.88}>
+                <Text style={ac.saveT}>{saving ? 'Loading…' : 'Continue'}</Text>
               </TouchableOpacity>
-            ))}
-          </View>
+            </>
+          ) : (
+            <ScrollView style={ac.scroll} showsVerticalScrollIndicator={false}>
+              <Text style={ac.title}>What happens</Text>
+              {copy.copy.what.map((line) => (
+                <View key={line} style={ac.bullet}><View style={ac.dot} /><Text style={ac.bulletT}>{line}</Text></View>
+              ))}
 
-          {!!err && <Text style={ac.err}>{err}</Text>}
+              <Text style={[ac.label, ac.labelGap]}>YOUR PERMISSION</Text>
+              {copy.copy.checks.map((line, i) => (
+                <TouchableOpacity key={line} style={[ac.check, checks[i] && ac.checkOn]}
+                  onPress={() => setChecks(checks.map((c, k) => (k === i ? !c : c)))}
+                  activeOpacity={0.85} accessibilityRole="checkbox" accessibilityState={{ checked: checks[i] }}>
+                  <View style={[ac.box, checks[i] && ac.boxOn]}>
+                    {checks[i] ? <Ionicons name="checkmark" size={14} color="#141311" /> : null}
+                  </View>
+                  <Text style={ac.checkT}>{line}</Text>
+                </TouchableOpacity>
+              ))}
 
-          <TouchableOpacity style={[ac.save, (!name.trim() || saving) && ac.saveOff]} onPress={save}
-            disabled={!name.trim() || saving} activeOpacity={0.88}>
-            <Text style={ac.saveT}>{saving ? 'Adding…' : 'Add'}</Text>
-          </TouchableOpacity>
-          <TouchableOpacity onPress={onClose} style={ac.cancel} activeOpacity={0.7}>
-            <Text style={ac.cancelT}>Cancel</Text>
+              {!!err && <Text style={ac.err}>{err}</Text>}
+              <TouchableOpacity style={[ac.save, (!allTicked || saving) && ac.saveOff]} onPress={save}
+                disabled={!allTicked || saving} activeOpacity={0.88}>
+                <Text style={ac.saveT}>{saving ? 'Adding…' : 'Give permission and add'}</Text>
+              </TouchableOpacity>
+            </ScrollView>
+          )}
+          <TouchableOpacity onPress={copy ? () => { setCopy(null); setErr(''); } : onClose} style={ac.cancel} activeOpacity={0.7}>
+            <Text style={ac.cancelT}>{copy ? 'Back' : 'Cancel'}</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -2304,6 +2355,19 @@ const ac = StyleSheet.create({
   saveT: { fontFamily: Fonts.ttDemiBold, fontSize: 15.5, color: '#141311' },
   cancel: { marginTop: 10, alignSelf: 'center', padding: 8 },
   cancelT: { fontFamily: Fonts.ttRegular, fontSize: 13.5, color: '#6B6656' },
+  scroll: { maxHeight: 540 },
+  labelGap: { marginTop: 22 },
+  bullet: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, paddingVertical: 9,
+    borderBottomWidth: 1, borderBottomColor: 'rgba(20,19,17,0.07)' },
+  dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#E2AA20', marginTop: 7 },
+  bulletT: { flex: 1, fontFamily: Fonts.ttRegular, fontSize: 14, lineHeight: 20, color: '#141311' },
+  check: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, borderRadius: 12, borderWidth: 1,
+    borderColor: 'rgba(20,19,17,0.14)', paddingVertical: 13, paddingHorizontal: 13, marginBottom: 8 },
+  checkOn: { borderWidth: 2, borderColor: '#E2AA20', paddingVertical: 12, paddingHorizontal: 12 },
+  box: { width: 20, height: 20, borderRadius: 5, borderWidth: 1.5, borderColor: 'rgba(20,19,17,0.30)',
+    alignItems: 'center', justifyContent: 'center', marginTop: 1 },
+  boxOn: { backgroundColor: '#E2AA20', borderColor: '#E2AA20' },
+  checkT: { flex: 1, fontFamily: Fonts.ttRegular, fontSize: 13.5, lineHeight: 19, color: '#141311' },
 });
 
 const styles = StyleSheet.create({

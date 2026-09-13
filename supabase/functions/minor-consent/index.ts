@@ -20,8 +20,8 @@
 // minor approve their own account. Test-mode approvals are stamped as such in
 // the proof, because they are not proof of anything.
 import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { TERMS_VERSION, consentCopy } from '../_shared/consentCopy.ts'
 
-const TERMS_VERSION = 'minor-consent-v1-2026-09-14'
 const INVITE_TTL_H = 72
 const TICKET_TTL_MIN = 30
 const MAX_VERIFY_ATTEMPTS = 5
@@ -71,27 +71,6 @@ const maskEmail = (e: string) => {
 const maskPhone = (p: string | null) => (p ? `${p.slice(0, 3)} ••• ••${p.slice(-2)}` : null)
 const ipOf = (req: Request) => req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown'
 const hoursFromNow = (h: number) => new Date(Date.now() + h * 3600000).toISOString()
-
-// The wording is the server's, not the app's: what the parent reads on screen
-// is exactly what is stored in the proof, because it came from here.
-function consentCopy(child: string, coach: string | null) {
-  const coachRef = coach || 'Their coach'
-  return {
-    context: { title: `${child} wants to use InBetween`, subtitle: coach ? `with their coach ${coach}` : null },
-    what: [
-      `${coachRef} wears a clip mic during ${child}'s lessons`,
-      `The audio becomes focus points for ${child} to train`,
-      'The raw recording is deleted within 24 hours',
-      `${coachRef} cannot listen back to the recording`,
-      'You can delete everything at any time',
-    ],
-    checks: [
-      `I am ${child}'s parent or legal guardian`,
-      `I consent to ${child}'s lessons being captured and processed as described above`,
-      'I understand I can withdraw this consent and delete all data at any time',
-    ],
-  }
-}
 
 // ── delivery ────────────────────────────────────────────────────────────────
 function deliveryMode(): 'live' | 'test' | null {
@@ -520,6 +499,21 @@ async function withdraw(admin: SupabaseClient, req: Request, b: Row, ip: string)
   return json({ ok: true, removedFiles, removedRecordings: recIds.length })
 }
 
+// The wording, before anything exists: a parent setting their child up reads —
+// and later has stored — exactly what an invited parent reads. The coach's name
+// is looked up here, never taken from the caller.
+async function copy(admin: SupabaseClient, b: Row) {
+  const childName = str(b.childName, 60)
+  if (!childName) return json({ error: "Add your child's first name." }, 400)
+  let coachName: string | null = null
+  const coachId = str(b.coachId, 40)
+  if (coachId) {
+    const { data } = await admin.from('users').select('name, role').eq('id', coachId).maybeSingle()
+    if (data?.role === 'coach') coachName = data.name || null
+  }
+  return json({ copy: consentCopy(childName, coachName), termsVersion: TERMS_VERSION })
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405)
   let body: Row
@@ -536,6 +530,7 @@ Deno.serve(async (req: Request) => {
       case 'verify': return await verify(admin, body, ip)
       case 'approve': return await approve(admin, body, ip)
       case 'withdraw': return await withdraw(admin, req, body, ip)
+      case 'copy': return await copy(admin, body)
       default: return json({ error: 'Unknown action' }, 400)
     }
   } catch (e) {
