@@ -12,6 +12,37 @@ const DANCES = {
     'Waltz', 'Tango', 'Foxtrot', 'Quickstep', 'Viennese Waltz'],
 };
 
+// ── the coach's answers, as choices ─────────────────────────────────────────
+// Every answer is a tap: nothing typed, nothing an AI rewrites. Each choice
+// carries the exact sentence the card shows, so what the coach picks is what a
+// student reads — no interpretation is ever published that he didn't choose.
+export const CORRECT_OPTIONS = [
+  { v: 'dance', t: 'I dance it next to them', card: 'I correct by dancing the movement right next to you.' },
+  { v: 'show', t: 'I show it, they copy it', card: 'I show you the movement, then have you copy it until it matches.' },
+  { v: 'hands', t: 'I adjust them hands-on', card: 'I adjust your body hands-on until it finds the position.' },
+  { v: 'explain', t: 'I explain the mechanics', card: 'I explain the mechanics until the movement makes sense to you.' },
+  { v: 'break', t: 'I break it into small steps', card: 'I break the movement into small steps and rebuild it with you.' },
+  { v: 'feel', t: 'I let them feel it first', card: 'I let you feel the movement first, then refine the details.' },
+];
+export const METHOD_OPTIONS = [
+  { v: 'repeat', t: 'Repetition', card: 'A correction sticks through repetition — we go again until your body owns it.' },
+  { v: 'rhythm', t: 'Rhythm and counts', card: 'I turn a movement into a rhythm you count back, again and again.' },
+  { v: 'image', t: 'An image to remember', card: 'I give you an image to hold on to, so the movement comes back on its own.' },
+  { v: 'contrast', t: 'Feeling right from wrong', card: 'I have you feel the wrong way and the right way until you can tell them apart.' },
+  { v: 'slow', t: 'Slow, then up to tempo', card: 'I slow a movement right down and build it back up to tempo.' },
+];
+export const EXPERIENCE_OPTIONS = [
+  { v: 'lt2', t: 'Less than 2 years', card: 'Teaching for under 2 years' },
+  { v: '2to5', t: '2 to 5 years', card: 'Teaching for 2–5 years' },
+  { v: '5to10', t: '5 to 10 years', card: 'Teaching for 5–10 years' },
+  { v: '10to20', t: '10 to 20 years', card: 'Teaching for 10–20 years' },
+  { v: '20plus', t: 'More than 20 years', card: 'Teaching for 20+ years' },
+];
+const cardLine = (options, v) => options.find((o) => o.v === v)?.card || null;
+export const howITeachFrom = (v) => cardLine(CORRECT_OPTIONS, v);
+export const myMethodFrom = (v) => cardLine(METHOD_OPTIONS, v);
+export const credentialFrom = (v) => cardLine(EXPERIENCE_OPTIONS, v);
+
 // "Marc Delaunay" → "marcdelaunay". Accents are folded rather than dropped so
 // "Gaëlle" does not become "galle".
 export function slugify(name) {
@@ -40,11 +71,11 @@ export async function saveCoachCard(userId, a) {
     style_words: a.words || [],
     teaches: DANCES[a.style] || DANCES.Latin,
     works_with: a.who || [],
-    how_i_teach: a.correct || null,
-    my_method: a.signature || null,
+    how_i_teach: howITeachFrom(a.correct),
+    my_method: myMethodFrom(a.signature),
     alloc: a.alloc || {},
     best_for: a.leave || [],
-    credential: a.cred || null,
+    credential: credentialFrom(a.cred),
     published: true,
   };
 

@@ -32,7 +32,10 @@ import { filterStudios, hasExactMatch } from '../utils/studioMatch';
 import { setOnboardingHold } from '../utils/onboardingHold';
 import { recallToFocusPoints, saveOnboardingFocusPoints } from '../services/ai/onboardingRecall';
 import { createChildAccount } from '../services/childAccount';
-import { saveCoachCard, slugify, essenceFrom } from '../storage/coachCardStorage';
+import {
+  saveCoachCard, slugify, essenceFrom, howITeachFrom, myMethodFrom, credentialFrom,
+  CORRECT_OPTIONS, METHOD_OPTIONS, EXPERIENCE_OPTIONS,
+} from '../storage/coachCardStorage';
 import CoachCard from '../components/CoachCard';
 import {
   inviteParent, getInviteStatus, resendInvite, updateInvite, verifyInvitation, approveInvitation,
@@ -355,13 +358,13 @@ const DANCES = {
 // this screen's answers → the shape the shared card renders
 const toCard = (a) => ({
   name: a.name,
-  credential: a.cred || `${a.style || 'Latin'} coach`,
+  credential: credentialFrom(a.cred) || `${a.style || 'Latin'} coach`,
   essence: essenceFrom(a.words, a.alloc),
   styleWords: a.words,
   teaches: DANCES[a.style] || DANCES.Latin,
   worksWith: a.who,
-  howITeach: a.correct,
-  myMethod: a.signature,
+  howITeach: howITeachFrom(a.correct),
+  myMethod: myMethodFrom(a.signature),
   alloc: a.alloc,
   bestFor: a.leave,
 });
@@ -825,6 +828,8 @@ export default function OnboardingScreen({ navigation }) {
     // App.js's onAuthStateChange swaps to the home navigator for students.
   }
 
+  const allocLeft = 100 - AXES.reduce((t, k) => t + a.alloc[k], 0);
+
   const gate = {
     role: !!a.role, style: !!a.style, level: !!a.level,
     age: !!a.age, solo: !!a.soloLabel,
@@ -841,14 +846,13 @@ export default function OnboardingScreen({ navigation }) {
     parentConsent: a.checks.every(Boolean),
     parentAccount: !!a.consent && (a.consent.accountExists || a.parentPassword.length >= 8),
     parentDone: true,
-    correct: a.correct.trim().length > 2, words: a.words.length > 0,
-    signature: a.signature.trim().length > 2, alloc: true, leave: a.leave.length > 0,
+    correct: !!a.correct, words: a.words.length > 0,
+    signature: !!a.signature, alloc: allocLeft === 0, leave: a.leave.length > 0,
     who: a.who.length > 0, cred: true, cardLocked: true, planReady: true, cardLive: true, confirm: true,
     account: !!(a.name.trim() && a.email.trim() && a.password.length >= 6
       && (!isParent || a.childName.trim())),
   }[step];
 
-  const allocLeft = 100 - AXES.reduce((t, k) => t + a.alloc[k], 0);
   const planLine = [a.role && (isCoach ? 'Coach' : isParent ? 'Parent' : 'Student'), a.style, a.level].filter(Boolean).join(' · ');
 
   function body() {
@@ -1175,13 +1179,13 @@ export default function OnboardingScreen({ navigation }) {
         </Q>
       );
 
+      // Each choice shows, underneath, the sentence a student will read on the card.
       case 'correct': return (
-        <Q h1="Describe how you correct a student."
-          sub="Not your philosophy — the actual thing you do. For example: I dance next to them until the body understands.">
-          <Rise delay={0.1}>
-            <TextInput style={s.ta} value={a.correct} onChangeText={(t) => set({ correct: t })} multiline
-              textAlignVertical="top" placeholder="I dance beside them until their body finds it…" placeholderTextColor={T.ink3} />
-          </Rise>
+        <Q h1="When a student misses a movement, what do you do first?" sub="Pick the one closest to what you actually do.">
+          {CORRECT_OPTIONS.map((o, i) => (
+            <Opt key={o.v} t={o.t} d={o.card} on={a.correct === o.v} delay={0.1 + i * 0.05}
+              onPress={() => { haptic(); set({ correct: o.v }); }} />
+          ))}
         </Q>
       );
       case 'words': return (
@@ -1192,11 +1196,11 @@ export default function OnboardingScreen({ navigation }) {
         </Q>
       );
       case 'signature': return (
-        <Q h1="There’s one thing you say to almost every student." sub="What is it?">
-          <Rise delay={0.1}>
-            <TextInput style={s.ta} value={a.signature} onChangeText={(t) => set({ signature: t })} multiline
-              textAlignVertical="top" placeholder="Stop rushing the foot — settle, then move…" placeholderTextColor={T.ink3} />
-          </Rise>
+        <Q h1="For a correction to stick, what do you rely on?" sub="Pick one.">
+          {METHOD_OPTIONS.map((o, i) => (
+            <Opt key={o.v} t={o.t} d={o.card} on={a.signature === o.v} delay={0.1 + i * 0.05}
+              onPress={() => { haptic(); set({ signature: o.v }); }} />
+          ))}
         </Q>
       );
       case 'alloc': return (
@@ -1209,7 +1213,13 @@ export default function OnboardingScreen({ navigation }) {
                   <Text style={s.alI} allowFontScaling={false}>{a.alloc[k]}</Text>
                 </View>
                 <Slider minimumValue={0} maximumValue={100} step={5} value={a.alloc[k]}
-                  onValueChange={(v) => set({ alloc: { ...a.alloc, [k]: Math.round(v) } })}
+                  upperLimit={a.alloc[k] + allocLeft}
+                  onValueChange={(v) => setA((p) => {
+                    // the limit already stops the thumb; this also clamps a value
+                    // that arrives from a stale render mid-drag
+                    const others = AXES.reduce((t, x) => (x === k ? t : t + p.alloc[x]), 0);
+                    return { ...p, alloc: { ...p.alloc, [k]: Math.min(Math.round(v), 100 - others) } };
+                  })}
                   minimumTrackTintColor={T.gold} maximumTrackTintColor="rgba(10,10,10,0.12)" thumbTintColor={T.gold} />
               </View>
             ))}
@@ -1232,11 +1242,11 @@ export default function OnboardingScreen({ navigation }) {
         </Q>
       );
       case 'cred': return (
-        <Q h1="Anything you want shown under your name?" sub="A title, a result, or the year you started teaching. Optional.">
-          <Rise delay={0.1}>
-            <Field label="Credential" value={a.cred} onChange={(t) => set({ cred: t })}
-              placeholder="World Champion · Teaching since 2004" />
-          </Rise>
+        <Q h1="How long have you been teaching?" sub="Shown under your name on your card. Optional — tap again to clear.">
+          {EXPERIENCE_OPTIONS.map((o, i) => (
+            <Opt key={o.v} t={o.t} d={o.card} on={a.cred === o.v} delay={0.1 + i * 0.05}
+              onPress={() => { haptic(); set({ cred: a.cred === o.v ? '' : o.v }); }} />
+          ))}
         </Q>
       );
 
@@ -1603,8 +1613,6 @@ const s = StyleSheet.create({
   re: { fontFamily: Fonts.ttDemiBold, fontSize: 12.5, color: T.goldInk },
 
   // .ta / .pick / .alloc
-  ta: { height: 120, borderWidth: 1, borderColor: T.line3, borderRadius: 12, backgroundColor: T.card,
-    padding: 15, fontFamily: Fonts.travelsRegular, fontSize: 15, lineHeight: 22, color: T.ink },
   picks: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   pick: { borderWidth: 1, borderColor: T.line3, backgroundColor: T.card, borderRadius: 999,
     paddingVertical: 11, paddingHorizontal: 15 },

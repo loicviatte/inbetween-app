@@ -62,7 +62,7 @@ export default function CoachCard({ card, locked }) {
 
   const Block = ({ n, title, children }) => (
     <View style={s.cblock}>
-      <Text style={s.cnum}>{n} \u00b7 {title}</Text>
+      <Text style={s.cnum}>{n} · {title}</Text>
       <Veil on={locked}>{children}</Veil>
     </View>
   );
@@ -85,20 +85,20 @@ export default function CoachCard({ card, locked }) {
         {(c.styleWords || []).map((w) => <View key={w} style={s.cword}><Text style={s.cwordT}>{w}</Text></View>)}
       </Veil>
 
-      <Block n="01" title="What he teaches">
+      <Block n="01" title="What I teach">
         <View style={s.cchips}>
           {(c.teaches || []).map((d) => <View key={d} style={s.cchip}><Text style={s.cchipT}>{d}</Text></View>)}
         </View>
       </Block>
-      <Block n="02" title="Who he works with">
+      <Block n="02" title="Who I work with">
         <View style={s.cchips}>
           {(c.worksWith && c.worksWith.length ? c.worksWith : ['Not set yet']).map((w) => (
             <View key={w} style={s.cchip}><Text style={s.cchipT}>{w}</Text></View>
           ))}
         </View>
       </Block>
-      <Block n="03" title="How he teaches"><Text style={s.cbody}>{c.howITeach || 'Not answered yet'}</Text></Block>
-      <Block n="04" title="His method"><Text style={s.cbody}>{c.myMethod || 'Not answered yet'}</Text></Block>
+      <Block n="03" title="How I teach"><Text style={s.cbody}>{c.howITeach || 'Not answered yet'}</Text></Block>
+      <Block n="04" title="My method"><Text style={s.cbody}>{c.myMethod || 'Not answered yet'}</Text></Block>
       <Block n="05" title="Where the hour goes">
         <View style={s.cbars}>
           {AXES.map((k) => (
@@ -111,7 +111,7 @@ export default function CoachCard({ card, locked }) {
         </View>
       </Block>
       <Block n="06" title="Best if you want to">
-        <Text style={s.cbody}>{c.bestFor && c.bestFor.length ? c.bestFor.join(' \u00b7 ') : '\u2014'}</Text>
+        <Text style={s.cbody}>{c.bestFor && c.bestFor.length ? c.bestFor.join(' · ') : '—'}</Text>
       </Block>
 
       {/* the second lock, a different job: the blur above converts to an
@@ -123,17 +123,17 @@ export default function CoachCard({ card, locked }) {
             <Text style={[s.ctrackT, s.ctrackOn]}>Verified InBetween Coach</Text>
           </View>
           <View style={s.ctrow}>
-            <LockIcon /><Text style={s.ctrackT}>Teaching since \u2014\u2014</Text><Text style={s.ctrackTag}>10 lessons</Text>
+            <LockIcon /><Text style={s.ctrackT}>Teaching since ——</Text><Text style={s.ctrackTag}>10 lessons</Text>
           </View>
           <View style={s.ctrow}>
-            <LockIcon /><Text style={s.ctrackT}>\u2014\u2014 lessons documented</Text><Text style={s.ctrackTag}>50 lessons</Text>
+            <LockIcon /><Text style={s.ctrackT}>—— lessons documented</Text><Text style={s.ctrackTag}>50 lessons</Text>
           </View>
         </View>
       </Block>
-      <Block n="08" title="How he works">
+      <Block n="08" title="How I work">
         <Text style={s.cbody}>
-          Every lesson is captured. After each one his students get their own focus points \u2014 exactly what he
-          told them \u2014 so they always know what to train before they come back.
+          Every lesson is captured. After each one, my students get their own focus points — exactly what I
+          told them — so they always know what to train before they come back.
         </Text>
       </Block>
 
