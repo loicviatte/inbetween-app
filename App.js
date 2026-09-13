@@ -31,6 +31,7 @@ import {
   resetAnalyticsUser,
 } from './src/services/analytics';
 import AuthNavigator from './src/navigation/AuthNavigator';
+import { useOnboardingHold } from './src/utils/onboardingHold';
 import StudentAppNavigator from './src/navigation/StudentAppNavigator';
 import { isFirstScreenReady, onFirstScreenReady } from './src/utils/firstPaint';
 import InBetweenLoader from './src/components/InBetweenLoader';
@@ -141,6 +142,7 @@ function handleNotificationTap(data) {
 
 export default function App() {
   const [session, setSession] = useState(undefined);
+  const onboardingHeld = useOnboardingHold();
   const [userRole, setUserRole] = useState(null);
   const [userEmail, setUserEmail] = useState(null);
   // Cold-start: hold the logo until the first screen has painted (Home /
@@ -329,7 +331,9 @@ export default function App() {
 
   // Show loading until session + role are resolved. Fonts are embedded
   // natively (expo-font config plugin), so no fontsLoaded gate.
-  const isLoading = session === undefined || (session !== null && userRole === null);
+  // Onboarding asks to keep the auth navigator while it shows the last screen
+  // of a sign-up it just completed (see src/utils/onboardingHold.js).
+  const isLoading = !onboardingHeld && (session === undefined || (session !== null && userRole === null));
 
   if (isLoading) {
     // Session/role not resolved yet — no navigator to mount, so the logo is all
@@ -338,7 +342,7 @@ export default function App() {
   }
 
   let activeNavigator;
-  if (!session) {
+  if (!session || onboardingHeld) {
     activeNavigator = <AuthNavigator />;
   } else if (userEmail === TRAINER_EMAIL) {
     const TrainerNavigator = require('./src/navigation/TrainerNavigator').default;
