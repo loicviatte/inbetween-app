@@ -27,10 +27,10 @@ const TICKET_TTL_MIN = 30
 const MAX_VERIFY_ATTEMPTS = 5
 const RESEND_MIN_INTERVAL_S = 60
 const MAX_RESENDS = 5
-// SMS is off for now: the parent proves the email channel only and no mobile
-// number is collected. Flip this once Twilio is configured and the app asks for
-// the number again — the code paths below are kept, not deleted.
-const SMS_ENABLED = false
+// Both channels: an email code AND an SMS code. Email alone let a student type
+// a second address of their own and approve themselves. A second number is much
+// harder to come by than a second address — but it is not proof of age.
+const SMS_ENABLED = true
 const MINOR_AGES = ['Juvenile', 'Junior', 'Youth']
 const MANAGED_DOMAIN = 'managed.useinbetween.com'
 // The only URL scheme the installed build registers (not `inbetween`).
@@ -80,6 +80,14 @@ function deliveryMode(): 'live' | 'test' | null {
     && (env('TWILIO_FROM') || env('TWILIO_MESSAGING_SERVICE_SID'))
   const live = emailLive && (!SMS_ENABLED || smsLive)
   if (live) return 'live'
+  if (env('CONSENT_TEST_MODE') === 'on') return 'test'
+  return null
+}
+
+function smsMode(): 'live' | 'test' | null {
+  const env = (k: string) => Deno.env.get(k)
+  if (env('TWILIO_ACCOUNT_SID') && env('TWILIO_AUTH_TOKEN')
+    && (env('TWILIO_FROM') || env('TWILIO_MESSAGING_SERVICE_SID'))) return 'live'
   if (env('CONSENT_TEST_MODE') === 'on') return 'test'
   return null
 }
@@ -499,6 +507,63 @@ async function withdraw(admin: SupabaseClient, req: Request, b: Row, ip: string)
   return json({ ok: true, removedFiles, removedRecordings: recIds.length })
 }
 
+// ── a parent's mobile, proven on its own ────────────────────────────────────
+// For a parent setting a child up without an invitation: the number is proven
+// by a code before the child exists, and create-child-account refuses without
+// the token handed back here.
+const SMS_CODE_TTL_MIN = 10
+const PHONE_TOKEN_TTL_MIN = 60
+
+async function smsSend(admin: SupabaseClient, b: Row, ip: string) {
+  const phone = normPhone(b.phone)
+  if (!phone) return json({ error: 'Add your mobile number with its country code, like +44 7700 900123.' }, 400)
+  const mode = smsMode()
+  if (!mode) return json({ error: "Text message codes aren't available yet. Try again soon." }, 503)
+  // Anything that sends texts without an account is a target for SMS-pumping
+  // fraud, which bills the sender — so the caller and the number are both capped.
+  if (await limited(admin, `sms:ip:${ip}`, 5, 3600)) return json({ error: 'Too many codes from here. Try again later.' }, 429)
+  if (await limited(admin, `sms:phone:${await sha256(phone)}`, 3, 3600)) {
+    return json({ error: 'Too many codes to this number. Try again later.' }, 429)
+  }
+  const code = randomCode(6, '0123456789')
+  const { data: row, error } = await admin.from('phone_verifications').insert({
+    phone, code_hash: await sha256(code), delivery_mode: mode,
+    expires_at: new Date(Date.now() + SMS_CODE_TTL_MIN * 60000).toISOString(),
+  }).select('id').single()
+  if (error || !row) return json({ error: "We couldn't send the code." }, 500)
+  try {
+    await sendSms(mode, phone, `InBetween: your code is ${code}. It expires in ${SMS_CODE_TTL_MIN} minutes.`)
+  } catch (e) {
+    console.error('[minor-consent] sms send failed', e)
+    await admin.from('phone_verifications').delete().eq('id', row.id)
+    return json({ error: "We couldn't text that number. Check it and try again." }, 502)
+  }
+  return json({ verificationId: row.id, maskedPhone: maskPhone(phone), mode })
+}
+
+async function smsCheck(admin: SupabaseClient, b: Row, ip: string) {
+  if (await limited(admin, `smscheck:ip:${ip}`, 20, 3600)) return json({ error: 'Too many attempts. Try again later.' }, 429)
+  const id = str(b.verificationId, 40), code = str(b.code, 12).replace(/\D/g, '')
+  if (code.length !== 6) return json({ error: 'Enter the 6-digit code.' }, 400)
+  const { data: row } = await admin.from('phone_verifications').select('*').eq('id', id).maybeSingle()
+  if (!row || row.used_at) return json({ error: 'Send a new code.' }, 404)
+  if (new Date(row.expires_at) < new Date()) return json({ error: 'That code has expired. Send a new one.' }, 410)
+  if (row.attempts >= MAX_VERIFY_ATTEMPTS) return json({ error: 'Too many wrong codes. Send a new one.' }, 423)
+  // ⚠️ TEST ONLY: a code sent in test mode accepts any 6 digits, like the
+  // invitation code. A live code is always checked.
+  if (row.delivery_mode !== 'test' && row.code_hash !== await sha256(code)) {
+    await admin.from('phone_verifications').update({ attempts: row.attempts + 1 }).eq('id', row.id)
+    return json({ error: "That code doesn't match." }, 401)
+  }
+  const token = randomCode(40)
+  await admin.from('phone_verifications').update({
+    verified_at: row.verified_at || new Date().toISOString(),
+    token_hash: await sha256(token),
+    token_expires_at: new Date(Date.now() + PHONE_TOKEN_TTL_MIN * 60000).toISOString(),
+  }).eq('id', row.id)
+  return json({ phoneToken: token, maskedPhone: maskPhone(row.phone) })
+}
+
 // The wording, before anything exists: a parent setting their child up reads —
 // and later has stored — exactly what an invited parent reads. The coach's name
 // is looked up here, never taken from the caller.
@@ -531,6 +596,8 @@ Deno.serve(async (req: Request) => {
       case 'approve': return await approve(admin, body, ip)
       case 'withdraw': return await withdraw(admin, req, body, ip)
       case 'copy': return await copy(admin, body)
+      case 'sms-send': return await smsSend(admin, body, ip)
+      case 'sms-check': return await smsCheck(admin, body, ip)
       default: return json({ error: 'Unknown action' }, 400)
     }
   } catch (e) {

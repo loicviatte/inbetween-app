@@ -24,7 +24,7 @@ import TabHeader from '../components/TabHeader';
 import { saveUserPreferences, getAccountUser, saveAccountName, clearSubjectCache, invalidateCache } from '../storage/storage';
 import { isGuardian, listChildren, setActiveChild } from '../storage/guardianStorage';
 import { createChildAccount } from '../services/childAccount';
-import { withdrawChild, getConsentCopy } from '../services/minorConsent';
+import { withdrawChild, getConsentCopy, sendPhoneCode, checkPhoneCode } from '../services/minorConsent';
 import ProfileDashboard from '../components/ProfileDashboard';
 import ProfileSkeleton from '../components/ProfileSkeleton';
 import StudioPicker from '../components/StudioPicker';
@@ -667,60 +667,83 @@ function SettingSwitch({ label, value, onChange, isLast }) {
 // coach, focus points — arrives from their first recorded lesson, the same way
 // it does for any student.
 function AddChildModal({ visible, onClose, onCreated }) {
+  // details → phone (number, then code) → permission. Same three steps a parent
+  // goes through at sign-up: a child added here gets the same proof.
+  const [step, setStep] = useState('details');
   const [name, setName] = useState('');
   const [style, setStyle] = useState('Latin');
-  const [copy, setCopy] = useState(null);        // the permission wording, once fetched
+  const [phone, setPhone] = useState('');
+  const [smsId, setSmsId] = useState('');
+  const [smsMasked, setSmsMasked] = useState('');
+  const [code, setCode] = useState('');
+  const [phoneToken, setPhoneToken] = useState('');
+  const [copy, setCopy] = useState(null);
   const [checks, setChecks] = useState([false, false, false]);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState('');
 
   useEffect(() => {
-    if (visible) { setName(''); setStyle('Latin'); setCopy(null); setChecks([false, false, false]); setErr(''); }
+    if (!visible) return;
+    setStep('details'); setName(''); setStyle('Latin'); setPhone(''); setSmsId(''); setSmsMasked('');
+    setCode(''); setPhoneToken(''); setCopy(null); setChecks([false, false, false]); setErr('');
   }, [visible]);
 
-  // A child added here gets the same permission, in the same words, as one set
-  // up at sign-up or approved from an invitation. The wording names the child,
-  // so it is fetched once the name is in.
-  async function toPermission() {
+  const run = async (fn) => {
     setSaving(true); setErr('');
-    try {
-      setCopy(await getConsentCopy(name.trim(), null));
-      setChecks([false, false, false]);
-    } catch (e) {
-      setErr(e.message);
-    } finally {
-      setSaving(false);
-    }
-  }
+    try { await fn(); } catch (e) { setErr(e.message); } finally { setSaving(false); }
+  };
+  const phoneOk = /^\+[0-9]{8,15}$/.test(phone.replace(/[\s().-]/g, ''));
 
-  async function save() {
-    setSaving(true); setErr('');
+  const sendCode = () => run(async () => {
+    const r = await sendPhoneCode(phone.trim());
+    setSmsId(r.verificationId); setSmsMasked(r.maskedPhone); setCode('');
+  });
+  const verifyCode = () => run(async () => {
+    const r = await checkPhoneCode(smsId, code);
+    setPhoneToken(r.phoneToken);
+    // the wording names the child, so it is fetched once the name is known
+    setCopy(await getConsentCopy(name.trim(), null));
+    setChecks([false, false, false]);
+    setStep('consent');
+  });
+  const save = () => run(async () => {
     const res = await createChildAccount({
-      childName: name.trim(), danceStyle: style,
+      childName: name.trim(), danceStyle: style, phoneToken,
       consent: { checks, termsVersion: copy?.termsVersion },
     });
-    setSaving(false);
-    if (res.error) { setErr(res.error); return; }
+    if (res.error) throw new Error(res.error);
     onCreated();
+  });
+
+  function back() {
+    setErr('');
+    if (step === 'consent') return setStep('phone');
+    if (step === 'phone' && smsId && !phoneToken) { setSmsId(''); return setCode(''); }
+    if (step === 'phone') return setStep('details');
+    return onClose();
   }
 
   const allTicked = checks.every(Boolean);
+  const cta = (label, onPress, enabled) => (
+    <TouchableOpacity style={[ac.save, (!enabled || saving) && ac.saveOff]} onPress={onPress}
+      disabled={!enabled || saving} activeOpacity={0.88}>
+      <Text style={ac.saveT}>{saving ? 'One moment…' : label}</Text>
+    </TouchableOpacity>
+  );
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View style={ac.backdrop}>
         <View style={ac.sheet}>
-          {!copy ? (
+          {step === 'details' && (
             <>
               <Text style={ac.title}>Add a child</Text>
               <Text style={ac.sub}>They get their own training, focus points and coach.</Text>
-
               <Text style={ac.label}>NAME</Text>
               <View style={ac.field}>
                 <TextInput style={ac.input} value={name} onChangeText={setName} placeholder="Noah"
                   placeholderTextColor="rgba(10,10,10,0.42)" autoCapitalize="words" autoFocus />
               </View>
-
               <Text style={ac.label}>DANCE STYLE</Text>
               <View style={ac.styles}>
                 {['Latin', 'Ballroom', 'Latin & Ballroom'].map((v) => (
@@ -730,20 +753,48 @@ function AddChildModal({ visible, onClose, onCreated }) {
                   </TouchableOpacity>
                 ))}
               </View>
+              {cta('Continue', () => setStep('phone'), !!name.trim())}
+            </>
+          )}
 
+          {step === 'phone' && !smsId && (
+            <>
+              <Text style={ac.title}>Your mobile number</Text>
+              <Text style={ac.sub}>We’ll text you a code. The permission comes from you, so the number has to be yours.</Text>
+              <Text style={ac.label}>MOBILE NUMBER</Text>
+              <View style={ac.field}>
+                <TextInput style={ac.input} value={phone} onChangeText={setPhone} placeholder="+44 7700 900123"
+                  placeholderTextColor="rgba(10,10,10,0.42)" keyboardType="phone-pad" autoFocus />
+              </View>
               {!!err && <Text style={ac.err}>{err}</Text>}
-              <TouchableOpacity style={[ac.save, (!name.trim() || saving) && ac.saveOff]} onPress={toPermission}
-                disabled={!name.trim() || saving} activeOpacity={0.88}>
-                <Text style={ac.saveT}>{saving ? 'Loading…' : 'Continue'}</Text>
+              {cta('Text me a code', sendCode, phoneOk)}
+            </>
+          )}
+
+          {step === 'phone' && !!smsId && (
+            <>
+              <Text style={ac.title}>Enter the code</Text>
+              <Text style={ac.sub}>Sent to {smsMasked}.</Text>
+              <Text style={ac.label}>6-DIGIT CODE</Text>
+              <View style={ac.field}>
+                <TextInput style={ac.input} value={code} onChangeText={(t) => setCode(t.replace(/\D/g, '').slice(0, 6))}
+                  placeholder="123456" placeholderTextColor="rgba(10,10,10,0.42)" keyboardType="number-pad"
+                  textContentType="oneTimeCode" autoFocus />
+              </View>
+              {!!err && <Text style={ac.err}>{err}</Text>}
+              {cta('Verify', verifyCode, /^[0-9]{6}$/.test(code))}
+              <TouchableOpacity onPress={sendCode} style={ac.cancel} activeOpacity={0.7} disabled={saving}>
+                <Text style={ac.linkT}>Send a new code</Text>
               </TouchableOpacity>
             </>
-          ) : (
+          )}
+
+          {step === 'consent' && copy && (
             <ScrollView style={ac.scroll} showsVerticalScrollIndicator={false}>
               <Text style={ac.title}>What happens</Text>
               {copy.copy.what.map((line) => (
                 <View key={line} style={ac.bullet}><View style={ac.dot} /><Text style={ac.bulletT}>{line}</Text></View>
               ))}
-
               <Text style={[ac.label, ac.labelGap]}>YOUR PERMISSION</Text>
               {copy.copy.checks.map((line, i) => (
                 <TouchableOpacity key={line} style={[ac.check, checks[i] && ac.checkOn]}
@@ -755,16 +806,13 @@ function AddChildModal({ visible, onClose, onCreated }) {
                   <Text style={ac.checkT}>{line}</Text>
                 </TouchableOpacity>
               ))}
-
               {!!err && <Text style={ac.err}>{err}</Text>}
-              <TouchableOpacity style={[ac.save, (!allTicked || saving) && ac.saveOff]} onPress={save}
-                disabled={!allTicked || saving} activeOpacity={0.88}>
-                <Text style={ac.saveT}>{saving ? 'Adding…' : 'Give permission and add'}</Text>
-              </TouchableOpacity>
+              {cta('Give permission and add', save, allTicked)}
             </ScrollView>
           )}
-          <TouchableOpacity onPress={copy ? () => { setCopy(null); setErr(''); } : onClose} style={ac.cancel} activeOpacity={0.7}>
-            <Text style={ac.cancelT}>{copy ? 'Back' : 'Cancel'}</Text>
+
+          <TouchableOpacity onPress={back} style={ac.cancel} activeOpacity={0.7}>
+            <Text style={ac.cancelT}>{step === 'details' ? 'Cancel' : 'Back'}</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -2368,6 +2416,7 @@ const ac = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center', marginTop: 1 },
   boxOn: { backgroundColor: '#E2AA20', borderColor: '#E2AA20' },
   checkT: { flex: 1, fontFamily: Fonts.ttRegular, fontSize: 13.5, lineHeight: 19, color: '#141311' },
+  linkT: { fontFamily: Fonts.ttDemiBold, fontSize: 13.5, color: '#8F6410' },
 });
 
 const styles = StyleSheet.create({

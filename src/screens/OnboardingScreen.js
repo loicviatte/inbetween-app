@@ -40,6 +40,7 @@ import CoachCard from '../components/CoachCard';
 import {
   inviteParent, getInviteStatus, resendInvite, updateInvite, verifyInvitation, approveInvitation,
   savePendingInvite, loadPendingInvite, clearPendingInvite, tokenFromUrl, getConsentCopy,
+  sendPhoneCode, checkPhoneCode,
 } from '../services/minorConsent';
 
 // ── tokens, straight from the comp's stylesheet ──────────────────────────────
@@ -320,6 +321,7 @@ const PARENT_COPY = {
 // offers the parent account rather than blocking the person outright.
 const MINOR_AGES = ['Juvenile', 'Junior', 'Youth'];
 const EMAIL_OK = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+const PHONE_OK = (v) => /^\+[0-9]{8,15}$/.test((v || '').replace(/[\s().-]/g, ''));
 const STYLES = [
   { v: 'Latin', t: 'Latin', d: 'Cha Cha · Rumba · Samba · Paso · Jive' },
   { v: 'Ballroom', t: 'Ballroom', d: 'Waltz · Tango · Foxtrot · Quickstep · Viennese' },
@@ -507,6 +509,7 @@ export default function OnboardingScreen({ navigation }) {
     parentFirstName: '', parentEmail: '', parentPhone: '',
     inviteId: '', deviceSecret: '', maskedEmail: '', inviteStatus: '', inviteNote: '', editingInvite: false, inviteClosed: false,
     invToken: '', invCode: '', consent: null, checks: [false, false, false], parentPassword: '', hasInvite: null, signupCopy: null,
+    signupPhone: '', smsId: '', smsMasked: '', smsCode: '', phoneToken: '',
     alloc: { Technique: 40, Musicality: 25, Mental: 20, Performance: 15 },
     name: '', childName: '', email: '', password: '', slug: '',
   });
@@ -618,7 +621,8 @@ export default function OnboardingScreen({ navigation }) {
     if (step === 'cred') return go('cardLocked');
     // A parent setting their child up gives the permission an invited parent
     // gives — and before the child's lesson is ever sent anywhere.
-    if (step === 'recap' && isParent) return loadSignupCopy();
+    if (step === 'recap' && isParent) return go('signupPhone');
+    if (step === 'signupPhone') return a.smsId ? checkSignupSms() : sendSignupSms();
     if (step === 'signupWhat') return go('signupConsent');
     if (step === 'signupConsent') return go('recall');
     if (step === 'recap' && !isCoach) return go('recall');
@@ -637,7 +641,12 @@ export default function OnboardingScreen({ navigation }) {
     if (step === 'account') return go(isCoach ? 'cardLocked' : (a.focus.length ? 'focusLocked' : 'planReady'), -1);
     if (step === 'cardLocked') return go('cred', -1);
     if (step === 'signupConsent') return go('signupWhat', -1);
-    if (step === 'signupWhat') return go('recap', -1);
+    if (step === 'signupWhat') return go('signupPhone', -1);
+    if (step === 'signupPhone') {
+      // from the code back to the number first, then out of the step
+      if (a.smsId && !a.phoneToken) { setError(''); return set({ smsId: '', smsCode: '' }); }
+      return go('recap', -1);
+    }
     if (step === 'planReady' || step === 'recall') return go(isParent ? 'signupConsent' : 'recap', -1);
     if (step === 'focusLocked' || step === 'analysing') return go('recall', -1);
     if (i > 0) return go(flow[i - 1], -1);
@@ -670,7 +679,7 @@ export default function OnboardingScreen({ navigation }) {
   async function sendInvite() {
     setError(''); setBusy(true);
     const contact = {
-      parentFirstName: a.parentFirstName.trim(), parentEmail: a.parentEmail.trim(),
+      parentFirstName: a.parentFirstName.trim(), parentEmail: a.parentEmail.trim(), parentPhone: a.parentPhone.trim(),
     };
     try {
       let inviteId = a.inviteId, deviceSecret = a.deviceSecret, maskedEmail;
@@ -730,6 +739,34 @@ export default function OnboardingScreen({ navigation }) {
     } catch (e) {
       setError(e.message);
     } finally {
+      setBusy(false);
+    }
+  }
+
+  // ── the parent's mobile, on the path without an invitation ──────────────
+  async function sendSignupSms() {
+    setError(''); setBusy(true);
+    try {
+      const r = await sendPhoneCode(a.signupPhone.trim());
+      set({ smsId: r.verificationId, smsMasked: r.maskedPhone, smsCode: '', phoneToken: '' });
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function checkSignupSms() {
+    setError(''); setBusy(true);
+    try {
+      const r = await checkPhoneCode(a.smsId, a.smsCode);
+      set({ phoneToken: r.phoneToken });
+      setBusy(false);
+      return loadSignupCopy();
+    } catch (e) {
+      setError(e.message);
+      // a spent, expired or locked code can only be replaced, not retried
+      if ([404, 410, 423].includes(e.status)) set({ smsId: '', smsCode: '' });
       setBusy(false);
     }
   }
@@ -819,6 +856,7 @@ export default function OnboardingScreen({ navigation }) {
           childName: a.childName.trim(),
           parentFirstName: a.name.trim().split(/\s+/)[0],
           consent: { checks: a.checks, termsVersion: a.signupCopy?.termsVersion },
+          phoneToken: a.phoneToken,
           danceStyle: a.style,
           level: a.level,
           ageCategory: a.age,
@@ -862,13 +900,14 @@ export default function OnboardingScreen({ navigation }) {
     recall: a.recall.trim().length > 11, analysing: false, focusLocked: true, focusLive: true,
     minorExplain: true,
     minorParent: !!((a.editingInvite || a.name.trim()) && a.parentFirstName.trim()
-      && EMAIL_OK.test(a.parentEmail.trim())),
+      && EMAIL_OK.test(a.parentEmail.trim()) && PHONE_OK(a.parentPhone)),
     minorWaiting: true,
     parentEntry: a.hasInvite !== null,
     childName: a.childName.trim().length > 0,
+    signupPhone: a.smsId ? /^[0-9]{6}$/.test(a.smsCode) : PHONE_OK(a.signupPhone),
     signupWhat: !!a.signupCopy,
     signupConsent: !!a.signupCopy && a.checks.every(Boolean),
-    parentCode: a.invToken.trim().length > 0,
+    parentCode: a.invToken.trim().length > 0 && /^[0-9]{6}$/.test(a.invCode),
     parentContext: true, parentWhat: true,
     parentConsent: a.checks.every(Boolean),
     parentAccount: !!a.consent && (a.consent.accountExists || a.parentPassword.length >= 8),
@@ -1077,6 +1116,31 @@ export default function OnboardingScreen({ navigation }) {
         </Q>
       );
 
+      case 'signupPhone': return a.smsId ? (
+        <Q h1="Enter the code we texted you" sub={`Sent to ${a.smsMasked}.`}>
+          <Rise delay={0.05}><Field label="6-digit code" value={a.smsCode}
+            onChange={(t) => set({ smsCode: t.replace(/\D/g, '').slice(0, 6) })}
+            placeholder="123456" keyboardType="number-pad" textContentType="oneTimeCode" /></Rise>
+          {!!error && <Text style={s.err}>{error}</Text>}
+          <View style={s.waitActs}>
+            <TouchableOpacity style={s.later} onPress={sendSignupSms} accessibilityRole="button">
+              <Text style={s.laterT}>Send a new code</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={s.later} accessibilityRole="button"
+              onPress={() => { setError(''); set({ smsId: '', smsCode: '' }); }}>
+              <Text style={s.laterT}>Change number</Text>
+            </TouchableOpacity>
+          </View>
+        </Q>
+      ) : (
+        <Q h1="Your mobile number"
+          sub="We’ll text you a code. The permission comes from you, so the number has to be yours.">
+          <Rise delay={0.05}><Field label="Mobile number" value={a.signupPhone} onChange={(t) => set({ signupPhone: t })}
+            placeholder="+44 7700 900123" keyboardType="phone-pad" textContentType="telephoneNumber" /></Rise>
+          {!!error && <Text style={s.err}>{error}</Text>}
+        </Q>
+      );
+
       case 'signupWhat': return (
         <Q h1="What happens">
           {(a.signupCopy?.copy?.what || []).map((line, i) => (
@@ -1129,6 +1193,8 @@ export default function OnboardingScreen({ navigation }) {
               onChange={(t) => set({ parentFirstName: t })} placeholder="Sarah" autoCapitalize="words" /></Rise>
             <Rise delay={0.08}><Field label="Their email" value={a.parentEmail} onChange={(t) => set({ parentEmail: t })}
               placeholder="sarah@email.com" autoCapitalize="none" autoCorrect={false} keyboardType="email-address" /></Rise>
+            <Rise delay={0.12}><Field label="Their mobile number" value={a.parentPhone} onChange={(t) => set({ parentPhone: t })}
+              placeholder="+44 7700 900123" keyboardType="phone-pad" /></Rise>
           </View>
           <Text style={s.fieldNote}>We’ll send them a link. Nothing is recorded until they approve.</Text>
           {!!error && <Text style={s.err}>{error}</Text>}
@@ -1145,7 +1211,7 @@ export default function OnboardingScreen({ navigation }) {
             sub="Sign in with their account to see your focus points. Your coach can start capturing your lessons." />
         );
         return (
-          <Q h1={`Invitation sent to ${a.parentEmail || a.maskedEmail}`}>
+          <Q h1={`Invitation sent to ${a.parentEmail || a.maskedEmail}`} sub="We’ve also texted them.">
             <Rise delay={0.1}>
               <Text style={s.para}>Once they approve, your coach can start capturing your lessons.</Text>
             </Rise>
@@ -1166,10 +1232,13 @@ export default function OnboardingScreen({ navigation }) {
       }
 
       case 'parentCode': return (
-        <Q h1="Your invitation" sub="Enter the code from the email we sent you.">
+        <Q h1="Your invitation" sub="Enter the code from the email, then the 6-digit code we texted you. You need both.">
           <View style={s.fields}>
             <Rise delay={0}><Field label="Email code" value={a.invToken} onChange={(t) => set({ invToken: t })}
               placeholder="ABCD-EFGH-JKMN" autoCapitalize="characters" autoCorrect={false} /></Rise>
+            <Rise delay={0.05}><Field label="Text message code" value={a.invCode}
+              onChange={(t) => set({ invCode: t.replace(/\D/g, '').slice(0, 6) })}
+              placeholder="123456" keyboardType="number-pad" textContentType="oneTimeCode" /></Rise>
           </View>
           {!!error && <Text style={s.err}>{error}</Text>}
         </Q>
@@ -1396,6 +1465,7 @@ export default function OnboardingScreen({ navigation }) {
     : step === 'minorParent' ? (a.editingInvite ? 'Update and resend' : 'Send invitation')
     : step === 'minorWaiting' ? (a.inviteStatus === 'withdrawn' || a.inviteClosed ? 'Start again'
       : a.inviteStatus === 'approved' ? 'Go to sign in' : 'Check again')
+    : step === 'signupPhone' ? (a.smsId ? 'Verify' : 'Text me a code')
     : step === 'parentConsent' || step === 'signupConsent' ? 'Give permission'
     : step === 'parentAccount' ? 'Finish'
     : step === 'parentDone' ? 'Sign in'

@@ -33,6 +33,9 @@ export const withdrawChild = (childId) => call('withdraw', { childId });
 // The permission wording for a parent setting a child up themselves — the same
 // text, from the same place, that an invited parent reads.
 export const getConsentCopy = (childName, coachId) => call('copy', { childName, coachId });
+// A parent's mobile, proven by a code, on the path without an invitation.
+export const sendPhoneCode = (phone) => call('sms-send', { phone });
+export const checkPhoneCode = (verificationId, code) => call('sms-check', { verificationId, code });
 
 // The waiting student's invitation survives the app being closed, so reopening
 // returns to it instead of starting a second pending profile.

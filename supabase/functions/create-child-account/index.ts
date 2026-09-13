@@ -17,6 +17,11 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { TERMS_VERSION, consentCopy } from '../_shared/consentCopy.ts'
 
+async function sha256(s: string) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s))
+  return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('')
+}
+
 const MANAGED_DOMAIN = 'managed.useinbetween.com'
 
 const json = (body: unknown, status = 200) =>
@@ -40,7 +45,7 @@ Deno.serve(async (req: Request) => {
     studioId?: string | null; coachId?: string | null
     lessonsPerMonth?: number; soloFrequency?: string; weeklyGoalMinutes?: number
     focusPoints?: unknown
-    consent?: unknown; parentFirstName?: unknown
+    consent?: unknown; parentFirstName?: unknown; phoneToken?: unknown
   }
   try { body = await req.json() } catch { return json({ error: 'Invalid JSON' }, 400) }
 
@@ -67,6 +72,18 @@ Deno.serve(async (req: Request) => {
     (r.users?.name || '').trim().toLowerCase() === childName.toLowerCase())
   if (twin) return json({ childId: (twin as { child_id: string }).child_id, created: false })
   const isFirst = (siblings || []).length === 0
+
+  // The parent's mobile, proven by a code moments ago: an email and three ticked
+  // boxes alone are within reach of the child themselves. Checked after the
+  // retry short-circuit above, so resubmitting an already-created child still
+  // returns it instead of failing on a token that has been spent.
+  const phoneToken = typeof body.phoneToken === 'string' ? body.phoneToken : ''
+  const { data: phoneRow } = phoneToken
+    ? await admin.from('phone_verifications').select('*').eq('token_hash', await sha256(phoneToken)).is('used_at', null).maybeSingle()
+    : { data: null }
+  if (!phoneRow?.verified_at || !phoneRow.token_expires_at || new Date(phoneRow.token_expires_at) < new Date()) {
+    return json({ error: 'Verify your mobile number first.' }, 400)
+  }
 
   const email = `child.${crypto.randomUUID()}@${MANAGED_DOMAIN}`
   const password = crypto.randomUUID() + crypto.randomUUID()
@@ -125,12 +142,17 @@ Deno.serve(async (req: Request) => {
     consent_text: consentCopy(childName, coachName), terms_version: TERMS_VERSION,
     guardian_id: parent.id,
     // signed in, but the address was never proven with a code: not stamped verified
-    email_verified_at: null, delivery_mode: null,
+    email_verified_at: null,
+    parent_phone: phoneRow.phone, phone_verified_at: phoneRow.verified_at,
+    // a code delivered in test mode proves nothing, and the proof says so
+    delivery_mode: phoneRow.delivery_mode,
   })
   if (proofErr) {
     await admin.auth.admin.deleteUser(childId)
     return json({ error: "We couldn't record your permission.", detail: proofErr.message }, 500)
   }
+  // one verified number, one child: the token can't be replayed for another
+  await admin.from('phone_verifications').update({ used_at: new Date().toISOString() }).eq('id', phoneRow.id)
   const { error: grantErr } = await admin.from('users').update({ consent_status: 'granted' }).eq('id', childId)
   if (grantErr) {
     await admin.from('parental_consents').delete().eq('child_id', childId)
