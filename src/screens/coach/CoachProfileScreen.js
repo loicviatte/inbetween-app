@@ -24,6 +24,8 @@ import * as ImagePicker from 'expo-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Fonts, Spacing } from '../../theme';
 import { getUser, saveUserProfile } from '../../storage/storage';
+import { getMyCoachCard } from '../../storage/coachCardStorage';
+import CoachCard from '../../components/CoachCard';
 import {
   getOrCreateInviteCode,
   getMyStudents,
@@ -221,6 +223,16 @@ export default function CoachProfileScreen({ navigation }) {
   }
 
   // ── Invite code actions ─────────────────────────────────────────────────
+
+  // The card the coach built during onboarding. Read back from the database
+  // rather than kept in memory: it is the only place it now exists.
+  const [card, setCard] = useState(null);
+  const [cardOpen, setCardOpen] = useState(false);
+  useFocusEffect(useCallback(() => {
+    let cancelled = false;
+    getMyCoachCard().then((c) => { if (!cancelled) setCard(c); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []));
 
   async function handleCopyCode() {
     if (!inviteCode) return;
@@ -506,6 +518,18 @@ export default function CoachProfileScreen({ navigation }) {
                   <Text style={invite.shareBtnText}>Share with a student</Text>
                 </TouchableOpacity>
 
+                {!!card && (
+                  <TouchableOpacity style={cc.row} onPress={() => setCardOpen(true)} activeOpacity={0.85}>
+                    <View style={cc.rowText}>
+                      <Text style={cc.rowTitle}>Your coach card</Text>
+                      <Text style={cc.rowSub} numberOfLines={1}>
+                        useinbetween.com/{card.slug}
+                      </Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={15} color="#F6D27A" />
+                  </TouchableOpacity>
+                )}
+
                 {studentCount > 0 ? (
                   <Text style={invite.foot}>
                     <Text style={invite.footStrong}>
@@ -679,6 +703,38 @@ export default function CoachProfileScreen({ navigation }) {
               <Text style={em.cancelBtnText}>Cancel</Text>
             </TouchableOpacity>
           </BottomSheet>
+
+          {/* ── The coach card, exactly as a student reads it ── */}
+          <Modal visible={cardOpen} animationType="slide" transparent onRequestClose={() => setCardOpen(false)}>
+            <View style={cc.backdrop}>
+              <SafeAreaView style={cc.sheet}>
+                <View style={cc.head}>
+                  <Text style={cc.headT}>Your coach card</Text>
+                  <TouchableOpacity onPress={() => setCardOpen(false)} hitSlop={12} accessibilityRole="button"
+                    accessibilityLabel="Close">
+                    <Ionicons name="close" size={22} color="#FFFFFF" />
+                  </TouchableOpacity>
+                </View>
+                <ScrollView showsVerticalScrollIndicator={false}>
+                  <CoachCard card={{
+                    name: user?.name,
+                    credential: card?.credential,
+                    essence: card?.essence,
+                    styleWords: card?.style_words,
+                    teaches: card?.teaches,
+                    worksWith: card?.works_with,
+                    howITeach: card?.how_i_teach,
+                    myMethod: card?.my_method,
+                    alloc: card?.alloc,
+                    bestFor: card?.best_for,
+                  }} />
+                  <Text style={cc.note}>
+                    The public page is not live yet — the link is reserved for you.
+                  </Text>
+                </ScrollView>
+              </SafeAreaView>
+            </View>
+          </Modal>
         </Animated.View>
       </SafeAreaView>
     </View>
@@ -686,6 +742,20 @@ export default function CoachProfileScreen({ navigation }) {
 }
 
 // ─── Styles ─────────────────────────────────────────────────────────────────
+
+const cc = StyleSheet.create({
+  row: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 14, paddingTop: 14,
+    borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.12)' },
+  rowText: { flex: 1, minWidth: 0, gap: 3 },
+  rowTitle: { fontFamily: Fonts.ttDemiBold, fontSize: 14.5, color: '#FFFFFF' },
+  rowSub: { fontFamily: Fonts.ttRegular, fontSize: 12.5, color: 'rgba(255,255,255,0.62)' },
+  backdrop: { flex: 1, backgroundColor: 'rgba(10,10,10,0.72)' },
+  sheet: { flex: 1, paddingHorizontal: 20, paddingTop: 8, paddingBottom: 28 },
+  head: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14 },
+  headT: { fontFamily: Fonts.ttExtraBold, fontSize: 18, letterSpacing: -0.4, color: '#FFFFFF' },
+  note: { fontFamily: Fonts.ttRegular, fontSize: 12.5, lineHeight: 18, color: 'rgba(255,255,255,0.62)',
+    textAlign: 'center', marginTop: 16 },
+});
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: 'transparent' },

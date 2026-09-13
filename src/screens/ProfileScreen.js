@@ -13,6 +13,7 @@ import {
   ActivityIndicator,
   ScrollView,
   Alert,
+  Switch,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -20,6 +21,10 @@ import { LinearGradient } from 'expo-linear-gradient';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import Svg, { Circle } from 'react-native-svg';
 import TabHeader from '../components/TabHeader';
+import { saveUserPreferences, getAccountUser, saveAccountName } from '../storage/storage';
+import { isGuardian, listChildren, setActiveChild } from '../storage/guardianStorage';
+import { createChildAccount } from '../services/childAccount';
+import ProfileDashboard from '../components/ProfileDashboard';
 import ProfileSkeleton from '../components/ProfileSkeleton';
 import StudioPicker from '../components/StudioPicker';
 import { useFocusEffect } from '@react-navigation/native';
@@ -639,6 +644,82 @@ function CoupleReviewSheet({ couple, partnerName, onRespond, onClose }) {
 }
 
 // ─── Settings tab row ─────────────────────────────────────────────────────────
+// A boolean is a switch, not a row that opens a screen to hold one checkbox.
+function SettingSwitch({ label, value, onChange, isLast }) {
+  return (
+    <View style={[set.row, !isLast && set.rowBorder]}>
+      <Text style={set.label}>{label}</Text>
+      <View style={{ flex: 1 }} />
+      <Switch
+        value={!!value}
+        onValueChange={onChange}
+        trackColor={{ false: 'rgba(20,19,17,0.16)', true: '#C08A12' }}
+        thumbColor="#FFFFFF"
+        ios_backgroundColor="rgba(20,19,17,0.16)"
+        accessibilityLabel={label}
+      />
+    </View>
+  );
+}
+
+// A sibling only needs a name and a style to exist: the rest — level, studio,
+// coach, focus points — arrives from their first recorded lesson, the same way
+// it does for any student.
+function AddChildModal({ visible, onClose, onCreated }) {
+  const [name, setName] = useState('');
+  const [style, setStyle] = useState('Latin');
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState('');
+
+  useEffect(() => { if (visible) { setName(''); setStyle('Latin'); setErr(''); } }, [visible]);
+
+  async function save() {
+    if (!name.trim()) return;
+    setSaving(true); setErr('');
+    const res = await createChildAccount({ childName: name.trim(), danceStyle: style });
+    setSaving(false);
+    if (res.error) { setErr(res.error); return; }
+    onCreated();
+  }
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={ac.backdrop}>
+        <View style={ac.sheet}>
+          <Text style={ac.title}>Add a child</Text>
+          <Text style={ac.sub}>They get their own training, focus points and coach.</Text>
+
+          <Text style={ac.label}>NAME</Text>
+          <View style={ac.field}>
+            <TextInput style={ac.input} value={name} onChangeText={setName} placeholder="Noah Lambert"
+              placeholderTextColor="rgba(10,10,10,0.42)" autoCapitalize="words" autoFocus />
+          </View>
+
+          <Text style={ac.label}>DANCE STYLE</Text>
+          <View style={ac.styles}>
+            {['Latin', 'Ballroom', 'Latin & Ballroom'].map((v) => (
+              <TouchableOpacity key={v} style={[ac.chip, style === v && ac.chipOn]} onPress={() => setStyle(v)}
+                activeOpacity={0.85} accessibilityRole="radio" accessibilityState={{ selected: style === v }}>
+                <Text style={[ac.chipT, style === v && ac.chipTOn]}>{v === 'Latin & Ballroom' ? 'Both' : v}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          {!!err && <Text style={ac.err}>{err}</Text>}
+
+          <TouchableOpacity style={[ac.save, (!name.trim() || saving) && ac.saveOff]} onPress={save}
+            disabled={!name.trim() || saving} activeOpacity={0.88}>
+            <Text style={ac.saveT}>{saving ? 'Adding…' : 'Add'}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity onPress={onClose} style={ac.cancel} activeOpacity={0.7}>
+            <Text style={ac.cancelT}>Cancel</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 function SettingRow({ icon, label, value, onPress, isLast }) {
   return (
     <TouchableOpacity
@@ -646,12 +727,9 @@ function SettingRow({ icon, label, value, onPress, isLast }) {
       onPress={onPress}
       activeOpacity={0.7}
     >
-      <View style={set.icon}>
-        <Ionicons name={icon} size={17} color="rgba(10,10,10,0.6)" />
-      </View>
       <Text style={set.label}>{label}</Text>
-      {!!value && <Text style={set.value} numberOfLines={1}>{value}</Text>}
-      <Ionicons name="chevron-forward" size={15} color="rgba(10,10,10,0.3)" />
+      {!!value && <Text style={set.value}>{value}</Text>}
+      <Ionicons name="chevron-forward" size={15} color="#767061" />
     </TouchableOpacity>
   );
 }
@@ -826,6 +904,17 @@ export default function ProfileScreen({ navigation, route }) {
   const hasLoadedRef = useRef(false);
   const [user, setUser] = useState(null);
   const [activeTab, setActiveTab] = useState('stats'); // 'links' | 'stats' | 'settings' — default to Statistics on first mount
+  // Which style the dashboard is showing. Seeded from the profile, then the
+  // scope control drives it — it does NOT write back to the profile.
+  const [dashCategory, setDashCategory] = useState(null);
+  // A guardian account follows one child at a time; the rest of the app never
+  // sees this, since getUserId() already resolves to whichever one is active.
+  const [children, setChildren] = useState([]);
+  // For a guardian, `user` is the child being followed — so "your account"
+  // needs the signed-in row separately, or the parent would be shown their
+  // child's name and the generated managed address.
+  const [account, setAccount] = useState(null);
+  const [addChild, setAddChild] = useState(false);
   // A partner-linking notification deep-links here with { tab: 'links' }; honor
   // it, then clear the param so a later manual subtab switch isn't overridden.
   useEffect(() => {
@@ -879,6 +968,7 @@ export default function ProfileScreen({ navigation, route }) {
   const [partnerIncoming, setPartnerIncoming] = useState(null);
   const [partnerOutgoing, setPartnerOutgoing] = useState(null);
   const [partnerModalVisible, setPartnerModalVisible] = useState(false);
+  const [editGoal, setEditGoal] = useState(60);
   const [partnerCode, setPartnerCode] = useState('');
   const [partnerLinking, setPartnerLinking] = useState(false);
   const [partnerError, setPartnerError] = useState('');
@@ -1120,11 +1210,69 @@ export default function ProfileScreen({ navigation, route }) {
   }
 
   // Account — name + profile photo + email (TabHeader "Edit" + Settings ▸ Account)
+  const me = account || user;          // the account, falling back to self
+
   function openEdit() {
-    setEditName(user?.name || '');
-    setEditEmail(user?.email || '');
+    setEditName(me?.name || '');
+    setEditEmail(me?.email || '');
     setProfileModal('account');
   }
+  function openGoalModal() {
+    setEditGoal(user?.weekly_goal_minutes ?? 60);
+    setProfileModal('goal');
+  }
+
+  const loadChildren = useCallback(async () => {
+    if (!(await isGuardian())) return;
+    try {
+      const [kids, acc] = await Promise.all([listChildren(), getAccountUser()]);
+      setChildren(kids);
+      setAccount(acc);
+    } catch { /* not a guardian, or offline */ }
+  }, []);
+  useEffect(() => { loadChildren(); }, [loadChildren]);
+
+  async function switchChild(childId) {
+    const current = children.find((c) => c.active);
+    if (current?.id === childId) return;
+    // Paint the choice immediately; the reload below is what actually swaps the
+    // data underneath every other screen.
+    setChildren((prev) => prev.map((c) => ({ ...c, active: c.id === childId })));
+    try {
+      await setActiveChild(childId);
+      await load();
+    } catch (e) {
+      setChildren((prev) => prev.map((c) => ({ ...c, active: c.id === current?.id })));
+      Alert.alert('Could not switch', e.message || 'Try again in a moment.');
+    }
+  }
+
+  async function handleSaveGoal() {
+    if (saving) return;
+    setSaving(true);
+    try {
+      await saveUserPreferences({ weekly_goal_minutes: editGoal });
+      setUser(prev => ({ ...prev, weekly_goal_minutes: editGoal }));
+      setProfileModal(null);
+    } catch {
+      Alert.alert('Could not save', 'Your weekly goal was not changed. Check your connection and try again.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // Optimistic: the switch moves at once and rolls back if the write fails.
+  async function handleToggleNotify(field, next) {
+    const before = user?.[field];
+    setUser(u => ({ ...u, [field]: next }));
+    try {
+      await saveUserPreferences({ [field]: next });
+    } catch {
+      setUser(u => ({ ...u, [field]: before }));
+      Alert.alert('Could not save', 'That setting was not changed. Check your connection and try again.');
+    }
+  }
+
   function openStyleModal() {
     setEditStyle(user?.dance_style || '');
     setProfileModal('style');
@@ -1141,14 +1289,15 @@ export default function ProfileScreen({ navigation, route }) {
     const newEmail = editEmail.trim();
     try {
       if (name && name !== user?.name) {
-        await saveUserProfile({ name });
-        setUser(prev => ({ ...prev, name }));
+        // The name on this sheet belongs to the account, not to the dancer.
+        if (account) { await saveAccountName(name); setAccount(prev => ({ ...prev, name })); }
+        else { await saveUserProfile({ name }); setUser(prev => ({ ...prev, name })); }
         const ini = name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
         setInitials(ini);
         AsyncStorage.setItem('@profile_name', name).catch(() => {});
       }
       let emailNotice = false;
-      if (newEmail && newEmail.toLowerCase() !== (user?.email || '').toLowerCase()) {
+      if (newEmail && newEmail.toLowerCase() !== (me?.email || '').toLowerCase()) {
         const { error } = await supabase.auth.updateUser({ email: newEmail });
         if (error) throw error;
         emailNotice = true;
@@ -1556,7 +1705,29 @@ export default function ProfileScreen({ navigation, route }) {
       />
       <SafeAreaView style={styles.safe} edges={['top', 'left', 'right']}>
         <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
-          <TabHeader navigation={navigation} onProfilePress={openEdit} editMode />
+          <TabHeader
+            navigation={navigation}
+            right={(
+              <View style={styles.heroActs}>
+                <TouchableOpacity
+                  style={[styles.heroActBtn, activeTab === 'links' && styles.heroActOn]}
+                  onPress={() => setActiveTab(activeTab === 'links' ? 'stats' : 'links')}
+                  accessibilityRole="button"
+                  accessibilityLabel="Links: your coach and partner"
+                >
+                  <Ionicons name="link-outline" size={21} color={activeTab === 'links' ? '#FFFFFF' : '#141311'} />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.heroActBtn, activeTab === 'settings' && styles.heroActOn]}
+                  onPress={() => setActiveTab(activeTab === 'settings' ? 'stats' : 'settings')}
+                  accessibilityRole="button"
+                  accessibilityLabel="Settings"
+                >
+                  <Ionicons name="options-outline" size={21} color={activeTab === 'settings' ? '#FFFFFF' : '#141311'} />
+                </TouchableOpacity>
+              </View>
+            )}
+          />
 
           {/* ── Fixed hero + sub-tabs — never scroll ── */}
           <View style={styles.fixedTop}>
@@ -1584,15 +1755,10 @@ export default function ProfileScreen({ navigation, route }) {
                     {user.studio.name}
                   </Text>
                 )}
-                {!!user?.dance_style && (
-                  <View style={styles.styleChip}>
-                    <Text style={styles.styleChipText}>{user.dance_style}</Text>
-                  </View>
-                )}
               </View>
+
             </View>
 
-            <SubTabs active={activeTab} onChange={setActiveTab} />
           </View>
 
           {/* ── Per-tab scrollable content ── */}
@@ -1702,106 +1868,71 @@ export default function ProfileScreen({ navigation, route }) {
 
             {activeTab === 'stats' && (
               <View style={styles.tabBody}>
-                <View style={stat.triad}>
-                  <View style={stat.cell}>
-                    <Text style={stat.num}>{stats.totalClasses}</Text>
-                    <Text style={stat.lbl}>Classes</Text>
-                  </View>
-                  <View style={stat.cellDivider} />
-                  <View style={stat.cell}>
-                    <Text style={stat.num}>{stats.totalSessions}</Text>
-                    <Text style={stat.lbl}>Sessions</Text>
-                  </View>
-                  <View style={stat.cellDivider} />
-                  <View style={stat.cell}>
-                    <Text style={stat.num}>{stats.activeFocusAreas}</Text>
-                    <Text style={stat.lbl}>Focus</Text>
-                  </View>
-                </View>
-
-                <View style={stat.miniCard}>
-                  <View style={stat.miniHalf}>
-                    <Text style={stat.miniLabel}>Best streak</Text>
-                    <Text style={stat.miniVal}>{streakLabel}</Text>
-                  </View>
-                  <View style={stat.miniHalfRight}>
-                    <Text style={stat.miniLabel}>This month</Text>
-                    <Text style={stat.miniVal}>{monthLabel}</Text>
-                  </View>
-                </View>
-
-                <SecLabel text="Get ready for next private lesson" plain />
-
-                {paired && (
-                  <View style={pm.readyToggle}>
-                    <TouchableOpacity onPress={() => setReadinessMode('solo')} style={[pm.readyTab, readinessMode === 'solo' && pm.readyTabOn]} activeOpacity={0.7}>
-                      <Text style={[pm.readyTabTxt, readinessMode === 'solo' && pm.readyTabTxtOn]}>Solo</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity onPress={() => setReadinessMode('couple')} style={[pm.readyTab, readinessMode === 'couple' && pm.readyTabOn]} activeOpacity={0.7}>
-                      <Text style={[pm.readyTabTxt, readinessMode === 'couple' && pm.readyTabTxtOn]}>Couple</Text>
-                    </TouchableOpacity>
-                  </View>
-                )}
-
-                <View style={ready.card}>
-                  <View style={ready.meterRow}>
-                    <ReadinessMeter percent={activeReadiness?.percent || 0} />
-                    <View style={{ flex: 1, minWidth: 0 }}>
-                      <Text style={ready.title}>{readinessTitle}</Text>
-                      <Text style={ready.subtitle}>{readinessSubtitle}</Text>
-                    </View>
-                  </View>
-
-                  <View style={ready.divider} />
-
-                  {(activeReadiness?.focuses || []).length > 0 && (
-                    <Text style={ready.sectionLabel}>Focus points</Text>
-                  )}
-                  {(activeReadiness?.focuses || []).map((focus, idx, arr) => (
-                    <FocusReadyRow
-                      key={focus.focusPointId}
-                      row={focus}
-                      isLast={idx === arr.length - 1}
-                    />
-                  ))}
-
-                  {visibleQuestions.length > 0 && (
-                    <>
-                      <View style={ready.divider} />
-                      <TouchableOpacity
-                        style={ready.sectionToggle}
-                        onPress={() => setQuestionsExpanded(v => !v)}
-                        activeOpacity={0.7}
-                      >
-                        <Text style={ready.sectionLabelInline}>
-                          Questions · {visibleQuestions.length}
-                        </Text>
-                        <Ionicons
-                          name={questionsExpanded ? 'chevron-up' : 'chevron-down'}
-                          size={14}
-                          color="#F6D27A"
-                        />
-                      </TouchableOpacity>
-                      {questionsExpanded && visibleQuestions.map((q, idx, arr) => (
-                        <QuestionReadyRow
-                          key={q.id}
-                          question={q}
-                          isLast={idx === arr.length - 1}
-                          onPress={() => setViewingQuestion(q)}
-                        />
-                      ))}
-                    </>
-                  )}
-                </View>
+                <ProfileDashboard
+                  user={user}
+                  category={dashCategory}
+                  onChangeCategory={setDashCategory}
+                  navigation={navigation}
+                />
               </View>
             )}
 
             {activeTab === 'settings' && (
               <View style={styles.tabBody}>
+                {children.length > 0 && (
+                  <>
+                    <SecLabel text={children.length > 1 ? 'Children' : 'Your child'} />
+                    <View style={set.card}>
+                      {children.map((c, i) => (
+                        <TouchableOpacity
+                          key={c.id}
+                          style={[set.row, i < children.length - 1 && set.rowBorder]}
+                          onPress={() => switchChild(c.id)}
+                          activeOpacity={0.7}
+                          accessibilityRole="radio"
+                          accessibilityState={{ selected: c.active }}
+                        >
+                          <Text style={set.label}>{c.name}</Text>
+                          <Text style={set.value}>{c.active ? 'Following' : c.danceStyle || ''}</Text>
+                          <Ionicons name={c.active ? 'checkmark-circle' : 'ellipse-outline'}
+                            size={17} color={c.active ? '#8F6410' : '#B9B3A5'} />
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                    <TouchableOpacity style={styles.addChildBtn} onPress={() => setAddChild(true)} activeOpacity={0.8}>
+                      <Ionicons name="add" size={16} color="#8F6410" />
+                      <Text style={styles.addChildText}>Add a child</Text>
+                    </TouchableOpacity>
+                  </>
+                )}
+
+                <SecLabel text="Account" />
                 <View style={set.card}>
-                  <SettingRow icon="person-outline" label="Account" onPress={openEdit} />
-                  <SettingRow icon="musical-notes-outline" label="Dance style" value={user?.dance_style} onPress={openStyleModal} />
-                  <SettingRow icon="business-outline" label="Dance studio" value={user?.studio?.name} onPress={openStudioModal} isLast />
+                  <SettingRow label={me?.name || 'Account'}
+                    value={account ? 'Your account — not your child’s' : 'Name, email and photo'}
+                    onPress={openEdit} isLast />
+                </View>
+
+                <SecLabel text="Training" />
+                <View style={set.card}>
+                  <SettingRow label="Dance style" value={user?.dance_style} onPress={openStyleModal} />
+                  <SettingRow label="Weekly goal" value={`${user?.weekly_goal_minutes ?? 60} min`} onPress={openGoalModal} />
+                  <SettingRow label="Dance studio" value={user?.studio?.name} onPress={openStudioModal} isLast />
+                </View>
+
+                <SecLabel text="Notifications" />
+                <View style={set.card}>
+                  <SettingSwitch
+                    label="Practice reminders"
+                    value={user?.notify_practice_reminders}
+                    onChange={(v) => handleToggleNotify('notify_practice_reminders', v)}
+                  />
+                  <SettingSwitch
+                    label="When a lesson lands"
+                    value={user?.notify_lesson_ready ?? true}
+                    onChange={(v) => handleToggleNotify('notify_lesson_ready', v)}
+                    isLast
+                  />
                 </View>
 
                 {isTrainer && pendingReviews > 0 && (
@@ -1901,6 +2032,32 @@ export default function ProfileScreen({ navigation, route }) {
                         </View>
                       </View>
                       <TouchableOpacity style={em.saveBtn} onPress={handleSaveStyle} activeOpacity={0.88} disabled={saving || !editStyle}>
+                        <Text style={em.saveBtnText}>{saving ? 'Saving…' : 'Save'}</Text>
+                      </TouchableOpacity>
+                    </>
+                  )}
+
+                  {profileModal === 'goal' && (
+                    <>
+                      <Text style={em.title}>Weekly goal</Text>
+                      <View style={em.field}>
+                        <View style={em.pillRow}>
+                          {[60, 90, 120, 150, 180, 240].map((g) => (
+                            <TouchableOpacity
+                              key={g}
+                              style={[em.pill, editGoal === g && em.pillActive]}
+                              onPress={() => setEditGoal(g)}
+                              activeOpacity={0.75}
+                            >
+                              <Text style={[em.pillText, editGoal === g && em.pillTextActive]}>{g} min</Text>
+                            </TouchableOpacity>
+                          ))}
+                        </View>
+                      </View>
+                      <Text style={em.studioNote}>
+                        Minutes of practice a week. Your dashboard compares this week against it.
+                      </Text>
+                      <TouchableOpacity style={em.saveBtn} onPress={handleSaveGoal} activeOpacity={0.88} disabled={saving}>
                         <Text style={em.saveBtnText}>{saving ? 'Saving…' : 'Save'}</Text>
                       </TouchableOpacity>
                     </>
@@ -2046,6 +2203,13 @@ export default function ProfileScreen({ navigation, route }) {
             onUnpair={handleUnpairPartner}
           />
 
+          {/* ── Add a child ── */}
+          <AddChildModal
+            visible={addChild}
+            onClose={() => setAddChild(false)}
+            onCreated={async () => { setAddChild(false); await loadChildren(); }}
+          />
+
           {/* ── Question detail modal ── */}
           <Modal
             visible={!!viewingQuestion}
@@ -2067,13 +2231,37 @@ export default function ProfileScreen({ navigation, route }) {
   );
 }
 
+const ac = StyleSheet.create({
+  backdrop: { flex: 1, backgroundColor: 'rgba(10,10,10,0.45)', justifyContent: 'center', paddingHorizontal: 26 },
+  sheet: { backgroundColor: '#FFFFFF', borderRadius: 22, padding: 22 },
+  title: { fontFamily: Fonts.ttExtraBold, fontSize: 21, letterSpacing: -0.5, color: '#141311' },
+  sub: { fontFamily: Fonts.ttRegular, fontSize: 13.5, lineHeight: 19, color: '#6B6656', marginTop: 6 },
+  label: { fontFamily: Fonts.ttMedium, fontSize: 10.5, letterSpacing: 1.4, color: '#6B6656', marginTop: 20, marginBottom: 8 },
+  field: { borderWidth: 1, borderColor: 'rgba(20,19,17,0.14)', borderRadius: 12, height: 50, paddingHorizontal: 14, justifyContent: 'center' },
+  input: { fontFamily: Fonts.ttRegular, fontSize: 15.5, color: '#141311', padding: 0 },
+  styles: { flexDirection: 'row', gap: 8 },
+  chip: { flex: 1, borderWidth: 1, borderColor: 'rgba(20,19,17,0.14)', borderRadius: 999, paddingVertical: 11, alignItems: 'center' },
+  chipOn: { borderWidth: 2, borderColor: '#E2AA20', paddingVertical: 10 },
+  chipT: { fontFamily: Fonts.ttRegular, fontSize: 13, color: '#141311' },
+  chipTOn: { fontFamily: Fonts.ttDemiBold },
+  err: { fontFamily: Fonts.ttMedium, fontSize: 13, lineHeight: 18, color: '#A3281B', marginTop: 14 },
+  save: { marginTop: 22, height: 52, borderRadius: 999, backgroundColor: '#E2AA20', alignItems: 'center', justifyContent: 'center' },
+  saveOff: { opacity: 0.4 },
+  saveT: { fontFamily: Fonts.ttDemiBold, fontSize: 15.5, color: '#141311' },
+  cancel: { marginTop: 10, alignSelf: 'center', padding: 8 },
+  cancelT: { fontFamily: Fonts.ttRegular, fontSize: 13.5, color: '#6B6656' },
+});
+
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: 'transparent' },
+  addChildBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    marginTop: 10, paddingVertical: 12 },
+  addChildText: { fontFamily: Fonts.ttDemiBold, fontSize: 13.5, color: '#8F6410' },
 
   fixedTop: {
     paddingHorizontal: Spacing.side,
     paddingTop: 0,
-    marginTop: -8,
+    marginTop: 0,
   },
 
   content: { flex: 1 },
@@ -2092,15 +2280,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 13,
     paddingHorizontal: 4,
-    paddingTop: 2,
+    paddingTop: 6,
     paddingBottom: 14,
   },
   heroAvatarWrap: { flex: 0 },
   heroAvatarRing: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    padding: 2.5,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    padding: 2,
     backgroundColor: 'rgba(232,181,48,0.45)',
     shadowColor: '#E8B530',
     shadowOpacity: 0.22,
@@ -2109,17 +2297,17 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   heroAvatarPhoto: {
-    width: 59,
-    height: 59,
-    borderRadius: 29.5,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: '#F7F6F3',
     borderWidth: 2,
     borderColor: '#F7F6F3',
   },
   heroAvatarFallback: {
-    width: 59,
-    height: 59,
-    borderRadius: 29.5,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: '#4E6A5C',
     alignItems: 'center',
     justifyContent: 'center',
@@ -2128,20 +2316,29 @@ const styles = StyleSheet.create({
   },
   heroAvatarInitials: {
     fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 22,
+    fontSize: 16,
     color: '#F7F6F3',
   },
   heroText: { flex: 1, minWidth: 0 },
+  heroActs: { flexDirection: 'row', gap: 8, flex: 0 },
+  heroActBtn: {
+    width: 44, height: 44, borderRadius: 22,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#282214', shadowOpacity: 0.10, shadowOffset: { width: 0, height: 4 }, shadowRadius: 10,
+    elevation: 2,
+  },
+  heroActOn: { backgroundColor: '#141311' },
   heroName: {
     fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 22,
+    fontSize: 17,
     color: '#0A0A0A',
     letterSpacing: -0.5,
   },
   heroStudio: {
-    fontFamily: Fonts.jakartaSemiBold,
-    fontSize: 12.5,
-    color: 'rgba(10,10,10,0.72)',
+    fontFamily: Fonts.jakartaRegular,
+    fontSize: 12,
+    color: '#6B6656',
     marginTop: 2,
   },
   styleChip: {
@@ -2166,21 +2363,24 @@ const styles = StyleSheet.create({
   // ── Logout — red pill, sits at the end of the scroll, just above the
   // floating tab bar.
   logoutBtn: {
-    alignSelf: 'center',
-    marginTop: 18,
-    paddingHorizontal: 16,
-    paddingVertical: 9,
-    backgroundColor: 'rgba(212,69,69,0.10)',
+    alignSelf: 'stretch',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 22,
+    minHeight: 44,
+    paddingHorizontal: 18,
+    backgroundColor: 'transparent',
     borderWidth: 1,
-    borderColor: 'rgba(212,69,69,0.30)',
-    borderRadius: 999,
+    borderColor: 'rgba(163,40,27,0.42)',
+    borderRadius: 12,
   },
   logoutText: {
     fontFamily: Fonts.jakartaSemiBold,
-    fontSize: 12,
-    color: '#D44545',
-    letterSpacing: 0.4,
+    fontSize: 14.5,
+    color: '#A3281B',          // 3.5:1 -> 7.2:1
+    letterSpacing: 0,
   },
+
 
   // ── Trainer-only ──
   trainerReviewBtn: {
@@ -2258,16 +2458,16 @@ const row = StyleSheet.create({
   secLabel: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 11,
+    gap: 12,
     paddingHorizontal: 4,
-    marginTop: 18,
+    marginTop: 24,
     marginBottom: 10,
   },
   secLabelText: {
     fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 10,
-    color: '#A8801A',
-    letterSpacing: 1.4,
+    fontSize: 11.5,
+    color: '#7F5A0B',          // 3.6:1 -> 5.3:1
+    letterSpacing: 1.6,
     textTransform: 'uppercase',
   },
   secLabelTextPlain: {
@@ -2276,7 +2476,7 @@ const row = StyleSheet.create({
     letterSpacing: 0,
     fontSize: 12.5,
   },
-  secLabelRule: { flex: 1, height: 1, backgroundColor: 'rgba(10,10,10,0.06)' },
+  secLabelRule: { flex: 1, height: 1, backgroundColor: 'rgba(20,19,17,0.10)' },
   secLabelRight: {
     fontFamily: Fonts.jakartaRegular,
     fontSize: 10,
@@ -2287,43 +2487,49 @@ const row = StyleSheet.create({
   card: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 11,
-    backgroundColor: 'rgba(255,255,255,0.55)',
-    borderWidth: 1,
-    borderColor: 'rgba(10,10,10,0.09)',
-    borderRadius: 15,
-    paddingHorizontal: 14,
-    paddingVertical: 11,
-    marginBottom: 8,
+    gap: 14,
+    minHeight: 62,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 22,
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+    marginBottom: 12,
   },
   init: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#F0C24A',
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: '#E2AA20',
+    borderWidth: 1,
+    borderColor: '#A87A10',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  initAdd: { backgroundColor: 'rgba(46,70,112,0.12)' },
+  initAdd: {
+    backgroundColor: '#F4F2EC',
+    borderStyle: 'dashed',
+    borderColor: 'rgba(20,19,17,0.45)',
+  },
   initTxt: {
     fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 12,
-    color: '#0A0A0A',
+    fontSize: 16,
+    color: '#141311',
+    letterSpacing: -0.3,
   },
-  initTxtAdd: { color: '#2E4670', fontSize: 15 },
+  initTxtAdd: { color: '#6B6656', fontSize: 24 },
   role: {
     fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 8.5,
-    color: '#A8801A',
-    letterSpacing: 1.3,
+    fontSize: 11,           // was 8.5 — below any legibility floor
+    color: '#7F5A0B',       // 3.6:1 -> 5.3:1
+    letterSpacing: 1.4,
     textTransform: 'uppercase',
   },
   name: {
     fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 15.5,
-    color: '#0A0A0A',
-    letterSpacing: -0.1,
-    marginTop: 1,
+    fontSize: 17,
+    color: '#141311',
+    letterSpacing: -0.34,
+    marginTop: 4,
   },
   nameMuted: { color: 'rgba(10,10,10,0.45)' },
 });
@@ -2473,22 +2679,20 @@ const stat = StyleSheet.create({
 // ─── Settings tab ─────────────────────────────────────────────────────────────
 const set = StyleSheet.create({
   card: {
-    backgroundColor: 'rgba(255,255,255,0.55)',
-    borderWidth: 1,
-    borderColor: 'rgba(10,10,10,0.09)',
-    borderRadius: 15,
-    paddingHorizontal: 4,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 22,
+    paddingHorizontal: 18,
   },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 13,
+    minHeight: 58,
+    paddingVertical: 15,
   },
   rowBorder: {
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(10,10,10,0.05)',
+    borderBottomColor: 'rgba(20,19,17,0.10)',
   },
   icon: {
     width: 30,
@@ -2499,17 +2703,22 @@ const set = StyleSheet.create({
     justifyContent: 'center',
   },
   label: {
-    flex: 1,
+    flexShrink: 0,
     fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 14.5,
-    color: '#0A0A0A',
+    fontSize: 15.5,
+    color: '#141311',
+    letterSpacing: -0.16,
   },
+  // maxWidth + numberOfLines is what cut "Oti & Marius Dance Studio" mid-word.
+  // The value now takes the remaining width and wraps instead.
   value: {
+    flex: 1,
+    textAlign: 'right',
     fontFamily: Fonts.jakartaRegular,
-    fontSize: 13,
-    color: 'rgba(10,10,10,0.45)',
+    fontSize: 13.5,
+    lineHeight: 18,
+    color: '#6B6656',          // 3.4:1 -> 5.7:1 on white
     marginRight: 6,
-    maxWidth: 130,
   },
 });
 

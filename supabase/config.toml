@@ -13,6 +13,17 @@ verify_jwt = false
 [functions.ai-chat]
 verify_jwt = false
 
+# Called before the student has an account, so there is no JWT to verify.
+# Abuse is bounded inside the function: fixed prompt, cheap model, small
+# max_tokens, length-capped input and a per-IP cooldown.
+[functions.onboarding-recall]
+verify_jwt = false
+
+# Verifies the parent's JWT itself, and needs the service role to create the
+# child's auth account — so the gateway check is left off and done in-function.
+[functions.create-child-account]
+verify_jwt = false
+
 [functions.student-class-score]
 verify_jwt = false
 

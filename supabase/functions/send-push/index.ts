@@ -81,7 +81,25 @@ async function sendPush(record: NotificationRecord): Promise<void> {
     return
   }
 
-  const pushToken = userRow?.push_token
+  let pushToken = userRow?.push_token
+  let tokenOwner = record.user_id
+
+  // A managed child has no device of their own: the account that follows them
+  // does. Without this, every notification addressed to a child dancer reads a
+  // null token and silently goes nowhere.
+  if (!pushToken) {
+    const { data: guards } = await supabase
+      .from('guardians')
+      .select('guardian_id, users!guardians_guardian_id_fkey(push_token)')
+      .eq('child_id', record.user_id)
+    const withToken = (guards || []).find((g: { users?: { push_token?: string } }) => g.users?.push_token)
+    if (withToken) {
+      pushToken = withToken.users!.push_token!
+      tokenOwner = withToken.guardian_id
+      console.log(`[send-push] user ${record.user_id} has no device — routing to guardian ${tokenOwner}`)
+    }
+  }
+
   if (!pushToken) {
     console.log(`[send-push] No push token for user ${record.user_id} — skipping`)
     return
@@ -133,15 +151,17 @@ async function sendPush(record: NotificationRecord): Promise<void> {
         // Clear the stale token so future notifications don't silently no-op.
         // Guard on the current value so we don't clobber a token the user
         // re-registered between our send and this cleanup.
+        // Clear it where it actually lives: for a child dancer the dead token
+        // belongs to the guardian's row, not to theirs.
         const { error: clearErr } = await supabase
           .from('users')
           .update({ push_token: null })
-          .eq('id', record.user_id)
+          .eq('id', tokenOwner)
           .eq('push_token', pushToken)
         if (clearErr) {
-          console.error(`[send-push] failed to clear stale token for ${record.user_id}:`, clearErr.message)
+          console.error(`[send-push] failed to clear stale token for ${tokenOwner}:`, clearErr.message)
         } else {
-          console.log(`[send-push] cleared stale push_token for user ${record.user_id}`)
+          console.log(`[send-push] cleared stale push_token for user ${tokenOwner}`)
         }
       }
       return
