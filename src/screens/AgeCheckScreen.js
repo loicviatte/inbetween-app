@@ -122,7 +122,7 @@ export default function AgeCheckScreen() {
             <>
               <Text style={styles.h1}>We think you might be under 18</Text>
               <Text style={styles.sub}>
-                Your account is locked until we’ve checked, and your lessons can’t be captured. Which is true?
+                Your account is locked until we’ve checked your age. Choose the option that applies to you.
               </Text>
               <Option
                 title="I’m 18 or over"
