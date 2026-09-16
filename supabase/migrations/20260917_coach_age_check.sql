@@ -13,6 +13,7 @@
 --   minor_pending    the coach said under 18; locked, waiting on the student
 --   adult_confirmed  the student confirmed by email they're 18 or over
 --   minor_consented  a parent gave permission
+--   manual_verification  InBetween confirmed 18+ from a proof of age (see 20260917_age_check_manual.sql)
 -- consent_status moves with it: 'pending' while locked (StartClass already
 -- refuses to record), back to 'not_required' or on to 'granted'.
 
