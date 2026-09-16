@@ -457,7 +457,7 @@ export default function CoachHomeScreen({ navigation, route }) {
     const first = (req.name || 'this student').split(/\s+/)[0];
     Alert.alert(
       `Is ${first} 18 or over?`,
-      'Under 18, their account stays locked until they confirm their age or a parent gives permission. Nothing is captured before then.',
+      'It helps us keep younger dancers safe: under-18s need a parent’s permission before their lessons are captured.',
       [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Under 18', onPress: () => { accept(true).catch(() => {}); } },
