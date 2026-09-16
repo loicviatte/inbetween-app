@@ -182,6 +182,18 @@ async function _getClassInputs() {
 }
 export const getClassInputs = cached('classInputs', _getClassInputs);
 
+// Minutes each lesson ran, from its recording — { [classInputId]: minutes }.
+// Recordings are the coach's to read, so this goes through lesson_minutes,
+// which returns minutes only, for lessons the caller can already see. Lessons
+// without a recording (logged by hand) are simply absent.
+export async function getLessonMinutes(classInputIds) {
+  const ids = (classInputIds || []).filter(Boolean);
+  if (ids.length === 0) return {};
+  const { data, error } = await supabase.rpc('lesson_minutes', { p_ids: ids });
+  if (error || !data) return {};
+  return Object.fromEntries(data.map((r) => [r.class_input_id, r.minutes]));
+}
+
 export async function respondToAttendance(classInputId, attended) {
   const { data, error } = await supabase.functions.invoke('attendance-response', {
     body: { class_input_id: classInputId, attended: attended === 'yes' || attended === true },

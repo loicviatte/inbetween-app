@@ -26,7 +26,29 @@ export function useIsParentAccount() {
   return isParent;
 }
 
-export default function TabHeader({ navigation, onProfilePress, editMode = false, center = null, right = null, lead = null, style = null }) {
+// A square icon button in the header's look (the bell's): `on` inverts it,
+// `badge` puts the gold count on its corner.
+export function HeaderIconButton({ icon, onPress, on = false, badge = 0, label }) {
+  return (
+    <TouchableOpacity
+      style={[styles.notifBtn, on && styles.iconBtnOn]}
+      onPress={onPress}
+      activeOpacity={0.7}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ selected: on }}
+    >
+      <Ionicons name={icon} size={18} color={on ? '#FFFFFF' : Colors.black} />
+      {badge > 0 && (
+        <View style={styles.notifBadge}>
+          <Text style={styles.notifBadgeText}>{badge > 9 ? '9+' : badge}</Text>
+        </View>
+      )}
+    </TouchableOpacity>
+  );
+}
+
+export default function TabHeader({ navigation, onProfilePress, editMode = false, center = null, right = null, lead = null, style = null, actions = null }) {
   const { avatarUri, initials: contextInitials } = useProfile();
 
   const [cachedPhoto, setCachedPhoto] = useState(null);
@@ -133,6 +155,9 @@ export default function TabHeader({ navigation, onProfilePress, editMode = false
 
       {/* A caller that supplies `right` owns that slot outright — otherwise the
           avatar would still render and land in the middle of the row. */}
+      {/* A screen's own buttons, set before the avatar. */}
+      {actions ? <View style={styles.actions}>{actions}</View> : null}
+
       {right || (editMode ? (
         <TouchableOpacity
           onPress={handleProfilePress}
@@ -212,6 +237,17 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.ttBold,
     fontSize: 9.5,
     color: '#0A0A0A',
+  },
+  iconBtnOn: {
+    backgroundColor: '#0A0A0A',
+    shadowOpacity: 0,
+    elevation: 0,
+  },
+  actions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+    marginRight: 9,
   },
   lead: {
     flex: 1,
