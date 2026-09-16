@@ -2406,7 +2406,7 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   focusName: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.ttBold,
     fontSize: 24,
     color: Colors.white,
     lineHeight: 30,

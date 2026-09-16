@@ -440,7 +440,7 @@ const c = StyleSheet.create({
   },
 
   name: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.ttBold,
     fontSize: 18,
     color: '#FFFFFF',
     letterSpacing: -0.4,

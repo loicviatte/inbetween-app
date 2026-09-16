@@ -2247,7 +2247,7 @@ const cc = StyleSheet.create({
   expTopLeft: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1, minWidth: 0 },
   progressTxt: { fontFamily: Fonts.jakartaExtraBold, fontSize: 13, color: 'rgba(255,255,255,0.92)', letterSpacing: 0.2 },
   progressUnit: { fontFamily: Fonts.jakartaSemiBold, fontSize: 11, color: 'rgba(255,255,255,0.55)', letterSpacing: 0.2 },
-  expTitle: { fontFamily: Fonts.jakartaExtraBold, fontSize: 30, color: '#fff', letterSpacing: -0.8, lineHeight: 33, marginTop: 12, minHeight: 66 },
+  expTitle: { fontFamily: Fonts.ttBold, fontSize: 30, color: '#fff', letterSpacing: -0.8, lineHeight: 33, marginTop: 12, minHeight: 66 },
   expSub: { fontFamily: Fonts.ttLight, fontSize: 11.5, color: 'rgba(255,255,255,0.55)', marginTop: 5 },
   expBodyBox: { minHeight: 38, marginTop: 9 },
   expDesc: { fontFamily: Fonts.jakartaRegular, fontSize: 13, color: 'rgba(255,255,255,0.8)', lineHeight: 19 },
@@ -2281,7 +2281,7 @@ const cc = StyleSheet.create({
   labelBare: { fontFamily: Fonts.jakartaExtraBold, fontSize: 9, letterSpacing: 1.1, textTransform: 'uppercase' },
   labelSolo: { color: 'rgba(255,255,255,0.55)' },
   labelCouple: { color: '#A9C2E2' },
-  collapsedTitle: { fontFamily: Fonts.jakartaBold, fontSize: 16.5, color: '#fff', letterSpacing: -0.3, marginTop: 3 },
+  collapsedTitle: { fontFamily: Fonts.ttBold, fontSize: 16.5, color: '#fff', letterSpacing: -0.3, marginTop: 3 },
   expandBtn: { width: 38, height: 38, borderRadius: 19, backgroundColor: 'rgba(255,255,255,0.12)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.26)', alignItems: 'center', justifyContent: 'center' },
 
   // Dots
