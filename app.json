@@ -49,27 +49,19 @@
         "expo-font",
         {
           "fonts": [
-            "./assets/fonts/TTTravelsNext-Light.ttf",
-            "./assets/fonts/TTTravelsNext-Regular.ttf",
-            "./assets/fonts/TTTravelsNext-Medium.ttf",
-            "./assets/fonts/TTTravelsNext-DemiBold.ttf",
-            "./assets/fonts/TTTravelsNext-Bold.ttf",
-            "./assets/fonts/TTTravelsNext-ExtraBold.ttf",
-            "./node_modules/@expo-google-fonts/bricolage-grotesque/300Light/BricolageGrotesque_300Light.ttf",
-            "./node_modules/@expo-google-fonts/bricolage-grotesque/400Regular/BricolageGrotesque_400Regular.ttf",
-            "./node_modules/@expo-google-fonts/bricolage-grotesque/500Medium/BricolageGrotesque_500Medium.ttf"
+            "./node_modules/@expo-google-fonts/syne/400Regular/Syne_400Regular.ttf",
+            "./node_modules/@expo-google-fonts/syne/500Medium/Syne_500Medium.ttf",
+            "./node_modules/@expo-google-fonts/syne/600SemiBold/Syne_600SemiBold.ttf",
+            "./node_modules/@expo-google-fonts/syne/700Bold/Syne_700Bold.ttf",
+            "./node_modules/@expo-google-fonts/syne/800ExtraBold/Syne_800ExtraBold.ttf"
           ],
           "android": {
             "fonts": [
-              { "fontFamily": "TTTravelsNextTrl-Lt", "fontDefinitions": [{ "path": "./assets/fonts/TTTravelsNext-Light.ttf", "weight": 300 }] },
-              { "fontFamily": "TTTravelsNextTrl-Rg", "fontDefinitions": [{ "path": "./assets/fonts/TTTravelsNext-Regular.ttf", "weight": 400 }] },
-              { "fontFamily": "TTTravelsNextTrl-Md", "fontDefinitions": [{ "path": "./assets/fonts/TTTravelsNext-Medium.ttf", "weight": 500 }] },
-              { "fontFamily": "TTTravelsNextTrl-DmBd", "fontDefinitions": [{ "path": "./assets/fonts/TTTravelsNext-DemiBold.ttf", "weight": 600 }] },
-              { "fontFamily": "TTTravelsNextTrl-Bd", "fontDefinitions": [{ "path": "./assets/fonts/TTTravelsNext-Bold.ttf", "weight": 700 }] },
-              { "fontFamily": "TTTravelsNextTrl-XBd", "fontDefinitions": [{ "path": "./assets/fonts/TTTravelsNext-ExtraBold.ttf", "weight": 800 }] },
-              { "fontFamily": "BricolageGrotesque-Light", "fontDefinitions": [{ "path": "./node_modules/@expo-google-fonts/bricolage-grotesque/300Light/BricolageGrotesque_300Light.ttf", "weight": 300 }] },
-              { "fontFamily": "BricolageGrotesque-Regular", "fontDefinitions": [{ "path": "./node_modules/@expo-google-fonts/bricolage-grotesque/400Regular/BricolageGrotesque_400Regular.ttf", "weight": 400 }] },
-              { "fontFamily": "BricolageGrotesque-Medium", "fontDefinitions": [{ "path": "./node_modules/@expo-google-fonts/bricolage-grotesque/500Medium/BricolageGrotesque_500Medium.ttf", "weight": 500 }] }
+              { "fontFamily": "Syne-Regular", "fontDefinitions": [{ "path": "./node_modules/@expo-google-fonts/syne/400Regular/Syne_400Regular.ttf", "weight": 400 }] },
+              { "fontFamily": "Syne-Medium", "fontDefinitions": [{ "path": "./node_modules/@expo-google-fonts/syne/500Medium/Syne_500Medium.ttf", "weight": 500 }] },
+              { "fontFamily": "Syne-SemiBold", "fontDefinitions": [{ "path": "./node_modules/@expo-google-fonts/syne/600SemiBold/Syne_600SemiBold.ttf", "weight": 600 }] },
+              { "fontFamily": "Syne-Bold", "fontDefinitions": [{ "path": "./node_modules/@expo-google-fonts/syne/700Bold/Syne_700Bold.ttf", "weight": 700 }] },
+              { "fontFamily": "Syne-ExtraBold", "fontDefinitions": [{ "path": "./node_modules/@expo-google-fonts/syne/800ExtraBold/Syne_800ExtraBold.ttf", "weight": 800 }] }
             ]
           }
         }

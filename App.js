@@ -193,18 +193,17 @@ export default function App() {
     registerPushToken(userId).catch(() => {}); // fire-and-forget
   }
 
-  // TT Travels Next powers the onboarding / auth flow. In dev & production
-  // builds these are embedded natively (expo-font config plugin) so they
-  // paint on the first frame; in Expo Go the config-plugin fonts aren't
-  // available, so we also register them at runtime. We deliberately do NOT
-  // gate the first frame on this — text simply re-flows once they resolve.
+  // Syne sets the whole app. In production builds it is embedded natively
+  // (expo-font config plugin) so it paints on the first frame; on a binary
+  // built before the switch (or in Expo Go) it isn't, so we also register it
+  // at runtime. We deliberately do NOT gate the first frame on this — text
+  // simply re-flows once the faces resolve.
   useFonts({
-    'TTTravelsNextTrl-Lt': require('./assets/fonts/TTTravelsNext-Light.ttf'),
-    'TTTravelsNextTrl-Rg': require('./assets/fonts/TTTravelsNext-Regular.ttf'),
-    'TTTravelsNextTrl-Md': require('./assets/fonts/TTTravelsNext-Medium.ttf'),
-    'TTTravelsNextTrl-DmBd': require('./assets/fonts/TTTravelsNext-DemiBold.ttf'),
-    'TTTravelsNextTrl-Bd': require('./assets/fonts/TTTravelsNext-Bold.ttf'),
-    'TTTravelsNextTrl-XBd': require('./assets/fonts/TTTravelsNext-ExtraBold.ttf'),
+    'Syne-Regular': require('@expo-google-fonts/syne/400Regular/Syne_400Regular.ttf'),
+    'Syne-Medium': require('@expo-google-fonts/syne/500Medium/Syne_500Medium.ttf'),
+    'Syne-SemiBold': require('@expo-google-fonts/syne/600SemiBold/Syne_600SemiBold.ttf'),
+    'Syne-Bold': require('@expo-google-fonts/syne/700Bold/Syne_700Bold.ttf'),
+    'Syne-ExtraBold': require('@expo-google-fonts/syne/800ExtraBold/Syne_800ExtraBold.ttf'),
   });
 
   // Kick off the batched AsyncStorage hydration. Singleton promise so any
