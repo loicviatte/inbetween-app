@@ -1677,7 +1677,10 @@ I don't have that in your data, but you can send the question to your coach if y
     try {
       const { applyFocusEvent } = await import('../utils/algorithm');
       const { supabase } = await import('../services/supabase/client');
-      const { data: { user } } = await supabase.auth.getUser();
+      // the event belongs to whoever trains this focus point — the child, for a parent
+      const { getUserId } = await import('../storage/storage');
+      const subjectId = await getUserId().catch(() => null);
+      const user = subjectId ? { id: subjectId } : null;
       const msgLower = text.toLowerCase();
       const isConfusion = /\b(don't understand|not sure|confused|what does|what is|how do|i don't get|unclear)\b/.test(msgLower);
       const isConfirmation = /\b(right\??|correct\??|is that|so i should|did i|am i)\b/.test(msgLower);

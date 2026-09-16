@@ -1,13 +1,11 @@
 import { supabase } from '../services/supabase/client';
 import { focusMatchesCategory } from './danceCategory';
-import { getLessonReadiness } from '../storage/storage';
+// getUserId is the training subject, not the signed-in account: a parent's
+// account follows their child, so the Train screen has to read the child's
+// focus points and log the child's sessions. A local copy of it used to return
+// the account's own id here, which showed a parent an empty Train screen.
+import { getLessonReadiness, getUserId } from '../storage/storage';
 import { getCoupleReadiness } from '../storage/coupleStorage';
-
-async function getUserId() {
-  const { data: { session } } = await supabase.auth.getSession();
-  if (!session?.user) throw new Error('Not authenticated');
-  return session.user.id;
-}
 
 function ordinal(n) {
   const s = ['th', 'st', 'nd', 'rd'];

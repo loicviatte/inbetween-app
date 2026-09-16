@@ -6,13 +6,9 @@
 import { supabase } from '../services/supabase/client';
 import { getOrCreateInviteCode } from './coachStorage';
 import { focusMatchesCategory } from '../utils/danceCategory';
-
-async function getUserId() {
-  // getSession() is local (no network round-trip); getUser() hits the auth server.
-  const { data: { session } } = await supabase.auth.getSession();
-  if (!session?.user) throw new Error('Not authenticated');
-  return session.user.id;
-}
+// The training subject, not the signed-in account — see storage.getUserId. For a
+// parent that is their child, so the couple shown is the child's couple.
+import { getUserId } from './storage';
 
 // Partner pairing reuses the user's existing stable invite_code (no new code).
 export async function getMyPartnerCode() {
