@@ -195,7 +195,12 @@ export default function TabHeader({ navigation, onProfilePress, editMode = false
         style={{ marginTop: Math.max(0, 12 - (StyleSheet.flatten([styles.header, style])?.paddingBottom ?? 12)) }} />
     ) : null}
 
-    <AccountSheet visible={accountOpen} onClose={() => setAccountOpen(false)} />
+    {/* From the avatar the sheet also offers Settings and Log out. */}
+    <AccountSheet
+      visible={accountOpen}
+      onClose={() => setAccountOpen(false)}
+      onOpenSettings={() => navigation.navigate('PROFILE', { tab: 'settings' })}
+    />
     </View>
   );
 }

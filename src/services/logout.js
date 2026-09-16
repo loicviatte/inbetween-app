@@ -1,0 +1,63 @@
+// Logging out, with the questions it has to ask first. Shared by Stats ▸
+// Settings and the Account sheet opened from the header avatar.
+import { Alert } from 'react-native';
+import { endFocusPoint as laEndFocusPoint } from 'live-activities';
+import { supabase } from './supabase/client';
+import { clearPushToken } from './notifications';
+import { pairedChildInfo, forgetPairedChild } from './childPairing';
+import { clearUserCaches } from '../storage/userCaches';
+import { getActiveSession, clearActiveSession, clearChatMessages } from '../storage/activeSession';
+
+// resetProfile clears the in-memory avatar and initials (ProfileContext) so the
+// next account never flashes this one's photo.
+export async function logOutWithChecks({ resetProfile } = {}) {
+  // A child signed in with their parent's code has no password: logging out
+  // means asking for a new code, so it's said before it happens.
+  const paired = await pairedChildInfo().catch(() => null);
+  if (paired) {
+    Alert.alert(
+      'Log out?',
+      `You’ll need a new code from ${paired.parentName || 'your parent'} to sign back in.`,
+      [
+        { text: 'Stay signed in', style: 'cancel' },
+        { text: 'Log out', style: 'destructive', onPress: () => afterSessionCheck(resetProfile) },
+      ],
+    );
+    return;
+  }
+  afterSessionCheck(resetProfile);
+}
+
+function afterSessionCheck(resetProfile) {
+  if (getActiveSession()) {
+    Alert.alert(
+      'Session in progress',
+      'You have a focus session running. Logging out will discard it. Continue?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Discard & log out', style: 'destructive', onPress: () => { performLogout(resetProfile); } },
+      ],
+    );
+    return;
+  }
+  performLogout(resetProfile);
+}
+
+async function performLogout(resetProfile) {
+  // A focus session runs off a plain JS module (activeSession) whose in-memory
+  // holder survives clearUserCaches() (that only wipes AsyncStorage): cleared
+  // here, or the running chrono bleeds into the next account on this device.
+  const active = getActiveSession();
+  if (active?.liveActivityId) { try { laEndFocusPoint(active.liveActivityId, false); } catch {} }
+  clearActiveSession();
+  clearChatMessages();
+  resetProfile?.();
+  await clearUserCaches();
+  forgetPairedChild();
+  // Drop this device's push token from the user's row BEFORE sign-out so a
+  // shared device stops receiving pushes tied to the ended session. Fire-and-
+  // forget: the write is dispatched with the still-valid session.
+  const { data: { session } } = await supabase.auth.getSession();
+  clearPushToken(session?.user?.id);
+  await supabase.auth.signOut({ scope: 'local' });
+}

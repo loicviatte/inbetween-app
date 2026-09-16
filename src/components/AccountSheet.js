@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert } from 'react-native';
 import { Image } from 'expo-image';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import { Colors, Fonts } from '../theme';
@@ -8,6 +9,7 @@ import BottomSheet from './BottomSheet';
 import { useProfile } from '../context/ProfileContext';
 import { supabase } from '../services/supabase/client';
 import { getAccountUser, saveAccountName } from '../storage/storage';
+import { logOutWithChecks } from '../services/logout';
 
 // Stats ▸ Settings ▸ Account — photo, name, email — lifted out of ProfileScreen
 // unchanged so the avatar in any tab header can open it right where you are.
@@ -15,7 +17,9 @@ import { getAccountUser, saveAccountName } from '../storage/storage';
 // themselves, not their child.
 const AVATAR_KEY = '@profile_photo';
 
-export default function AccountSheet({ visible, onClose, onSaved }) {
+// onOpenSettings: pass it (the header avatar does) to add Settings and Log out
+// under Save; Stats ▸ Settings ▸ Account opens it without them.
+export default function AccountSheet({ visible, onClose, onSaved, onOpenSettings }) {
   const { avatarUri, setAvatarUri, setInitials } = useProfile();
   const [account, setAccount] = useState(null);
   const [editName, setEditName] = useState('');
@@ -168,6 +172,25 @@ export default function AccountSheet({ visible, onClose, onSaved }) {
       <TouchableOpacity style={em.saveBtn} onPress={handleSaveAccount} activeOpacity={0.88} disabled={saving}>
         <Text style={em.saveBtnText}>{saving ? 'Saving…' : 'Save'}</Text>
       </TouchableOpacity>
+
+      {onOpenSettings ? (
+        <View style={em.shortcuts}>
+          <TouchableOpacity style={em.shortcut} onPress={() => { onClose(); onOpenSettings(); }} activeOpacity={0.7} accessibilityRole="button">
+            <Ionicons name="options-outline" size={17} color={Colors.black} />
+            <Text style={em.shortcutText}>Settings</Text>
+          </TouchableOpacity>
+          <View style={em.shortcutSep} />
+          <TouchableOpacity
+            style={em.shortcut}
+            onPress={() => { onClose(); logOutWithChecks({ resetProfile: () => { setAvatarUri(null); setInitials(null); } }); }}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+          >
+            <Ionicons name="log-out-outline" size={17} color="#A3281B" />
+            <Text style={[em.shortcutText, em.logoutText]}>Log out</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
     </BottomSheet>
   );
 }
@@ -242,4 +265,13 @@ const em = StyleSheet.create({
     marginTop: 4,
   },
   saveBtnText: { fontFamily: Fonts.jakartaBold, fontSize: 15, color: Colors.white },
+
+  shortcuts: {
+    flexDirection: 'row', alignItems: 'center', marginTop: 14,
+    borderRadius: 14, borderWidth: 0.5, borderColor: Colors.statCardBorder, backgroundColor: Colors.statCardBg,
+  },
+  shortcut: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14 },
+  shortcutSep: { width: 0.5, alignSelf: 'stretch', marginVertical: 10, backgroundColor: Colors.statCardBorder },
+  shortcutText: { fontFamily: Fonts.jakartaBold, fontSize: 14.5, color: Colors.black },
+  logoutText: { color: '#A3281B' },
 });
