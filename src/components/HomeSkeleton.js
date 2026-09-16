@@ -61,7 +61,7 @@ export default function HomeSkeleton() {
 
         {/* Readiness dial + copy */}
         <View style={sk.head}>
-          <Bone width={104} height={104} radius={52} />
+          <Bone width={132} height={132} radius={66} />
           <View style={sk.headCopy}>
             <Bone width="90%" height={15} radius={5} />
             <Bone width="60%" height={15} radius={5} />
@@ -78,7 +78,7 @@ export default function HomeSkeleton() {
             <Bone width={96} height={9} radius={3} color={onDark} />
             <Bone width="80%" height={26} radius={6} color={onDark} style={{ marginTop: 18 }} />
             <Bone width="100%" height={12} radius={4} color={onDark} style={{ marginTop: 16 }} />
-            <Bone width="100%" height={48} radius={24} color={onDark} style={{ marginTop: 'auto' }} />
+            <Bone width="100%" height={46} radius={23} color={onDark} style={{ marginTop: 'auto' }} />
           </View>
           <View style={[sk.card, { width: cardWidth }]} />
         </View>
@@ -103,14 +103,14 @@ const sk = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 18,
-    paddingTop: 34,
+    paddingTop: 30,
     paddingHorizontal: 20,
   },
   headCopy: { flex: 1, gap: 9 },
   label: { paddingTop: 18, paddingBottom: 11, paddingHorizontal: 20 },
   track: { flexDirection: 'row', gap: 11, paddingHorizontal: 20 },
   card: {
-    height: 290,
+    height: 250,
     borderRadius: 20,
     paddingVertical: 17,
     paddingHorizontal: 18,

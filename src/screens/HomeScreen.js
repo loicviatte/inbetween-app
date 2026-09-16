@@ -268,13 +268,14 @@ function ModeTabs({ mode, onChange, disabled }) {
 // ─── Readiness dial: a 270° arc open at the bottom, with a gold head ──────────
 const DIAL_ARC = 'M 18.18 81.82 A 45 45 0 1 1 81.82 81.82';
 const DIAL_LEN = 212.06;
+const DIAL_SIZE = 132;
 
 function ReadyDial({ percent }) {
   const pc = Math.max(0, Math.min(100, Math.round(percent || 0)));
   const th = ((135 + 2.7 * pc) * Math.PI) / 180;
   return (
     <View style={rd.dial}>
-      <Svg width={104} height={104} viewBox="0 0 100 100">
+      <Svg width={DIAL_SIZE} height={DIAL_SIZE} viewBox="0 0 100 100">
         <Path d={DIAL_ARC} fill="none" stroke={LINE} strokeWidth={3} strokeLinecap="round" />
         {pc > 0 ? (
           <Path
@@ -329,7 +330,7 @@ function FocusSlide({ width, couple, tag, index, count, who, focus, done, target
           ) : null}
         </View>
         <Text style={fc.title} numberOfLines={2}>{focus.name}</Text>
-        {focus.subtitle ? <Text style={fc.desc} numberOfLines={3}>{focus.subtitle}</Text> : null}
+        {focus.subtitle ? <Text style={fc.desc} numberOfLines={2}>{focus.subtitle}</Text> : null}
       </View>
 
       <View style={fc.foot}>
@@ -443,7 +444,7 @@ function TrainSwitchSkeleton({ cardWidth }) {
   return (
     <Animated.View style={{ opacity: pulse }}>
       <View style={rd.head}>
-        <Bone width={104} height={104} radius={52} />
+        <Bone width={DIAL_SIZE} height={DIAL_SIZE} radius={DIAL_SIZE / 2} />
         <View style={[rd.copy, { gap: 10 }]}>
           <Bone width="90%" height={16} radius={5} />
           <Bone width="60%" height={16} radius={5} />
@@ -454,13 +455,13 @@ function TrainSwitchSkeleton({ cardWidth }) {
         <Bone width={90} height={10} radius={3} />
       </View>
       <View style={{ flexDirection: 'row', paddingHorizontal: SIDE, gap: CARD_GAP }}>
-        <View style={[fc.card, { width: cardWidth, height: 290, backgroundColor: INK }]}>
+        <View style={[fc.card, { width: cardWidth, height: 250, backgroundColor: INK }]}>
           <Bone width={96} height={10} radius={3} color={onDark} />
           <Bone width="80%" height={26} radius={6} color={onDark} style={{ marginTop: 16 }} />
           <Bone width="100%" height={13} radius={4} color={onDark} style={{ marginTop: 16 }} />
-          <Bone width="100%" height={48} radius={24} color={onDark} style={{ marginTop: 'auto' }} />
+          <Bone width="100%" height={46} radius={23} color={onDark} style={{ marginTop: 'auto' }} />
         </View>
-        <View style={[fc.card, { width: cardWidth, height: 290, backgroundColor: INK }]} />
+        <View style={[fc.card, { width: cardWidth, height: 250, backgroundColor: INK }]} />
       </View>
     </Animated.View>
   );
@@ -1261,6 +1262,7 @@ export default function HomeScreen({ navigation }) {
                   key={carouselKey}
                   ref={carouselRef}
                   horizontal
+                  style={fp.carousel}
                   showsHorizontalScrollIndicator={false}
                   decelerationRate="fast"
                   snapToInterval={interval}
@@ -1500,11 +1502,11 @@ const md = StyleSheet.create({
 // ─── Readiness head ───────────────────────────────────────────────────────────
 const rd = StyleSheet.create({
   head: { flexDirection: 'row', alignItems: 'center', gap: 18, paddingTop: 16, paddingHorizontal: SIDE },
-  dial: { width: 104, height: 104 },
+  dial: { width: DIAL_SIZE, height: DIAL_SIZE },
   center: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
-  pct: { fontFamily: Fonts.ttBold, fontSize: 32, letterSpacing: -1.44, color: INK, fontVariant: ['tabular-nums'], lineHeight: 36 },
-  pctUnit: { fontFamily: Fonts.ttMedium, fontSize: 14, letterSpacing: 0, color: INK_2 },
-  ready: { fontFamily: Fonts.ttDemiBold, fontSize: 8.5, letterSpacing: 1.36, textTransform: 'uppercase', color: INK_2, marginTop: 2 },
+  pct: { fontFamily: Fonts.ttBold, fontSize: 40, letterSpacing: -1.8, color: INK, fontVariant: ['tabular-nums'], lineHeight: 45 },
+  pctUnit: { fontFamily: Fonts.ttMedium, fontSize: 17, letterSpacing: 0, color: INK_2 },
+  ready: { fontFamily: Fonts.ttDemiBold, fontSize: 9.5, letterSpacing: 1.52, textTransform: 'uppercase', color: INK_2, marginTop: 2 },
   copy: { flex: 1, minWidth: 0, gap: 6 },
   lead: { fontFamily: Fonts.ttDemiBold, fontSize: 15.5, letterSpacing: -0.28, lineHeight: 20, color: INK },
   sub: { fontFamily: Fonts.ttRegular, fontSize: 12.5, lineHeight: 18, color: INK_2 },
@@ -1517,13 +1519,16 @@ const fp = StyleSheet.create({
   head: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, paddingTop: 16, paddingHorizontal: SIDE, paddingBottom: 9 },
   label: { fontFamily: Fonts.ttDemiBold, fontSize: 10, letterSpacing: 1.6, textTransform: 'uppercase', color: INK_2 },
   link: { fontFamily: Fonts.ttDemiBold, fontSize: 12.5, color: GOLD_INK },
+  // A ScrollView grows by default; the cards keep their own height instead of
+  // filling the free space of the page.
+  carousel: { flexGrow: 0 },
   track: { paddingHorizontal: SIDE, gap: CARD_GAP, alignItems: 'stretch' },
 });
 
 // ─── Focus card ───────────────────────────────────────────────────────────────
 const fc = StyleSheet.create({
-  card: { borderRadius: 20, paddingVertical: 17, paddingHorizontal: 18 },
-  body: { gap: 12 },
+  card: { borderRadius: 20, paddingVertical: 16, paddingHorizontal: 18 },
+  body: { gap: 10 },
   top: { flexDirection: 'row', alignItems: 'center', gap: 9, minHeight: 27 },
   tag: { fontFamily: Fonts.ttDemiBold, fontSize: 9.5, letterSpacing: 1.33, textTransform: 'uppercase', color: GOLD },
   ix: { paddingLeft: 9, borderLeftWidth: 1, borderLeftColor: 'rgba(255,255,255,0.24)' },
@@ -1536,16 +1541,16 @@ const fc = StyleSheet.create({
   avTxt: { fontFamily: Fonts.ttDemiBold, fontSize: 9.5, color: '#FFFFFF' },
   title: { fontFamily: Fonts.ttBold, fontSize: 28, letterSpacing: -1.06, lineHeight: 30, color: '#FFFFFF' },
   desc: { fontFamily: Fonts.ttRegular, fontSize: 13.5, lineHeight: 19, color: 'rgba(255,255,255,0.72)' },
-  foot: { marginTop: 'auto', paddingTop: 12, gap: 12 },
+  foot: { marginTop: 'auto', paddingTop: 14, gap: 12 },
   steps: { flexDirection: 'row', alignItems: 'center', gap: 9 },
   ticks: { flex: 1, flexDirection: 'row', gap: 4 },
   tick: { flex: 1, height: 4, borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.22)' },
   tickOn: { backgroundColor: GOLD },
   stepsTxt: { fontFamily: Fonts.ttRegular, fontSize: 11.5, color: 'rgba(255,255,255,0.75)', fontVariant: ['tabular-nums'] },
-  go: { height: 48, borderRadius: 999, backgroundColor: GOLD, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9 },
+  go: { height: 46, borderRadius: 999, backgroundColor: GOLD, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9 },
   goAgain: { backgroundColor: 'transparent', borderWidth: 1, borderColor: 'rgba(255,255,255,0.3)' },
   goTxt: { fontFamily: Fonts.ttDemiBold, fontSize: 15, letterSpacing: -0.15, color: INK },
-  live: { height: 48, borderRadius: 999, paddingHorizontal: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: 'rgba(255,255,255,0.1)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.18)' },
+  live: { height: 46, borderRadius: 999, paddingHorizontal: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: 'rgba(255,255,255,0.1)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.18)' },
   liveLeft: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1 },
   liveDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: GOLD },
   liveTxt: { fontFamily: Fonts.ttDemiBold, fontSize: 14.5, color: '#FFFFFF', flexShrink: 1 },

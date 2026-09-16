@@ -1,10 +1,15 @@
 import React, { useRef, useEffect, useState, useMemo } from 'react';
 import { View, Text, Pressable, StyleSheet, Animated, PanResponder } from 'react-native';
 import { BlurView } from 'expo-blur';
+import { useFonts } from 'expo-font';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors, Fonts } from '../theme';
 
 const HIDDEN_TABS = [];
+// The bar mounts before the runtime-registered Syne has loaded, and iOS keeps
+// the label width it measured with the fallback font — so the wider Syne got
+// clipped ("PROF"). Re-keying the labels once the face is in re-measures them.
+const LABEL_FONT = { 'Syne-ExtraBold': require('@expo-google-fonts/syne/800ExtraBold/Syne_800ExtraBold.ttf') };
 const PADDING = 5;
 const DRAG_THRESHOLD = 8;
 
@@ -19,6 +24,7 @@ export default function CustomTabBar({ state, navigation }) {
   const visibleRoutes = routes.filter((r) => !HIDDEN_TABS.includes(r.name));
   const [containerWidth, setContainerWidth] = useState(0);
   const [dragIndex, setDragIndex] = useState(-1);
+  const [labelFontReady] = useFonts(LABEL_FONT);
 
   const activeIndex = visibleRoutes.findIndex(
     (r) => r.key === routes[state?.index]?.key
@@ -236,7 +242,11 @@ export default function CustomTabBar({ state, navigation }) {
               style={styles.tab}
               onPress={() => navigation.navigate(route.name)}
             >
-              <Text style={[styles.tabText, { color: isFocused ? '#FFFFFF' : '#0D0D12' }]}>
+              <Text
+                key={labelFontReady ? 'syne' : 'fallback'}
+                style={[styles.tabText, { color: isFocused ? '#FFFFFF' : '#0D0D12' }]}
+                numberOfLines={1}
+              >
                 {route.name}
               </Text>
             </Pressable>
