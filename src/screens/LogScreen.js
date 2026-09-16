@@ -815,7 +815,7 @@ export default function LogScreen({ navigation }) {
   const styleLabel = dancerStyle.includes('Latin') && dancerStyle.includes('Ballroom') ? 'Latin & Ballroom'
     : dancerStyle.includes('Ballroom') ? 'Ballroom'
     : dancerStyle.includes('Latin') ? 'Latin'
-    : 'Log';
+    : 'Lessons';
   const dancerFirst = (dancer?.name || '').trim().split(/\s+/)[0] || '';
   const headerSub = isParent
     ? [dancerFirst, 'parent’s account'].filter(Boolean).join(' · ')
