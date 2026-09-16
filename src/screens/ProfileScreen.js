@@ -1341,6 +1341,14 @@ export default function ProfileScreen({ navigation, route }) {
     setEditEmail(me?.email || '');
     setProfileModal('account');
   }
+  // The avatar in any tab header lands here with { openAccount } — open the
+  // Account sheet once the account is loaded, then clear the param.
+  useEffect(() => {
+    if (!route?.params?.openAccount || !me) return;
+    openEdit();
+    navigation.setParams({ openAccount: undefined });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [route?.params?.openAccount, me?.id]);
   function openGoalModal() {
     setEditGoal(user?.weekly_goal_minutes ?? 60);
     setProfileModal('goal');

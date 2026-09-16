@@ -112,7 +112,9 @@ export default function TabHeader({ navigation, onProfilePress, editMode = false
     if (onProfilePress) {
       onProfilePress();
     } else {
-      navigation.navigate('PROFILE');
+      // Straight to the account (photo, name, email): Stats opens its Account
+      // sheet on this param. A fresh value each tap, so it opens every time.
+      navigation.navigate('PROFILE', { openAccount: Date.now() });
     }
   }
 
