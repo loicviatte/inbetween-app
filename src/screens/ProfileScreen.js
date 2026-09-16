@@ -14,6 +14,7 @@ import {
   ScrollView,
   Alert,
   Switch,
+  RefreshControl,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -1012,6 +1013,9 @@ export default function ProfileScreen({ navigation, route }) {
   // Solo | Couple scope of the Stats dashboard — lifted here so the header can
   // name the dancer, or the pair.
   const [dashMode, setDashMode] = useState('solo');
+  // Pull to refresh: bumping the key makes the Stats dashboard refetch too.
+  const [refreshing, setRefreshing] = useState(false);
+  const [dashRefreshKey, setDashRefreshKey] = useState(0);
   const isParent = useIsParentAccount();
   // A guardian account follows one child at a time; the rest of the app never
   // sees this, since getUserId() already resolves to whichever one is active.
@@ -1080,6 +1084,14 @@ export default function ProfileScreen({ navigation, route }) {
   const [partnerLinking, setPartnerLinking] = useState(false);
   const [partnerError, setPartnerError] = useState('');
   const [myPartnerCode, setMyPartnerCode] = useState('');
+
+  async function handleRefresh() {
+    setRefreshing(true);
+    invalidateCache();
+    setDashRefreshKey((k) => k + 1);
+    try { await load(); } catch {}
+    setRefreshing(false);
+  }
 
   async function load() {
     // ONE bundled RPC (get_student_profile) replaces ~15 parallel queries that
@@ -1891,8 +1903,10 @@ export default function ProfileScreen({ navigation, route }) {
             style={styles.content}
             contentContainerStyle={styles.contentInner}
             showsVerticalScrollIndicator={false}
-            bounces={false}
             overScrollMode="never"
+            refreshControl={
+              <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor="#8A6414" colors={['#E8B530']} />
+            }
           >
             {activeTab === 'links' && (
               <View style={styles.tabBody}>
@@ -1998,6 +2012,7 @@ export default function ProfileScreen({ navigation, route }) {
                   category={dashCat}
                   mode={dashMode}
                   onChangeMode={setDashMode}
+                  refreshKey={dashRefreshKey}
                   navigation={navigation}
                 />
               </View>

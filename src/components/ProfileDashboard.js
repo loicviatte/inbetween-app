@@ -229,7 +229,7 @@ function Card({ children, onPress, label, side, style, tight }) {
 // The style is chosen in the tab header (StyleTitle) and arrives as `category`.
 // `mode` / `onChangeMode` let the screen hold the Solo | Couple scope (the
 // header names the dancer or the pair); without them the dashboard keeps it.
-export default function ProfileDashboard({ user, category, navigation, mode: modeProp, onChangeMode }) {
+export default function ProfileDashboard({ user, category, navigation, mode: modeProp, onChangeMode, refreshKey = 0 }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [couple, setCouple] = useState(null);        // the couple row, or null if solo
@@ -239,24 +239,30 @@ export default function ProfileDashboard({ user, category, navigation, mode: mod
 
   useEffect(() => {
     getMyCouple().then(setCouple).catch(() => setCouple(null));
-  }, []);
+  }, [refreshKey]);
 
   // The scope defaults to whatever style the profile says, but the header can
   // override it for this screen without writing back to the profile.
   const cat = category || categoryFromStyle(user?.dance_style) || 'latin';
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  // `quiet`: a pull to refresh keeps the cards on screen while they refetch
+  // (and keeps them if the refetch fails) instead of flashing the spinner.
+  const load = useCallback(async ({ quiet = false } = {}) => {
+    if (!quiet) setLoading(true);
     try {
       setData(await getStudentDashboard(cat));
     } catch {
-      setData(null);
+      if (!quiet) setData(null);
     } finally {
       setLoading(false);
     }
   }, [cat]);
 
   useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    if (refreshKey > 0) load({ quiet: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshKey]);
 
 
   const showSeg = !!couple;
