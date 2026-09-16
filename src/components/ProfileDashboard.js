@@ -13,6 +13,7 @@ import { getStudentDashboard } from '../storage/dashboardStorage';
 import { categoryFromStyle } from '../utils/danceCategory';
 import { getMyCouple, getCoupleReadiness } from '../storage/coupleStorage';
 import { openFocusSession } from '../utils/openFocusSession';
+import ModeTabs from './ModeTabs';
 
 // The mock's warm world. Not in theme/Colors — that palette predates this screen
 // and carries none of these. Contrast ratios noted where they were engineered.
@@ -48,29 +49,6 @@ function Meter({ percent, style, ...a11y }) {
   return (
     <View style={[s.meter, style]} {...a11y}>
       <View style={[s.meterFill, { width: `${w}%` }]} />
-    </View>
-  );
-}
-
-function Seg({ options, value, onChange, label }) {
-  return (
-    <View style={s.seg} accessibilityRole="radiogroup" accessibilityLabel={label}>
-      {options.map((o) => {
-        const on = o.key === value;
-        return (
-          <TouchableOpacity
-            key={o.key}
-            style={[s.segBtn, on && s.segBtnOn]}
-            onPress={() => !on && onChange(o.key)}
-            activeOpacity={0.8}
-            accessibilityRole="radio"
-            accessibilityState={{ checked: on }}
-            accessibilityLabel={o.label}
-          >
-            <Text style={[s.segTxt, on && s.segTxtOn]}>{o.label}</Text>
-          </TouchableOpacity>
-        );
-      })}
     </View>
   );
 }
@@ -289,15 +267,9 @@ export default function ProfileDashboard({ user, category, navigation, mode: mod
   }, [mode, couple?.id, cat]);
 
   const showSeg = !!couple;
+  // Same Solo | Couple tabs as Train.
   const scopeBar = !showSeg ? null : (
-    <View style={[s.scope, s.scopeEnd]}>
-      <Seg
-        label="Practice mode"
-        value={mode}
-        onChange={setMode}
-        options={[{ key: 'solo', label: 'Solo' }, { key: 'couple', label: 'Couple' }]}
-      />
-    </View>
+    <ModeTabs mode={mode} onChange={setMode} style={s.tabs} />
   );
 
   // The scope stays put while the query runs — it is the control you just used.
@@ -548,13 +520,8 @@ const s = StyleSheet.create({
   root: { paddingHorizontal: 0 },
   loading: { paddingVertical: 48, alignItems: 'center' },
 
-  scope: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', rowGap: 10, paddingBottom: 18 },
-  scopeEnd: { justifyContent: 'flex-end' },
-  seg: { flexDirection: 'row', backgroundColor: C.tile, borderRadius: 99, borderWidth: 1, borderColor: C.line, padding: 2 },
-  segBtn: { minHeight: 40, paddingHorizontal: 14, borderRadius: 99, alignItems: 'center', justifyContent: 'center' },
-  segBtnOn: { backgroundColor: C.card },
-  segTxt: { fontFamily: Fonts.ttMedium, fontSize: 13, color: C.mut },
-  segTxtOn: { fontFamily: Fonts.ttDemiBold, color: C.ink },
+  // Solo | Couple tabs — the space below matches Train's.
+  tabs: { marginBottom: 18 },
 
   // hero — boxless, sits on the page itself
   hero: { paddingBottom: 22 },

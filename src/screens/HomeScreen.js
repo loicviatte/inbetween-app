@@ -19,6 +19,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Haptics from 'expo-haptics';
 import TabHeader, { useIsParentAccount } from '../components/TabHeader';
 import StyleTitle from '../components/StyleTitle';
+import ModeTabs, { COUPLE_BLUE } from '../components/ModeTabs';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Fonts } from '../theme';
@@ -77,8 +78,6 @@ const GOLD = '#E8B530';
 const GOLD_300 = '#F6D27A';
 const GOLD_INK = '#8A6414';
 const NAVY = '#22314D';
-// Couple accent on the cream page — the Couple side's gold.
-const COUPLE_BLUE = '#3C66AE';
 const SIDE = 20;
 const CARD_GAP = 11;
 // Pull to refresh on a page that doesn't scroll: how far the page must be
@@ -178,29 +177,6 @@ function WeekRail({ activity, goal, onPress, accent = GOLD, accentInk = GOLD_INK
         })}
       </View>
     </TouchableOpacity>
-  );
-}
-
-function ModeTabs({ mode, onChange, disabled }) {
-  return (
-    <View style={md.row}>
-      {[['solo', 'Solo', GOLD], ['couple', 'Couple', COUPLE_BLUE]].map(([key, label, color]) => {
-        const on = mode === key;
-        return (
-          <TouchableOpacity
-            key={key}
-            style={[md.tab, on && { borderBottomColor: color }]}
-            onPress={() => onChange(key)}
-            disabled={disabled}
-            activeOpacity={0.7}
-            accessibilityRole="tab"
-            accessibilityState={{ selected: on }}
-          >
-            <Text style={[md.label, on && md.labelOn]}>{label}</Text>
-          </TouchableOpacity>
-        );
-      })}
-    </View>
   );
 }
 
@@ -1275,7 +1251,7 @@ export default function HomeScreen({ navigation }) {
           accentInk={isCouple ? COUPLE_BLUE : GOLD_INK}
         />
 
-        {showTabs ? <ModeTabs mode={viewMode} onChange={setMode} disabled={anyInProgress} /> : null}
+        {showTabs ? <ModeTabs mode={viewMode} onChange={setMode} disabled={anyInProgress} style={s.tabs} /> : null}
 
         {/* Swap the dial + cards for a skeleton while they load — either a
             not-yet-prefetched style toggle, or the very first load before the
@@ -1393,6 +1369,7 @@ export default function HomeScreen({ navigation }) {
 const s = StyleSheet.create({
   safe: { flex: 1, backgroundColor: 'transparent' },
   header: { paddingTop: 6, paddingBottom: 0 },
+  tabs: { marginTop: 16, marginHorizontal: SIDE },
   pullSpinner: { position: 'absolute', top: (PULL_REST - 20) / 2, left: 0, right: 0, alignItems: 'center' },
   scrollContent: { flexGrow: 1, paddingBottom: 14 },
   // The summary card sits at the foot of the screen when there's room, and
@@ -1413,14 +1390,6 @@ const wk = StyleSheet.create({
   segNow: { backgroundColor: INK_3 },
   letter: { fontFamily: Fonts.ttRegular, fontSize: 9, letterSpacing: 0.9, color: INK_2, textAlign: 'center', paddingTop: 5 },
   letterNow: { fontFamily: Fonts.ttBold, color: GOLD_INK },
-});
-
-// ─── Solo | Couple tabs ───────────────────────────────────────────────────────
-const md = StyleSheet.create({
-  row: { flexDirection: 'row', alignItems: 'flex-end', gap: 24, marginTop: 16, marginHorizontal: SIDE, borderBottomWidth: 1, borderBottomColor: LINE },
-  tab: { paddingBottom: 9, marginBottom: -1, borderBottomWidth: 2, borderBottomColor: 'transparent' },
-  label: { fontFamily: Fonts.ttDemiBold, fontSize: 17, letterSpacing: -0.34, color: INK_2 },
-  labelOn: { color: INK },
 });
 
 // ─── Readiness head ───────────────────────────────────────────────────────────
