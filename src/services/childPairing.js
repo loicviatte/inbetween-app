@@ -2,6 +2,7 @@
 // A parent's account holds their child's training; the child trains on their
 // own phone, signed in to their own profile, with a one-time code the parent
 // gets from Stats ▸ Links. Every step runs in supabase/functions/child-pairing.
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from './supabase/client';
 import { listChildren } from '../storage/guardianStorage';
 
@@ -27,12 +28,30 @@ export async function signOutChildPhone(childId) {
 }
 
 // Child side: the code becomes a session on this phone.
+const PARENT_KEY = '@paired_parent_name';
 export async function signInWithPairingCode(code) {
-  const { tokenHash, childName } = await call('claim', { code });
+  const { tokenHash, childName, parentName } = await call('claim', { code });
   const { data, error } = await supabase.auth.verifyOtp({ token_hash: tokenHash, type: 'magiclink' });
   if (error || !data?.session) throw new Error('We couldn’t sign you in. Ask your parent for a new code.');
+  AsyncStorage.setItem(PARENT_KEY, parentName || '').catch(() => {});
   return { user: data.user, childName };
 }
+
+// On a child's phone: signed in with a parent's code, so there is no password
+// to come back with. { parentName } when that's the case, otherwise null.
+// This phone signed in with a code (the key is written then, even without a
+// name) and the account is someone's child.
+export async function pairedChildInfo() {
+  const parentName = await AsyncStorage.getItem(PARENT_KEY).catch(() => null);
+  if (parentName === null) return null;
+  const { data: { session } } = await supabase.auth.getSession();
+  const user = session?.user;
+  if (!user) return null;
+  const { data } = await supabase.from('guardians').select('id').eq('child_id', user.id).limit(1);
+  if (!data?.length) return null;
+  return { parentName: parentName || null };
+}
+export const forgetPairedChild = () => AsyncStorage.removeItem(PARENT_KEY).catch(() => {});
 
 // "A6KQ7P" → "A6K 7QP" — two groups of three read back easily over a shoulder.
 export const formatPairingCode = (code) => {

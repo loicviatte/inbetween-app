@@ -33,6 +33,7 @@ import { createChildAccount } from '../services/childAccount';
 import { withdrawChild, getConsentCopy, sendPhoneCode, checkPhoneCode } from '../services/minorConsent';
 import ProfileDashboard from '../components/ProfileDashboard';
 import ChildPhoneCard from '../components/ChildPhoneCard';
+import { pairedChildInfo, forgetPairedChild } from '../services/childPairing';
 import ProfileSkeleton from '../components/ProfileSkeleton';
 import StudioPicker from '../components/StudioPicker';
 import { useFocusEffect } from '@react-navigation/native';
@@ -1424,7 +1425,25 @@ export default function ProfileScreen({ navigation, route }) {
   // holder survives clearUserCaches() (that only wipes AsyncStorage). If we sign
   // out without clearing it, the running chrono bleeds into the NEXT account
   // signed in on this device. So logout confirms first, then hard-clears it.
-  function handleLogout() {
+  async function handleLogout() {
+    // A child signed in with their parent's code has no password: logging out
+    // means asking for a new code, so it's said before it happens.
+    const paired = await pairedChildInfo().catch(() => null);
+    if (paired) {
+      Alert.alert(
+        'Log out?',
+        `You’ll need a new code from ${paired.parentName || 'your parent'} to sign back in.`,
+        [
+          { text: 'Stay signed in', style: 'cancel' },
+          { text: 'Log out', style: 'destructive', onPress: () => logoutAfterSessionCheck() },
+        ],
+      );
+      return;
+    }
+    logoutAfterSessionCheck();
+  }
+
+  function logoutAfterSessionCheck() {
     if (getActiveSession()) {
       Alert.alert(
         'Session in progress',
@@ -1451,6 +1470,7 @@ export default function ProfileScreen({ navigation, route }) {
     setAvatarUri(null);
     setInitials(null);
     await clearUserCaches();
+    forgetPairedChild();
     // Drop this device's push token from the user's row BEFORE sign-out so a
     // shared device stops receiving pushes tied to the ended session. Fire-and-
     // forget: the write is dispatched with the still-valid session.

@@ -102,9 +102,10 @@ async function claim(admin: SupabaseClient, b: Row, ip: string) {
     .eq('id', row.id).is('used_at', null).select('id')
   if (!spent?.length) return json({ error: 'That code has just been used. Ask your parent for a new one.' }, 409)
 
-  const [{ data: au }, { data: child }] = await Promise.all([
+  const [{ data: au }, { data: child }, { data: parent }] = await Promise.all([
     admin.auth.admin.getUserById(row.child_id),
     admin.from('users').select('name, consent_status').eq('id', row.child_id).maybeSingle(),
+    admin.from('users').select('name').eq('id', row.guardian_id).maybeSingle(),
   ])
   const email = au?.user?.email
   if (!email || !child || !PAIRABLE.includes(child.consent_status)) {
@@ -124,7 +125,10 @@ async function claim(admin: SupabaseClient, b: Row, ip: string) {
     body: `${child.name || 'Your child'} can now train on their own phone. You can sign it out from Stats ▸ Links.`,
     data: { child_id: row.child_id },
   })
-  return json({ tokenHash, childName: child.name })
+  // The child's phone can't read its parent's row; it keeps the first name to
+  // say who to ask if it is ever signed out.
+  const parentName = (parent?.name || '').trim().split(/\s+/)[0] || null
+  return json({ tokenHash, childName: child.name, parentName })
 }
 
 async function status(admin: SupabaseClient, req: Request, b: Row) {
