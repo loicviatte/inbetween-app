@@ -5,8 +5,6 @@ import {
   StyleSheet,
   TouchableOpacity,
   Animated,
-  Modal,
-  Pressable,
   ScrollView,
   RefreshControl,
   ActivityIndicator,
@@ -20,6 +18,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Haptics from 'expo-haptics';
 import TabHeader, { useIsParentAccount } from '../components/TabHeader';
+import StyleTitle from '../components/StyleTitle';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Fonts } from '../theme';
@@ -143,71 +142,6 @@ function lessonMeta(lesson) {
   }
   if (lesson.corrections > 0) parts.push(plural(lesson.corrections, 'correction'));
   return parts.join(' · ');
-}
-
-function CategoryPicker({ visible, current, onSelect, onClose }) {
-  return (
-    <Modal
-      visible={visible}
-      animationType="fade"
-      transparent
-      onRequestClose={onClose}
-    >
-      <Pressable style={s.pickerBackdrop} onPress={onClose}>
-        <SafeAreaView edges={['top']} style={s.pickerAnchor} pointerEvents="box-none">
-          <Pressable style={s.pickerSheet} onPress={(e) => e.stopPropagation()}>
-            {[
-              { key: 'latin', label: 'Latin' },
-              { key: 'ballroom', label: 'Ballroom' },
-            ].map((opt, i) => {
-              const on = opt.key === current;
-              return (
-                <TouchableOpacity
-                  key={opt.key}
-                  style={[s.pickerRow, i > 0 && s.pickerRowDivider]}
-                  activeOpacity={0.65}
-                  onPress={() => onSelect(opt.key)}
-                >
-                  <Text style={s.pickerLabel}>{opt.label}</Text>
-                  {on && (
-                    <Ionicons name="checkmark" size={18} color="#FFFFFF" style={s.pickerCheck} />
-                  )}
-                </TouchableOpacity>
-              );
-            })}
-          </Pressable>
-        </SafeAreaView>
-      </Pressable>
-    </Modal>
-  );
-}
-
-// ─── Header lead: the style, and whose training this is ──────────────────────
-function TrainTitle({ label, canSwitch, disabled, onPress, sub }) {
-  const title = (
-    <View style={hd.row}>
-      <Text style={hd.title} numberOfLines={1}>{label}</Text>
-      {canSwitch ? <Ionicons name="chevron-down" size={13} color={INK} style={hd.chev} /> : null}
-    </View>
-  );
-  return (
-    <View style={hd.wrap}>
-      {canSwitch ? (
-        <TouchableOpacity
-          onPress={onPress}
-          disabled={disabled}
-          activeOpacity={0.6}
-          style={[hd.btn, disabled && { opacity: 0.4 }]}
-          hitSlop={{ top: 8, bottom: 8, right: 16 }}
-          accessibilityRole="button"
-          accessibilityLabel={`${label}. Change style`}
-        >
-          {title}
-        </TouchableOpacity>
-      ) : title}
-      {sub ? <Text style={hd.sub} numberOfLines={1}>{sub}</Text> : null}
-    </View>
-  );
 }
 
 // ─── This week: one segment per day, gold once a session is done ─────────────
@@ -528,7 +462,6 @@ export default function HomeScreen({ navigation }) {
   const [coupleLock, setCoupleLock] = useState(null);
   const [myUserId, setMyUserId] = useState(null);
   const [lockRemaining, setLockRemaining] = useState(0);
-  const [pickerVisible, setPickerVisible] = useState(false);
   // Trend bundle for "This week", prefetched per style so the tap opens at once.
   const trendRef = useRef({ cat: undefined, data: null });
   // Latest reviewed lesson on each side, for "Read last lesson summary".
@@ -792,7 +725,6 @@ export default function HomeScreen({ navigation }) {
   // common back-and-forth toggle is instant (cache hit → swap now, refresh
   // quietly). Only an un-prefetched style shows the switch skeleton.
   async function handleSelectCategory(next) {
-    setPickerVisible(false);
     if (next === category) return;
     AsyncStorage.setItem(CATEGORY_STORAGE_KEY, next).catch(() => {});
     getSoloFocusCounts(next).then(setSoloCounts).catch(() => {});
@@ -1305,11 +1237,12 @@ export default function HomeScreen({ navigation }) {
         navigation={navigation}
         style={s.header}
         lead={
-          <TrainTitle
+          <StyleTitle
             label={styleName}
+            category={category}
             canSwitch={showFilter}
             disabled={anyInProgress}
-            onPress={() => setPickerVisible(true)}
+            onSelect={handleSelectCategory}
             sub={headerSub}
           />
         }
@@ -1450,13 +1383,6 @@ export default function HomeScreen({ navigation }) {
       </Animated.View>
       </View>
 
-      <CategoryPicker
-        visible={pickerVisible}
-        current={category}
-        onSelect={handleSelectCategory}
-        onClose={() => setPickerVisible(false)}
-      />
-
       </Animated.View>
     </SafeAreaView>
     </View>
@@ -1472,57 +1398,6 @@ const s = StyleSheet.create({
   // The summary card sits at the foot of the screen when there's room, and
   // simply follows the cards when there isn't.
   foot: { marginTop: 'auto', paddingTop: 18, paddingHorizontal: SIDE },
-
-  pickerBackdrop: {
-    flex: 1,
-    backgroundColor: 'transparent',
-  },
-  pickerAnchor: {
-    alignItems: 'flex-start',
-    paddingTop: 52,
-    paddingLeft: SIDE + 47,
-  },
-  pickerSheet: {
-    minWidth: 220,
-    borderRadius: 16,
-    overflow: 'hidden',
-    backgroundColor: 'rgba(28,28,30,0.96)',
-    shadowColor: '#000',
-    shadowOpacity: 0.35,
-    shadowOffset: { width: 0, height: 10 },
-    shadowRadius: 22,
-    elevation: 14,
-  },
-  pickerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 15,
-    minWidth: 220,
-  },
-  pickerRowDivider: {
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: 'rgba(255,255,255,0.15)',
-  },
-  pickerLabel: {
-    fontFamily: Fonts.jakartaSemiBold,
-    fontSize: 15,
-    color: '#FFFFFF',
-    flex: 1,
-  },
-  pickerCheck: {
-    marginLeft: 12,
-  },
-});
-
-// ─── Header lead ──────────────────────────────────────────────────────────────
-const hd = StyleSheet.create({
-  wrap: { flex: 1, minWidth: 0 },
-  btn: { alignSelf: 'flex-start' },
-  row: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  title: { fontFamily: Fonts.ttDemiBold, fontSize: 17, letterSpacing: -0.34, color: INK, flexShrink: 1 },
-  chev: { marginTop: 1 },
-  sub: { fontFamily: Fonts.ttRegular, fontSize: 11.5, color: INK_2, marginTop: 1 },
 });
 
 // ─── This week rail ───────────────────────────────────────────────────────────

@@ -5,8 +5,8 @@
 //
 // Every figure comes from getStudentDashboard(), which derives them all from one
 // practice_logs query, so no two cards can disagree.
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Animated, Easing } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
 import Svg, { Circle, Defs, Line, LinearGradient, Path, Polyline, Stop, Text as SvgText } from 'react-native-svg';
 import { Fonts } from '../theme';
 import { getStudentDashboard } from '../storage/dashboardStorage';
@@ -248,32 +248,24 @@ function Card({ children, onPress, label, side, style, tight }) {
 }
 
 // ─── the screen ──────────────────────────────────────────────────────────────
-export default function ProfileDashboard({ user, category, onChangeCategory, navigation }) {
+// The style is chosen in the tab header (StyleTitle) and arrives as `category`.
+// `mode` / `onChangeMode` let the screen hold the Solo | Couple scope (the
+// header names the dancer or the pair); without them the dashboard keeps it.
+export default function ProfileDashboard({ user, category, navigation, mode: modeProp, onChangeMode }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [couple, setCouple] = useState(null);        // the couple row, or null if solo
-  const [mode, setMode] = useState('solo');          // 'solo' | 'couple'
+  const [modeState, setModeState] = useState('solo'); // 'solo' | 'couple'
+  const mode = modeProp ?? modeState;
+  const setMode = onChangeMode ?? setModeState;
   const [coupleReadiness, setCoupleReadiness] = useState(null);
-  const [styleOpen, setStyleOpen] = useState(false);
-  const drop = useRef(new Animated.Value(0)).current;   // 0 closed, 1 open
-
-  const toggleStyleMenu = useCallback((open) => {
-    setStyleOpen(open);
-    Animated.timing(drop, {
-      toValue: open ? 1 : 0,
-      duration: 220,
-      easing: Easing.bezier(0.16, 1, 0.3, 1),   // exponential ease-out
-      useNativeDriver: false,                   // height is not transform-able
-    }).start();
-  }, [drop]);
 
   useEffect(() => {
     getMyCouple().then(setCouple).catch(() => setCouple(null));
   }, []);
 
-  // The scope defaults to whatever style the profile says, but the control can
+  // The scope defaults to whatever style the profile says, but the header can
   // override it for this screen without writing back to the profile.
-  const isDual = user?.dance_style === 'Latin & Ballroom';
   const cat = category || categoryFromStyle(user?.dance_style) || 'latin';
 
   const load = useCallback(async () => {
@@ -297,55 +289,15 @@ export default function ProfileDashboard({ user, category, onChangeCategory, nav
   }, [mode, couple?.id, cat]);
 
   const showSeg = !!couple;
-  const scopeBar = (!isDual && !showSeg) ? null : (
-    <View style={[s.scope, !isDual && s.scopeEnd]}>
-      {isDual && (
-        <TouchableOpacity
-          style={s.styleBtn}
-          onPress={() => toggleStyleMenu(!styleOpen)}
-          activeOpacity={0.7}
-          accessibilityRole="button"
-          accessibilityState={{ expanded: styleOpen }}
-          accessibilityLabel={`Style: ${cat === 'ballroom' ? 'Ballroom' : 'Latin'}. Tap to choose a style.`}
-        >
-          <Text style={s.styleTxt}>{cat === 'ballroom' ? 'Ballroom' : 'Latin'}</Text>
-          <Animated.View style={{ transform: [{ rotate: drop.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '180deg'] }) }] }}>
-            <Svg width={13} height={8} viewBox="0 0 13 8">
-              <Path d="M1.5 1.5l5 5 5-5" stroke={C.mut} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" fill="none" />
-            </Svg>
-          </Animated.View>
-        </TouchableOpacity>
-      )}
-      {showSeg && (
-        <Seg
-          label="Practice mode"
-          value={mode}
-          onChange={setMode}
-          options={[{ key: 'solo', label: 'Solo' }, { key: 'couple', label: 'Couple' }]}
-        />
-      )}
+  const scopeBar = !showSeg ? null : (
+    <View style={[s.scope, s.scopeEnd]}>
+      <Seg
+        label="Practice mode"
+        value={mode}
+        onChange={setMode}
+        options={[{ key: 'solo', label: 'Solo' }, { key: 'couple', label: 'Couple' }]}
+      />
     </View>
-  );
-
-  const otherCat = cat === 'latin' ? 'ballroom' : 'latin';
-  const styleMenu = !isDual ? null : (
-    <Animated.View
-      style={[s.drop, {
-        height: drop.interpolate({ inputRange: [0, 1], outputRange: [0, 56] }),
-        opacity: drop,
-      }]}
-      pointerEvents={styleOpen ? 'auto' : 'none'}
-    >
-      <TouchableOpacity
-        style={s.dropRow}
-        activeOpacity={0.8}
-        accessibilityRole="button"
-        accessibilityLabel={`Switch to ${otherCat === 'ballroom' ? 'Ballroom' : 'Latin'}`}
-        onPress={() => { toggleStyleMenu(false); onChangeCategory?.(otherCat); }}
-      >
-        <Text style={s.dropTxt}>{otherCat === 'ballroom' ? 'Ballroom' : 'Latin'}</Text>
-      </TouchableOpacity>
-    </Animated.View>
   );
 
   // The scope stays put while the query runs — it is the control you just used.
@@ -353,7 +305,6 @@ export default function ProfileDashboard({ user, category, onChangeCategory, nav
     return (
       <View style={s.root}>
         {scopeBar}
-        {styleMenu}
         <View style={s.loading}><ActivityIndicator color={C.goldInk} /></View>
       </View>
     );
@@ -380,7 +331,6 @@ export default function ProfileDashboard({ user, category, onChangeCategory, nav
   return (
     <View style={s.root}>
       {scopeBar}
-      {styleMenu}
 
       {/* ── hero: the one number they can still move ── */}
       <View style={s.hero}>
@@ -600,14 +550,6 @@ const s = StyleSheet.create({
 
   scope: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', rowGap: 10, paddingBottom: 18 },
   scopeEnd: { justifyContent: 'flex-end' },
-  styleBtn: { flexDirection: 'row', alignItems: 'center', gap: 9, minHeight: 44 },
-  styleTxt: { fontFamily: Fonts.ttExtraBold, fontSize: 23, letterSpacing: -0.8, color: C.ink },
-  drop: { overflow: 'hidden', marginTop: -6, marginBottom: 6 },
-  dropRow: {
-    minHeight: 48, justifyContent: 'center', paddingHorizontal: 16,
-    backgroundColor: C.card, borderRadius: 14,
-  },
-  dropTxt: { fontFamily: Fonts.ttExtraBold, fontSize: 20, letterSpacing: -0.7, color: C.mut },
   seg: { flexDirection: 'row', backgroundColor: C.tile, borderRadius: 99, borderWidth: 1, borderColor: C.line, padding: 2 },
   segBtn: { minHeight: 40, paddingHorizontal: 14, borderRadius: 99, alignItems: 'center', justifyContent: 'center' },
   segBtnOn: { backgroundColor: C.card },

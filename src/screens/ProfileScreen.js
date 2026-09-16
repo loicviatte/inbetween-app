@@ -20,7 +20,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import Svg, { Circle } from 'react-native-svg';
-import TabHeader from '../components/TabHeader';
+import TabHeader, { useIsParentAccount } from '../components/TabHeader';
+import StyleTitle from '../components/StyleTitle';
+import { categoryFromStyle } from '../utils/danceCategory';
 import { saveUserPreferences, getAccountUser, saveAccountName, clearSubjectCache, invalidateCache } from '../storage/storage';
 import { isGuardian, listChildren, setActiveChild } from '../storage/guardianStorage';
 import { createChildAccount } from '../services/childAccount';
@@ -1007,6 +1009,10 @@ export default function ProfileScreen({ navigation, route }) {
   // Which style the dashboard is showing. Seeded from the profile, then the
   // scope control drives it — it does NOT write back to the profile.
   const [dashCategory, setDashCategory] = useState(null);
+  // Solo | Couple scope of the Stats dashboard — lifted here so the header can
+  // name the dancer, or the pair.
+  const [dashMode, setDashMode] = useState('solo');
+  const isParent = useIsParentAccount();
   // A guardian account follows one child at a time; the rest of the app never
   // sees this, since getUserId() already resolves to whichever one is active.
   const [children, setChildren] = useState([]);
@@ -1821,6 +1827,16 @@ export default function ProfileScreen({ navigation, route }) {
   const hasPendingChange = !!couple?.pendingChange;
   const pendingChangeMine = !!couple?.pendingChangeMine;
 
+  // Header: the style the Stats dashboard shows, and whose training it is.
+  const dashCat = dashCategory || categoryFromStyle(user?.dance_style) || 'latin';
+  const meFirst = (user?.name || '').trim().split(/\s+/)[0] || '';
+  const dancersLabel = dashMode === 'couple' && couple
+    ? [meFirst, partnerFirst].filter(Boolean).join(' & ')
+    : meFirst;
+  const headerSub = isParent
+    ? [dancersLabel, 'parent’s account'].filter(Boolean).join(' · ')
+    : (dancersLabel || null);
+
   if (isLoading) {
     return <ProfileSkeleton />;
   }
@@ -1838,6 +1854,16 @@ export default function ProfileScreen({ navigation, route }) {
         <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
           <TabHeader
             navigation={navigation}
+            style={styles.header}
+            lead={(
+              <StyleTitle
+                label={dashCat === 'ballroom' ? 'Ballroom' : 'Latin'}
+                category={dashCat}
+                canSwitch={user?.dance_style === 'Latin & Ballroom'}
+                onSelect={setDashCategory}
+                sub={headerSub}
+              />
+            )}
             right={(
               <View style={styles.heroActs}>
                 <TouchableOpacity
@@ -1846,7 +1872,7 @@ export default function ProfileScreen({ navigation, route }) {
                   accessibilityRole="button"
                   accessibilityLabel="Links: your coach and partner"
                 >
-                  <Ionicons name="link-outline" size={21} color={activeTab === 'links' ? '#FFFFFF' : '#141311'} />
+                  <Ionicons name="link-outline" size={18} color={activeTab === 'links' ? '#FFFFFF' : '#141311'} />
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.heroActBtn, activeTab === 'settings' && styles.heroActOn]}
@@ -1854,43 +1880,11 @@ export default function ProfileScreen({ navigation, route }) {
                   accessibilityRole="button"
                   accessibilityLabel="Settings"
                 >
-                  <Ionicons name="options-outline" size={21} color={activeTab === 'settings' ? '#FFFFFF' : '#141311'} />
+                  <Ionicons name="options-outline" size={18} color={activeTab === 'settings' ? '#FFFFFF' : '#141311'} />
                 </TouchableOpacity>
               </View>
             )}
           />
-
-          {/* ── Fixed hero + sub-tabs — never scroll ── */}
-          <View style={styles.fixedTop}>
-            <View style={styles.hero}>
-              <TouchableOpacity
-                style={styles.heroAvatarWrap}
-                onPress={handlePickPhoto}
-                activeOpacity={0.85}
-              >
-                <View style={styles.heroAvatarRing}>
-                  {(photoUri || avatarUri) ? (
-                    <Image source={{ uri: photoUri || avatarUri }} style={styles.heroAvatarPhoto} />
-                  ) : (
-                    <View style={styles.heroAvatarFallback}>
-                      <Text style={styles.heroAvatarInitials}>{initials}</Text>
-                    </View>
-                  )}
-                </View>
-              </TouchableOpacity>
-
-              <View style={styles.heroText}>
-                <Text style={styles.heroName} numberOfLines={1}>{user?.name || 'Your Name'}</Text>
-                {!!user?.studio?.name && (
-                  <Text style={styles.heroStudio} numberOfLines={1} ellipsizeMode="tail">
-                    {user.studio.name}
-                  </Text>
-                )}
-              </View>
-
-            </View>
-
-          </View>
 
           {/* ── Per-tab scrollable content ── */}
           <ScrollView
@@ -2001,8 +1995,9 @@ export default function ProfileScreen({ navigation, route }) {
               <View style={styles.tabBody}>
                 <ProfileDashboard
                   user={user}
-                  category={dashCategory}
-                  onChangeCategory={setDashCategory}
+                  category={dashCat}
+                  mode={dashMode}
+                  onChangeMode={setDashMode}
                   navigation={navigation}
                 />
               </View>
@@ -2427,11 +2422,8 @@ const styles = StyleSheet.create({
   withdrawText: { fontFamily: Fonts.ttDemiBold, fontSize: 14.5, color: '#A3281B' },
   withdrawSub: { fontFamily: Fonts.ttRegular, fontSize: 12.5, color: '#6B6656', marginTop: 2 },
 
-  fixedTop: {
-    paddingHorizontal: Spacing.side,
-    paddingTop: 0,
-    marginTop: 0,
-  },
+  // Same header rhythm as Train, so switching tabs doesn't shift it.
+  header: { paddingTop: 6 },
 
   content: { flex: 1 },
   contentInner: {
@@ -2443,73 +2435,15 @@ const styles = StyleSheet.create({
     gap: 0,
   },
 
-  // ── Hero (horizontal: avatar + name/studio/style chip) ──
-  hero: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 13,
-    paddingHorizontal: 4,
-    paddingTop: 6,
-    paddingBottom: 14,
-  },
-  heroAvatarWrap: { flex: 0 },
-  heroAvatarRing: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    padding: 2,
-    backgroundColor: 'rgba(232,181,48,0.45)',
-    shadowColor: '#E8B530',
-    shadowOpacity: 0.22,
-    shadowOffset: { width: 0, height: 6 },
-    shadowRadius: 12,
-    elevation: 4,
-  },
-  heroAvatarPhoto: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#F7F6F3',
-    borderWidth: 2,
-    borderColor: '#F7F6F3',
-  },
-  heroAvatarFallback: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#4E6A5C',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 2,
-    borderColor: '#F7F6F3',
-  },
-  heroAvatarInitials: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 16,
-    color: '#F7F6F3',
-  },
-  heroText: { flex: 1, minWidth: 0 },
   heroActs: { flexDirection: 'row', gap: 8, flex: 0 },
   heroActBtn: {
-    width: 44, height: 44, borderRadius: 22,
+    width: 36, height: 36, borderRadius: 18,
     alignItems: 'center', justifyContent: 'center',
     backgroundColor: '#FFFFFF',
     shadowColor: '#282214', shadowOpacity: 0.10, shadowOffset: { width: 0, height: 4 }, shadowRadius: 10,
     elevation: 2,
   },
   heroActOn: { backgroundColor: '#141311' },
-  heroName: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 17,
-    color: '#0A0A0A',
-    letterSpacing: -0.5,
-  },
-  heroStudio: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 12,
-    color: '#6B6656',
-    marginTop: 2,
-  },
   styleChip: {
     alignSelf: 'flex-start',
     marginTop: 7,

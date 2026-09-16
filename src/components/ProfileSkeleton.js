@@ -35,17 +35,15 @@ export default function ProfileSkeleton() {
       />
       <SafeAreaView style={sk.safe} edges={['top']}>
         <Animated.View style={{ flex: 1, opacity: pulse }}>
-          {/* Header */}
+          {/* Header: bell · style + name · links / settings */}
           <View style={sk.header}>
-            <Bone width={44} height={44} radius={14} />
-            <Bone width={56} height={32} radius={16} />
-          </View>
-
-          {/* Avatar + name */}
-          <View style={sk.profile}>
-            <Bone width={88} height={88} radius={44} style={{ marginBottom: 10 }} />
-            <Bone width={160} height={26} radius={6} style={{ marginBottom: 6 }} />
-            <Bone width={180} height={14} radius={4} />
+            <Bone width={36} height={36} radius={11} />
+            <View style={sk.headerMid}>
+              <Bone width={72} height={15} radius={5} />
+              <Bone width={90} height={10} radius={4} style={{ marginTop: 6 }} />
+            </View>
+            <Bone width={36} height={36} radius={18} style={{ marginRight: 8 }} />
+            <Bone width={36} height={36} radius={18} />
           </View>
 
           {/* Glance card */}
@@ -72,17 +70,12 @@ const sk = StyleSheet.create({
   safe: { flex: 1, backgroundColor: 'transparent' },
   header: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: Spacing.side,
-    paddingTop: 16,
+    paddingTop: 6,
     paddingBottom: 12,
   },
-  profile: {
-    alignItems: 'center',
-    marginTop: 6,
-    marginBottom: 14,
-  },
+  headerMid: { flex: 1, marginHorizontal: 11 },
   row: {
     paddingHorizontal: Spacing.side,
     marginTop: 14,

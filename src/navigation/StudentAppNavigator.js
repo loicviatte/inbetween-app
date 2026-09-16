@@ -46,7 +46,8 @@ function MainTabs() {
           tabBarStyle: { backgroundColor: 'transparent', borderTopWidth: 0, elevation: 0 },
         }}
       >
-        <Tab.Screen name="PROFILE" component={ProfileScreen} />
+        {/* Route stays PROFILE (deep links, navigate calls); the tab reads Stats. */}
+        <Tab.Screen name="PROFILE" component={ProfileScreen} options={{ tabBarLabel: 'STATS' }} />
         <Tab.Screen name="TRAIN" component={HomeScreen} />
         <Tab.Screen name="LOG" component={LogScreen} />
       </Tab.Navigator>

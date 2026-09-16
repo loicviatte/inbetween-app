@@ -13,7 +13,7 @@ const LABEL_FONT = { 'Syne-ExtraBold': require('@expo-google-fonts/syne/800Extra
 const PADDING = 5;
 const DRAG_THRESHOLD = 8;
 
-export default function CustomTabBar({ state, navigation }) {
+export default function CustomTabBar({ state, descriptors, navigation }) {
   const insets = useSafeAreaInsets();
   // `state` is always supplied by React Navigation while mounted, but guard the
   // access so a teardown-time render (e.g. the tab navigator unmounting on
@@ -247,7 +247,9 @@ export default function CustomTabBar({ state, navigation }) {
                 style={[styles.tabText, { color: isFocused ? '#FFFFFF' : '#0D0D12' }]}
                 numberOfLines={1}
               >
-                {route.name}
+                {typeof descriptors?.[route.key]?.options?.tabBarLabel === 'string'
+                  ? descriptors[route.key].options.tabBarLabel
+                  : route.name}
               </Text>
             </Pressable>
           );
