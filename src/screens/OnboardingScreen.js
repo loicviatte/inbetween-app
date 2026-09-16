@@ -758,8 +758,21 @@ export default function OnboardingScreen({ navigation }) {
     setStudioPrompt(false);
   }
 
+  // No studio means no coach list worth picking from, so the coach step is
+  // passed over — forward, and on the way back.
+  const afterCoach = flow.includes('coach') ? flow[flow.indexOf('coach') + 1] : null;
+  function skipStudio() {
+    haptic();
+    set({ noStudio: true, studioId: null, createStudio: false, studioName: '', noCoach: true, coachId: null, coachName: '' });
+    if (afterCoach) go(afterCoach); else next();
+  }
+
   function next() {
     const i = flow.indexOf(step);
+    if (step === 'studio' && a.noStudio && !isCoach && afterCoach) {
+      set({ noCoach: true, coachId: null, coachName: '' });
+      return go(afterCoach);
+    }
     if (step === 'parentEntry' && a.hasInvite) return go('parentCode');
     if (i > -1 && i < flow.length - 1) return go(flow[i + 1]);
     if (step === 'minorParent') return sendInvite();
@@ -800,6 +813,7 @@ export default function OnboardingScreen({ navigation }) {
     }
     if (step === 'planReady' || step === 'recall') return go(isParent ? 'signupConsent' : 'recap', -1);
     if (step === 'focusLocked' || step === 'analysing') return go('recall', -1);
+    if (step === afterCoach && a.noStudio && !isCoach) return go('studio', -1);
     if (i > 0) return go(flow[i - 1], -1);
     if (i === 0) return go('welcome', -1);
     navigation.goBack();
@@ -1206,7 +1220,7 @@ export default function OnboardingScreen({ navigation }) {
                     if (isCoach) { setStudioDraft(query.trim()); setStudioPrompt(true); return; }
                     setInvited('studio'); set({ noStudio: true });
                   }}
-                  onSkip={() => { haptic(); set({ noStudio: true, studioId: null, createStudio: false, studioName: '' }); next(); }}
+                  onSkip={skipStudio}
                 />
               )}
             </View>
