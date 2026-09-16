@@ -1193,18 +1193,19 @@ export default function HomeScreen({ navigation }) {
     <SafeAreaView style={s.safe} edges={['top', 'left', 'right']}>
       <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
 
-      <TabHeader
-        navigation={navigation}
-        center={
-          showFilter ? (
-            <CategoryToggle
-              category={category}
-              onPress={() => setPickerVisible(true)}
-              disabled={anyInProgress}
-            />
-          ) : null
-        }
-      />
+      <TabHeader navigation={navigation} />
+
+      {/* Train's own control, under the header: the header's middle is shared by
+          every tab (it shows "Parent's account" on a parent's account). */}
+      {showFilter && (
+        <View style={s.toggleRow}>
+          <CategoryToggle
+            category={category}
+            onPress={() => setPickerVisible(true)}
+            disabled={anyInProgress}
+          />
+        </View>
+      )}
 
       {/* ── This Week — anchored at the top, right under the header ── */}
       {SHOW_THIS_WEEK && (
@@ -1707,6 +1708,11 @@ const s = StyleSheet.create({
   },
 
   // ── Latin / Ballroom toggle (centered in TabHeader, Instagram-style) ────
+  toggleRow: {
+    alignItems: 'center',
+    marginTop: -6,
+    marginBottom: 4,
+  },
   toggle: {
     flexDirection: 'row',
     alignItems: 'center',

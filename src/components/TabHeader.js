@@ -89,17 +89,7 @@ export default function TabHeader({ navigation, onProfilePress, editMode = false
 
   return (
     <View>
-    {/* centred above the row, so it sits over the Latin/Ballroom toggle on Train
-        and over the middle of the header everywhere else */}
-    {isParent && (
-      <View style={styles.parentRow} pointerEvents="none">
-        <View style={styles.parentPill} accessibilityRole="text" accessibilityLabel="Parent's account">
-          <Ionicons name="people-outline" size={11} color={PARENT_INK} />
-          <Text style={styles.parentText}>Parent's account</Text>
-        </View>
-      </View>
-    )}
-    <View style={[styles.header, isParent && styles.headerUnderPill]}>
+    <View style={styles.header}>
       <TouchableOpacity
         style={styles.notifBtn}
         onPress={() => navigation.navigate('Notifications')}
@@ -113,11 +103,21 @@ export default function TabHeader({ navigation, onProfilePress, editMode = false
         )}
       </TouchableOpacity>
 
-      {center && (
+      {/* The middle of the row: a screen's own control if it passes one, or —
+          on every tab of a parent's account — whose account this is, level with
+          the bell and the avatar. */}
+      {center ? (
         <View style={styles.center} pointerEvents="box-none">
           {center}
         </View>
-      )}
+      ) : isParent ? (
+        <View style={styles.center} pointerEvents="none">
+          <View style={styles.parentPill} accessibilityRole="text" accessibilityLabel="Parent's account">
+            <Ionicons name="people-outline" size={11} color={PARENT_INK} />
+            <Text style={styles.parentText}>Parent's account</Text>
+          </View>
+        </View>
+      ) : null}
 
       {/* A caller that supplies `right` owns that slot outright — otherwise the
           avatar would still render and land in the middle of the row. */}
@@ -195,16 +195,6 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.jakartaExtraBold,
     fontSize: 9,
     color: '#fff',
-  },
-  parentRow: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    paddingHorizontal: Spacing.side,
-    paddingTop: 8,
-  },
-  // the pill takes the top padding's place, so the row doesn't drift down
-  headerUnderPill: {
-    paddingTop: 6,
   },
   parentPill: {
     flexDirection: 'row',
