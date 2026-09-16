@@ -48,7 +48,7 @@ export function HeaderIconButton({ icon, onPress, on = false, badge = 0, label }
   );
 }
 
-export default function TabHeader({ navigation, onProfilePress, editMode = false, center = null, right = null, lead = null, style = null, actions = null, onBack = null }) {
+export default function TabHeader({ navigation, onProfilePress, editMode = false, center = null, right = null, lead = null, style = null, actions = null, onBack = null, bellActive = false }) {
   const { avatarUri, initials: contextInitials } = useProfile();
 
   const [cachedPhoto, setCachedPhoto] = useState(null);
@@ -126,13 +126,14 @@ export default function TabHeader({ navigation, onProfilePress, editMode = false
         </TouchableOpacity>
       ) : (
       <TouchableOpacity
-        style={styles.notifBtn}
-        onPress={() => navigation.navigate('Notifications')}
+        style={[styles.notifBtn, bellActive && styles.iconBtnOn]}
+        // On Notifications itself the bell is lit, and pressing it closes them.
+        onPress={() => (bellActive ? navigation.goBack() : navigation.navigate('Notifications'))}
         activeOpacity={0.7}
-        accessibilityLabel={unreadCount > 0 ? `Notifications, ${unreadCount} unread` : 'Notifications'}
+        accessibilityLabel={bellActive ? 'Close notifications' : unreadCount > 0 ? `Notifications, ${unreadCount} unread` : 'Notifications'}
       >
-        <Ionicons name="notifications-outline" size={19} color={Colors.black} />
-        {unreadCount > 0 && (
+        <Ionicons name="notifications-outline" size={19} color={bellActive ? '#FFFFFF' : Colors.black} />
+        {!bellActive && unreadCount > 0 && (
           <View style={styles.notifBadge}>
             <Text style={styles.notifBadgeText}>{unreadCount > 9 ? '9+' : unreadCount}</Text>
           </View>
