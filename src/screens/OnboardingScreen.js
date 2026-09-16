@@ -19,6 +19,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput,
   ActivityIndicator, KeyboardAvoidingView, Platform, Animated, Easing, Linking, Keyboard, Modal, Alert,
+  Pressable, Dimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -32,6 +33,7 @@ import { filterStudios, hasExactMatch } from '../utils/studioMatch';
 import { setOnboardingHold } from '../utils/onboardingHold';
 import { recallToFocusPoints, saveOnboardingFocusPoints } from '../services/ai/onboardingRecall';
 import { createChildAccount } from '../services/childAccount';
+import { COUNTRIES, DEFAULT_COUNTRY, countryByIso, toE164, splitE164 } from '../utils/phone';
 import {
   saveCoachCard, slugify, essenceFrom, howITeachFrom, myMethodFrom, credentialFrom,
   CORRECT_OPTIONS, METHOD_OPTIONS, EXPERIENCE_OPTIONS,
@@ -269,6 +271,69 @@ function Field({ label, value, onChange, placeholder, ...rest }) {
         <TextInput style={s.input} value={value} onChangeText={onChange} placeholder={placeholder}
           placeholderTextColor={T.ink3} onFocus={() => setFocus(true)} onBlur={() => setFocus(false)} {...rest} />
       </View>
+    </View>
+  );
+}
+
+// A mobile number the way people know it: the country code picked from a
+// dropdown, the rest typed as dialled at home (07482 552037 or 7482 552037).
+const DIAL_MENU_H = 340;
+function PhoneField({ label, country, onCountry, value, onChange }) {
+  const [focus, setFocus] = useState(false);
+  const [menu, setMenu] = useState(null);   // { x, top } in window coordinates
+  const box = useRef(null);
+  const c = countryByIso(country);
+
+  function openMenu() {
+    haptic();
+    box.current?.measureInWindow((x, y, w, h) => {
+      // Below the field when it fits above the keyboard, otherwise above it.
+      const kb = Keyboard.isVisible() ? (Keyboard.metrics()?.height || 0) : 0;
+      const room = Dimensions.get('window').height - kb;
+      const below = y + h + 6;
+      setMenu({ x, width: w, top: below + DIAL_MENU_H <= room ? below : Math.max(56, y - DIAL_MENU_H - 6) });
+    });
+  }
+
+  return (
+    <View style={s.field}>
+      <Text style={s.lbl}>{label}</Text>
+      <View ref={box} collapsable={false} style={[s.fieldIn, s.phoneIn, focus && s.fieldOn]}>
+        <TouchableOpacity style={s.dial} onPress={openMenu} activeOpacity={0.6} accessibilityRole="button"
+          accessibilityLabel={`Country code, ${c.name}, plus ${c.dial}. Change`}>
+          <Text style={s.dialFlag}>{c.flag}</Text>
+          <Text style={s.dialT}>+{c.dial}</Text>
+          <Svg width={10} height={10} viewBox="0 0 10 10">
+            <Path d="M2 3.5l3 3 3-3" stroke={T.ink2} strokeWidth={1.6} fill="none" strokeLinecap="round" strokeLinejoin="round" />
+          </Svg>
+        </TouchableOpacity>
+        <View style={s.dialSep} />
+        <TextInput style={[s.input, s.phoneInput]} value={value} onChangeText={onChange}
+          placeholder={c.example} placeholderTextColor={T.ink3} keyboardType="phone-pad"
+          textContentType="telephoneNumber" autoComplete="tel-national"
+          onFocus={() => setFocus(true)} onBlur={() => setFocus(false)} />
+      </View>
+
+      <Modal visible={!!menu} transparent animationType="fade" statusBarTranslucent onRequestClose={() => setMenu(null)}>
+        <Pressable style={s.dialBackdrop} onPress={() => setMenu(null)}>
+          <View style={[s.dialMenu, { top: menu?.top ?? 0, left: menu?.x ?? 0, width: menu?.width ?? 280 }]}>
+            <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator>
+              {COUNTRIES.map((opt, i) => {
+                const on = opt.iso === c.iso;
+                return (
+                  <TouchableOpacity key={opt.iso} style={[s.dialOpt, i > 0 && s.dialOptLine, on && s.dialOptOn]}
+                    activeOpacity={0.6} accessibilityRole="button" accessibilityState={{ selected: on }}
+                    onPress={() => { haptic(); setMenu(null); onCountry(opt.iso); }}>
+                    <Text style={s.dialFlag}>{opt.flag}</Text>
+                    <Text style={s.dialOptName} numberOfLines={1}>{opt.name}</Text>
+                    <Text style={s.dialOptCode}>+{opt.dial}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
@@ -553,10 +618,10 @@ export default function OnboardingScreen({ navigation }) {
     correct: '', signature: '', words: [], leave: [], who: [], cred: '',
     coachId: null, coachName: '', noCoach: false,
     recall: '', focus: [],
-    parentFirstName: '', parentEmail: '', parentPhone: '',
+    parentFirstName: '', parentEmail: '', parentPhone: '', parentPhoneCountry: DEFAULT_COUNTRY,
     inviteId: '', deviceSecret: '', maskedEmail: '', inviteStatus: '', inviteNote: '', editingInvite: false, inviteClosed: false,
     invToken: '', invCode: '', consent: null, checks: [false, false, false], parentPassword: '', hasInvite: null, signupCopy: null,
-    signupPhone: '', smsId: '', smsMasked: '', smsCode: '', phoneToken: '',
+    signupPhone: '', signupPhoneCountry: DEFAULT_COUNTRY, smsId: '', smsMasked: '', smsCode: '', phoneToken: '',
     alloc: { Technique: 40, Musicality: 25, Mental: 20, Performance: 15 },
     name: '', childName: '', email: '', password: '', slug: '',
   });
@@ -607,9 +672,11 @@ export default function OnboardingScreen({ navigation }) {
     let alive = true;
     loadPendingInvite().then((p) => {
       if (!alive || !p?.inviteId) return;
+      const phone = splitE164(p.parentPhone);
       set({
         inviteId: p.inviteId, deviceSecret: p.deviceSecret, name: p.childName || '',
-        parentFirstName: p.parentFirstName || '', parentEmail: p.parentEmail || '', parentPhone: p.parentPhone || '',
+        parentFirstName: p.parentFirstName || '', parentEmail: p.parentEmail || '',
+        parentPhone: phone.national, parentPhoneCountry: phone.iso,
       });
       setStep('minorWaiting');
     });
@@ -763,7 +830,8 @@ export default function OnboardingScreen({ navigation }) {
   async function sendInvite() {
     setError(''); setBusy(true);
     const contact = {
-      parentFirstName: a.parentFirstName.trim(), parentEmail: a.parentEmail.trim(), parentPhone: a.parentPhone.trim(),
+      parentFirstName: a.parentFirstName.trim(), parentEmail: a.parentEmail.trim(),
+      parentPhone: toE164(a.parentPhoneCountry, a.parentPhone),
     };
     try {
       let inviteId = a.inviteId, deviceSecret = a.deviceSecret, maskedEmail;
@@ -864,7 +932,7 @@ export default function OnboardingScreen({ navigation }) {
   async function sendSignupSms() {
     setError(''); setBusy(true);
     try {
-      const r = await sendPhoneCode(a.signupPhone.trim());
+      const r = await sendPhoneCode(toE164(a.signupPhoneCountry, a.signupPhone));
       set({ smsId: r.verificationId, smsMasked: r.maskedPhone, smsCode: '', phoneToken: '' });
     } catch (e) {
       setError(e.message);
@@ -1017,11 +1085,11 @@ export default function OnboardingScreen({ navigation }) {
     recall: a.recall.trim().length > 11, analysing: false, focusLocked: true, focusLive: true,
     minorExplain: true,
     minorParent: !!((a.editingInvite || a.name.trim()) && a.parentFirstName.trim()
-      && EMAIL_OK.test(a.parentEmail.trim()) && PHONE_OK(a.parentPhone)),
+      && EMAIL_OK.test(a.parentEmail.trim()) && PHONE_OK(toE164(a.parentPhoneCountry, a.parentPhone))),
     minorWaiting: true,
     parentEntry: a.hasInvite !== null,
     childName: a.childName.trim().length > 0,
-    signupPhone: a.smsId ? /^[0-9]{6}$/.test(a.smsCode) : PHONE_OK(a.signupPhone),
+    signupPhone: a.smsId ? /^[0-9]{6}$/.test(a.smsCode) : PHONE_OK(toE164(a.signupPhoneCountry, a.signupPhone)),
     signupWhat: !!a.signupCopy,
     signupConsent: !!a.signupCopy && a.checks.every(Boolean),
     parentCode: a.invToken.trim().length > 0 && /^[0-9]{6}$/.test(a.invCode),
@@ -1256,8 +1324,9 @@ export default function OnboardingScreen({ navigation }) {
       ) : (
         <Q h1="Your mobile number"
           sub="We’ll text you a code. The permission comes from you, so the number has to be yours.">
-          <Rise delay={0.05}><Field label="Mobile number" value={a.signupPhone} onChange={(t) => set({ signupPhone: t })}
-            placeholder="+44 7700 900123" keyboardType="phone-pad" textContentType="telephoneNumber" /></Rise>
+          <Rise delay={0.05}><PhoneField label="Mobile number" country={a.signupPhoneCountry}
+            onCountry={(iso) => set({ signupPhoneCountry: iso })} value={a.signupPhone}
+            onChange={(t) => set({ signupPhone: t })} /></Rise>
           {!!error && <Text style={s.err}>{error}</Text>}
         </Q>
       );
@@ -1313,8 +1382,9 @@ export default function OnboardingScreen({ navigation }) {
               onChange={(t) => set({ parentFirstName: t })} placeholder="Sarah" autoCapitalize="words" /></Rise>
             <Rise delay={0.04}><Field label="Parent’s email" value={a.parentEmail} onChange={(t) => set({ parentEmail: t })}
               placeholder="sarah@email.com" autoCapitalize="none" autoCorrect={false} keyboardType="email-address" /></Rise>
-            <Rise delay={0.08}><Field label="Parent’s mobile number" value={a.parentPhone} onChange={(t) => set({ parentPhone: t })}
-              placeholder="+44 7700 900123" keyboardType="phone-pad" /></Rise>
+            <Rise delay={0.08}><PhoneField label="Parent’s mobile number" country={a.parentPhoneCountry}
+              onCountry={(iso) => set({ parentPhoneCountry: iso })} value={a.parentPhone}
+              onChange={(t) => set({ parentPhone: t })} /></Rise>
           </View>
           {!a.editingInvite && (
             <Rise delay={0.12}>
@@ -1932,6 +2002,21 @@ const s = StyleSheet.create({
     height: 50, paddingHorizontal: 14, justifyContent: 'center' },
   fieldOn: { borderColor: T.gold },
   input: { fontFamily: Fonts.travelsRegular, fontSize: 15, color: T.ink, padding: 0 },
+  phoneIn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-start', paddingLeft: 0 },
+  dial: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'stretch', paddingLeft: 14, paddingRight: 10 },
+  dialFlag: { fontSize: 17 },
+  dialT: { fontFamily: Fonts.travelsMedium, fontSize: 15, color: T.ink },
+  dialSep: { width: 1, height: 22, backgroundColor: T.line3, marginRight: 12 },
+  phoneInput: { flex: 1, alignSelf: 'stretch' },
+  dialBackdrop: { flex: 1 },
+  dialMenu: { position: 'absolute', maxHeight: DIAL_MENU_H, borderRadius: 14, overflow: 'hidden',
+    backgroundColor: T.card, borderWidth: 1, borderColor: T.line2,
+    shadowColor: '#000', shadowOpacity: 0.16, shadowOffset: { width: 0, height: 10 }, shadowRadius: 24, elevation: 12 },
+  dialOpt: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingVertical: 12 },
+  dialOptLine: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: T.line2 },
+  dialOptOn: { backgroundColor: 'rgba(232,181,48,0.14)' },
+  dialOptName: { flex: 1, fontFamily: Fonts.travelsRegular, fontSize: 14.5, color: T.ink },
+  dialOptCode: { fontFamily: Fonts.travelsMedium, fontSize: 14, color: T.ink2 },
 
   // .card — the student's plan
   pcard: { backgroundColor: T.card, borderWidth: 1, borderColor: T.line2, borderRadius: 14, padding: 17, gap: 11 },
