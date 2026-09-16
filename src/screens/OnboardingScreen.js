@@ -638,6 +638,9 @@ export default function OnboardingScreen({ navigation }) {
   const [studioDraft, setStudioDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  // "Check again" on the teen's waiting screen: failures in a row, and the last one.
+  const [checkFails, setCheckFails] = useState(0);
+  const [checkError, setCheckError] = useState('');
   const scroller = useRef(null);
   const bump = useRef(new Animated.Value(1)).current;
 
@@ -871,15 +874,45 @@ export default function OnboardingScreen({ navigation }) {
   }
 
   async function refreshInvite() {
-    setError('');
-    try { const r = await getInviteStatus(a.inviteId, a.deviceSecret); set({ inviteStatus: r.status }); }
-    catch (e) { if ([404, 409, 410].includes(e.status)) set({ inviteClosed: true }); else setError(e.message); }
+    if (busy) return;
+    setError(''); setBusy(true);
+    const started = Date.now();
+    try {
+      const r = await getInviteStatus(a.inviteId, a.deviceSecret);
+      // Long enough for the spinner to register as a check, not a flicker.
+      await new Promise((res) => setTimeout(res, Math.max(0, 700 - (Date.now() - started))));
+      setCheckFails(0); setCheckError('');
+      set({ inviteStatus: r.status,
+        inviteNote: r.status === 'pending' ? `Still waiting for ${a.parentFirstName || 'your parent'}.` : '' });
+    } catch (e) {
+      if ([404, 409, 410].includes(e.status)) set({ inviteClosed: true });
+      else { setCheckFails((n) => n + 1); setCheckError(e.message || ''); }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // After three failed checks: a written-out email, so support can find the invitation.
+  function contactSupport() {
+    haptic();
+    const subject = 'My parent invitation won’t update';
+    const body = [
+      'Hi InBetween,', '',
+      `I’m waiting for ${a.parentFirstName || 'my parent'} to approve my account, but “Check again” keeps failing.`, '',
+      `My first name: ${a.name.trim() || '—'}`,
+      `Invitation: ${a.inviteId || '—'}`,
+      `Phone: ${Platform.OS} ${Platform.Version}`,
+      ...(checkError ? [`Error: ${checkError}`] : []),
+    ].join('\n');
+    Linking.openURL(`mailto:hello@useinbetween.com?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`)
+      .catch(() => Alert.alert('Write to us', 'Email hello@useinbetween.com and we’ll sort it out.'));
   }
 
   // Back to the start with nothing left behind: the server drops the pending
   // profile (and the coach's request) before this device forgets the invitation.
   function resetInvite() {
     clearPendingInvite();
+    setCheckFails(0); setCheckError('');
     set({ inviteId: '', deviceSecret: '', inviteStatus: '', inviteClosed: false, inviteNote: '',
       parentFirstName: '', parentEmail: '', parentPhone: '' });
     setError('');
@@ -1747,6 +1780,16 @@ export default function OnboardingScreen({ navigation }) {
           <View style={[s.foot, { paddingBottom: keyboardUp ? 12 : insets.bottom + 20 }]}>
             <LinearGradient colors={['rgba(242,240,235,0)', T.screen]} style={s.footFade} pointerEvents="none" />
             {!!whyLine && !keyboardUp && <Text style={s.why}>{whyLine}</Text>}
+            {step === 'minorWaiting' && checkFails > 0 && !a.inviteClosed && a.inviteStatus !== 'approved' && (
+              <View style={s.checkFail} accessibilityLiveRegion="polite">
+                <Text style={s.checkFailT}>We couldn’t check just now. Try again in a few moments.</Text>
+                {checkFails >= 3 && (
+                  <TouchableOpacity onPress={contactSupport} accessibilityRole="link" hitSlop={10}>
+                    <Text style={s.checkContactT}>Still not working? <Text style={s.checkContactL}>Contact us</Text></Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
             <Cta label={ctaLabel} onPress={onCta} disabled={!gate} busy={busy} />
           </View>
         )}
@@ -1938,6 +1981,10 @@ const s = StyleSheet.create({
   checkT: { flex: 1, fontFamily: Fonts.travelsRegular, fontSize: 14.5, lineHeight: 21, color: T.ink },
   lead: { marginTop: 14, fontFamily: Fonts.travelsRegular, fontSize: 13.5, lineHeight: 20, color: T.ink2, textAlign: 'center' },
   err: { marginTop: 14, fontFamily: Fonts.travelsMedium, fontSize: 13, lineHeight: 19, color: '#A3281B' },
+  checkFail: { alignItems: 'center', marginBottom: 12, gap: 6 },
+  checkFailT: { fontFamily: Fonts.travelsMedium, fontSize: 13, lineHeight: 18, color: '#A3281B', textAlign: 'center', maxWidth: 300 },
+  checkContactT: { fontFamily: Fonts.travelsRegular, fontSize: 13, lineHeight: 18, color: T.ink2, textAlign: 'center' },
+  checkContactL: { fontFamily: Fonts.ttDemiBold, color: T.ink, textDecorationLine: 'underline' },
 
   // .opt — selection is an inset 2px ring in the comp, so the padding gives the
   // pixel back and the row never resizes under the finger
