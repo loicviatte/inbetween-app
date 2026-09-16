@@ -18,7 +18,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput,
-  ActivityIndicator, KeyboardAvoidingView, Platform, Animated, Easing, Linking, Keyboard,
+  ActivityIndicator, KeyboardAvoidingView, Platform, Animated, Easing, Linking, Keyboard, Modal,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -560,6 +560,8 @@ export default function OnboardingScreen({ navigation }) {
   const [coachesLoading, setCoachesLoading] = useState(false);
   const [noticeFor, setNoticeFor] = useState('');     // 'studio' | 'coach'
   const [invited, setInvited] = useState('');
+  const [studioPrompt, setStudioPrompt] = useState(false);
+  const [studioDraft, setStudioDraft] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const scroller = useRef(null);
@@ -657,6 +659,28 @@ export default function OnboardingScreen({ navigation }) {
   }, [step]);
 
   function go(to, d = 1) { haptic(); setDir(d); setStep(to); }
+
+  // A submitted studio goes the same way as "Create …": its name is kept here and
+  // the row is created with the account (see submit).
+  function confirmStudio() {
+    const name = studioDraft.trim();
+    if (name.length < 2) return;
+    haptic();
+    // a name that is already in the list is that studio, not a new one — creating
+    // it would fail on the unique name at sign-up
+    const existing = studios.find((st) => (st.name || '').trim().toLowerCase() === name.toLowerCase());
+    if (existing) {
+      setQuery(existing.name);
+      set({ studioId: existing.id, studioName: existing.name, createStudio: false, noStudio: false });
+      setNoticeFor('');
+      setStudioPrompt(false);
+      return;
+    }
+    setQuery(name);
+    set({ createStudio: true, studioId: null, studioName: name, noStudio: false });
+    setInvited('studio');
+    setStudioPrompt(false);
+  }
 
   function next() {
     const i = flow.indexOf(step);
@@ -1063,11 +1087,15 @@ export default function OnboardingScreen({ navigation }) {
                 <Notice
                   lead="Can’t find your studio?"
                   body={isCoach
-                    ? 'Submit it and we’ll add it manually — this won’t hold up your setup.'
+                    ? 'Submit its name and we’ll add it with your account — this won’t hold up your setup.'
                     : 'Without one, nothing syncs automatically — you’ll add lessons and coaches by hand.'}
                   inviteLabel={isCoach ? 'Submit my studio' : 'Invite them'}
                   invited={invited === 'studio'}
-                  onInvite={() => { haptic(); setInvited('studio'); set({ noStudio: true }); }}
+                  onInvite={() => {
+                    haptic();
+                    if (isCoach) { setStudioDraft(query.trim()); setStudioPrompt(true); return; }
+                    setInvited('studio'); set({ noStudio: true });
+                  }}
                   onSkip={() => { haptic(); set({ noStudio: true, studioId: null, createStudio: false, studioName: '' }); next(); }}
                 />
               )}
@@ -1588,6 +1616,30 @@ export default function OnboardingScreen({ navigation }) {
           </View>
         )}
       </KeyboardAvoidingView>
+
+      {/* the studio a coach submits: created with the account, like "Create …" */}
+      <Modal visible={studioPrompt} transparent animationType="fade" onRequestClose={() => setStudioPrompt(false)}>
+        <KeyboardAvoidingView style={s.promptBackdrop} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+          <View style={s.prompt}>
+            <Text style={s.promptTitle}>Your studio’s name</Text>
+            <Text style={s.promptSub}>We’ll add it with your account, so your classes and students can sync to it.</Text>
+            <View style={[s.fieldIn, s.promptField]}>
+              <TextInput style={s.input} value={studioDraft} onChangeText={setStudioDraft} autoFocus
+                placeholder="Studio name" placeholderTextColor={T.ink3} autoCapitalize="words" returnKeyType="done"
+                onSubmitEditing={() => { if (studioDraft.trim().length >= 2) confirmStudio(); }} />
+            </View>
+            <View style={s.promptActs}>
+              <TouchableOpacity style={s.promptCancel} onPress={() => setStudioPrompt(false)} accessibilityRole="button">
+                <Text style={s.promptCancelT}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[s.promptOk, studioDraft.trim().length < 2 && s.ctaOff]}
+                disabled={studioDraft.trim().length < 2} onPress={confirmStudio} accessibilityRole="button">
+                <Text style={s.promptOkT}>Submit</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </View>
   );
 }
@@ -1722,6 +1774,17 @@ const s = StyleSheet.create({
   sub: { marginTop: 10, fontFamily: Fonts.travelsRegular, fontSize: 14.5, lineHeight: 21, color: T.ink2 },
   qbody: { marginTop: 22 },
   grow: { flex: 1, minHeight: 0 },
+  promptBackdrop: { flex: 1, backgroundColor: 'rgba(10,10,10,0.45)', justifyContent: 'center', paddingHorizontal: 24 },
+  prompt: { backgroundColor: T.screen, borderRadius: 20, padding: 22 },
+  promptTitle: { fontFamily: Fonts.ttBold, fontSize: 22, letterSpacing: -0.6, color: T.ink },
+  promptSub: { fontFamily: Fonts.travelsRegular, fontSize: 13.5, lineHeight: 19, color: T.ink2, marginTop: 6 },
+  promptField: { marginTop: 16 },
+  promptActs: { flexDirection: 'row', gap: 10, marginTop: 18 },
+  promptCancel: { flex: 1, height: 50, borderRadius: 999, borderWidth: 1, borderColor: 'rgba(10,10,10,0.22)',
+    alignItems: 'center', justifyContent: 'center' },
+  promptCancelT: { fontFamily: Fonts.ttDemiBold, fontSize: 15, color: T.ink },
+  promptOk: { flex: 1, height: 50, borderRadius: 999, backgroundColor: T.gold, alignItems: 'center', justifyContent: 'center' },
+  promptOkT: { fontFamily: Fonts.ttDemiBold, fontSize: 15, color: T.ink },
   para: { fontFamily: Fonts.travelsRegular, fontSize: 15, lineHeight: 23, color: T.ink2 },
   fieldNote: { marginTop: 14, fontFamily: Fonts.travelsRegular, fontSize: 13, lineHeight: 19, color: T.ink2 },
   waitActs: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 22 },
