@@ -25,7 +25,7 @@ import TabHeader, { useIsParentAccount } from '../components/TabHeader';
 import StyleTitle from '../components/StyleTitle';
 import { useTabBarSpace } from '../components/CustomTabBar';
 import MaskedView from '@react-native-masked-view/masked-view';
-import PullLogo from '../components/PullLogo';
+import PullLogo, { usePullRefresh } from '../components/PullLogo';
 import { categoryFromStyle } from '../utils/danceCategory';
 import { saveUserPreferences, getAccountUser, saveAccountName, clearSubjectCache, invalidateCache } from '../storage/storage';
 import { isGuardian, listChildren, setActiveChild } from '../storage/guardianStorage';
@@ -1023,9 +1023,14 @@ export default function ProfileScreen({ navigation, route }) {
   // Pull to refresh: bumping the key makes the Stats dashboard refetch too.
   const [refreshing, setRefreshing] = useState(false);
   const [dashRefreshKey, setDashRefreshKey] = useState(0);
+  const pull = usePullRefresh({
+    refreshing,
+    onRefresh: () => handleRefresh(),
+    scrollToTop: () => contentScrollRef.current?.scrollTo({ y: 0, animated: true }),
+  });
   const isParent = useIsParentAccount();
   const tabBarSpace = useTabBarSpace();
-  const pullLogoRef = useRef(null);
+  const contentScrollRef = useRef(null);
   // A guardian account follows one child at a time; the rest of the app never
   // sees this, since getUserId() already resolves to whichever one is active.
   const [children, setChildren] = useState([]);
@@ -1925,10 +1930,10 @@ export default function ProfileScreen({ navigation, route }) {
               EDGE_FADE lower, so at rest nothing sits in the fade. */}
           {/* Pull to refresh draws the InBetween mark in the gap the pull opens,
               behind the content (iOS; Android keeps its native spinner). */}
-          {Platform.OS === 'ios' ? (
+          {pull.ios ? (
             <View style={styles.pullLogoAnchor} pointerEvents="none">
               <View style={styles.pullLogo}>
-                <PullLogo ref={pullLogoRef} refreshing={refreshing} />
+                <PullLogo ref={pull.logoRef} refreshing={refreshing} />
               </View>
             </View>
           ) : null}
@@ -1947,15 +1952,15 @@ export default function ProfileScreen({ navigation, route }) {
             }
           >
           <ScrollView
+            ref={contentScrollRef}
             style={styles.content}
             contentContainerStyle={[styles.contentInner, { paddingTop: CONTENT_TOP + EDGE_FADE, paddingBottom: CONTENT_BOTTOM + tabBarSpace }]}
             showsVerticalScrollIndicator={false}
             overScrollMode="never"
-            scrollEventThrottle={16}
-            onScroll={Platform.OS === 'ios' ? (e) => pullLogoRef.current?.setProgress((-e.nativeEvent.contentOffset.y - 8) / 56) : undefined}
-            refreshControl={
-              <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={Platform.OS === 'ios' ? 'transparent' : '#8A6414'} colors={['#E8B530']} />
-            }
+            {...pull.scrollProps}
+            refreshControl={pull.ios ? undefined : (
+              <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} colors={['#E8B530']} />
+            )}
           >
             {activeTab === 'links' && (
               <View style={styles.tabBody}>

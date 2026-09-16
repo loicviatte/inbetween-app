@@ -22,7 +22,7 @@ import TabHeader, { useIsParentAccount } from '../components/TabHeader';
 import StyleTitle from '../components/StyleTitle';
 import { useTabBarSpace } from '../components/CustomTabBar';
 import ModeTabs, { COUPLE_BLUE } from '../components/ModeTabs';
-import PullLogo from '../components/PullLogo';
+import PullLogo, { usePullRefresh } from '../components/PullLogo';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Fonts } from '../theme';
@@ -457,6 +457,14 @@ export default function HomeScreen({ navigation }) {
   const overflow = viewportH > 0 && contentH > viewportH + 1;
   const pullY = useRef(new Animated.Value(0)).current;
   const pullLogoRef = useRef(null);
+  // When the page does scroll (small phones), the pull is read off the scroll.
+  const pageScrollRef = useRef(null);
+  const pagePull = usePullRefresh({
+    refreshing,
+    onRefresh: () => handleRefresh(),
+    scrollToTop: () => pageScrollRef.current?.scrollTo({ y: 0, animated: true }),
+    logoRef: pullLogoRef,
+  });
   const pullRef = useRef({ enabled: false, busy: false, armed: false, refresh: null, logo: pullLogoRef });
   pullRef.current.enabled = !overflow;
   const pullResponder = useRef(PanResponder.create({
@@ -1293,16 +1301,16 @@ export default function HomeScreen({ navigation }) {
       ) : null}
       <Animated.View style={{ flex: 1, transform: [{ translateY: pullY }] }}>
       <ScrollView
+        ref={pageScrollRef}
         style={{ flex: 1 }}
         contentContainerStyle={s.scrollContent}
         showsVerticalScrollIndicator={false}
         scrollEnabled={overflow}
         onLayout={(e) => setViewportH(e.nativeEvent.layout.height)}
         onContentSizeChange={(_, h) => setContentH(h)}
-        scrollEventThrottle={16}
-        onScroll={overflow ? (e) => pullLogoRef.current?.setProgress(-e.nativeEvent.contentOffset.y / PULL_TRIGGER) : undefined}
-        refreshControl={overflow ? (
-          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={Platform.OS === 'ios' ? 'transparent' : GOLD_INK} colors={[GOLD]} />
+        {...(overflow ? pagePull.scrollProps : {})}
+        refreshControl={overflow && !pagePull.ios ? (
+          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={GOLD_INK} colors={[GOLD]} />
         ) : undefined}
       >
         <WeekRail

@@ -14,7 +14,6 @@ import {
   Dimensions,
   Modal,
   Switch,
-  RefreshControl,
 } from 'react-native';
 
 const SCREEN_W = Dimensions.get('window').width;
@@ -46,7 +45,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import TabHeader, { useIsParentAccount } from '../components/TabHeader';
 import StyleTitle from '../components/StyleTitle';
 import { useTabBarSpace } from '../components/CustomTabBar';
-import PullLogo from '../components/PullLogo';
+import PullLogo, { usePullRefresh } from '../components/PullLogo';
 import LogSkeleton from '../components/LogSkeleton';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -559,11 +558,22 @@ export default function LogScreen({ navigation }) {
   const [dontRemind, setDontRemind] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   // Pull to refresh draws the InBetween mark in the gap the pull opens (iOS;
-  // Android keeps its native spinner). One per page, since each list pulls.
-  const classLogoRef = useRef(null);
-  const notesLogoRef = useRef(null);
-  const pullProgress = (e) => (-e.nativeEvent.contentOffset.y - 8) / 56;
-  const pullTint = Platform.OS === 'ios' ? 'transparent' : GREEN_500;
+  // Android keeps its native spinner). One per page, since each list pulls —
+  // and only the list that pulled holds its gap open.
+  const classListRef = useRef(null);
+  const notesListRef = useRef(null);
+  const [pulledTab, setPulledTab] = useState(null);
+  const scrollListTop = (ref) => ref.current?.getScrollResponder?.()?.scrollTo({ y: 0, animated: true });
+  const classPull = usePullRefresh({
+    refreshing: refreshing && pulledTab === 'CLASS',
+    onRefresh: () => { setPulledTab('CLASS'); handleRefresh(); },
+    scrollToTop: () => scrollListTop(classListRef),
+  });
+  const notesPull = usePullRefresh({
+    refreshing: refreshing && pulledTab === 'NOTES',
+    onRefresh: () => { setPulledTab('NOTES'); handleRefresh(); },
+    scrollToTop: () => scrollListTop(notesListRef),
+  });
 
   const [isLoading, setIsLoading] = useState(true);
   const [pending, setPending] = useState([]);
@@ -917,15 +927,16 @@ export default function LogScreen({ navigation }) {
                   }}
                 />
               </View>
-              {Platform.OS === 'ios' ? (
+              {classPull.ios ? (
                 <Animated.View
                   pointerEvents="none"
                   style={[styles.pullLogo, { top: Animated.add(spacerHeight, OVERLAY_COLLAPSED_HEIGHT + 12) }]}
                 >
-                  <PullLogo ref={classLogoRef} refreshing={refreshing && activeTab === 'CLASS'} />
+                  <PullLogo ref={classPull.logoRef} refreshing={refreshing && pulledTab === 'CLASS'} />
                 </Animated.View>
               ) : null}
               <SectionList
+                ref={classListRef}
                 sections={groupedInputs}
                 keyExtractor={(item) => item.id}
                 renderItem={({ item }) => (
@@ -948,26 +959,30 @@ export default function LogScreen({ navigation }) {
                 contentContainerStyle={styles.listContentClass}
                 showsVerticalScrollIndicator={false}
                 ListEmptyComponent={search.trim() ? null : <ClassEmptyState />}
-                refreshing={refreshing}
-                onRefresh={handleRefresh}
-                refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={pullTint} />}
+                {...classPull.scrollProps}
+                refreshing={classPull.ios ? undefined : refreshing}
+                onRefresh={classPull.ios ? undefined : handleRefresh}
                 stickySectionHeadersEnabled={false}
                 onScroll={(e) => {
                   handleListScroll(e);
-                  if (Platform.OS === 'ios') classLogoRef.current?.setProgress(pullProgress(e));
+                  classPull.scrollProps.onScroll?.(e);
                 }}
                 onScrollBeginDrag={handleListScrollBeginDrag}
-                onScrollEndDrag={handleListScrollEndDrag}
+                onScrollEndDrag={(e) => {
+                  handleListScrollEndDrag(e);
+                  classPull.scrollProps.onScrollEndDrag?.(e);
+                }}
                 scrollEventThrottle={16}
               />
             </View>
             <View style={{ width: SCREEN_W, height: '100%' }}>
-              {Platform.OS === 'ios' ? (
+              {notesPull.ios ? (
                 <View pointerEvents="none" style={[styles.pullLogo, { top: 12 }]}>
-                  <PullLogo ref={notesLogoRef} refreshing={refreshing && activeTab === 'NOTES'} />
+                  <PullLogo ref={notesPull.logoRef} refreshing={refreshing && pulledTab === 'NOTES'} />
                 </View>
               ) : null}
               <SectionList
+                ref={notesListRef}
                 sections={groupedNotes}
                 keyExtractor={(item) => item.id}
                 renderItem={({ item }) => (
@@ -985,12 +1000,10 @@ export default function LogScreen({ navigation }) {
                 contentContainerStyle={styles.listContent}
                 showsVerticalScrollIndicator={false}
                 ListEmptyComponent={<EmptyState text="No notes yet. Tap ADD to create one." />}
-                refreshing={refreshing}
-                onRefresh={handleRefresh}
-                refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={pullTint} />}
+                {...notesPull.scrollProps}
+                refreshing={notesPull.ios ? undefined : refreshing}
+                onRefresh={notesPull.ios ? undefined : handleRefresh}
                 stickySectionHeadersEnabled={false}
-                scrollEventThrottle={16}
-                onScroll={Platform.OS === 'ios' ? (e) => notesLogoRef.current?.setProgress(pullProgress(e)) : undefined}
               />
             </View>
           </ScrollView>

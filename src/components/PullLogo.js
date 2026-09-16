@@ -1,5 +1,6 @@
 import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
-import { Animated, Easing } from 'react-native';
+import { Animated, Easing, Platform } from 'react-native';
+import * as Haptics from 'expo-haptics';
 import Svg, { G, Path } from 'react-native-svg';
 
 // ─── Pull-to-refresh mark ─────────────────────────────────────────────────────
@@ -110,3 +111,59 @@ const PullLogo = forwardRef(function PullLogo({ width = 46, refreshing = false }
 });
 
 export default PullLogo;
+
+// ─── Pull to refresh on a scrolling list (iOS) ────────────────────────────────
+// The system RefreshControl can't be told to hide its spinner reliably (a
+// transparent tint still shows it on the first pull), so on iOS the pull is
+// read straight off the scroll: the mark follows the overscroll, releasing
+// past PULL_TRIGGER refreshes, and a top content inset holds the gap open
+// while it runs. Android returns no scroll props — keep the RefreshControl
+// there.
+//
+//   const pull = usePullRefresh({ refreshing, onRefresh, scrollToTop });
+//   <ScrollView {...pull.scrollProps} refreshControl={pull.ios ? undefined : …}>
+//   <PullLogo ref={pull.logoRef} refreshing={refreshing} />
+const PULL_TRIGGER = 64;
+const PULL_HOLD = 56;
+
+export function usePullRefresh({ refreshing, onRefresh, scrollToTop, logoRef: sharedLogoRef }) {
+  const ios = Platform.OS === 'ios';
+  const ownLogoRef = useRef(null);
+  const logoRef = sharedLogoRef || ownLogoRef;   // a screen that also drives the mark itself shares its ref
+  const armedRef = useRef(false);
+  const wasRefreshingRef = useRef(refreshing);
+
+  // Done: drop the inset (already gone this render) and glide back to the top.
+  useEffect(() => {
+    if (ios && wasRefreshingRef.current && !refreshing) {
+      requestAnimationFrame(() => scrollToTop?.());
+    }
+    wasRefreshingRef.current = refreshing;
+  }, [refreshing]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!ios) return { ios, logoRef, scrollProps: {} };
+
+  return {
+    ios,
+    logoRef,
+    scrollProps: {
+      scrollEventThrottle: 16,
+      alwaysBounceVertical: true,
+      contentInset: { top: refreshing ? PULL_HOLD : 0 },
+      onScroll: (e) => {
+        const pulled = -e.nativeEvent.contentOffset.y;
+        logoRef.current?.setProgress((pulled - 8) / (PULL_TRIGGER - 8));
+        if (!armedRef.current && pulled >= PULL_TRIGGER && !refreshing) {
+          armedRef.current = true;
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+        } else if (armedRef.current && pulled < PULL_TRIGGER) {
+          armedRef.current = false;
+        }
+      },
+      onScrollEndDrag: (e) => {
+        armedRef.current = false;
+        if (!refreshing && -e.nativeEvent.contentOffset.y >= PULL_TRIGGER) onRefresh?.();
+      },
+    },
+  };
+}
