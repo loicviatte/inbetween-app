@@ -10,8 +10,12 @@ import {
   Animated,
   Modal,
   Switch,
+  TextInput,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -57,6 +61,7 @@ const SIDE = 20;
 
 const MONTH_FULL = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const WEEKDAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const DOW = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -201,24 +206,58 @@ function LessonRow({ item, minutes, first, last, onPress }) {
   );
 }
 
-function NoteRow({ item, first, last, onPress }) {
-  const clips = item.video_clips?.length || 0;
-  const meta = [
-    clips ? plural(clips, 'clip') : null,
-    item.linked_class_input_id ? 'Linked to a lesson' : null,
-  ].filter(Boolean).join(' · ') || (item.content || '').split('\n')[0] || 'Note';
+// Notes read newest first in groups: this week, the rest of this month, then
+// month by month.
+function noteGroups(notes) {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const monday = new Date(today);
+  monday.setDate(today.getDate() - ((today.getDay() + 6) % 7));
+  const map = new Map();
+  for (const n of notes) {
+    const d = new Date(n.updated_at || n.created_at);
+    const title = d >= monday ? 'This week'
+      : (d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth()) ? `Earlier in ${MONTH_FULL[now.getMonth()]}`
+      : d.getFullYear() === now.getFullYear() ? MONTH_FULL[d.getMonth()]
+      : `${MONTH_FULL[d.getMonth()]} ${d.getFullYear()}`;
+    if (!map.has(title)) map.set(title, { title, data: [] });
+    map.get(title).data.push(n);
+  }
+  return Array.from(map.values());
+}
+
+function noteDate(iso) {
+  const ago = daysAgo(iso);
+  if (ago === 0) return 'Today';
+  if (ago === 1) return 'Yesterday';
+  const d = new Date(iso);
+  return `${WEEKDAY_SHORT[d.getDay()]} ${d.getDate()} ${MONTH_SHORT[d.getMonth()]}`;
+}
+
+function NoteGroupHeader({ title, count }) {
   return (
-    <TouchableOpacity
-      style={[rw.row, first && rw.rowFirst, last && rw.rowLast, !first && rw.rowSep]}
-      onPress={onPress}
-      activeOpacity={0.7}
-    >
-      <DateTile iso={item.updated_at || item.created_at} />
-      <View style={rw.body}>
-        <Text style={rw.title} numberOfLines={2}>{item.title || 'Untitled note'}</Text>
-        <Text style={rw.meta} numberOfLines={1}>{meta}</Text>
-      </View>
-      <Ionicons name="chevron-forward" size={13} color={INK_34} />
+    <View style={nt.group}>
+      <Text style={nt.groupTitle}>{title}</Text>
+      <View style={nt.groupRule} />
+      <Text style={nt.groupCount}>{count}</Text>
+    </View>
+  );
+}
+
+function NoteCard({ item, lessonTitleOf, onPress }) {
+  const linked = item.linked_class_input_id ? lessonTitleOf(item.linked_class_input_id) : null;
+  const body = (item.content || '').trim();
+  return (
+    <TouchableOpacity style={nt.card} onPress={onPress} activeOpacity={0.8}>
+      <Text style={nt.date}>{noteDate(item.updated_at || item.created_at)}</Text>
+      <Text style={nt.title} numberOfLines={2}>{item.title || 'Untitled note'}</Text>
+      {body ? <Text style={nt.body} numberOfLines={2}>{body}</Text> : null}
+      {linked ? (
+        <View style={nt.link}>
+          <Ionicons name="document-outline" size={12} color="rgba(10,10,10,0.38)" />
+          <Text style={nt.linkTxt} numberOfLines={1}>{linked}</Text>
+        </View>
+      ) : null}
     </TouchableOpacity>
   );
 }
@@ -349,6 +388,7 @@ export default function LogScreen({ navigation }) {
   const [filter, setFilter] = useState('all');       // 'all' | 'group' | 'private'
   const [calMonth, setCalMonth] = useState(() => { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), 1); });
   const [calDay, setCalDay] = useState(null);
+  const [noteQuery, setNoteQuery] = useState('');
 
   const [modalVisible, setModalVisible] = useState(false);
   const [reminderVisible, setReminderVisible] = useState(false);
@@ -581,13 +621,18 @@ export default function LogScreen({ navigation }) {
     : calMonth;
   const nowMonth = (() => { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), 1); })();
   const monthLessons = filtered.filter((l) => monthKey(new Date(l.created_at)) === monthKey(calMonth));
-  const noteSections = byMonth(notes, 'updated_at');
+  const q = noteQuery.trim().toLowerCase();
+  const noteSections = noteGroups(q
+    ? notes.filter((n) => `${n.title || ''} ${n.content || ''}`.toLowerCase().includes(q))
+    : notes);
+  const lessonTitleOf = (id) => {
+    const l = inputs.find((i) => i.id === id);
+    return l ? lessonTitle(l) : null;
+  };
 
   const countLabel = view === 'calendar'
     ? `${plural(monthLessons.length, 'lesson')} in ${MONTH_FULL[calMonth.getMonth()]}`
-    : view === 'notes'
-      ? plural(notes.length, 'note')
-      : plural(filtered.length, 'lesson');
+    : plural(filtered.length, 'lesson');
 
   // Header: the dancer's style(s) — Lessons lists every style, so it names them
   // rather than offering a switch — and who, since when.
@@ -616,14 +661,7 @@ export default function LogScreen({ navigation }) {
         <SeasonTile value={String(totalCorrections)} label="Corrections" />
         <SeasonTile value={floor.value} unit={floor.unit} label="On the floor" />
       </View>
-      {view === 'notes' ? (
-        <View style={[ft.row, { justifyContent: 'space-between' }]}>
-          <Text style={[ft.label, ft.labelOn, ft.notesLabel]}>Notes</Text>
-          <Text style={ft.count}>{countLabel}</Text>
-        </View>
-      ) : (
-        <FilterTabs value={filter} onChange={(f) => { setFilter(f); setCalDay(null); }} count={countLabel} />
-      )}
+      <FilterTabs value={filter} onChange={(f) => { setFilter(f); setCalDay(null); }} count={countLabel} />
     </View>
   );
 
@@ -659,6 +697,11 @@ export default function LogScreen({ navigation }) {
             )}
           />
 
+          {/* On Notes the search field sits at the foot: lift it over the keyboard. */}
+          <KeyboardAvoidingView
+            style={{ flex: 1 }}
+            behavior={Platform.OS === 'ios' && view === 'notes' ? 'padding' : undefined}
+          >
           <View style={{ flex: 1 }}>
             {pullLogo}
             {view === 'list' ? (
@@ -727,20 +770,22 @@ export default function LogScreen({ navigation }) {
                 keyExtractor={(item) => item.id}
                 stickySectionHeadersEnabled={false}
                 showsVerticalScrollIndicator={false}
-                contentContainerStyle={s.feed}
-                ListHeaderComponent={pageHead}
+                contentContainerStyle={s.notesFeed}
+                keyboardShouldPersistTaps="handled"
+                keyboardDismissMode="on-drag"
                 renderSectionHeader={({ section }) => (
-                  <MonthMarker title={section.title} count={section.data.length} noun="note" />
+                  <NoteGroupHeader title={section.title} count={section.data.length} />
                 )}
-                renderItem={({ item, index, section }) => (
-                  <NoteRow
+                renderItem={({ item }) => (
+                  <NoteCard
                     item={item}
-                    first={index === 0}
-                    last={index === section.data.length - 1}
+                    lessonTitleOf={lessonTitleOf}
                     onPress={() => navigation.navigate('NoteDetail', { noteId: item.id })}
                   />
                 )}
-                ListEmptyComponent={(
+                ListEmptyComponent={q ? (
+                  <Text style={nt.none}>No note matches “{noteQuery.trim()}”.</Text>
+                ) : (
                   <View style={s.empty}>
                     <Text style={s.emptyTitle}>No notes yet</Text>
                     <Text style={s.emptyBody}>Write down what you want to remember from a lesson or a practice.</Text>
@@ -753,16 +798,54 @@ export default function LogScreen({ navigation }) {
             )}
           </View>
 
-          {/* Log a lesson (or, on Notes, write one): a round + in the corner. */}
-          <TouchableOpacity
-            style={[s.fab, { bottom: tabBarSpace + 14 }]}
-            onPress={view === 'notes' ? () => navigation.navigate('NoteDetail', {}) : handleLogLesson}
-            activeOpacity={0.85}
-            accessibilityRole="button"
-            accessibilityLabel={view === 'notes' ? 'Write a note' : 'Log a lesson'}
-          >
-            <Ionicons name="add" size={28} color={INK} />
-          </TouchableOpacity>
+          {view === 'notes' ? (
+            <View style={nt.foot}>
+              <LinearGradient
+                colors={['rgba(242,240,235,0)', PAGE]}
+                locations={[0, 0.34]}
+                style={StyleSheet.absoluteFill}
+                pointerEvents="none"
+              />
+              <View style={nt.search}>
+                <Ionicons name="search" size={15} color={INK_42} />
+                <TextInput
+                  style={nt.searchInput}
+                  value={noteQuery}
+                  onChangeText={setNoteQuery}
+                  placeholder="Search notes"
+                  placeholderTextColor={INK_42}
+                  clearButtonMode="while-editing"
+                  returnKeyType="search"
+                />
+              </View>
+              <TouchableOpacity
+                style={nt.add}
+                onPress={() => navigation.navigate('NoteDetail', {})}
+                activeOpacity={0.85}
+                accessibilityRole="button"
+                accessibilityLabel="Write a note"
+              >
+                <Text style={nt.addTxt}>ADD</Text>
+                <View style={nt.addCircle}>
+                  <Ionicons name="add" size={18} color="#FFFFFF" />
+                </View>
+              </TouchableOpacity>
+            </View>
+          ) : null}
+          </KeyboardAvoidingView>
+
+          {/* Log a lesson: a round + in the corner. */}
+          {view !== 'notes' ? (
+            <TouchableOpacity
+              style={[s.fab, { bottom: tabBarSpace + 14 }]}
+              onPress={handleLogLesson}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityLabel="Log a lesson"
+            >
+              <Ionicons name="add" size={28} color={INK} />
+            </TouchableOpacity>
+          ) : null}
 
           <LogModal
             visible={modalVisible}
@@ -818,6 +901,7 @@ const s = StyleSheet.create({
   // Bottom room so the last row clears the round + button.
   feed: { paddingHorizontal: SIDE, paddingBottom: 88 },
   calScroll: { paddingHorizontal: SIDE, paddingBottom: 88 },
+  notesFeed: { paddingHorizontal: SIDE, paddingTop: 4, paddingBottom: 14 },
   pullLogo: { position: 'absolute', top: 14, left: 0, right: 0, alignItems: 'center' },
   empty: { paddingTop: 36, paddingHorizontal: 12, alignItems: 'center' },
   emptyTitle: { fontFamily: Fonts.ttDemiBold, fontSize: 15.5, letterSpacing: -0.2, color: INK, textAlign: 'center' },
@@ -866,8 +950,28 @@ const ft = StyleSheet.create({
   tabOn: { borderBottomColor: GOLD },
   label: { fontFamily: Fonts.ttDemiBold, fontSize: 15, letterSpacing: -0.3, color: INK_2 },
   labelOn: { color: INK },
-  notesLabel: { paddingBottom: 9 },
   count: { marginLeft: 'auto', paddingBottom: 11, fontFamily: Fonts.ttRegular, fontSize: 11.5, color: INK_2 },
+});
+
+// Notes
+const nt = StyleSheet.create({
+  group: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingTop: 18, paddingBottom: 9 },
+  groupTitle: { fontFamily: Fonts.ttDemiBold, fontSize: 9.5, letterSpacing: 1.71, textTransform: 'uppercase', color: INK_45 },
+  groupRule: { flex: 1, height: 1, backgroundColor: LINE },
+  groupCount: { fontFamily: Fonts.ttRegular, fontSize: 9.5, letterSpacing: 0.57, color: 'rgba(10,10,10,0.38)' },
+  card: { backgroundColor: '#FFFFFF', borderRadius: 16, borderWidth: 1, borderColor: HAIR, paddingVertical: 14, paddingHorizontal: 16, marginBottom: 9, gap: 5 },
+  date: { fontFamily: Fonts.ttRegular, fontSize: 11, color: INK_50 },
+  title: { fontFamily: Fonts.ttBold, fontSize: 17, lineHeight: 21, letterSpacing: -0.42, color: INK },
+  body: { fontFamily: Fonts.ttRegular, fontSize: 13.5, lineHeight: 19.5, color: 'rgba(10,10,10,0.6)' },
+  link: { flexDirection: 'row', alignItems: 'center', gap: 7, paddingTop: 3 },
+  linkTxt: { flex: 1, fontFamily: Fonts.ttDemiBold, fontSize: 11, color: INK },
+  none: { paddingTop: 26, textAlign: 'center', fontFamily: Fonts.ttRegular, fontSize: 13, lineHeight: 19, color: INK_50 },
+  foot: { flexDirection: 'row', gap: 9, paddingHorizontal: SIDE, paddingTop: 10, paddingBottom: 10 },
+  search: { flex: 1, minWidth: 0, height: 52, flexDirection: 'row', alignItems: 'center', gap: 9, paddingHorizontal: 16, borderRadius: 999, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: 'rgba(10,10,10,0.1)' },
+  searchInput: { flex: 1, minWidth: 0, fontFamily: Fonts.ttRegular, fontSize: 14.5, color: INK, paddingVertical: 0 },
+  add: { height: 52, paddingLeft: 20, paddingRight: 8, borderRadius: 999, backgroundColor: GOLD, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  addTxt: { fontFamily: Fonts.ttBold, fontSize: 13, letterSpacing: 1.17, color: INK },
+  addCircle: { width: 36, height: 36, borderRadius: 18, backgroundColor: INK, alignItems: 'center', justifyContent: 'center' },
 });
 
 // Month markers and rows
