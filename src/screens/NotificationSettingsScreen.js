@@ -11,8 +11,9 @@ import { getUser, saveUserPreferences } from '../storage/storage';
 // One switch per notification the app really sends a dancer, under the
 // design's four headings. "Lesson summary ready" keeps its existing column
 // (notify_lesson_ready); the rest live in users.notification_prefs. Requests
-// from a coach or a partner aren't switchable. Saved only for now: nothing
-// that sends notifications reads them yet.
+// from a coach or a partner aren't switchable. The send-push function reads
+// them before every push: the notification is always kept, the phone is only
+// buzzed when the settings allow it.
 const PAGE = '#F2F0EB';
 const INK = '#0A0A0A';
 const INK_55 = 'rgba(10,10,10,0.55)';
@@ -173,7 +174,11 @@ export default function NotificationSettingsScreen({ navigation, route }) {
 
   function setPref(key, value) {
     const before = prefs;
-    const next = { ...prefs, [key]: value };
+    // The phone's time zone travels with the settings, so quiet hours are
+    // counted in the dancer's local time on the server.
+    let tz = prefs.tz;
+    try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || tz; } catch {}
+    const next = { ...prefs, [key]: value, ...(tz ? { tz } : {}) };
     setPrefs(next);
     saveUserPreferences({ notification_prefs: next }).catch(() => { setPrefs(before); notSaved(); });
   }
