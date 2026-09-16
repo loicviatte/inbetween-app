@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
   PanResponder,
   Dimensions,
+  Easing,
 } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
 
@@ -1011,6 +1012,47 @@ export default function HomeScreen({ navigation }) {
   const showTabs = soloVisible && coupleVisible;
   const viewMode = showTabs ? mode : coupleVisible ? 'couple' : 'solo';
 
+  // Solo ↔ Couple slide. The tabs answer the tap at once; everything below
+  // them slides out towards the side being left, the other side's content is
+  // swapped in (shownMode lags viewMode by the exit) and slides in from the
+  // opposite edge. Only a tap slides — a mode set by a session or by the data
+  // just swaps.
+  const [shownMode, setShownMode] = useState(viewMode);
+  const modeSlideX = useRef(new Animated.Value(0)).current;
+  const modeSlideO = useRef(new Animated.Value(1)).current;
+  const modeTapRef = useRef(false);
+  const modeTargetRef = useRef(viewMode);
+  modeTargetRef.current = viewMode;
+  useEffect(() => {
+    if (shownMode === viewMode) { modeTapRef.current = false; return; }
+    if (!modeTapRef.current) { setShownMode(viewMode); return; }
+    modeTapRef.current = false;
+    // Couple sits to the right of Solo: going there pushes the page left.
+    const dir = viewMode === 'couple' ? -1 : 1;
+    const shift = Dimensions.get('window').width * 0.45;
+    modeSlideX.stopAnimation();
+    modeSlideO.stopAnimation();
+    Animated.parallel([
+      Animated.timing(modeSlideX, { toValue: dir * shift, duration: 150, easing: Easing.in(Easing.quad), useNativeDriver: true }),
+      Animated.timing(modeSlideO, { toValue: 0, duration: 150, useNativeDriver: true }),
+    ]).start(({ finished }) => {
+      if (!finished) return;
+      setShownMode(modeTargetRef.current);
+      modeSlideX.setValue(-dir * shift);
+      Animated.parallel([
+        Animated.timing(modeSlideX, { toValue: 0, duration: 280, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+        Animated.timing(modeSlideO, { toValue: 1, duration: 220, useNativeDriver: true }),
+      ]).start();
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewMode]);
+  const modeSlideStyle = { opacity: modeSlideO, transform: [{ translateX: modeSlideX }] };
+  function tapMode(next) {
+    if (next === viewMode) return;
+    modeTapRef.current = true;
+    setMode(next);
+  }
+
   // A running session (yours or your partner's) opens its own tab.
   const forcedMode = soloSessionActive ? 'solo' : coupleInProgress ? 'couple' : null;
   useEffect(() => {
@@ -1062,7 +1104,7 @@ export default function HomeScreen({ navigation }) {
   const activeFocusName = activeSession?.focusPointName ?? null;
 
   // ─── The side on screen ──────────────────────────────────────────────────
-  const isCouple = viewMode === 'couple';
+  const isCouple = shownMode === 'couple';
   const items = (isCouple
     ? [coupleSlots.slot1, coupleSlots.slot2, coupleSlots.slot3]
     : [slot1, slot2, slot3]).filter(Boolean);
@@ -1167,7 +1209,7 @@ export default function HomeScreen({ navigation }) {
   const carouselIdx = Math.min(isCouple ? coupleIdx : soloIdx, Math.max(0, items.length - 1));
   const setCarouselIdx = isCouple ? setCoupleIdx : setSoloIdx;
   const liveIdx = liveId ? items.findIndex((f) => f.id === liveId) : -1;
-  const carouselKey = `${viewMode}:${category || 'all'}:${items.map((f) => f.id).join(',')}`;
+  const carouselKey = `${shownMode}:${category || 'all'}:${items.map((f) => f.id).join(',')}`;
 
   // The carousel remounts (back at the first card) whenever its set of cards
   // changes; a running session scrolls its own card into view.
@@ -1254,7 +1296,7 @@ export default function HomeScreen({ navigation }) {
           accentInk={isCouple ? COUPLE_BLUE : GOLD_INK}
         />
 
-        {showTabs ? <ModeTabs mode={viewMode} onChange={setMode} disabled={anyInProgress} style={s.tabs} /> : null}
+        {showTabs ? <ModeTabs mode={viewMode} onChange={tapMode} disabled={anyInProgress} style={s.tabs} /> : null}
 
         {/* Swap the dial + cards for a skeleton while they load — either a
             not-yet-prefetched style toggle, or the very first load before the
@@ -1263,7 +1305,7 @@ export default function HomeScreen({ navigation }) {
         {(categorySwitching || (!initialLoadDone && !slot1 && !coupleSlots?.slot1)) ? (
           <TrainSwitchSkeleton cardWidth={windowWidth - SIDE * 2 - CARD_PEEK} />
         ) : (
-          <>
+          <Animated.View style={modeSlideStyle}>
             {/* Dial + copy open the readiness detail — once there is something
                 to break down. */}
             <TouchableOpacity
@@ -1292,7 +1334,7 @@ export default function HomeScreen({ navigation }) {
                 <View style={fp.head}>
                   <Text style={fp.label}>Focus points</Text>
                   <TouchableOpacity
-                    onPress={() => navigation.navigate('AllFocusPoints', { category, tab: viewMode })}
+                    onPress={() => navigation.navigate('AllFocusPoints', { category, tab: shownMode })}
                     activeOpacity={0.6}
                     hitSlop={{ top: 8, bottom: 8, left: 12 }}
                   >
@@ -1347,16 +1389,16 @@ export default function HomeScreen({ navigation }) {
                 />
               </>
             ) : null}
-          </>
+          </Animated.View>
         )}
 
         {lesson ? (
-          <View style={s.foot}>
+          <Animated.View style={[s.foot, modeSlideStyle]}>
             <LessonSummaryCard
               lesson={lesson}
               onPress={() => navigation.navigate('ClassDetail', { inputId: lesson.id })}
             />
-          </View>
+          </Animated.View>
         ) : null}
       </ScrollView>
       </Animated.View>
