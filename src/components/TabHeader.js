@@ -89,7 +89,17 @@ export default function TabHeader({ navigation, onProfilePress, editMode = false
 
   return (
     <View>
-    <View style={styles.header}>
+    {/* centred above the row, so it sits over the Latin/Ballroom toggle on Train
+        and over the middle of the header everywhere else */}
+    {isParent && (
+      <View style={styles.parentRow} pointerEvents="none">
+        <View style={styles.parentPill} accessibilityRole="text" accessibilityLabel="Parent's account">
+          <Ionicons name="people-outline" size={11} color={PARENT_INK} />
+          <Text style={styles.parentText}>Parent's account</Text>
+        </View>
+      </View>
+    )}
+    <View style={[styles.header, isParent && styles.headerUnderPill]}>
       <TouchableOpacity
         style={styles.notifBtn}
         onPress={() => navigation.navigate('Notifications')}
@@ -131,16 +141,6 @@ export default function TabHeader({ navigation, onProfilePress, editMode = false
       ))}
     </View>
 
-    {/* under the avatar, right-aligned: the centre of the row is taken by the
-        Latin/Ballroom toggle on Train */}
-    {isParent && (
-      <View style={styles.parentRow} pointerEvents="none">
-        <View style={styles.parentPill} accessibilityRole="text" accessibilityLabel="Parent's account">
-          <Ionicons name="people-outline" size={11} color={PARENT_INK} />
-          <Text style={styles.parentText}>Parent's account</Text>
-        </View>
-      </View>
-    )}
     </View>
   );
 }
@@ -198,10 +198,13 @@ const styles = StyleSheet.create({
   },
   parentRow: {
     flexDirection: 'row',
-    justifyContent: 'flex-end',
+    justifyContent: 'center',
     paddingHorizontal: Spacing.side,
-    marginTop: -6,
-    paddingBottom: 8,
+    paddingTop: 8,
+  },
+  // the pill takes the top padding's place, so the row doesn't drift down
+  headerUnderPill: {
+    paddingTop: 6,
   },
   parentPill: {
     flexDirection: 'row',
