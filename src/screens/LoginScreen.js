@@ -65,10 +65,18 @@ export default function LoginScreen({ navigation }) {
     setResetting(true);
     setError('');
     setInfo('');
+    // Supabase stays silent for an email with no account, so a typo would
+    // still read "link sent". Ask first; if the check itself fails, send anyway.
+    const { data: exists, error: checkErr } = await supabase.rpc('account_exists_for_email', { p_email: email.trim() });
+    if (!checkErr && exists === false) {
+      setResetting(false);
+      setError(`No account uses ${email.trim()}. Check the spelling, or create an account below.`);
+      return;
+    }
     const { error: err } = await supabase.auth.resetPasswordForEmail(email.trim());
     setResetting(false);
     if (err) setError(err.message);
-    else setInfo(`Reset link sent to ${email.trim()}. Check your inbox.`);
+    else setInfo(`Reset link sent to ${email.trim()}. Check your inbox, and your spam folder too.`);
   }
 
   return (
