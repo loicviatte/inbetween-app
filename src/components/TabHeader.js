@@ -10,7 +10,7 @@ import { getNotifications } from '../storage/notificationsStorage';
 import { locallyRespondedAttendance } from '../storage/attendanceState';
 import { supabase } from '../services/supabase/client';
 import AccountSheet from './AccountSheet';
-import ChildPhoneNudge from './ChildPhoneNudge';
+import { useChildPhoneNudge, ChildPhoneBanner, ChildPhoneHeaderIcon } from './ChildPhoneNudge';
 
 // A parent's account shows their child's training through the same screens,
 // so the header says, on every tab, whose account this is.
@@ -57,6 +57,7 @@ export default function TabHeader({ navigation, onProfilePress, editMode = false
   const [cachedInitials, setCachedInitials] = useState('');
   const [unreadCount, setUnreadCount] = useState(0);
   const isParent = useIsParentAccount();
+  const nudge = useChildPhoneNudge(isParent && !hideChildNudge, navigation);
 
   useEffect(() => {
     async function load() {
@@ -162,6 +163,9 @@ export default function TabHeader({ navigation, onProfilePress, editMode = false
       {/* A screen's own buttons, set before the avatar. */}
       {actions ? <View style={styles.actions}>{actions}</View> : null}
 
+      {/* A parent who put the phone banner away keeps a way back to it. */}
+      {nudge.mode === 'icon' ? <ChildPhoneHeaderIcon nudge={nudge} /> : null}
+
       {right || (editMode ? (
         <TouchableOpacity
           onPress={handleProfilePress}
@@ -186,8 +190,8 @@ export default function TabHeader({ navigation, onProfilePress, editMode = false
 
     {/* Sits 12pt under the header row whatever bottom padding a screen gives the
         header (Train and Lessons: none; Stats: its fade). */}
-    {isParent && !hideChildNudge ? (
-      <ChildPhoneNudge navigation={navigation}
+    {nudge.mode === 'banner' ? (
+      <ChildPhoneBanner nudge={nudge}
         style={{ marginTop: Math.max(0, 12 - (StyleSheet.flatten([styles.header, style])?.paddingBottom ?? 12)) }} />
     ) : null}
 
