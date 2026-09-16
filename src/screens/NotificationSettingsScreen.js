@@ -10,9 +10,11 @@ import TabHeader, { useIsParentAccount } from '../components/TabHeader';
 import StyleTitle from '../components/StyleTitle';
 
 // ─── Notification settings (docs/design/notifications.html) ───────────────────
-// Every setting is shown and saved. Two map onto the columns the app already
-// had (notify_lesson_ready, notify_practice_reminders); the rest live in
-// users.notification_prefs. Nothing that sends notifications reads them yet.
+// One switch per notification the app really sends a dancer, under the
+// design's four headings. "Lesson summary ready" keeps its existing column
+// (notify_lesson_ready); the rest live in users.notification_prefs. Requests
+// from a coach or a partner aren't switchable. Saved only for now: nothing
+// that sends notifications reads them yet.
 const PAGE = '#F2F0EB';
 const INK = '#0A0A0A';
 const INK_55 = 'rgba(10,10,10,0.55)';
@@ -25,23 +27,15 @@ const GOLD_INK = '#8A6414';
 const SIDE = 20;
 
 const DEFAULT_PREFS = {
-  corrections: true,
-  new_focus_point: true,
-  class_reminder: true,
-  remind_lead: '3h',
-  weekly_recap: true,
-  milestones: false,
+  new_focus_point: true,   // focus_point_added — the coach validated one
+  coach_comments: true,    // a comment on one of your focus points
+  attendance: true,        // group_class_attendance / attendance_check
+  milestones: true,        // a focus point mastered
+  focus_reviews: true,     // merge_request_student — two may be the same
   push: 'on',
-  email: 'recaps',
-  quiet: '22-8',
+  quiet: 'off',
   paused_until: null,
 };
-
-const REMIND_LEADS = [
-  { key: '1h', label: '1 hour before' },
-  { key: '3h', label: '3 hours before' },
-  { key: 'evening', label: 'The evening before' },
-];
 const QUIET_HOURS = [
   { key: 'off', label: 'Off' },
   { key: '21-7', label: '21:00 – 7:00' },
@@ -158,7 +152,6 @@ export default function NotificationSettingsScreen({ navigation, route }) {
   const [user, setUser] = useState(null);
   const [prefs, setPrefs] = useState(DEFAULT_PREFS);
   const [lessonReady, setLessonReady] = useState(true);
-  const [nudges, setNudges] = useState(false);
   const [coachName, setCoachName] = useState(route?.params?.coachName || null);
   const [partnerName, setPartnerName] = useState(null);
 
@@ -169,7 +162,6 @@ export default function NotificationSettingsScreen({ navigation, route }) {
       setUser(u);
       setPrefs({ ...DEFAULT_PREFS, ...(u.notification_prefs || {}) });
       setLessonReady(u.notify_lesson_ready ?? true);
-      setNudges(u.notify_practice_reminders ?? false);
     }).catch(() => {});
     // Coach and partner names from the Stats and Train caches — no round-trip.
     AsyncStorage.multiGet(['@cache_profile', '@cache_home_couple']).then(([[, profile], [, couple]]) => {
@@ -230,41 +222,35 @@ export default function NotificationSettingsScreen({ navigation, route }) {
 
         <Text style={st.title}>Notification settings</Text>
         <Text style={st.lead}>
-          {who} can always reach you about a class time change — everything else is yours to switch off.
+          {who} and your partner can always reach you with a request — everything else is yours to switch off.
         </Text>
 
         <ScrollView contentContainerStyle={st.scroll} showsVerticalScrollIndicator={false}>
           <Section title="From your coach" side={coachName} />
           <View style={st.card}>
-            <SwitchRow first title="Corrections captured"
-              sub={`When ${coachFirst || 'your coach'} logs corrections after a lesson`}
-              value={prefs.corrections} onChange={(v) => setPref('corrections', v)} />
-            <SwitchRow title="Lesson summary ready" sub="The written recap, usually within an hour"
-              value={lessonReady} onChange={(v) => setColumn('notify_lesson_ready', v, setLessonReady, lessonReady)} />
-            <SwitchRow title="New focus point" sub="When something new is added to Train"
+            <SwitchRow first title="New focus points"
+              sub={`When ${coachFirst || 'your coach'} validates a focus point from your lesson`}
               value={prefs.new_focus_point} onChange={(v) => setPref('new_focus_point', v)} />
-            <SwitchRow title="Nudges to practise" sub="A reminder when you’ve been quiet for a few days"
-              value={nudges} onChange={(v) => setColumn('notify_practice_reminders', v, setNudges, nudges)} />
+            <SwitchRow title="Lesson summary ready" sub="When your lesson is transcribed and ready to read"
+              value={lessonReady} onChange={(v) => setColumn('notify_lesson_ready', v, setLessonReady, lessonReady)} />
+            <SwitchRow title="Comments"
+              sub={`When ${coachFirst || 'your coach'} comments on one of your focus points`}
+              value={prefs.coach_comments} onChange={(v) => setPref('coach_comments', v)} />
           </View>
 
           <Section title="Classes" />
           <View style={st.card}>
-            <SwitchRow first title="Class reminder" sub="Before group classes and privates"
-              value={prefs.class_reminder} onChange={(v) => setPref('class_reminder', v)} />
-            <ValueRow title="Remind me" sub="How far ahead of the start time"
-              value={labelOf(REMIND_LEADS, prefs.remind_lead)}
-              disabled={!prefs.class_reminder}
-              onPress={() => pick('Remind me', REMIND_LEADS, 'remind_lead')} />
-            <SwitchRow title="Schedule changes" sub="Moved, cancelled or newly booked lessons"
-              value disabled onChange={() => {}} />
+            <SwitchRow first title="Attendance check-ins"
+              sub={`When ${coachFirst || 'your coach'} asks whether you were at a group class`}
+              value={prefs.attendance} onChange={(v) => setPref('attendance', v)} />
           </View>
 
           <Section title="Your training" />
           <View style={st.card}>
-            <SwitchRow first title="Weekly recap" sub="Sunday evening: sessions, readiness, what’s left"
-              value={prefs.weekly_recap} onChange={(v) => setPref('weekly_recap', v)} />
-            <SwitchRow title="Streaks and milestones" sub="Best week, 10th lesson, focus point cleared"
+            <SwitchRow first title="Focus points mastered" sub="When one of your focus points is cleared"
               value={prefs.milestones} onChange={(v) => setPref('milestones', v)} />
+            <SwitchRow title="Possible duplicates" sub="When two of your focus points may be the same"
+              value={prefs.focus_reviews} onChange={(v) => setPref('focus_reviews', v)} />
           </View>
 
           <Section title="Delivery" />
@@ -272,14 +258,11 @@ export default function NotificationSettingsScreen({ navigation, route }) {
             <SegRow first title="Push" sub="On this phone"
               options={[{ key: 'on', label: 'ON' }, { key: 'off', label: 'OFF' }]}
               value={prefs.push} onChange={(v) => setPref('push', v)} />
-            <SegRow title="Email" sub={user?.email || 'Your email'}
-              options={[{ key: 'all', label: 'ALL' }, { key: 'recaps', label: 'RECAPS' }, { key: 'off', label: 'OFF' }]}
-              value={prefs.email} onChange={(v) => setPref('email', v)} />
             <ValueRow title="Quiet hours" sub="Nothing buzzes between these times"
               value={labelOf(QUIET_HOURS, prefs.quiet)}
               onPress={() => pick('Quiet hours', QUIET_HOURS, 'quiet')} />
           </View>
-          <Text style={st.note}>Class time changes always come through, even during quiet hours.</Text>
+          <Text style={st.note}>Everything still lands in Notifications — these settings only decide what reaches your phone.</Text>
         </ScrollView>
 
         <View style={[st.foot, { paddingBottom: Math.max(insets.bottom, 12) }]}>
