@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef, useMemo } from 'react';
+import React, { useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import {
   Alert,
   View,
@@ -32,7 +32,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Colors, Fonts, Spacing } from '../theme';
-import { getClassInputs, getNotes, getTrainingSessionsThisMonth } from '../storage/storage';
+import { getClassInputs, getNotes, getTrainingSessionsThisMonth, getUser } from '../storage/storage';
 import {
   getPendingClasses,
   addPendingClass,
@@ -42,7 +42,8 @@ import {
 import { processClassDraft } from '../services/classSubmission';
 import LogModal from '../components/LogModal';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import TabHeader from '../components/TabHeader';
+import TabHeader, { useIsParentAccount } from '../components/TabHeader';
+import StyleTitle from '../components/StyleTitle';
 import LogSkeleton from '../components/LogSkeleton';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -536,6 +537,15 @@ function NoteItem({ item, onPress }) {
 export default function LogScreen({ navigation }) {
   const [activeTab, setActiveTab] = useState('CLASS');
   const [inputs, setInputs] = useState([]);
+  // Header: the dancer (the child, on a parent's account) — style and first name.
+  const [dancer, setDancer] = useState(null);
+  const isParent = useIsParentAccount();
+  // Paint the header at once from Train's cached user; load() refreshes it.
+  useEffect(() => {
+    AsyncStorage.getItem('@cache_home')
+      .then((raw) => { const u = raw && JSON.parse(raw)?.user; if (u) setDancer((d) => d || u); })
+      .catch(() => {});
+  }, []);
   const [trainings, setTrainings] = useState([]);
   const [notes, setNotes] = useState([]);
   const [search, setSearch] = useState('');
@@ -623,6 +633,7 @@ export default function LogScreen({ navigation }) {
       getPendingClasses(),
       getTrainingSessionsThisMonth(),
     ]);
+    getUser().then((u) => { if (u) setDancer(u); }).catch(() => {});
     setInputs(allInputs);
     setNotes(allNotes);
     setPending(pendingList);
@@ -795,6 +806,18 @@ export default function LogScreen({ navigation }) {
     outputRange: [innerExpandedH + STATS_TOP_SPACE, 0],
   });
 
+  // Log lists every style's classes, so the title names the dancer's style(s)
+  // rather than offering a switch that would filter nothing here.
+  const dancerStyle = dancer?.dance_style || '';
+  const styleLabel = dancerStyle.includes('Latin') && dancerStyle.includes('Ballroom') ? 'Latin & Ballroom'
+    : dancerStyle.includes('Ballroom') ? 'Ballroom'
+    : dancerStyle.includes('Latin') ? 'Latin'
+    : 'Log';
+  const dancerFirst = (dancer?.name || '').trim().split(/\s+/)[0] || '';
+  const headerSub = isParent
+    ? [dancerFirst, 'parent’s account'].filter(Boolean).join(' · ')
+    : (dancerFirst || null);
+
   if (isLoading) {
     return <LogSkeleton />;
   }
@@ -808,7 +831,11 @@ export default function LogScreen({ navigation }) {
       />
       <SafeAreaView style={styles.safe} edges={['top']}>
         <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
-          <TabHeader navigation={navigation} />
+          <TabHeader
+            navigation={navigation}
+            style={styles.header}
+            lead={<StyleTitle label={styleLabel} sub={headerSub} />}
+          />
 
           {/* Class / Notes toggle (translucent pill style) */}
           <View style={styles.tabRow}>
@@ -1367,6 +1394,8 @@ const ed = StyleSheet.create({
 // ─── Main screen styles ───────────────────────────────────────────────
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: 'transparent' },
+  // Same header rhythm as Train and Stats, so switching tabs doesn't shift it.
+  header: { paddingTop: 6 },
 
   // Toggle (Class / Notes)
   tabRow: {

@@ -28,7 +28,11 @@ export default function LogSkeleton() {
       <Animated.View style={{ flex: 1, opacity: pulse }}>
         {/* Header */}
         <View style={sk.header}>
-          <Bone width={36} height={36} radius={18} />
+          <Bone width={36} height={36} radius={11} />
+          <View style={sk.headerMid}>
+            <Bone width={72} height={15} radius={5} />
+            <Bone width={60} height={10} radius={4} style={{ marginTop: 6 }} />
+          </View>
           <Bone width={36} height={36} radius={18} />
         </View>
 
@@ -61,12 +65,12 @@ const sk = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#fff' },
   header: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: Spacing.side,
-    paddingTop: 16,
+    paddingTop: 6,
     paddingBottom: 14,
   },
+  headerMid: { flex: 1, marginHorizontal: 11 },
   tabs: {
     flexDirection: 'row',
     paddingHorizontal: Spacing.side,
