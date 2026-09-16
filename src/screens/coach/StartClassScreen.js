@@ -372,8 +372,13 @@ function PrivateCard({ st, onPress }) {
     metaLine = 'No private together yet';
   }
 
+  // Can't be recorded yet: greyed, and the meta line says why.
+  const waitLabel = st.age_check === 'minor_pending' ? 'Awaiting verification'
+    : CONSENT_BLOCKED.includes(st.consent_status) ? 'Awaiting parent approval' : null;
+  if (waitLabel) metaLine = waitLabel;
+
   return (
-    <TouchableOpacity style={sc.card} onPress={onPress} activeOpacity={0.85}>
+    <TouchableOpacity style={[sc.card, waitLabel && { opacity: 0.5 }]} onPress={onPress} activeOpacity={0.85}>
       <View style={[sc.avRing, { borderColor: ringColor }]}>
         {st.photoUrl ? (
           <Image source={{ uri: st.photoUrl }} style={sc.avPhoto} />
@@ -2978,13 +2983,14 @@ export default function StartClassScreen({ navigation }) {
 
             <View style={ad.actions}>
               <TouchableOpacity
-                style={[ad.btnStart, view === 'private-briefing' && CONSENT_BLOCKED.includes(selectedStudent?.consent_status) && { opacity: 0.4 }]}
+                style={[ad.btnStart, view === 'private-briefing' && (CONSENT_BLOCKED.includes(selectedStudent?.consent_status) || selectedStudent?.age_check === 'minor_pending') && { opacity: 0.4 }]}
                 activeOpacity={0.88}
                 onPress={() => handleStartTap(phoneMic)}
               >
                 <Text style={ad.btnStartText}>
-                  {view === 'private-briefing' && CONSENT_BLOCKED.includes(selectedStudent?.consent_status)
-                    ? 'Waiting for parent approval' : 'Start class'}
+                  {view === 'private-briefing' && selectedStudent?.age_check === 'minor_pending' ? 'Waiting for verification'
+                    : view === 'private-briefing' && CONSENT_BLOCKED.includes(selectedStudent?.consent_status)
+                      ? 'Waiting for parent approval' : 'Start class'}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -2996,11 +3002,21 @@ export default function StartClassScreen({ navigation }) {
     );
   }
 
-  function handleStartTap(phoneMic) {
-    if (view === 'private-briefing' && CONSENT_BLOCKED.includes(selectedStudent?.consent_status)) {
-      Alert.alert('Waiting for a parent',
-        `${selectedStudent?.name || 'This student'} is under 18. Recording works as soon as their parent gives permission.`);
-      return;
+  async function handleStartTap(phoneMic) {
+    if (view === 'private-briefing' && selectedStudent?.id) {
+      // The roster's copy can be a few minutes old; the row is not.
+      const { data: st } = await supabase.from('users').select('consent_status, age_check').eq('id', selectedStudent.id).maybeSingle();
+      const fresh = { ...selectedStudent, ...(st || {}) };
+      if (fresh.age_check === 'minor_pending') {
+        Alert.alert('Waiting for verification',
+          `You marked ${fresh.name || 'this student'} as under 18. Recording works once they confirm they’re 18 or over, or a parent gives permission.`);
+        return;
+      }
+      if (CONSENT_BLOCKED.includes(fresh.consent_status)) {
+        Alert.alert('Waiting for a parent',
+          `${fresh.name || 'This student'} is under 18. Recording works as soon as their parent gives permission.`);
+        return;
+      }
     }
     // First class ever for this coach → consent gate before anything else.
     if (!consentGiven) {

@@ -401,6 +401,11 @@ async function _getMyStudentsImpl() {
           ...(s.ballroom_coach_id === coachId ? ['ballroom'] : []),
         ])],
         photoUrl: s.avatar_url || null,
+        // Whether they can be recorded: a parent's permission, and a coach's
+        // "under 18" still waiting on the student (read by the roster chips and
+        // Start class). They were fetched but never passed on.
+        consent_status: s.consent_status || 'not_required',
+        age_check: s.age_check || null,
         lastActiveDate: lastPracticeIso,
         daysSincePractice,
         lastClassDate: lastClassIso,
@@ -1613,6 +1618,8 @@ export async function getStartClassRoster() {
       readiness: r?.percent ?? 0,
       briefings,
       status: s.status,
+      consent_status: s.consent_status,
+      age_check: s.age_check,
     };
   }).sort((a, b) => b.readiness - a.readiness);
 
