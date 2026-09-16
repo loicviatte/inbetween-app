@@ -376,7 +376,13 @@ const toCard = (a) => ({
   bestFor: a.leave,
 });
 
-const COACH_FLOW = ['role', 'style', 'studio', 'recap', 'correct', 'words', 'signature', 'alloc', 'leave', 'who', 'cred'];
+// The coach card — its questions and its reveal — is parked for now: a coach
+// stops at their studio and creates the account. The screens stay in this file,
+// so bringing the card back is this one flag.
+const COACH_CARD_ONBOARDING = false;
+const COACH_FLOW = COACH_CARD_ONBOARDING
+  ? ['role', 'style', 'studio', 'recap', 'correct', 'words', 'signature', 'alloc', 'leave', 'who', 'cred']
+  : ['role', 'style', 'studio', 'recap'];
 const STUDENT_FLOW = ['role', 'style', 'level', 'age', 'solo', 'lessons', 'studio', 'coach', 'recap'];
 // A parent first says whether their child already invited them: with a code
 // they approve that account, without one they set the child up themselves.
@@ -663,6 +669,7 @@ export default function OnboardingScreen({ navigation }) {
     if (step === 'parentConsent') return go('parentAccount');
     if (step === 'parentAccount') return runApprove();
     if (step === 'cred') return go('cardLocked');
+    if (step === 'recap' && isCoach) return go('account');
     // A parent setting their child up gives the permission an invited parent
     // gives — and before the child's lesson is ever sent anywhere.
     if (step === 'recap' && isParent) return go('signupPhone');
@@ -682,7 +689,7 @@ export default function OnboardingScreen({ navigation }) {
     if (step === 'parentWhat') return go('parentContext', -1);
     if (step === 'parentConsent') return go('parentWhat', -1);
     if (step === 'parentAccount') return go('parentConsent', -1);
-    if (step === 'account') return go(isCoach ? 'cardLocked' : (a.focus.length ? 'focusLocked' : 'planReady'), -1);
+    if (step === 'account') return go(isCoach ? (COACH_CARD_ONBOARDING ? 'cardLocked' : 'recap') : (a.focus.length ? 'focusLocked' : 'planReady'), -1);
     if (step === 'cardLocked') return go('cred', -1);
     if (step === 'signupConsent') return go('signupWhat', -1);
     if (step === 'signupWhat') return go('signupPhone', -1);
@@ -850,7 +857,7 @@ export default function OnboardingScreen({ navigation }) {
   // session.
   async function submit() {
     setBusy(true); setError('');
-    if (isCoach || a.focus.length) setOnboardingHold(true);
+    if ((isCoach && COACH_CARD_ONBOARDING) || a.focus.length) setOnboardingHold(true);
     const dbRole = isCoach ? 'coach' : 'student';
     const metadata = { name: a.name.trim(), role: dbRole, dance_style: a.style };
     if (isParent) metadata.account_for = 'child';
@@ -881,7 +888,7 @@ export default function OnboardingScreen({ navigation }) {
     }
     if (userId) {
       await supabase.from('users').update({ role: dbRole, dance_style: a.style, studio_id: studioId || null }).eq('id', userId);
-      if (isCoach) {
+      if (isCoach && COACH_CARD_ONBOARDING) {
         // Eleven answers that until now only existed in this screen's state.
         const { slug, error: cardErr } = await saveCoachCard(userId, a);
         if (cardErr) {
@@ -928,7 +935,7 @@ export default function OnboardingScreen({ navigation }) {
       }
     }
     setBusy(false);
-    if (isCoach) return go('cardLive');
+    if (isCoach && COACH_CARD_ONBOARDING) return go('cardLive');
     if (a.focus.length) return go('focusLive');
     setOnboardingHold(false);
     // App.js's onAuthStateChange swaps to the home navigator for students.
@@ -1483,8 +1490,8 @@ export default function OnboardingScreen({ navigation }) {
       );
 
       default: return ( // account
-        <Q h1={isCoach ? 'Publish your coach card' : 'Save your plan'}
-          sub={isCoach ? 'Under a minute. Your card is built and waiting.'
+        <Q h1={isCoach ? (COACH_CARD_ONBOARDING ? 'Publish your coach card' : 'Create your account') : 'Save your plan'}
+          sub={isCoach ? (COACH_CARD_ONBOARDING ? 'Under a minute. Your card is built and waiting.' : 'Under a minute. Everything you just set up is already in.')
             : isParent ? 'Under a minute. The account is yours; the training is theirs.'
             : 'Under a minute. Everything you just set up is already in.'}>
           <View style={s.fields}>
@@ -1522,7 +1529,7 @@ export default function OnboardingScreen({ navigation }) {
     : step === 'recall' ? 'Build my focus points'
     : step === 'cardLocked' ? 'See it'
     : step === 'planReady' ? 'Save my plan'
-    : step === 'account' ? (isCoach ? 'Publish my card' : 'Create account')
+    : step === 'account' ? (isCoach && COACH_CARD_ONBOARDING ? 'Publish my card' : 'Create account')
     : step === 'cardLive' ? 'Done'
     : step === 'confirm' ? 'Go to sign in'
     : step === 'cred' ? 'Build my card'
