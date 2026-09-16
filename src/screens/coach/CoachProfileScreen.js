@@ -24,7 +24,7 @@ import * as ImagePicker from 'expo-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Fonts, Spacing } from '../../theme';
 import { getUser, saveUserProfile } from '../../storage/storage';
-import { getMyCoachCard } from '../../storage/coachCardStorage';
+import { getMyCoachCard, getCoachObserved } from '../../storage/coachCardStorage';
 import CoachCard from '../../components/CoachCard';
 import {
   getOrCreateInviteCode,
@@ -228,9 +228,12 @@ export default function CoachProfileScreen({ navigation }) {
   // rather than kept in memory: it is the only place it now exists.
   const [card, setCard] = useState(null);
   const [cardOpen, setCardOpen] = useState(false);
+  const [observed, setObserved] = useState(null);
   useFocusEffect(useCallback(() => {
     let cancelled = false;
     getMyCoachCard().then((c) => { if (!cancelled) setCard(c); }).catch(() => {});
+    // his captured lessons unlock parts of the card; re-read on every visit
+    getCoachObserved().then((o) => { if (!cancelled) setObserved(o); }).catch(() => {});
     return () => { cancelled = true; };
   }, []));
 
@@ -727,7 +730,7 @@ export default function CoachProfileScreen({ navigation }) {
                     myMethod: card?.my_method,
                     alloc: card?.alloc,
                     bestFor: card?.best_for,
-                  }} />
+                  }} observed={observed} />
                   <Text style={cc.note}>
                     The public page is not live yet — the link is reserved for you.
                   </Text>

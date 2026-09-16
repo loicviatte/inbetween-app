@@ -90,6 +90,16 @@ export async function saveCoachCard(userId, a) {
   return { error: 'Could not claim a link for your card.' };
 }
 
+// What he actually does, from his captured lessons: aggregates only (lesson and
+// student counts, category and dance counts). Readable by the coach himself,
+// or by anyone once his card is published — see coach_card_observed.
+export async function getCoachObserved(coachId) {
+  const id = coachId || await getAuthUserId();
+  const { data, error } = await supabase.rpc('coach_card_observed', { target: id });
+  if (error) throw new Error(error.message);
+  return data || { lessons: 0, students: 0, corrections: 0, categories: [], dances: [] };
+}
+
 export async function getMyCoachCard() {
   const userId = await getAuthUserId();
   const { data } = await supabase.from('coach_cards').select('*').eq('user_id', userId).maybeSingle();

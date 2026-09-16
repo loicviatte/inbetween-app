@@ -8,6 +8,12 @@
 // teaches, worksWith, howITeach, myMethod, alloc, bestFor. `locked` blurs
 // everything an account has not paid for yet, keeping the labels and the
 // essence line legible.
+//
+// Two kinds of section. What he declared is there from day one. What he does
+// is earned: "How I teach" opens after 4 captured lessons and "My vision" after
+// 21, built from `observed` — counts from his real lessons (coach_card_observed)
+// — so a prospect reads evidence, not a promise. Until then the section stays
+// on the card, padlocked, with how far he has to go.
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { BlurView } from 'expo-blur';
@@ -24,6 +30,11 @@ const D = {
   chip: 'rgba(255,255,255,0.10)', chipEdge: 'rgba(255,255,255,0.20)',
 };
 const AXES = ['Technique', 'Musicality', 'Mental', 'Performance'];
+export const UNLOCK_HOW_I_TEACH = 4;
+export const UNLOCK_MY_VISION = 21;
+// the same category, named for a reader rather than a database
+const CATEGORY_LABEL = { Technicality: 'Technique' };
+const pct = (n, total) => (total ? Math.round((100 * n) / total) : 0);
 
 function Tick({ color = T.gold, size = 14 }) {
   return (
@@ -53,12 +64,18 @@ function Veil({ on, children, style }) {
   );
 }
 
-export default function CoachCard({ card, locked }) {
+export default function CoachCard({ card, locked, observed }) {
   const c = card || {};
   const alloc = c.alloc && Object.keys(c.alloc).length ? c.alloc
     : { Technique: 40, Musicality: 25, Mental: 20, Performance: 15 };
   const initials = (c.name || '').trim().split(/\s+/).filter(Boolean)
     .map((w) => w[0]).slice(0, 2).join('').toUpperCase();
+
+  const lessons = observed?.lessons ?? 0;
+  const students = observed?.students ?? 0;
+  const cats = observed?.categories || [];
+  const catTotal = cats.reduce((t, x) => t + x.count, 0);
+  const topDances = (observed?.dances || []).slice(0, 3).map((d) => d.name);
 
   const Block = ({ n, title, children }) => (
     <View style={s.cblock}>
@@ -66,6 +83,41 @@ export default function CoachCard({ card, locked }) {
       <Veil on={locked}>{children}</Veil>
     </View>
   );
+
+  // A section earned by captured lessons: padlocked with its progress until
+  // the threshold, then its content.
+  const Earned = ({ n, title, after, children }) => {
+    if (lessons >= after) return <Block n={n} title={title}>{children}</Block>;
+    return (
+      <View style={s.cblock}>
+        <View style={s.tierHead}>
+          <Text style={s.cnum}>{n} · {title}</Text>
+          <LockIcon size={13} />
+        </View>
+        <Text style={s.tierT}>Unlocks after {after} lessons</Text>
+        <View style={s.tierRow}>
+          <View style={s.cbarTrack}>
+            <View style={[s.cbarFill, s.tierFill, { width: `${Math.min(100, pct(lessons, after))}%` }]} />
+          </View>
+          <Text style={s.tierCount}>{lessons} of {after}</Text>
+        </View>
+      </View>
+    );
+  };
+
+  const Bars = ({ rows }) => (
+    <View style={s.cbars}>
+      {rows.map((r) => (
+        <View key={r.k} style={s.cbar}>
+          <Text style={s.cbarK} numberOfLines={1}>{r.k}</Text>
+          <View style={s.cbarTrack}><View style={[s.cbarFill, { width: `${r.v}%` }]} /></View>
+          <Text style={s.cbarV}>{r.v}%</Text>
+        </View>
+      ))}
+    </View>
+  );
+  const observedRows = (limit) => cats.slice(0, limit)
+    .map((x) => ({ k: CATEGORY_LABEL[x.name] || x.name, v: pct(x.count, catTotal) }));
 
   return (
     <View style={s.ccard}>
@@ -85,6 +137,7 @@ export default function CoachCard({ card, locked }) {
         {(c.styleWords || []).map((w) => <View key={w} style={s.cword}><Text style={s.cwordT}>{w}</Text></View>)}
       </Veil>
 
+      {/* ── declared: his from day one ── */}
       <Block n="01" title="What I teach">
         <View style={s.cchips}>
           {(c.teaches || []).map((d) => <View key={d} style={s.cchip}><Text style={s.cchipT}>{d}</Text></View>)}
@@ -97,37 +150,48 @@ export default function CoachCard({ card, locked }) {
           ))}
         </View>
       </Block>
-      <Block n="03" title="How I teach"><Text style={s.cbody}>{c.howITeach || 'Not answered yet'}</Text></Block>
-      <Block n="04" title="My method"><Text style={s.cbody}>{c.myMethod || 'Not answered yet'}</Text></Block>
-      <Block n="05" title="Where the hour goes">
-        <View style={s.cbars}>
-          {AXES.map((k) => (
-            <View key={k} style={s.cbar}>
-              <Text style={s.cbarK}>{k}</Text>
-              <View style={s.cbarTrack}><View style={[s.cbarFill, { width: `${alloc[k] || 0}%` }]} /></View>
-              <Text style={s.cbarV}>{alloc[k] || 0}</Text>
-            </View>
-          ))}
-        </View>
-      </Block>
-      <Block n="06" title="Best if you want to">
+      <Block n="03" title="My method"><Text style={s.cbody}>{c.myMethod || 'Not answered yet'}</Text></Block>
+      <Block n="04" title="Best if you want to">
         <Text style={s.cbody}>{c.bestFor && c.bestFor.length ? c.bestFor.join(' · ') : '—'}</Text>
       </Block>
 
-      {/* the second lock, a different job: the blur above converts to an
-          account, this one converts to capturing lessons, and it stays for good */}
+      {/* ── observed: earned by captured lessons ── */}
+      <Earned n="05" title="How I teach" after={UNLOCK_HOW_I_TEACH}>
+        {!!c.howITeach && <Text style={s.cbody}>{c.howITeach}</Text>}
+        {catTotal > 0 ? (
+          <>
+            <Text style={s.subLab}>What I correct most · from {lessons} lessons</Text>
+            <Bars rows={observedRows(3)} />
+            {topDances.length > 0 && <Text style={s.obsNote}>Mostly in {topDances.join(' · ')}</Text>}
+          </>
+        ) : (
+          <Text style={s.obsNote}>Not enough corrections captured yet.</Text>
+        )}
+      </Earned>
+
+      <Earned n="06" title="My vision" after={UNLOCK_MY_VISION}>
+        <Text style={s.subLab}>Where I plan the hour to go</Text>
+        <Bars rows={AXES.map((k) => ({ k, v: alloc[k] || 0 }))} />
+        <Text style={[s.subLab, s.subLabGap]}>
+          Where it actually goes · {lessons} lessons{students ? `, ${students} students` : ''}
+        </Text>
+        {catTotal > 0 ? <Bars rows={observedRows(5)} /> : <Text style={s.obsNote}>Not enough corrections captured yet.</Text>}
+      </Earned>
+
       <Block n="07" title="Track record">
         <View style={s.ctrack}>
           <View style={s.ctrow}>
             <Tick />
             <Text style={[s.ctrackT, s.ctrackOn]}>Verified InBetween Coach</Text>
           </View>
-          <View style={s.ctrow}>
-            <LockIcon /><Text style={s.ctrackT}>Teaching since ——</Text><Text style={s.ctrackTag}>10 lessons</Text>
-          </View>
-          <View style={s.ctrow}>
-            <LockIcon /><Text style={s.ctrackT}>—— lessons documented</Text><Text style={s.ctrackTag}>50 lessons</Text>
-          </View>
+          {lessons > 0 && (
+            <View style={s.ctrow}>
+              <Tick />
+              <Text style={[s.ctrackT, s.ctrackOn]}>
+                {lessons} lesson{lessons === 1 ? '' : 's'} documented{students ? ` · ${students} student${students === 1 ? '' : 's'}` : ''}
+              </Text>
+            </View>
+          )}
         </View>
       </Block>
       <Block n="08" title="How I work">
@@ -173,8 +237,14 @@ const s = StyleSheet.create({
   ctrow: { flexDirection: 'row', alignItems: 'center', gap: 9 },
   ctrackT: { fontFamily: Fonts.travelsRegular, fontSize: 12.5, color: D.on3 },
   ctrackOn: { color: D.on, fontFamily: Fonts.travelsMedium },
-  ctrackTag: { marginLeft: 'auto', fontFamily: Fonts.travelsRegular, fontSize: 10.5, letterSpacing: 1.1,
-    textTransform: 'uppercase', color: D.on3 },
+  tierHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  tierT: { fontFamily: Fonts.travelsMedium, fontSize: 13, color: D.on2 },
+  tierRow: { flexDirection: 'row', alignItems: 'center', gap: 9, paddingTop: 2 },
+  tierFill: { backgroundColor: 'rgba(232,181,48,0.55)' },
+  tierCount: { fontFamily: Fonts.travelsMedium, fontSize: 11.5, color: D.on3, minWidth: 44, textAlign: 'right' },
+  subLab: { fontFamily: Fonts.travelsMedium, fontSize: 11.5, color: D.on2, paddingTop: 4 },
+  subLabGap: { paddingTop: 10 },
+  obsNote: { fontFamily: Fonts.travelsRegular, fontSize: 12, lineHeight: 17, color: D.on2, paddingTop: 2 },
   cfoot: { gap: 9, paddingTop: 14, borderTopWidth: 1, borderTopColor: D.line, alignItems: 'center' },
   cbtn: { width: '100%', borderRadius: 999, backgroundColor: T.gold, paddingVertical: 12, alignItems: 'center' },
   cbtnT: { fontFamily: Fonts.ttDemiBold, fontSize: 13.5, color: T.ink },

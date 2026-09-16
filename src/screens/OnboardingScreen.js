@@ -357,6 +357,10 @@ const DANCES = {
   'Latin & Ballroom': ['Cha Cha', 'Rumba', 'Samba', 'Paso Doble', 'Jive',
     'Waltz', 'Tango', 'Foxtrot', 'Quickstep', 'Viennese Waltz'],
 };
+// A coach finishing onboarding has captured nothing: every earned section shows
+// as padlocked, which is the promise that the card grows with use.
+const NO_LESSONS_YET = { lessons: 0, students: 0, corrections: 0, categories: [], dances: [] };
+
 // this screen's answers → the shape the shared card renders
 const toCard = (a) => ({
   name: a.name,
@@ -894,7 +898,7 @@ export default function OnboardingScreen({ navigation }) {
 
   const gate = {
     role: !!a.role, style: !!a.style, level: !!a.level,
-    age: !!a.age, solo: !!a.soloLabel,
+    age: !!a.age && (!isParent || MINOR_AGES.includes(a.age)), solo: !!a.soloLabel,
     lessons: true, studio: !!a.studioId || a.noStudio || a.createStudio,
     coach: !!a.coachId || a.noCoach, recap: true,
     recall: a.recall.trim().length > 11, analysing: false, focusLocked: true, focusLive: true,
@@ -951,7 +955,7 @@ export default function OnboardingScreen({ navigation }) {
       );
       case 'age': return (
         <Q plan={planLine} {...qc(copy('age', 'Your age category', 'Competition grading works by age — it keeps your focus list realistic.'))}>
-          {AGES.map((r, i) => (
+          {AGES.filter((r) => !isParent || MINOR_AGES.includes(r.v)).map((r, i) => (
             <Opt key={r.v} t={r.t} d={r.d} on={a.age === r.v} delay={0.1 + i * 0.06}
               onPress={() => { haptic(); set({ age: r.v }); }} />
           ))}
@@ -1403,7 +1407,7 @@ export default function OnboardingScreen({ navigation }) {
           {/* cut by the fold, not dissolved: the scrim is the card's own black */}
           <Rise delay={0.15} duration={700}>
             <View style={s.peek}>
-              <CoachCard card={toCard(a)} locked />
+              <CoachCard card={toCard(a)} observed={NO_LESSONS_YET} locked />
               <LinearGradient colors={['rgba(10,10,10,0)', 'rgba(10,10,10,0.74)', D.bg]} locations={[0, 0.58, 1]}
                 style={s.peekFade} pointerEvents="none" />
             </View>
@@ -1411,7 +1415,7 @@ export default function OnboardingScreen({ navigation }) {
           <Rise delay={0.34}>
             <View style={s.lockbar}>
               <LockIcon color={T.goldInk} size={16} />
-              <Text style={s.lockT}>Create your account to publish it and get your link.</Text>
+              <Text style={s.lockT}>Create your account and get your link.</Text>
             </View>
           </Rise>
         </Q>
@@ -1425,7 +1429,7 @@ export default function OnboardingScreen({ navigation }) {
               <Text style={s.linkSlug}>{a.slug || slugify(a.name)}</Text>
             </View>
           </Rise>
-          <Rise delay={0.15} duration={700}><CoachCard card={toCard(a)} /></Rise>
+          <Rise delay={0.15} duration={700}><CoachCard card={toCard(a)} observed={NO_LESSONS_YET} /></Rise>
           <Text style={s.lead}>Send it to anyone who asks about lessons. You can adjust it whenever you want.</Text>
         </Q>
       );
