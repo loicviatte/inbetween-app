@@ -12,7 +12,6 @@ import {
   Switch,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -608,6 +607,26 @@ export default function LogScreen({ navigation }) {
     return <LogSkeleton />;
   }
 
+  // Tiles + tabs head every view and scroll with it, so a pull opens the gap —
+  // and shows the mark — above them.
+  const pageHead = (
+    <View>
+      <View style={s.season}>
+        <SeasonTile value={String(recorded.length)} label="Lessons" />
+        <SeasonTile value={String(totalCorrections)} label="Corrections" />
+        <SeasonTile value={floor.value} unit={floor.unit} label="On the floor" />
+      </View>
+      {view === 'notes' ? (
+        <View style={[ft.row, { justifyContent: 'space-between' }]}>
+          <Text style={[ft.label, ft.labelOn, ft.notesLabel]}>Notes</Text>
+          <Text style={ft.count}>{countLabel}</Text>
+        </View>
+      ) : (
+        <FilterTabs value={filter} onChange={(f) => { setFilter(f); setCalDay(null); }} count={countLabel} />
+      )}
+    </View>
+  );
+
   const pullLogo = pull.ios ? (
     <View pointerEvents="none" style={s.pullLogo}>
       <PullLogo ref={pull.logoRef} refreshing={refreshing} />
@@ -641,21 +660,6 @@ export default function LogScreen({ navigation }) {
             )}
           />
 
-          <View style={s.season}>
-            <SeasonTile value={String(recorded.length)} label="Lessons" />
-            <SeasonTile value={String(totalCorrections)} label="Corrections" />
-            <SeasonTile value={floor.value} unit={floor.unit} label="On the floor" />
-          </View>
-
-          {view === 'notes' ? (
-            <View style={[ft.row, { justifyContent: 'space-between' }]}>
-              <Text style={[ft.label, ft.labelOn, ft.notesLabel]}>Notes</Text>
-              <Text style={ft.count}>{countLabel}</Text>
-            </View>
-          ) : (
-            <FilterTabs value={filter} onChange={(f) => { setFilter(f); setCalDay(null); }} count={countLabel} />
-          )}
-
           <View style={{ flex: 1 }}>
             {pullLogo}
             {view === 'list' ? (
@@ -667,6 +671,7 @@ export default function LogScreen({ navigation }) {
                 stickySectionHeadersEnabled={false}
                 showsVerticalScrollIndicator={false}
                 contentContainerStyle={s.feed}
+                ListHeaderComponent={pageHead}
                 renderSectionHeader={({ section }) => (
                   <MonthMarker title={section.title} count={section.data.length} />
                 )}
@@ -701,6 +706,7 @@ export default function LogScreen({ navigation }) {
                 showsVerticalScrollIndicator={false}
                 {...pull.scrollProps}
               >
+                {pageHead}
                 <LessonCalendar
                   month={calMonth}
                   canPrev={calMonth > firstMonth}
@@ -723,6 +729,7 @@ export default function LogScreen({ navigation }) {
                 stickySectionHeadersEnabled={false}
                 showsVerticalScrollIndicator={false}
                 contentContainerStyle={s.feed}
+                ListHeaderComponent={pageHead}
                 renderSectionHeader={({ section }) => (
                   <MonthMarker title={section.title} count={section.data.length} noun="note" />
                 )}
@@ -747,23 +754,16 @@ export default function LogScreen({ navigation }) {
             )}
           </View>
 
-          {/* The foot fades the list out above its button. */}
-          <View style={s.foot}>
-            <LinearGradient
-              colors={['rgba(242,240,235,0)', PAGE]}
-              locations={[0, 0.34]}
-              style={StyleSheet.absoluteFill}
-              pointerEvents="none"
-            />
-            <TouchableOpacity
-              style={s.logBtn}
-              onPress={view === 'notes' ? () => navigation.navigate('NoteDetail', {}) : handleLogLesson}
-              activeOpacity={0.85}
-            >
-              <Ionicons name="add" size={18} color={INK} />
-              <Text style={s.logTxt}>{view === 'notes' ? 'Write a note' : 'Log a lesson'}</Text>
-            </TouchableOpacity>
-          </View>
+          {/* Log a lesson (or, on Notes, write one): a round + in the corner. */}
+          <TouchableOpacity
+            style={[s.fab, { bottom: tabBarSpace + 14 }]}
+            onPress={view === 'notes' ? () => navigation.navigate('NoteDetail', {}) : handleLogLesson}
+            activeOpacity={0.85}
+            accessibilityRole="button"
+            accessibilityLabel={view === 'notes' ? 'Write a note' : 'Log a lesson'}
+          >
+            <Ionicons name="add" size={28} color={INK} />
+          </TouchableOpacity>
 
           <LogModal
             visible={modalVisible}
@@ -815,17 +815,30 @@ const s = StyleSheet.create({
   safe: { flex: 1, backgroundColor: 'transparent' },
   // Same header rhythm as Train and Stats, so switching tabs doesn't shift it.
   header: { paddingTop: 6, paddingBottom: 0 },
-  season: { flexDirection: 'row', gap: 8, paddingHorizontal: SIDE, paddingTop: 16, paddingBottom: 14 },
-  feed: { paddingHorizontal: SIDE, paddingBottom: 14 },
-  calScroll: { paddingHorizontal: SIDE, paddingBottom: 18 },
+  season: { flexDirection: 'row', gap: 8, paddingTop: 16, paddingBottom: 14 },
+  // Bottom room so the last row clears the round + button.
+  feed: { paddingHorizontal: SIDE, paddingBottom: 88 },
+  calScroll: { paddingHorizontal: SIDE, paddingBottom: 88 },
   pullLogo: { position: 'absolute', top: 14, left: 0, right: 0, alignItems: 'center' },
   empty: { paddingTop: 36, paddingHorizontal: 12, alignItems: 'center' },
   emptyTitle: { fontFamily: Fonts.ttDemiBold, fontSize: 15.5, letterSpacing: -0.2, color: INK, textAlign: 'center' },
   emptyBody: { fontFamily: Fonts.ttRegular, fontSize: 13, lineHeight: 19, color: INK_2, textAlign: 'center', marginTop: 6 },
 
-  foot: { paddingHorizontal: SIDE, paddingTop: 10 },
-  logBtn: { height: 52, borderRadius: 999, backgroundColor: GOLD, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
-  logTxt: { fontFamily: Fonts.ttDemiBold, fontSize: 15, letterSpacing: -0.15, color: INK },
+  fab: {
+    position: 'absolute',
+    right: SIDE,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: GOLD,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#7A5710',
+    shadowOpacity: 0.28,
+    shadowOffset: { width: 0, height: 8 },
+    shadowRadius: 16,
+    elevation: 6,
+  },
 
   reminderOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', alignItems: 'center', paddingHorizontal: 28 },
   reminderSheet: { width: '100%', backgroundColor: '#FFFFFF', borderRadius: 22, padding: 22, alignItems: 'center' },
@@ -849,7 +862,7 @@ const st = StyleSheet.create({
 
 // All | Group | Private
 const ft = StyleSheet.create({
-  row: { flexDirection: 'row', alignItems: 'flex-end', gap: 22, marginHorizontal: SIDE, borderBottomWidth: 1, borderBottomColor: LINE },
+  row: { flexDirection: 'row', alignItems: 'flex-end', gap: 22, borderBottomWidth: 1, borderBottomColor: LINE },
   tab: { paddingBottom: 9, marginBottom: -1, borderBottomWidth: 2, borderBottomColor: 'transparent' },
   tabOn: { borderBottomColor: GOLD },
   label: { fontFamily: Fonts.ttDemiBold, fontSize: 15, letterSpacing: -0.3, color: INK_2 },
