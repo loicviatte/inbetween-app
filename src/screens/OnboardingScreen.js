@@ -1064,6 +1064,15 @@ export default function OnboardingScreen({ navigation, route }) {
           weekly_goal_minutes: weeklyTarget(a),
         }).eq('id', userId);
         if (stuErr) console.warn('[onboarding] student fields not saved:', stuErr.message);
+        // Picking a coach here is asking them to coach you: the same pending
+        // request as linking by code, which notifies the coach to accept.
+        if (a.coachId) {
+          const cats = a.style === 'Latin & Ballroom' ? ['latin', 'ballroom'] : [a.style === 'Ballroom' ? 'ballroom' : 'latin'];
+          const { error: reqErr } = await supabase.from('coach_requests').insert(
+            cats.map((category) => ({ student_id: userId, coach_id: a.coachId, status: 'pending', category })),
+          );
+          if (reqErr) console.warn('[onboarding] coach request not sent:', reqErr.message);
+        }
         // Generated before the account existed; written now that there is one
         // to attach them to. Abandon the flow and they were never anywhere.
         await saveOnboardingFocusPoints(userId, a.focus);
