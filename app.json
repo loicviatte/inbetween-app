@@ -101,7 +101,8 @@
       ],
       "expo-asset",
       "@bacons/apple-targets",
-      "./plugins/withGradleMemory.js"
+      "./plugins/withGradleMemory.js",
+      "./plugins/withPodsDeploymentTarget.js"
     ],
     "extra": {
       "eas": {
