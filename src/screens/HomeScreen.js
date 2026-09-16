@@ -561,7 +561,7 @@ function FocusCard({
 
 // The "This week" card at the top of Train — hidden for now to see the screen
 // without it. Untouched below: set this back to true to bring it back.
-const SHOW_THIS_WEEK = false;
+const SHOW_THIS_WEEK = true;
 
 export default function HomeScreen({ navigation }) {
   // Computed per-render (not a module const) so it survives Fast Refresh and
