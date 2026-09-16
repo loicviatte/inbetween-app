@@ -338,6 +338,15 @@ export default function NotificationsScreen({ navigation }) {
             <Text style={styles.badgeText}>{unreadCount}</Text>
           </View>
         )}
+        <Pressable
+          onPress={() => navigation.navigate('NotificationSettings')}
+          style={styles.backBtn}
+          hitSlop={12}
+          accessibilityRole="button"
+          accessibilityLabel="Notification settings"
+        >
+          <Ionicons name="options-outline" size={22} color={Colors.black} />
+        </Pressable>
       </View>
 
       {loading ? (

@@ -654,25 +654,6 @@ function CoupleReviewSheet({ couple, partnerName, onRespond, onClose }) {
   );
 }
 
-// ─── Settings tab row ─────────────────────────────────────────────────────────
-// A boolean is a switch, not a row that opens a screen to hold one checkbox.
-function SettingSwitch({ label, value, onChange, isLast }) {
-  return (
-    <View style={[set.row, !isLast && set.rowBorder]}>
-      <Text style={set.label}>{label}</Text>
-      <View style={{ flex: 1 }} />
-      <Switch
-        value={!!value}
-        onValueChange={onChange}
-        trackColor={{ false: 'rgba(20,19,17,0.16)', true: '#C08A12' }}
-        thumbColor="#FFFFFF"
-        ios_backgroundColor="rgba(20,19,17,0.16)"
-        accessibilityLabel={label}
-      />
-    </View>
-  );
-}
-
 // A sibling only needs a name and a style to exist: the rest — level, studio,
 // coach, focus points — arrives from their first recorded lesson, the same way
 // it does for any student.
@@ -1436,17 +1417,6 @@ export default function ProfileScreen({ navigation, route }) {
   }
 
   // Optimistic: the switch moves at once and rolls back if the write fails.
-  async function handleToggleNotify(field, next) {
-    const before = user?.[field];
-    setUser(u => ({ ...u, [field]: next }));
-    try {
-      await saveUserPreferences({ [field]: next });
-    } catch {
-      setUser(u => ({ ...u, [field]: before }));
-      Alert.alert('Could not save', 'That setting was not changed. Check your connection and try again.');
-    }
-  }
-
   function openStyleModal() {
     setEditStyle(user?.dance_style || '');
     setProfileModal('style');
@@ -2139,15 +2109,10 @@ export default function ProfileScreen({ navigation, route }) {
 
                 <SecLabel text="Notifications" />
                 <View style={set.card}>
-                  <SettingSwitch
-                    label="Practice reminders"
-                    value={user?.notify_practice_reminders}
-                    onChange={(v) => handleToggleNotify('notify_practice_reminders', v)}
-                  />
-                  <SettingSwitch
-                    label="When a lesson lands"
-                    value={user?.notify_lesson_ready ?? true}
-                    onChange={(v) => handleToggleNotify('notify_lesson_ready', v)}
+                  <SettingRow
+                    label="Notification settings"
+                    value="From your coach, classes, delivery"
+                    onPress={() => navigation.navigate('NotificationSettings', { coachName: myCoach?.name || latinCoach?.name || ballroomCoach?.name || null })}
                     isLast
                   />
                 </View>

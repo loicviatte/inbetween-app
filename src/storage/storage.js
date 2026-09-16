@@ -103,7 +103,7 @@ export async function saveUserProfile({ name, studio_id, dance_style }) {
 // the keys that changed.
 export async function saveUserPreferences(patch) {
   const userId = await getUserId();
-  const allowed = ['weekly_goal_minutes', 'notify_practice_reminders', 'notify_lesson_ready'];
+  const allowed = ['weekly_goal_minutes', 'notify_practice_reminders', 'notify_lesson_ready', 'notification_prefs'];
   const body = {};
   for (const k of allowed) if (patch[k] !== undefined) body[k] = patch[k];
   if (!Object.keys(body).length) return;

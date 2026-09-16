@@ -86,6 +86,11 @@ export default function StudentAppNavigator() {
           options={{ animation: 'slide_from_left' }}
         />
         <Stack.Screen
+          name="NotificationSettings"
+          getComponent={() => require('../screens/NotificationSettingsScreen').default}
+          options={{ animation: 'slide_from_right' }}
+        />
+        <Stack.Screen
           name="AllFocusPoints"
           getComponent={() => require('../screens/AllFocusPointsScreen').default}
           options={{ animation: 'slide_from_right' }}
