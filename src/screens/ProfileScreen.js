@@ -13,7 +13,6 @@ import {
   ActivityIndicator,
   ScrollView,
   Alert,
-  Switch,
   RefreshControl,
 } from 'react-native';
 import { Image } from 'expo-image';
