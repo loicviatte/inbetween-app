@@ -191,6 +191,20 @@ export default function NotificationSettingsScreen({ navigation, route }) {
     saveUserPreferences({ [field]: value }).catch(() => { set(before); notSaved(); });
   }
 
+  // Attendance check-ins are how a group class's focus points reach you: you
+  // confirm you were there, then you get them. Say so before switching off.
+  function setAttendance(on) {
+    if (on) { setPref('attendance', true); return; }
+    Alert.alert(
+      'Turn off attendance check-ins?',
+      `After a group class, ${coachFirst || 'your coach'} asks whether you were there. Confirming is what sends you that class’s focus points — without this notification, you may miss them.`,
+      [
+        { text: 'Keep them on', style: 'cancel' },
+        { text: 'Turn off', style: 'destructive', onPress: () => setPref('attendance', false) },
+      ],
+    );
+  }
+
   function pick(title, options, key) {
     Alert.alert(title, undefined, [
       ...options.map((o) => ({ text: o.label, onPress: () => setPref(key, o.key) })),
@@ -242,7 +256,7 @@ export default function NotificationSettingsScreen({ navigation, route }) {
           <View style={st.card}>
             <SwitchRow first title="Attendance check-ins"
               sub={`When ${coachFirst || 'your coach'} asks whether you were at a group class`}
-              value={prefs.attendance} onChange={(v) => setPref('attendance', v)} />
+              value={prefs.attendance} onChange={setAttendance} />
           </View>
 
           <Section title="Your training" />
