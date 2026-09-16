@@ -14,6 +14,7 @@ import {
   Dimensions,
   Modal,
   Switch,
+  RefreshControl,
 } from 'react-native';
 
 const SCREEN_W = Dimensions.get('window').width;
@@ -45,6 +46,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import TabHeader, { useIsParentAccount } from '../components/TabHeader';
 import StyleTitle from '../components/StyleTitle';
 import { useTabBarSpace } from '../components/CustomTabBar';
+import PullLogo from '../components/PullLogo';
 import LogSkeleton from '../components/LogSkeleton';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -556,6 +558,12 @@ export default function LogScreen({ navigation }) {
   const [reminderVisible, setReminderVisible] = useState(false);
   const [dontRemind, setDontRemind] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  // Pull to refresh draws the InBetween mark in the gap the pull opens (iOS;
+  // Android keeps its native spinner). One per page, since each list pulls.
+  const classLogoRef = useRef(null);
+  const notesLogoRef = useRef(null);
+  const pullProgress = (e) => (-e.nativeEvent.contentOffset.y - 8) / 56;
+  const pullTint = Platform.OS === 'ios' ? 'transparent' : GREEN_500;
 
   const [isLoading, setIsLoading] = useState(true);
   const [pending, setPending] = useState([]);
@@ -909,6 +917,14 @@ export default function LogScreen({ navigation }) {
                   }}
                 />
               </View>
+              {Platform.OS === 'ios' ? (
+                <Animated.View
+                  pointerEvents="none"
+                  style={[styles.pullLogo, { top: Animated.add(spacerHeight, OVERLAY_COLLAPSED_HEIGHT + 12) }]}
+                >
+                  <PullLogo ref={classLogoRef} refreshing={refreshing && activeTab === 'CLASS'} />
+                </Animated.View>
+              ) : null}
               <SectionList
                 sections={groupedInputs}
                 keyExtractor={(item) => item.id}
@@ -934,14 +950,23 @@ export default function LogScreen({ navigation }) {
                 ListEmptyComponent={search.trim() ? null : <ClassEmptyState />}
                 refreshing={refreshing}
                 onRefresh={handleRefresh}
+                refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={pullTint} />}
                 stickySectionHeadersEnabled={false}
-                onScroll={handleListScroll}
+                onScroll={(e) => {
+                  handleListScroll(e);
+                  if (Platform.OS === 'ios') classLogoRef.current?.setProgress(pullProgress(e));
+                }}
                 onScrollBeginDrag={handleListScrollBeginDrag}
                 onScrollEndDrag={handleListScrollEndDrag}
                 scrollEventThrottle={16}
               />
             </View>
             <View style={{ width: SCREEN_W, height: '100%' }}>
+              {Platform.OS === 'ios' ? (
+                <View pointerEvents="none" style={[styles.pullLogo, { top: 12 }]}>
+                  <PullLogo ref={notesLogoRef} refreshing={refreshing && activeTab === 'NOTES'} />
+                </View>
+              ) : null}
               <SectionList
                 sections={groupedNotes}
                 keyExtractor={(item) => item.id}
@@ -962,7 +987,10 @@ export default function LogScreen({ navigation }) {
                 ListEmptyComponent={<EmptyState text="No notes yet. Tap ADD to create one." />}
                 refreshing={refreshing}
                 onRefresh={handleRefresh}
+                refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={pullTint} />}
                 stickySectionHeadersEnabled={false}
+                scrollEventThrottle={16}
+                onScroll={Platform.OS === 'ios' ? (e) => notesLogoRef.current?.setProgress(pullProgress(e)) : undefined}
               />
             </View>
           </ScrollView>
@@ -1450,6 +1478,9 @@ const styles = StyleSheet.create({
   // page. The card itself shrinks via its internal animation; this wrapper
   // just positions and pads. `overflow: hidden` clips the inner gradient
   // and any list cards that scroll behind the overlay area.
+  // The pull-to-refresh mark, centred, behind the list.
+  pullLogo: { position: 'absolute', left: 0, right: 0, alignItems: 'center' },
+
   overviewOverlay: {
     position: 'absolute',
     top: 0,
