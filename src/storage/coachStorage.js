@@ -177,6 +177,10 @@ async function _getMyStudentsImpl() {
     .select('id, name, dance_style, last_active_date, avatar_url, latin_coach_id, ballroom_coach_id, consent_status, age_check')
     .in('id', wantedIds);
 
+  // Students who asked this coach to look at their age again.
+  const { data: reviewIds } = await supabase.rpc('coach_pending_age_reviews');
+  const reviewPending = new Set((reviewIds || []).map((r) => (typeof r === 'string' ? r : r?.coach_pending_age_reviews)));
+
   const byId = new Map();
   for (const u of userRows || []) {
     if (u?.id) byId.set(u.id, { ...u, photo_url: u.avatar_url || null });
@@ -406,6 +410,7 @@ async function _getMyStudentsImpl() {
         // Start class). They were fetched but never passed on.
         consent_status: s.consent_status || 'not_required',
         age_check: s.age_check || null,
+        age_review_pending: s.age_check === 'minor_pending' && reviewPending.has(s.id),
         lastActiveDate: lastPracticeIso,
         daysSincePractice,
         lastClassDate: lastClassIso,
@@ -1620,6 +1625,7 @@ export async function getStartClassRoster() {
       status: s.status,
       consent_status: s.consent_status,
       age_check: s.age_check,
+      age_review_pending: s.age_review_pending,
     };
   }).sort((a, b) => b.readiness - a.readiness);
 

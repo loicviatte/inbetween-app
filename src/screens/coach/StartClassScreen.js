@@ -374,12 +374,16 @@ function PrivateCard({ st, onPress }) {
   }
 
   // Can't be recorded yet: greyed, and the meta line says why.
-  const waitLabel = st.age_check === 'minor_pending' ? 'Awaiting verification'
+  const reviewing = !!st.age_review_pending;
+  const waitLabel = reviewing ? 'Asked you to review their age'
+    : st.age_check === 'minor_pending' ? 'Awaiting verification'
     : CONSENT_BLOCKED.includes(st.consent_status) ? 'Awaiting parent approval' : null;
   if (waitLabel) metaLine = waitLabel;
 
   return (
-    <TouchableOpacity style={[sc.card, waitLabel && { opacity: 0.5 }]} onPress={onPress} activeOpacity={0.85}>
+    <TouchableOpacity
+      style={[sc.card, waitLabel && !reviewing && { opacity: 0.5 }, reviewing && { backgroundColor: '#FDF3D6', borderColor: '#E8B530', borderWidth: 1.5 }]}
+      onPress={onPress} activeOpacity={0.85}>
       <View style={[sc.avRing, { borderColor: ringColor }]}>
         {st.photoUrl ? (
           <Image source={{ uri: st.photoUrl }} style={sc.avPhoto} />

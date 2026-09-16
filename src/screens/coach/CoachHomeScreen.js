@@ -181,7 +181,15 @@ function AlertLine({ alert }) {
 // ── Attention student card ──────────────────────────────────────────────────
 // A student under 18 whose parent hasn't approved yet. Shown wherever the
 // student appears, because it is the reason their Start button won't work.
-function ConsentChip({ status, ageCheck }) {
+function ConsentChip({ status, ageCheck, reviewPending }) {
+  // The student asked this coach to look at their age again: it's the coach's move.
+  if (reviewPending) {
+    return (
+      <View style={[consentStyles.chip, consentStyles.chipReview]}>
+        <Text style={[consentStyles.chipText, consentStyles.chipReviewText]} numberOfLines={1}>Review their age</Text>
+      </View>
+    );
+  }
   // A student the coach marked under 18, who hasn't sorted it yet.
   if (ageCheck === 'minor_pending') {
     return (
@@ -199,11 +207,13 @@ function ConsentChip({ status, ageCheck }) {
 }
 
 // Greyed out while their age is being verified: nothing can be captured yet.
-const waiting = (student) => student?.age_check === 'minor_pending';
+// Yellow instead when they asked this coach to review it — the coach has to act.
+const reviewing = (student) => !!student?.age_review_pending;
+const waiting = (student) => student?.age_check === 'minor_pending' && !reviewing(student);
 
 function AttentionCard({ student, readinessPercent = 0, onPress }) {
   return (
-    <Pressable style={[styles.attentionCard, waiting(student) && consentStyles.greyed]} onPress={onPress}>
+    <Pressable style={[styles.attentionCard, waiting(student) && consentStyles.greyed, reviewing(student) && consentStyles.reviewCard]} onPress={onPress}>
       <View style={styles.ringWrap}>
         <HealthRing value={readinessPercent} size={42} strokeWidth={3} />
         <View style={[styles.ringAvatar, { width: 30, height: 30 }]}>
@@ -216,7 +226,7 @@ function AttentionCard({ student, readinessPercent = 0, onPress }) {
             {student.name}
           </Text>
           <PendingQChip count={student.pendingQuestions} />
-          <ConsentChip status={student.consent_status} ageCheck={student.age_check} />
+          <ConsentChip status={student.consent_status} ageCheck={student.age_check} reviewPending={student.age_review_pending} />
         </View>
         <AlertLine alert={student.alert} />
       </View>
@@ -229,7 +239,7 @@ function AttentionCard({ student, readinessPercent = 0, onPress }) {
 function OnTrackRow({ student, readinessPercent = 0, onPress, isLast }) {
   return (
     <Pressable
-      style={[styles.onTrackRow, !isLast && styles.onTrackRowDivider, waiting(student) && consentStyles.greyed]}
+      style={[styles.onTrackRow, !isLast && styles.onTrackRowDivider, waiting(student) && consentStyles.greyed, reviewing(student) && consentStyles.reviewRow]}
       onPress={onPress}
     >
       <View style={styles.ringWrap}>
@@ -244,7 +254,7 @@ function OnTrackRow({ student, readinessPercent = 0, onPress, isLast }) {
             {student.name}
           </Text>
           <PendingQChip count={student.pendingQuestions} />
-          <ConsentChip status={student.consent_status} ageCheck={student.age_check} />
+          <ConsentChip status={student.consent_status} ageCheck={student.age_check} reviewPending={student.age_review_pending} />
         </View>
         <Text style={styles.onTrackMeta}>
           {student.lastActiveDate ? `${shortRelative(student.lastActiveDate)} ago` : 'No recent practice'}
@@ -271,7 +281,7 @@ function LastPrivateRow({ student, onPress, isLast }) {
 
   return (
     <Pressable
-      style={[styles.lpRow, !isLast && styles.onTrackRowDivider, waiting(student) && consentStyles.greyed]}
+      style={[styles.lpRow, !isLast && styles.onTrackRowDivider, waiting(student) && consentStyles.greyed, reviewing(student) && consentStyles.reviewRow]}
       onPress={onPress}
     >
       <View style={styles.lpAvatar}>
@@ -283,7 +293,7 @@ function LastPrivateRow({ student, onPress, isLast }) {
             {student.name}
           </Text>
           <PendingQChip count={student.pendingQuestions} />
-          <ConsentChip status={student.consent_status} ageCheck={student.age_check} />
+          <ConsentChip status={student.consent_status} ageCheck={student.age_check} reviewPending={student.age_review_pending} />
         </View>
         <Text style={styles.onTrackMeta}>
           {student.lastPrivateClassDate ? shortDate(student.lastPrivateClassDate) : 'No private lesson yet'}
@@ -1196,4 +1206,8 @@ const consentStyles = StyleSheet.create({
   chipWait: { backgroundColor: 'rgba(10,10,10,0.07)' },
   chipWaitText: { color: '#5C5C5C' },
   greyed: { opacity: 0.5 },
+  chipReview: { backgroundColor: '#E8B530' },
+  chipReviewText: { color: '#0E0E0E' },
+  reviewCard: { backgroundColor: '#FDF3D6', borderColor: '#E8B530', borderWidth: 1.5 },
+  reviewRow: { backgroundColor: '#FDF3D6', borderRadius: 12, marginHorizontal: -8, paddingHorizontal: 8 },
 });
