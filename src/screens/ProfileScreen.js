@@ -1012,6 +1012,8 @@ export default function ProfileScreen({ navigation, route }) {
   });
   const isParent = useIsParentAccount();
   const tabBarSpace = useTabBarSpace();
+  // Settings holds nothing a refresh would change: no pull there.
+  const canPull = activeTab !== 'settings';
   const contentScrollRef = useRef(null);
   // A guardian account follows one child at a time; the rest of the app never
   // sees this, since getUserId() already resolves to whichever one is active.
@@ -1833,7 +1835,7 @@ export default function ProfileScreen({ navigation, route }) {
               EDGE_FADE lower, so at rest nothing sits in the fade. */}
           {/* Pull to refresh draws the InBetween mark in the gap the pull opens,
               behind the content (iOS; Android keeps its native spinner). */}
-          {pull.ios ? (
+          {pull.ios && canPull ? (
             <View style={styles.pullLogoAnchor} pointerEvents="none">
               <View style={styles.pullLogo}>
                 <PullLogo ref={pull.logoRef} refreshing={refreshing} />
@@ -1860,8 +1862,8 @@ export default function ProfileScreen({ navigation, route }) {
             contentContainerStyle={[styles.contentInner, { paddingTop: CONTENT_TOP + EDGE_FADE, paddingBottom: CONTENT_BOTTOM + tabBarSpace }]}
             showsVerticalScrollIndicator={false}
             overScrollMode="never"
-            {...pull.scrollProps}
-            refreshControl={pull.ios ? undefined : (
+            {...(canPull ? pull.scrollProps : null)}
+            refreshControl={pull.ios || !canPull ? undefined : (
               <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} colors={['#E8B530']} />
             )}
           >
