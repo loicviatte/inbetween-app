@@ -17,6 +17,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import Svg, { Circle } from 'react-native-svg';
 import { Fonts, Spacing } from '../../theme';
 import { respondToCoachRequest } from '../../storage/coachStorage';
+import { setStudentAge } from '../../services/ageCheck';
 import { getMyCouples, getPendingCoupleCoachRequests, respondToCoupleCoachRequest, getCoupleReadiness } from '../../storage/coupleStorage';
 import { CoachHomeScreenSkeleton } from '../../components/Skeleton';
 import { useCoachData } from '../../context/CoachDataContext';
@@ -179,7 +180,15 @@ function AlertLine({ alert }) {
 // ── Attention student card ──────────────────────────────────────────────────
 // A student under 18 whose parent hasn't approved yet. Shown wherever the
 // student appears, because it is the reason their Start button won't work.
-function ConsentChip({ status }) {
+function ConsentChip({ status, ageCheck }) {
+  // A student the coach marked under 18, who hasn't sorted it yet.
+  if (ageCheck === 'minor_pending') {
+    return (
+      <View style={[consentStyles.chip, consentStyles.chipWait]}>
+        <Text style={[consentStyles.chipText, consentStyles.chipWaitText]} numberOfLines={1}>Awaiting verification</Text>
+      </View>
+    );
+  }
   if (status !== 'pending') return null;
   return (
     <View style={consentStyles.chip}>
@@ -188,9 +197,12 @@ function ConsentChip({ status }) {
   );
 }
 
+// Greyed out while their age is being verified: nothing can be captured yet.
+const waiting = (student) => student?.age_check === 'minor_pending';
+
 function AttentionCard({ student, readinessPercent = 0, onPress }) {
   return (
-    <Pressable style={styles.attentionCard} onPress={onPress}>
+    <Pressable style={[styles.attentionCard, waiting(student) && consentStyles.greyed]} onPress={onPress}>
       <View style={styles.ringWrap}>
         <HealthRing value={readinessPercent} size={42} strokeWidth={3} />
         <View style={[styles.ringAvatar, { width: 30, height: 30 }]}>
@@ -203,7 +215,7 @@ function AttentionCard({ student, readinessPercent = 0, onPress }) {
             {student.name}
           </Text>
           <PendingQChip count={student.pendingQuestions} />
-          <ConsentChip status={student.consent_status} />
+          <ConsentChip status={student.consent_status} ageCheck={student.age_check} />
         </View>
         <AlertLine alert={student.alert} />
       </View>
@@ -216,7 +228,7 @@ function AttentionCard({ student, readinessPercent = 0, onPress }) {
 function OnTrackRow({ student, readinessPercent = 0, onPress, isLast }) {
   return (
     <Pressable
-      style={[styles.onTrackRow, !isLast && styles.onTrackRowDivider]}
+      style={[styles.onTrackRow, !isLast && styles.onTrackRowDivider, waiting(student) && consentStyles.greyed]}
       onPress={onPress}
     >
       <View style={styles.ringWrap}>
@@ -231,7 +243,7 @@ function OnTrackRow({ student, readinessPercent = 0, onPress, isLast }) {
             {student.name}
           </Text>
           <PendingQChip count={student.pendingQuestions} />
-          <ConsentChip status={student.consent_status} />
+          <ConsentChip status={student.consent_status} ageCheck={student.age_check} />
         </View>
         <Text style={styles.onTrackMeta}>
           {student.lastActiveDate ? `${shortRelative(student.lastActiveDate)} ago` : 'No recent practice'}
@@ -258,7 +270,7 @@ function LastPrivateRow({ student, onPress, isLast }) {
 
   return (
     <Pressable
-      style={[styles.lpRow, !isLast && styles.onTrackRowDivider]}
+      style={[styles.lpRow, !isLast && styles.onTrackRowDivider, waiting(student) && consentStyles.greyed]}
       onPress={onPress}
     >
       <View style={styles.lpAvatar}>
@@ -270,7 +282,7 @@ function LastPrivateRow({ student, onPress, isLast }) {
             {student.name}
           </Text>
           <PendingQChip count={student.pendingQuestions} />
-          <ConsentChip status={student.consent_status} />
+          <ConsentChip status={student.consent_status} ageCheck={student.age_check} />
         </View>
         <Text style={styles.onTrackMeta}>
           {student.lastPrivateClassDate ? shortDate(student.lastPrivateClassDate) : 'No private lesson yet'}
@@ -426,10 +438,32 @@ export default function CoachHomeScreen({ navigation, route }) {
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
-  async function handleAccept(requestId) {
-    await respondToCoachRequest(requestId, true);
-    updateRequests((prev) => prev.filter((r) => r.id !== requestId));
-    refresh();
+  // Accepting asks the one thing the coach knows better than the sign-up form:
+  // is this student 18 or over? A student who came with a parent is already
+  // known to be under 18, so they're accepted straight away.
+  async function handleAccept(requestId, fallback = {}) {
+    const req = requests.find((r) => r.id === requestId) || fallback;
+    const known = ['pending', 'granted'].includes(req.consentStatus);
+    const accept = async (minor) => {
+      await respondToCoachRequest(requestId, true);
+      if (minor !== null && req.studentId) {
+        try { await setStudentAge(req.studentId, minor); }
+        catch (e) { Alert.alert('Accepted', `We couldn't save their age: ${e.message}`); }
+      }
+      updateRequests((prev) => prev.filter((r) => r.id !== requestId));
+      refresh();
+    };
+    if (known) return accept(null);
+    const first = (req.name || 'this student').split(/\s+/)[0];
+    Alert.alert(
+      `Is ${first} 18 or over?`,
+      'Under 18, their account stays locked until they confirm their age or a parent gives permission. Nothing is captured before then.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Under 18', onPress: () => { accept(true).catch(() => {}); } },
+        { text: '18 or over', onPress: () => { accept(false).catch(() => {}); } },
+      ],
+    );
   }
   async function handleReject(requestId) {
     await respondToCoachRequest(requestId, false);
@@ -444,18 +478,22 @@ export default function CoachHomeScreen({ navigation, route }) {
   async function showCoachRequestModal(reqId, studentId) {
     if (!reqId || shownReqRef.current === reqId) return;
     shownReqRef.current = reqId;
-    let name = requests.find((r) => r.id === reqId)?.name;
-    if (!name && studentId) {
-      const { data } = await supabase.from('users').select('name').eq('id', studentId).maybeSingle();
+    const listed = requests.find((r) => r.id === reqId);
+    let name = listed?.name;
+    let consentStatus = listed?.consentStatus;
+    if (!listed && studentId) {
+      const { data } = await supabase.from('users').select('name, consent_status').eq('id', studentId).maybeSingle();
       name = data?.name;
+      consentStatus = data?.consent_status;
     }
+    const fallback = { studentId, name, consentStatus };
     Alert.alert(
       'New student request',
       `${name || 'A student'} wants to add you as their coach.`,
       [
         { text: 'Later', style: 'cancel' },
         { text: 'Decline', style: 'destructive', onPress: () => handleReject(reqId).catch(() => {}) },
-        { text: 'Accept', onPress: () => handleAccept(reqId).catch(() => {}) },
+        { text: 'Accept', onPress: () => handleAccept(reqId, fallback).catch(() => {}) },
       ],
     );
   }
@@ -1154,4 +1192,7 @@ const consentStyles = StyleSheet.create({
   chip: { alignSelf: 'flex-start', marginLeft: 6, borderRadius: 999, paddingVertical: 2, paddingHorizontal: 8,
     backgroundColor: 'rgba(232,181,48,0.16)' },
   chipText: { fontFamily: Fonts.ttDemiBold, fontSize: 11, color: '#8A6414' },
+  chipWait: { backgroundColor: 'rgba(10,10,10,0.07)' },
+  chipWaitText: { color: '#5C5C5C' },
+  greyed: { opacity: 0.5 },
 });

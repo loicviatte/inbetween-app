@@ -74,6 +74,8 @@ const TYPE_META = {
   couple_request_accepted: { group: 'other', icon: 'people-outline' },
   couple_paired:           { group: 'other', icon: 'heart-outline' },
   child_phone_linked:      { group: 'other', icon: 'phone-portrait-outline', cta: 'See their phone' },
+  age_check_required:      { group: 'coach', icon: 'lock-closed-outline' },
+  age_check_adult_confirmed: { group: 'coach', icon: 'checkmark-circle-outline' },
 };
 const DEFAULT_META = { group: 'other', icon: 'notifications-outline' };
 

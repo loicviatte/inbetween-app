@@ -311,6 +311,80 @@ async function cancel(admin: SupabaseClient, b: Row) {
   return json({ ok: true })
 }
 
+// ── a student who already has an account ────────────────────────────────────
+// A coach said this signed-in student is under 18 (users.age_check =
+// 'minor_pending'). Their account stays theirs; the parent approves it the same
+// way, and approve() links the parent to it and unlocks it. No device secret:
+// the student's own JWT proves who is asking.
+async function studentFromJwt(admin: SupabaseClient, req: Request) {
+  const auth = req.headers.get('Authorization') || ''
+  if (!auth.startsWith('Bearer ')) return null
+  const { data: { user } } = await admin.auth.getUser(auth.slice(7))
+  if (!user) return null
+  const { data: me } = await admin.from('users').select('id, name, age_check, age_check_by').eq('id', user.id).maybeSingle()
+  return me ?? null
+}
+
+async function inviteSelf(admin: SupabaseClient, req: Request, b: Row, ip: string) {
+  const me = await studentFromJwt(admin, req)
+  if (!me) return json({ error: 'Sign in again.' }, 401)
+  if (me.age_check !== 'minor_pending') return json({ error: 'Your account doesn’t need a parent’s permission.' }, 409)
+  const parentFirst = str(b.parentFirstName, 60)
+  const parentEmail = str(b.parentEmail, 120).toLowerCase(), parentPhone = normPhone(b.parentPhone)
+  if (!parentFirst) return json({ error: "Add your parent's first name." }, 400)
+  if (!EMAIL_RE.test(parentEmail)) return json({ error: "That email doesn't look right." }, 400)
+  if (SMS_ENABLED && !parentPhone) return json({ error: 'Add the mobile number with its country code, like +44 7700 900123.' }, 400)
+
+  // Already invited: correct the details and send it again.
+  const { data: open } = await admin.from('parental_consents').select('*')
+    .eq('child_id', me.id).eq('status', 'pending').order('created_at', { ascending: false }).limit(1).maybeSingle()
+  if (open) {
+    if (await limited(admin, `invite:ip:${ip}`, 5, 3600)) return json({ error: 'Too many invitations from here. Try again later.' }, 429)
+    return reissue(admin, { ...open, last_sent_at: null }, { parent_first_name: parentFirst, parent_email: parentEmail, parent_phone: parentPhone || null })
+  }
+
+  const mode = deliveryMode()
+  if (!mode) return json({ error: "Parent verification isn't available yet. Try again soon." }, 503)
+  if (await limited(admin, `invite:ip:${ip}`, 5, 3600)) return json({ error: 'Too many invitations from here. Try again later.' }, 429)
+  if (await limited(admin, `invite:email:${await sha256(parentEmail)}`, 3, 86400)
+    || (parentPhone && await limited(admin, `invite:phone:${await sha256(parentPhone)}`, 3, 86400))) {
+    return json({ error: 'This parent has already been invited several times today.' }, 429)
+  }
+  let coachName: string | null = null
+  if (me.age_check_by) {
+    const { data: coach } = await admin.from('users').select('name').eq('id', me.age_check_by).maybeSingle()
+    coachName = coach?.name || null
+  }
+  const childName = (me.name || '').trim().split(/\s+/)[0] || 'Your child'
+  const s = await freshSecrets()
+  const { data: row, error } = await admin.from('parental_consents').insert({
+    child_id: me.id, child_name: childName, coach_id: me.age_check_by, coach_name: coachName,
+    parent_first_name: parentFirst, parent_email: parentEmail, parent_phone: parentPhone || null,
+    email_token_hash: s.tokenHash, sms_code_hash: SMS_ENABLED ? s.codeHash : null,
+    device_secret_hash: await sha256(randomCode(32)),   // unused: the JWT stands in for it
+    expires_at: hoursFromNow(INVITE_TTL_H), last_sent_at: new Date().toISOString(),
+    delivery_mode: mode, terms_version: TERMS_VERSION,
+  }).select('*').single()
+  if (error || !row) return json({ error: "We couldn't create the invitation." }, 500)
+  try {
+    await deliverInvite(mode, row, s.token, s.code)
+  } catch (e) {
+    console.error('[minor-consent] invite-self delivery failed', e)
+    await admin.from('parental_consents').delete().eq('id', row.id)
+    return json({ error: "We couldn't reach that email or number. Check them and try again." }, 502)
+  }
+  return json({ ok: true, maskedEmail: maskEmail(parentEmail), maskedPhone: maskPhone(parentPhone), mode })
+}
+
+async function resendSelf(admin: SupabaseClient, req: Request) {
+  const me = await studentFromJwt(admin, req)
+  if (!me) return json({ error: 'Sign in again.' }, 401)
+  const { data: open } = await admin.from('parental_consents').select('*')
+    .eq('child_id', me.id).eq('status', 'pending').order('created_at', { ascending: false }).limit(1).maybeSingle()
+  if (!open) return json({ error: 'There’s no invitation to send again.' }, 404)
+  return reissue(admin, open)
+}
+
 // ── the parent ──────────────────────────────────────────────────────────────
 async function verify(admin: SupabaseClient, b: Row, ip: string) {
   if (await limited(admin, `verify:ip:${ip}`, 20, 3600)) return json({ error: 'Too many attempts. Try again later.' }, 429)
@@ -408,6 +482,9 @@ async function approve(admin: SupabaseClient, b: Row, ip: string) {
     await admin.from('parental_consents').update({ status: 'pending' }).eq('id', row.id)
     return json({ error: "We couldn't record your permission." }, 500)
   }
+  // A student a coach had flagged as under 18 is now accounted for.
+  await admin.from('users').update({ age_check: 'minor_consented', age_check_at: new Date().toISOString() })
+    .eq('id', row.child_id).eq('age_check', 'minor_pending')
 
   if (row.coach_id) {
     await admin.from('notifications').insert({
@@ -620,6 +697,8 @@ async function handle(req: Request): Promise<Response> {
       case 'resend': return await resend(admin, body)
       case 'update': return await update(admin, body, ip)
       case 'cancel': return await cancel(admin, body)
+      case 'invite-self': return await inviteSelf(admin, req, body, ip)
+      case 'resend-self': return await resendSelf(admin, req)
       case 'verify': return await verify(admin, body, ip)
       case 'approve': return await approve(admin, body, ip)
       case 'withdraw': return await withdraw(admin, req, body, ip)

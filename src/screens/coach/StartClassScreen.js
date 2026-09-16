@@ -1473,7 +1473,13 @@ export default function StartClassScreen({ navigation }) {
   async function startClassNow() {
     // The roster's copy of the student can be stale; the row is not.
     if (view === 'private-briefing' && selectedStudent?.id) {
-      const { data: st } = await supabase.from('users').select('consent_status').eq('id', selectedStudent.id).maybeSingle();
+      const { data: st } = await supabase.from('users').select('consent_status, age_check').eq('id', selectedStudent.id).maybeSingle();
+      if (st?.age_check === 'minor_pending') {
+        setAudioModalOpen(false);
+        Alert.alert('Waiting for verification',
+          `You marked ${selectedStudent.name || 'this student'} as under 18. Recording works once they confirm they’re 18 or over, or a parent gives permission.`);
+        return;
+      }
       if (st && CONSENT_BLOCKED.includes(st.consent_status)) {
         setAudioModalOpen(false);
         Alert.alert('Waiting for a parent',

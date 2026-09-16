@@ -56,3 +56,6 @@ verify_jwt = false
 
 [functions.child-pairing]
 verify_jwt = false
+
+[functions.age-check]
+verify_jwt = false

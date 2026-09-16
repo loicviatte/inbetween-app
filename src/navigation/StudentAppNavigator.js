@@ -11,6 +11,7 @@ import LogScreen from '../screens/LogScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import CustomTabBar from '../components/CustomTabBar';
 import { ProfileProvider } from '../context/ProfileContext';
+import { useAgeLock } from '../components/AgeCheckGate';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -56,6 +57,13 @@ function MainTabs() {
 }
 
 export default function StudentAppNavigator() {
+  // A coach said this student is under 18 and no parent has approved: the app
+  // stays closed behind the lock screen until the account is sorted.
+  const ageLocked = useAgeLock();
+  if (ageLocked) {
+    const AgeCheckScreen = require('../screens/AgeCheckScreen').default;
+    return <AgeCheckScreen />;
+  }
   return (
     <ProfileProvider>
       <Stack.Navigator screenOptions={{ headerShown: false, detachInactiveScreens: false }}>

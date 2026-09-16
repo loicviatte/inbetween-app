@@ -19,7 +19,6 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput,
   ActivityIndicator, KeyboardAvoidingView, Platform, Animated, Easing, Linking, Keyboard, Modal, Alert,
-  Pressable, Dimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -34,7 +33,8 @@ import { setOnboardingHold } from '../utils/onboardingHold';
 import { recallToFocusPoints, saveOnboardingFocusPoints } from '../services/ai/onboardingRecall';
 import { createChildAccount } from '../services/childAccount';
 import { clearSubjectCache, invalidateCache } from '../storage/storage';
-import { COUNTRIES, DEFAULT_COUNTRY, countryByIso, toE164, splitE164 } from '../utils/phone';
+import { DEFAULT_COUNTRY, toE164, splitE164 } from '../utils/phone';
+import PhoneField from '../components/PhoneField';
 import {
   saveCoachCard, slugify, essenceFrom, howITeachFrom, myMethodFrom, credentialFrom,
   CORRECT_OPTIONS, METHOD_OPTIONS, EXPERIENCE_OPTIONS,
@@ -272,69 +272,6 @@ function Field({ label, value, onChange, placeholder, ...rest }) {
         <TextInput style={s.input} value={value} onChangeText={onChange} placeholder={placeholder}
           placeholderTextColor={T.ink3} onFocus={() => setFocus(true)} onBlur={() => setFocus(false)} {...rest} />
       </View>
-    </View>
-  );
-}
-
-// A mobile number the way people know it: the country code picked from a
-// dropdown, the rest typed as dialled at home (07482 552037 or 7482 552037).
-const DIAL_MENU_H = 340;
-function PhoneField({ label, country, onCountry, value, onChange }) {
-  const [focus, setFocus] = useState(false);
-  const [menu, setMenu] = useState(null);   // { x, top } in window coordinates
-  const box = useRef(null);
-  const c = countryByIso(country);
-
-  function openMenu() {
-    haptic();
-    box.current?.measureInWindow((x, y, w, h) => {
-      // Below the field when it fits above the keyboard, otherwise above it.
-      const kb = Keyboard.isVisible() ? (Keyboard.metrics()?.height || 0) : 0;
-      const room = Dimensions.get('window').height - kb;
-      const below = y + h + 6;
-      setMenu({ x, width: w, top: below + DIAL_MENU_H <= room ? below : Math.max(56, y - DIAL_MENU_H - 6) });
-    });
-  }
-
-  return (
-    <View style={s.field}>
-      <Text style={s.lbl}>{label}</Text>
-      <View ref={box} collapsable={false} style={[s.fieldIn, s.phoneIn, focus && s.fieldOn]}>
-        <TouchableOpacity style={s.dial} onPress={openMenu} activeOpacity={0.6} accessibilityRole="button"
-          accessibilityLabel={`Country code, ${c.name}, plus ${c.dial}. Change`}>
-          <Text style={s.dialFlag}>{c.flag}</Text>
-          <Text style={s.dialT}>+{c.dial}</Text>
-          <Svg width={10} height={10} viewBox="0 0 10 10">
-            <Path d="M2 3.5l3 3 3-3" stroke={T.ink2} strokeWidth={1.6} fill="none" strokeLinecap="round" strokeLinejoin="round" />
-          </Svg>
-        </TouchableOpacity>
-        <View style={s.dialSep} />
-        <TextInput style={[s.input, s.phoneInput]} value={value} onChangeText={onChange}
-          placeholder={c.example} placeholderTextColor={T.ink3} keyboardType="phone-pad"
-          textContentType="telephoneNumber" autoComplete="tel-national"
-          onFocus={() => setFocus(true)} onBlur={() => setFocus(false)} />
-      </View>
-
-      <Modal visible={!!menu} transparent animationType="fade" statusBarTranslucent onRequestClose={() => setMenu(null)}>
-        <Pressable style={s.dialBackdrop} onPress={() => setMenu(null)}>
-          <View style={[s.dialMenu, { top: menu?.top ?? 0, left: menu?.x ?? 0, width: menu?.width ?? 280 }]}>
-            <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator>
-              {COUNTRIES.map((opt, i) => {
-                const on = opt.iso === c.iso;
-                return (
-                  <TouchableOpacity key={opt.iso} style={[s.dialOpt, i > 0 && s.dialOptLine, on && s.dialOptOn]}
-                    activeOpacity={0.6} accessibilityRole="button" accessibilityState={{ selected: on }}
-                    onPress={() => { haptic(); setMenu(null); onCountry(opt.iso); }}>
-                    <Text style={s.dialFlag}>{opt.flag}</Text>
-                    <Text style={s.dialOptName} numberOfLines={1}>{opt.name}</Text>
-                    <Text style={s.dialOptCode}>+{opt.dial}</Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
-          </View>
-        </Pressable>
-      </Modal>
     </View>
   );
 }
@@ -2080,21 +2017,6 @@ const s = StyleSheet.create({
     height: 50, paddingHorizontal: 14, justifyContent: 'center' },
   fieldOn: { borderColor: T.gold },
   input: { fontFamily: Fonts.travelsRegular, fontSize: 15, color: T.ink, padding: 0 },
-  phoneIn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-start', paddingLeft: 0 },
-  dial: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'stretch', paddingLeft: 14, paddingRight: 10 },
-  dialFlag: { fontSize: 17 },
-  dialT: { fontFamily: Fonts.travelsMedium, fontSize: 15, color: T.ink },
-  dialSep: { width: 1, height: 22, backgroundColor: T.line3, marginRight: 12 },
-  phoneInput: { flex: 1, alignSelf: 'stretch' },
-  dialBackdrop: { flex: 1 },
-  dialMenu: { position: 'absolute', maxHeight: DIAL_MENU_H, borderRadius: 14, overflow: 'hidden',
-    backgroundColor: T.card, borderWidth: 1, borderColor: T.line2,
-    shadowColor: '#000', shadowOpacity: 0.16, shadowOffset: { width: 0, height: 10 }, shadowRadius: 24, elevation: 12 },
-  dialOpt: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingVertical: 12 },
-  dialOptLine: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: T.line2 },
-  dialOptOn: { backgroundColor: 'rgba(232,181,48,0.14)' },
-  dialOptName: { flex: 1, fontFamily: Fonts.travelsRegular, fontSize: 14.5, color: T.ink },
-  dialOptCode: { fontFamily: Fonts.travelsMedium, fontSize: 14, color: T.ink2 },
 
   // .card — the student's plan
   pcard: { backgroundColor: T.card, borderWidth: 1, borderColor: T.line2, borderRadius: 14, padding: 17, gap: 11 },

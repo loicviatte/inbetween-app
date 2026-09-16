@@ -174,7 +174,7 @@ async function _getMyStudentsImpl() {
   // instead of FK embed, which can get silently dropped by RLS).
   const { data: userRows } = await supabase
     .from('users')
-    .select('id, name, dance_style, last_active_date, avatar_url, latin_coach_id, ballroom_coach_id, consent_status')
+    .select('id, name, dance_style, last_active_date, avatar_url, latin_coach_id, ballroom_coach_id, consent_status, age_check')
     .in('id', wantedIds);
 
   const byId = new Map();
