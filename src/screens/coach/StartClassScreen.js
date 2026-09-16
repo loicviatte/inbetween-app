@@ -375,7 +375,7 @@ function PrivateCard({ st, onPress }) {
 
   // Can't be recorded yet: greyed, and the meta line says why.
   const reviewing = !!st.age_review_pending;
-  const waitLabel = reviewing ? 'Asked you to review their age'
+  const waitLabel = reviewing ? 'Tap to review'
     : st.age_check === 'minor_pending' ? 'Awaiting verification'
     : CONSENT_BLOCKED.includes(st.consent_status) ? 'Awaiting parent approval' : null;
   if (waitLabel) metaLine = waitLabel;

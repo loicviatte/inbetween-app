@@ -186,7 +186,7 @@ function ConsentChip({ status, ageCheck, reviewPending }) {
   if (reviewPending) {
     return (
       <View style={[consentStyles.chip, consentStyles.chipReview]}>
-        <Text style={[consentStyles.chipText, consentStyles.chipReviewText]} numberOfLines={1}>Review their age</Text>
+        <Text style={[consentStyles.chipText, consentStyles.chipReviewText]} numberOfLines={1}>Tap to review</Text>
       </View>
     );
   }
