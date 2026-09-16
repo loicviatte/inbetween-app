@@ -6,8 +6,6 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Fonts } from '../theme';
 import { getUser, saveUserPreferences } from '../storage/storage';
-import TabHeader, { useIsParentAccount } from '../components/TabHeader';
-import StyleTitle from '../components/StyleTitle';
 
 // ─── Notification settings (docs/design/notifications.html) ───────────────────
 // One switch per notification the app really sends a dancer, under the
@@ -148,29 +146,23 @@ function pausedLabel(iso) {
 
 export default function NotificationSettingsScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
-  const isParent = useIsParentAccount();
-  const [user, setUser] = useState(null);
   const [prefs, setPrefs] = useState(DEFAULT_PREFS);
   const [lessonReady, setLessonReady] = useState(true);
   const [coachName, setCoachName] = useState(route?.params?.coachName || null);
-  const [partnerName, setPartnerName] = useState(null);
 
   useEffect(() => {
     let alive = true;
     getUser().then((u) => {
       if (!alive || !u) return;
-      setUser(u);
       setPrefs({ ...DEFAULT_PREFS, ...(u.notification_prefs || {}) });
       setLessonReady(u.notify_lesson_ready ?? true);
     }).catch(() => {});
-    // Coach and partner names from the Stats and Train caches — no round-trip.
-    AsyncStorage.multiGet(['@cache_profile', '@cache_home_couple']).then(([[, profile], [, couple]]) => {
+    // The coach's name from the Stats cache — no round-trip.
+    AsyncStorage.getItem('@cache_profile').then((profile) => {
       if (!alive) return;
       const p = profile && JSON.parse(profile);
       const coach = p?.myCoach?.name || p?.latinCoach?.name || p?.ballroomCoach?.name;
       if (coach) setCoachName((n) => n || coach);
-      const partner = couple && JSON.parse(couple)?.couple?.partner?.name;
-      if (partner) setPartnerName(partner);
     }).catch(() => {});
     return () => { alive = false; };
   }, []);
@@ -216,25 +208,22 @@ export default function NotificationSettingsScreen({ navigation, route }) {
   const coachFirst = firstName(coachName);
   const who = coachFirst || 'Your coach';
 
-  const dancerStyle = user?.dance_style || '';
-  const styleLabel = dancerStyle.includes('Latin') && dancerStyle.includes('Ballroom') ? 'Latin & Ballroom'
-    : dancerStyle.includes('Ballroom') ? 'Ballroom'
-    : dancerStyle.includes('Latin') ? 'Latin'
-    : 'Notifications';
-  const dancers = [firstName(user?.name), firstName(partnerName)].filter(Boolean).join(' & ');
-  const headerSub = [dancers, isParent ? 'parent’s account' : null].filter(Boolean).join(' · ') || null;
-
   return (
     <View style={{ flex: 1, backgroundColor: PAGE }}>
       <SafeAreaView style={{ flex: 1 }} edges={['top', 'left', 'right']}>
-        <TabHeader
-          navigation={navigation}
-          style={st.header}
-          onBack={() => navigation.goBack()}
-          lead={<StyleTitle label={styleLabel} sub={headerSub} />}
-        />
-
-        <Text style={st.title}>Notification settings</Text>
+        {/* Just the way back and the page's name, as on Notifications. */}
+        <View style={st.titleRow}>
+          <TouchableOpacity
+            style={st.back}
+            onPress={() => navigation.goBack()}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel="Back"
+          >
+            <Ionicons name="chevron-back" size={19} color={INK} />
+          </TouchableOpacity>
+          <Text style={st.title} numberOfLines={1}>Notification settings</Text>
+        </View>
         <Text style={st.lead}>
           {who} and your partner can always reach you with a request — everything else is yours to switch off.
         </Text>
@@ -308,9 +297,11 @@ const sw = StyleSheet.create({
 });
 
 const st = StyleSheet.create({
-  header: { paddingTop: 6, paddingBottom: 0 },
-  title: { fontFamily: Fonts.ttBold, fontSize: 25, letterSpacing: -0.88, lineHeight: 28, color: INK, paddingTop: 18, paddingHorizontal: SIDE },
-  lead: { fontFamily: Fonts.ttRegular, fontSize: 12.5, lineHeight: 18, color: INK_55, paddingTop: 6, paddingHorizontal: SIDE, maxWidth: 300 },
+  // Same height and place as the tab headers' first row.
+  titleRow: { flexDirection: 'row', alignItems: 'center', gap: 11, paddingTop: 6, paddingHorizontal: SIDE },
+  back: { width: 36, height: 36, borderRadius: 11, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center', shadowColor: INK, shadowOpacity: 0.07, shadowOffset: { width: 0, height: 1 }, shadowRadius: 2, elevation: 1 },
+  title: { flex: 1, fontFamily: Fonts.ttBold, fontSize: 24, letterSpacing: -0.84, lineHeight: 28, color: INK },
+  lead: { fontFamily: Fonts.ttRegular, fontSize: 12.5, lineHeight: 18, color: INK_55, paddingTop: 12, paddingHorizontal: SIDE, maxWidth: 320 },
   scroll: { paddingHorizontal: SIDE, paddingTop: 4, paddingBottom: 14 },
   section: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, paddingTop: 18, paddingBottom: 8, paddingHorizontal: 2 },
   sectionTitle: { fontFamily: Fonts.ttDemiBold, fontSize: 9.5, letterSpacing: 1.6, textTransform: 'uppercase', color: INK_45 },

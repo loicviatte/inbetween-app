@@ -48,7 +48,7 @@ export function HeaderIconButton({ icon, onPress, on = false, badge = 0, label }
   );
 }
 
-export default function TabHeader({ navigation, onProfilePress, editMode = false, center = null, right = null, lead = null, style = null, actions = null, onBack = null }) {
+export default function TabHeader({ navigation, onProfilePress, editMode = false, center = null, right = null, lead = null, style = null, actions = null }) {
   const { avatarUri, initials: contextInitials } = useProfile();
 
   const [cachedPhoto, setCachedPhoto] = useState(null);
@@ -119,12 +119,6 @@ export default function TabHeader({ navigation, onProfilePress, editMode = false
   return (
     <View>
     <View style={[styles.header, style]}>
-      {/* A pushed screen swaps the bell for a way back. */}
-      {onBack ? (
-        <TouchableOpacity style={styles.notifBtn} onPress={onBack} activeOpacity={0.7} accessibilityRole="button" accessibilityLabel="Back">
-          <Ionicons name="chevron-back" size={19} color={Colors.black} />
-        </TouchableOpacity>
-      ) : (
       <TouchableOpacity
         style={styles.notifBtn}
         onPress={() => navigation.navigate('Notifications')}
@@ -138,7 +132,6 @@ export default function TabHeader({ navigation, onProfilePress, editMode = false
           </View>
         )}
       </TouchableOpacity>
-      )}
 
       {/* A screen's own title, set right after the bell (Train: the style and
           whose training it is — which already says "parent's account"). */}
