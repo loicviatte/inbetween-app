@@ -17,6 +17,7 @@ import { Colors, Fonts, Spacing } from '../../theme';
 import DashboardSkeleton from '../../components/DashboardSkeleton';
 import { useCoachData } from '../../context/CoachDataContext';
 import { markFirstScreenReady } from '../../utils/firstPaint';
+import { guardStudent, isAwaitingVerification } from '../../utils/studentLock';
 import { getStudentsReadiness } from '../../storage/storage';
 import { getStartClassRoster } from '../../storage/coachStorage';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -123,7 +124,7 @@ function StudentRing({ student, readinessPercent = 0, actionCount = 0, onPress }
   const offset = C * (1 - progress);
 
   return (
-    <TouchableOpacity style={miniS.wrap} onPress={onPress} activeOpacity={0.75}>
+    <TouchableOpacity style={[miniS.wrap, isAwaitingVerification(student) && { opacity: 0.45 }]} onPress={onPress} activeOpacity={0.75}>
       <View style={{ width: size, height: size, marginBottom: 5 }}>
         <Svg width={size} height={size}>
           <Circle
@@ -481,11 +482,11 @@ export default function DashboardScreen({ navigation }) {
                 student={s}
                 readinessPercent={readinessByStudent[s.id] || 0}
                 actionCount={studentActionCounts?.[s.id] || 0}
-                onPress={() =>
+                onPress={() => guardStudent(s, () =>
                   navigation.navigate('StudentDetail', {
                     studentId: s.id,
                     studentName: s.name,
-                  })
+                  }))
                 }
               />
             ))}
@@ -663,11 +664,11 @@ export default function DashboardScreen({ navigation }) {
                   key={item.student.id}
                   style={[styles.readyRow, i > 0 && styles.readyRowDivider]}
                   activeOpacity={0.85}
-                  onPress={() =>
+                  onPress={() => guardStudent(item.student, () =>
                     navigation.navigate('StudentDetail', {
                       studentId: item.student.id,
                       studentName: item.student.name,
-                    })
+                    }))
                   }
                 >
                   <View style={styles.readyAvatar}>

@@ -18,6 +18,7 @@ import Svg, { Circle } from 'react-native-svg';
 import { Fonts, Spacing } from '../../theme';
 import { respondToCoachRequest } from '../../storage/coachStorage';
 import { setStudentAge } from '../../services/ageCheck';
+import { guardStudent } from '../../utils/studentLock';
 import { getMyCouples, getPendingCoupleCoachRequests, respondToCoupleCoachRequest, getCoupleReadiness } from '../../storage/coupleStorage';
 import { CoachHomeScreenSkeleton } from '../../components/Skeleton';
 import { useCoachData } from '../../context/CoachDataContext';
@@ -598,7 +599,7 @@ export default function CoachHomeScreen({ navigation, route }) {
   }, [couples]);
 
   const openStudent = (s) =>
-    navigation.navigate('StudentDetail', { studentId: s.id, studentName: s.name });
+    guardStudent(s, () => navigation.navigate('StudentDetail', { studentId: s.id, studentName: s.name }));
 
   if (loading) return <CoachHomeScreenSkeleton />;
 

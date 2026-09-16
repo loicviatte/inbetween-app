@@ -29,6 +29,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import Svg, { Circle, Path } from 'react-native-svg';
 import { Colors, Fonts, Spacing } from '../../theme';
 import { supabase } from '../../services/supabase/client';
+import { showVerificationPopup } from '../../utils/studentLock';
 import {
   getStudentProfile,
   getCoachStudentDetail,
@@ -422,6 +423,17 @@ function QuestionSheet({ visible, question, onClose, onDone }) {
 // ── Main Screen ─────────────────────────────────────────────────────────────
 export default function StudentDetailScreen({ route, navigation }) {
   const { studentId, studentName } = route.params;
+  // Every other way in (a feed, a notification, a deep link) lands here: a
+  // student still waiting on their age check turns the coach straight back.
+  useEffect(() => {
+    let alive = true;
+    supabase.from('users').select('age_check').eq('id', studentId).maybeSingle().then(({ data }) => {
+      if (alive && data?.age_check === 'minor_pending') {
+        showVerificationPopup(studentName, () => { if (navigation.canGoBack()) navigation.goBack(); });
+      }
+    });
+    return () => { alive = false; };
+  }, [studentId]);
   const { refresh: refreshCoachData, getOrFetch, invalidateCache } = useCoachData();
   const [profile, setProfile] = useState(null);
   const [focusPoints, setFocusPoints] = useState([]);
