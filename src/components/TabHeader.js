@@ -184,7 +184,12 @@ export default function TabHeader({ navigation, onProfilePress, editMode = false
       ))}
     </View>
 
-    {isParent && !hideChildNudge ? <ChildPhoneNudge navigation={navigation} /> : null}
+    {/* Sits 12pt under the header row whatever bottom padding a screen gives the
+        header (Train and Lessons: none; Stats: its fade). */}
+    {isParent && !hideChildNudge ? (
+      <ChildPhoneNudge navigation={navigation}
+        style={{ marginTop: Math.max(0, 12 - (StyleSheet.flatten([styles.header, style])?.paddingBottom ?? 12)) }} />
+    ) : null}
 
     <AccountSheet visible={accountOpen} onClose={() => setAccountOpen(false)} />
     </View>

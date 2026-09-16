@@ -7,7 +7,7 @@ import { getChildPhones } from '../services/childPairing';
 
 // Under the header on a parent's account, until one of their children has a
 // phone signed in to their own profile. It opens Stats ▸ Links, where the code is.
-export default function ChildPhoneNudge({ navigation }) {
+export default function ChildPhoneNudge({ navigation, style }) {
   const [children, setChildren] = useState(null);
 
   useFocusEffect(useCallback(() => {
@@ -22,7 +22,7 @@ export default function ChildPhoneNudge({ navigation }) {
   const first = children.length === 1 ? (children[0].name || '').split(/\s+/)[0] : null;
   return (
     <TouchableOpacity
-      style={st.wrap}
+      style={[st.wrap, style]}
       onPress={() => navigation.navigate('PROFILE', { tab: 'links' })}
       activeOpacity={0.85}
       accessibilityRole="button"
