@@ -9,14 +9,9 @@ import { getNotifications } from '../storage/notificationsStorage';
 import { locallyRespondedAttendance } from '../storage/attendanceState';
 import { supabase } from '../services/supabase/client';
 
-export default function TabHeader({ navigation, onProfilePress, editMode = false, center = null, right = null }) {
-  const { avatarUri, initials: contextInitials } = useProfile();
-
-  const [cachedPhoto, setCachedPhoto] = useState(null);
-  const [cachedInitials, setCachedInitials] = useState('');
-  const [unreadCount, setUnreadCount] = useState(0);
-  // A parent's account shows their child's training through the same screens,
-  // so it says, on every tab, whose account this is.
+// A parent's account shows their child's training through the same screens,
+// so the header says, on every tab, whose account this is.
+export function useIsParentAccount() {
   const [isParent, setIsParent] = useState(false);
 
   useEffect(() => {
@@ -26,6 +21,17 @@ export default function TabHeader({ navigation, onProfilePress, editMode = false
     const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => setIsParent(read(session)));
     return () => { alive = false; sub?.subscription?.unsubscribe(); };
   }, []);
+
+  return isParent;
+}
+
+export default function TabHeader({ navigation, onProfilePress, editMode = false, center = null, right = null }) {
+  const { avatarUri, initials: contextInitials } = useProfile();
+
+  const [cachedPhoto, setCachedPhoto] = useState(null);
+  const [cachedInitials, setCachedInitials] = useState('');
+  const [unreadCount, setUnreadCount] = useState(0);
+  const isParent = useIsParentAccount();
 
   useEffect(() => {
     async function load() {

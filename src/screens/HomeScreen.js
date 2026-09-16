@@ -21,7 +21,7 @@ import Svg, { Circle } from 'react-native-svg';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import TabHeader from '../components/TabHeader';
+import TabHeader, { useIsParentAccount } from '../components/TabHeader';
 import * as Clipboard from 'expo-clipboard';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -611,6 +611,7 @@ export default function HomeScreen({ navigation }) {
   const [soloCounts, setSoloCounts] = useState({ active: 0, past: 0 });
   const [metrics, setMetrics] = useState({ progression: 0, retention: 100, global: 0 });
   const [showFilter, setShowFilter] = useState(false);
+  const isParent = useIsParentAccount();
   const [category, setCategory] = useState(null); // global: 'latin' | 'ballroom' | null
   const [categorySwitching, setCategorySwitching] = useState(false);
   // ── Couple feature ──
@@ -1179,6 +1180,14 @@ export default function HomeScreen({ navigation }) {
 
   const heroMessage = slot1?.subtitle || null;
 
+  const styleToggle = showFilter ? (
+    <CategoryToggle
+      category={category}
+      onPress={() => setPickerVisible(true)}
+      disabled={anyInProgress}
+    />
+  ) : null;
+
   if (isLoading) {
     return <HomeSkeleton />;
   }
@@ -1193,18 +1202,13 @@ export default function HomeScreen({ navigation }) {
     <SafeAreaView style={s.safe} edges={['top', 'left', 'right']}>
       <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
 
-      <TabHeader navigation={navigation} />
+      {/* The style toggle sits level with the bell and the avatar — except on a
+          parent's account, where that middle says "Parent's account" on every
+          tab and Train's own toggle drops to a row just below. */}
+      <TabHeader navigation={navigation} center={isParent ? null : styleToggle} />
 
-      {/* Train's own control, under the header: the header's middle is shared by
-          every tab (it shows "Parent's account" on a parent's account). */}
-      {showFilter && (
-        <View style={s.toggleRow}>
-          <CategoryToggle
-            category={category}
-            onPress={() => setPickerVisible(true)}
-            disabled={anyInProgress}
-          />
-        </View>
+      {isParent && styleToggle && (
+        <View style={s.toggleRow}>{styleToggle}</View>
       )}
 
       {/* ── This Week — anchored at the top, right under the header ── */}
@@ -1707,7 +1711,7 @@ const s = StyleSheet.create({
     borderRadius: 18,
   },
 
-  // ── Latin / Ballroom toggle (centered in TabHeader, Instagram-style) ────
+  // ── Latin / Ballroom toggle (centred in TabHeader; its own row on a parent's account) ────
   toggleRow: {
     alignItems: 'center',
     marginTop: -6,
