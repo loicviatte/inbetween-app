@@ -1026,7 +1026,7 @@ export default function OnboardingScreen({ navigation }) {
                 <Opt t={`Create “${query.trim()}”`} d="We’ll set it up with you after sign-up" on={a.createStudio} delay={0.1}
                   onPress={() => { haptic(); set({ createStudio: true, studioId: null, studioName: query.trim(), noStudio: false }); }} />
               )}
-              <AddRow title="Can’t find your studio?" sub="Invite them to InBetween"
+              <AddRow title="Can’t find your studio?"
                 onPress={() => { haptic(); setNoticeFor('studio'); set({ studioId: null, createStudio: false, studioName: '' }); }} />
               {noticeFor === 'studio' && (
                 <Notice
@@ -1055,7 +1055,7 @@ export default function OnboardingScreen({ navigation }) {
                   on={a.coachId === c.id} delay={0.1 + i * 0.06}
                   onPress={() => { haptic(); set({ coachId: c.id, coachName: c.name || 'Coach', noCoach: false }); }} />
               ))}
-              <AddRow title="Can’t find your coach?" sub="Invite them to InBetween"
+              <AddRow title="Can’t find your coach?"
                 onPress={() => { haptic(); setNoticeFor('coach'); set({ coachId: null, coachName: '' }); }} />
               {noticeFor === 'coach' && (
                 <Notice
@@ -1578,14 +1578,13 @@ const countWord = (n) => COUNTS[n] || String(n);
 const fpWord = (n) => `${COUNTS[n] || n} focus point${n === 1 ? '' : 's'}`;
 
 // .opt with a + avatar — the row that admits the list may not hold you
-function AddRow({ title, sub, onPress }) {
+// A way out of the list, so it stays slimmer than the choices in it: one line,
+// no subtitle — what continuing without one means is said by the notice it opens.
+function AddRow({ title, onPress }) {
   return (
-    <TouchableOpacity style={s.opt} onPress={onPress} activeOpacity={0.9} accessibilityRole="button">
+    <TouchableOpacity style={s.addRow} onPress={onPress} activeOpacity={0.9} accessibilityRole="button">
       <View style={s.avAdd}><Text style={s.avAddT}>+</Text></View>
-      <View style={s.optTxt}>
-        <Text style={s.optB}>{title}</Text>
-        <Text style={s.optS}>{sub}</Text>
-      </View>
+      <Text style={s.addRowT}>{title}</Text>
     </TouchableOpacity>
   );
 }
@@ -1817,8 +1816,11 @@ const s = StyleSheet.create({
   ghostT: { fontFamily: Fonts.travelsRegular, fontSize: 13.5, color: T.ink2 },
 
   // .opt .av.add / .notice / .invite
-  avAdd: { width: 42, height: 42, borderRadius: 21, backgroundColor: T.tile, alignItems: 'center', justifyContent: 'center' },
-  avAddT: { fontFamily: Fonts.travelsRegular, fontSize: 22, lineHeight: 26, color: 'rgba(10,10,10,0.55)' },
+  addRow: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: T.card, borderRadius: 14,
+    borderWidth: 1, borderColor: T.line2, paddingVertical: 11, paddingHorizontal: 16, minHeight: 48, marginBottom: 10 },
+  avAdd: { width: 24, height: 24, borderRadius: 12, backgroundColor: T.tile, alignItems: 'center', justifyContent: 'center' },
+  avAddT: { fontFamily: Fonts.travelsRegular, fontSize: 16, lineHeight: 19, color: 'rgba(10,10,10,0.55)' },
+  addRowT: { flex: 1, fontFamily: Fonts.ttDemiBold, fontSize: 14.5, letterSpacing: -0.2, color: T.ink },
   notice: { marginTop: 4, marginBottom: 10, gap: 12 },
   noticeP: { fontFamily: Fonts.travelsRegular, fontSize: 13, lineHeight: 19, color: T.ink2 },
   noticeB: { fontFamily: Fonts.ttDemiBold, color: T.ink },
