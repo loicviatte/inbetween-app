@@ -10,7 +10,7 @@ export function showVerificationPopup(name, onClose) {
   const first = (name || 'This student').split(/\s+/)[0];
   Alert.alert(
     'Verification in progress',
-    `You marked ${first} as under 18. You’ll be able to open their profile and record their lessons once they confirm they’re 18 or over, or a parent gives permission.`,
+    `${first} will be available again once their account is verified.`,
     [{ text: 'OK', onPress: onClose }],
   );
 }
