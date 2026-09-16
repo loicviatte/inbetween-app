@@ -9,6 +9,8 @@ import {
   Pressable,
   ScrollView,
   RefreshControl,
+  ActivityIndicator,
+  PanResponder,
   Dimensions,
 } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
@@ -16,6 +18,7 @@ import Svg, { Circle, Path } from 'react-native-svg';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import * as Haptics from 'expo-haptics';
 import TabHeader, { useIsParentAccount } from '../components/TabHeader';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -77,6 +80,12 @@ const GOLD_INK = '#8A6414';
 const NAVY = '#22314D';
 const SIDE = 20;
 const CARD_GAP = 11;
+// Pull to refresh on a page that doesn't scroll: how far the page must be
+// pulled (after the rubber-band damping) to refresh, and where it rests while
+// the refresh runs.
+const PULL_TRIGGER = 64;
+const PULL_REST = 52;
+const pullDamp = (dy) => Math.min(Math.max(0, dy) * 0.5, 120);
 // How much of the next focus card shows at the right edge, inviting the swipe.
 const CARD_PEEK = 46;
 
@@ -523,6 +532,52 @@ export default function HomeScreen({ navigation }) {
   // Latest reviewed lesson on each side, for "Read last lesson summary".
   const [lessons, setLessons] = useState({ solo: null, couple: null });
   const [refreshing, setRefreshing] = useState(false);
+  // Train fits on the screen on most phones: then the page is fixed (nothing
+  // to scroll up to) and only a pull down does something — it refreshes. When
+  // the content is taller than the screen (small phones) it scrolls normally,
+  // with the system pull to refresh.
+  const [viewportH, setViewportH] = useState(0);
+  const [contentH, setContentH] = useState(0);
+  const overflow = viewportH > 0 && contentH > viewportH + 1;
+  const pullY = useRef(new Animated.Value(0)).current;
+  const pullRef = useRef({ enabled: false, busy: false, armed: false, refresh: null });
+  pullRef.current.enabled = !overflow;
+  const pullResponder = useRef(PanResponder.create({
+    // Capture: a pull that starts on a card or a button is still a pull.
+    onMoveShouldSetPanResponderCapture: (_, g) => {
+      const p = pullRef.current;
+      return p.enabled && !p.busy && g.dy > 10 && g.dy > Math.abs(g.dx) * 1.5;
+    },
+    onPanResponderMove: (_, g) => {
+      const y = pullDamp(g.dy);
+      pullY.setValue(y);
+      const p = pullRef.current;
+      if (!p.armed && y >= PULL_TRIGGER) {
+        p.armed = true;
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+      } else if (p.armed && y < PULL_TRIGGER) {
+        p.armed = false;
+      }
+    },
+    onPanResponderRelease: (_, g) => {
+      const p = pullRef.current;
+      p.armed = false;
+      if (pullDamp(g.dy) < PULL_TRIGGER) {
+        Animated.spring(pullY, { toValue: 0, useNativeDriver: true, bounciness: 0, speed: 18 }).start();
+        return;
+      }
+      p.busy = true;
+      Animated.spring(pullY, { toValue: PULL_REST, useNativeDriver: true, bounciness: 0, speed: 18 }).start();
+      Promise.resolve(p.refresh?.()).finally(() => {
+        Animated.timing(pullY, { toValue: 0, duration: 220, useNativeDriver: true }).start(() => { p.busy = false; });
+      });
+    },
+    onPanResponderTerminate: () => {
+      pullRef.current.armed = false;
+      Animated.spring(pullY, { toValue: 0, useNativeDriver: true, bounciness: 0, speed: 18 }).start();
+    },
+    onPanResponderTerminationRequest: () => false,
+  })).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const carouselRef = useRef(null);
   const carouselIdxRef = useRef(0);
@@ -937,6 +992,7 @@ export default function HomeScreen({ navigation }) {
     try { await load(); } catch {}
     setRefreshing(false);
   }
+  pullRef.current.refresh = handleRefresh;
 
   // The Profile dashboard bundle behind Trend and Readiness, for this style.
   async function dashboardBundle() {
@@ -1257,14 +1313,24 @@ export default function HomeScreen({ navigation }) {
         }
       />
 
+      <View style={{ flex: 1 }} {...pullResponder.panHandlers}>
+      <Animated.View
+        style={[s.pullSpinner, { opacity: pullY.interpolate({ inputRange: [0, 24, PULL_TRIGGER], outputRange: [0, 0, 1], extrapolate: 'clamp' }) }]}
+        pointerEvents="none"
+      >
+        <ActivityIndicator color={GOLD_INK} />
+      </Animated.View>
+      <Animated.View style={{ flex: 1, transform: [{ translateY: pullY }] }}>
       <ScrollView
         style={{ flex: 1 }}
         contentContainerStyle={s.scrollContent}
         showsVerticalScrollIndicator={false}
-        alwaysBounceVertical
-        refreshControl={
+        scrollEnabled={overflow}
+        onLayout={(e) => setViewportH(e.nativeEvent.layout.height)}
+        onContentSizeChange={(_, h) => setContentH(h)}
+        refreshControl={overflow ? (
           <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={GOLD_INK} colors={[GOLD]} />
-        }
+        ) : undefined}
       >
         <WeekRail
           activity={weekActivity}
@@ -1377,6 +1443,8 @@ export default function HomeScreen({ navigation }) {
           </View>
         ) : null}
       </ScrollView>
+      </Animated.View>
+      </View>
 
       <CategoryPicker
         visible={pickerVisible}
@@ -1395,6 +1463,7 @@ export default function HomeScreen({ navigation }) {
 const s = StyleSheet.create({
   safe: { flex: 1, backgroundColor: 'transparent' },
   header: { paddingTop: 6, paddingBottom: 0 },
+  pullSpinner: { position: 'absolute', top: (PULL_REST - 20) / 2, left: 0, right: 0, alignItems: 'center' },
   scrollContent: { flexGrow: 1, paddingBottom: 14 },
   // The summary card sits at the foot of the screen when there's room, and
   // simply follows the cards when there isn't.
