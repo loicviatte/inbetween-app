@@ -28,6 +28,10 @@ function MainTabs() {
           style={StyleSheet.absoluteFillObject}
         />
       )}
+      {/* Train's flat page colour continues behind the floating tab bar. */}
+      {activeRoute === 'TRAIN' && (
+        <View style={[StyleSheet.absoluteFillObject, { backgroundColor: '#F2F0EB' }]} />
+      )}
       <Tab.Navigator
         initialRouteName="TRAIN"
         tabBar={(props) => <CustomTabBar {...props} />}

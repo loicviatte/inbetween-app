@@ -122,7 +122,8 @@ export default function AllFocusPointsScreen({ navigation, route }) {
   const [loading, setLoading] = useState(true);
   const [danceStyle, setDanceStyle] = useState(null);
   const [couple, setCouple] = useState(null);
-  const [tab, setTab] = useState('solo'); // 'solo' | 'couple' | 'group'
+  // Train's "See all" opens on the side (Solo | Couple) the user was viewing.
+  const [tab, setTab] = useState(route?.params?.tab === 'couple' ? 'couple' : 'solo'); // 'solo' | 'couple' | 'group'
   const [filter, setFilter] = useState(initialFilter); // 'all' | 'latin' | 'ballroom'
   const [solo, setSolo] = useState([]);
   const [couplePts, setCouplePts] = useState([]);

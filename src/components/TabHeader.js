@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { Image } from 'expo-image';
+import { LinearGradient } from 'expo-linear-gradient';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Colors, Fonts, Spacing } from '../theme';
@@ -25,7 +26,7 @@ export function useIsParentAccount() {
   return isParent;
 }
 
-export default function TabHeader({ navigation, onProfilePress, editMode = false, center = null, right = null }) {
+export default function TabHeader({ navigation, onProfilePress, editMode = false, center = null, right = null, lead = null, style = null }) {
   const { avatarUri, initials: contextInitials } = useProfile();
 
   const [cachedPhoto, setCachedPhoto] = useState(null);
@@ -95,13 +96,14 @@ export default function TabHeader({ navigation, onProfilePress, editMode = false
 
   return (
     <View>
-    <View style={styles.header}>
+    <View style={[styles.header, style]}>
       <TouchableOpacity
         style={styles.notifBtn}
         onPress={() => navigation.navigate('Notifications')}
         activeOpacity={0.7}
+        accessibilityLabel={unreadCount > 0 ? `Notifications, ${unreadCount} unread` : 'Notifications'}
       >
-        <Ionicons name="notifications-outline" size={24} color={Colors.black} />
+        <Ionicons name="notifications-outline" size={19} color={Colors.black} />
         {unreadCount > 0 && (
           <View style={styles.notifBadge}>
             <Text style={styles.notifBadgeText}>{unreadCount > 9 ? '9+' : unreadCount}</Text>
@@ -109,10 +111,14 @@ export default function TabHeader({ navigation, onProfilePress, editMode = false
         )}
       </TouchableOpacity>
 
+      {/* A screen's own title, set right after the bell (Train: the style and
+          whose training it is — which already says "parent's account"). */}
+      {lead ? <View style={styles.lead}>{lead}</View> : null}
+
       {/* The middle of the row: a screen's own control if it passes one, or —
           on every tab of a parent's account — whose account this is, level with
           the bell and the avatar. */}
-      {center ? (
+      {lead ? null : center ? (
         <View style={styles.center} pointerEvents="box-none">
           {center}
         </View>
@@ -141,7 +147,9 @@ export default function TabHeader({ navigation, onProfilePress, editMode = false
           {photoUri ? (
             <Image source={{ uri: photoUri }} style={styles.avatarPhoto} />
           ) : (
-            <Text style={styles.avatarText}>{initials}</Text>
+            <LinearGradient colors={['#F6D27A', '#E8B530']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.avatarFill}>
+              <Text style={styles.avatarText}>{initials}</Text>
+            </LinearGradient>
           )}
         </TouchableOpacity>
       ))}
@@ -173,34 +181,43 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   notifBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
+    width: 36,
+    height: 36,
+    borderRadius: 11,
     backgroundColor: '#FFFFFF',
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOpacity: 0.06,
-    shadowOffset: { width: 0, height: 2 },
-    shadowRadius: 8,
-    elevation: 2,
+    shadowColor: '#0A0A0A',
+    shadowOpacity: 0.07,
+    shadowOffset: { width: 0, height: 1 },
+    shadowRadius: 2,
+    elevation: 1,
   },
+  // Sits on the bell's corner with a ring in the page colour.
   notifBadge: {
     position: 'absolute',
-    top: 6,
-    right: 6,
-    backgroundColor: Colors.orange,
-    borderRadius: 8,
-    minWidth: 14,
-    height: 14,
+    top: -6,
+    right: -6,
+    backgroundColor: '#E8B530',
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: '#F2F0EB',
+    minWidth: 19,
+    height: 19,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 3,
   },
   notifBadgeText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 9,
-    color: '#fff',
+    fontFamily: Fonts.ttBold,
+    fontSize: 9.5,
+    color: '#0A0A0A',
+  },
+  lead: {
+    flex: 1,
+    minWidth: 0,
+    marginLeft: 11,
+    marginRight: 11,
   },
   parentPill: {
     flexDirection: 'row',
@@ -218,25 +235,29 @@ const styles = StyleSheet.create({
     color: PARENT_INK,
   },
   avatar: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    backgroundColor: '#F0D9A0',
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#E8B530',
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
-    borderWidth: 2,
-    borderColor: '#FFFFFF',
+  },
+  avatarFill: {
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   avatarText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 16,
-    color: '#8A6A2E',
+    fontFamily: Fonts.ttBold,
+    fontSize: 12.5,
+    color: '#0A0A0A',
   },
   avatarPhoto: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
   },
   editPill: {
     paddingHorizontal: 14,
