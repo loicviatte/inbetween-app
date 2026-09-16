@@ -1158,7 +1158,10 @@ export default function HomeScreen({ navigation }) {
       ? 'Your couple private lesson brings shared focus points.'
       : soloPending
         ? 'Your new focus points appear once it’s approved.'
-        : 'Log your next private lesson to get focus points.')
+        // No lesson at all yet: a new dancer can start from a lesson they had.
+        : !lessons.solo
+          ? 'Attend or manually log your last lesson to get focus points.'
+          : 'Log your next private lesson to get focus points.')
     : openN === 0
       ? `All ${focuses.length} fully drilled — nothing left to prepare`
       : `${doneN === 0 ? 'None fully drilled yet' : `${doneN} of ${focuses.length} fully drilled`} · ${plural(drillsLeft, 'drill')} to go`;
