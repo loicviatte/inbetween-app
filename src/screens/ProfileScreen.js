@@ -1794,7 +1794,7 @@ export default function ProfileScreen({ navigation, route }) {
           <TabHeader
             navigation={navigation}
             style={styles.header}
-            hideChildNudge={activeTab === 'links'}
+            hideChildNudge={activeTab === 'settings'}
             lead={(
               <StyleTitle
                 label={dashCat === 'ballroom' ? 'Ballroom' : 'Latin'}
@@ -1867,12 +1867,6 @@ export default function ProfileScreen({ navigation, route }) {
           >
             {activeTab === 'links' && (
               <View style={styles.tabBody}>
-                {isParent && children.length > 0 && (
-                  <>
-                    <SecLabel text={children.length > 1 ? 'Their phones' : 'Their phone'} />
-                    {children.map((c) => <ChildPhoneCard key={c.id} child={c} />)}
-                  </>
-                )}
                 <SecLabel text="Your coach" />
                 {isDual ? (
                   <>
@@ -2002,6 +1996,10 @@ export default function ProfileScreen({ navigation, route }) {
                             size={17} color={c.active ? '#8F6410' : '#B9B3A5'} />
                         </TouchableOpacity>
                       ))}
+                    </View>
+                    {/* Each child's own phone, right under whom you follow. */}
+                    <View style={{ marginTop: 12 }}>
+                      {children.map((c) => <ChildPhoneCard key={`phone-${c.id}`} child={c} />)}
                     </View>
                     <TouchableOpacity style={styles.addChildBtn} onPress={() => setAddChild(true)} activeOpacity={0.8}>
                       <Ionicons name="add" size={16} color="#8F6410" />

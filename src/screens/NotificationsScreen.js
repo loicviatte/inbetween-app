@@ -330,8 +330,8 @@ export default function NotificationsScreen({ navigation }) {
       // 'MergeReview' route → dead no-op.)
       navigation.navigate('TrainerReview');
     } else if (notif.type === 'child_phone_linked') {
-      // A parent's account: the phone is managed from Stats ▸ Links.
-      navigation.navigate('MainTabs', { screen: 'PROFILE', params: { tab: 'links' } });
+      // A parent's account: the phone is managed from Stats ▸ Settings.
+      navigation.navigate('MainTabs', { screen: 'PROFILE', params: { tab: 'settings' } });
     } else if (notif.type === 'coach_request_received') {
       // CoachHomeScreen is the STUDENTS tab inside CoachMainTabs and surfaces
       // pending requests at the top of the list with accept/reject buttons.

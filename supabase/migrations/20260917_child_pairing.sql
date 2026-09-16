@@ -2,7 +2,7 @@
 --
 -- A parent's account holds their child's training, but the child shouldn't
 -- need the parent's password (or see the parent's settings) to train on their
--- own phone. From Stats ▸ Links the parent gets a short one-time code; the
+-- own phone. From Stats ▸ Settings the parent gets a short one-time code; the
 -- child types it on their phone and is signed in to their own profile. The
 -- child-pairing edge function does both halves; this is its storage.
 --

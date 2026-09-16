@@ -1,7 +1,7 @@
 // ─── A child's own phone ─────────────────────────────────────────────────────
 // A parent's account holds their child's training; the child trains on their
 // own phone, signed in to their own profile, with a one-time code the parent
-// gets from Stats ▸ Links. Every step runs in supabase/functions/child-pairing.
+// gets from Stats ▸ Settings. Every step runs in supabase/functions/child-pairing.
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from './supabase/client';
 import { listChildren } from '../storage/guardianStorage';

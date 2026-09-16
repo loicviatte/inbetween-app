@@ -1464,7 +1464,7 @@ export default function OnboardingScreen({ navigation, route }) {
         );
         if (a.inviteStatus === 'approved') return (
           <Q h1={`${a.parentFirstName || 'Your parent'} said yes`}
-            sub={`Now ask ${a.parentFirstName || 'them'} for a code to sign in on this phone — it’s in their InBetween app, under Stats ▸ Links. Your coach can start capturing your lessons.`} />
+            sub={`Now ask ${a.parentFirstName || 'them'} for a code to sign in on this phone — it’s in their InBetween app, under Stats ▸ Settings. Your coach can start capturing your lessons.`} />
         );
         return (
           <Q h1={`Invitation sent to ${a.parentEmail || a.maskedEmail}`} sub="We’ve also texted them.">
@@ -1543,7 +1543,7 @@ export default function OnboardingScreen({ navigation, route }) {
 
       case 'parentDone': return (
         <Q big h1={`${a.consent?.childName || 'Your child'} is set up`}
-          sub={`You’ll receive their focus points after every lesson. To get ${a.consent?.childName || 'them'} on their own phone, sign in and open Stats ▸ Links.`} />
+          sub={`You’ll receive their focus points after every lesson. To get ${a.consent?.childName || 'them'} on their own phone, sign in and open Stats ▸ Settings.`} />
       );
 
       case 'recap': return (

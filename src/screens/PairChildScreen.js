@@ -1,5 +1,5 @@
 // Pair — a child signs in on their own phone with the code their parent got
-// from Stats ▸ Links. Cream + gold, like Login.
+// from Stats ▸ Settings. Cream + gold, like Login.
 
 import React, { useEffect, useRef, useState } from 'react';
 import {
@@ -85,7 +85,7 @@ export default function PairChildScreen({ navigation }) {
 
           <Text style={styles.h1}>Enter the code{'\n'}from your parent</Text>
           <Text style={styles.sub}>
-            They get it in their InBetween app: <Text style={styles.subStrong}>Stats ▸ Links ▸ Get a code</Text>. It works once, for 10 minutes.
+            They get it in their InBetween app: <Text style={styles.subStrong}>Stats ▸ Settings ▸ Get a code</Text>. It works once, for 10 minutes.
           </Text>
 
           {/* One real input laid over six boxes: typing, deleting, autofill and the

@@ -6,7 +6,7 @@ import { Fonts, Spacing } from '../theme';
 import { getChildPhones } from '../services/childPairing';
 
 // Under the header on a parent's account, until one of their children has a
-// phone signed in to their own profile. It opens Stats ▸ Links, where the code is.
+// phone signed in to their own profile. It opens Stats ▸ Settings, where the code is.
 export default function ChildPhoneNudge({ navigation, style }) {
   const [children, setChildren] = useState(null);
 
@@ -23,10 +23,10 @@ export default function ChildPhoneNudge({ navigation, style }) {
   return (
     <TouchableOpacity
       style={[st.wrap, style]}
-      onPress={() => navigation.navigate('PROFILE', { tab: 'links' })}
+      onPress={() => navigation.navigate('PROFILE', { tab: 'settings' })}
       activeOpacity={0.85}
       accessibilityRole="button"
-      accessibilityHint="Opens Links, where you get a code for their phone"
+      accessibilityHint="Opens Settings, where you get a code for their phone"
     >
       <View style={st.icon}>
         <Ionicons name="phone-portrait-outline" size={16} color="#7F5A0B" />

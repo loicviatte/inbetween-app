@@ -122,7 +122,7 @@ async function claim(admin: SupabaseClient, b: Row, ip: string) {
   await admin.from('notifications').insert({
     user_id: row.guardian_id, type: 'child_phone_linked',
     title: `${child.name || 'Your child'}'s phone is signed in`,
-    body: `${child.name || 'Your child'} can now train on their own phone. You can sign it out from Stats ▸ Links.`,
+    body: `${child.name || 'Your child'} can now train on their own phone. You can sign it out from Stats ▸ Settings.`,
     data: { child_id: row.child_id },
   })
   // The child's phone can't read its parent's row; it keeps the first name to

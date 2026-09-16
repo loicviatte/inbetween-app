@@ -7,7 +7,7 @@ import {
   createPairingCode, getChildPhoneStatus, signOutChildPhone, formatPairingCode, forgetChildPhones,
 } from '../services/childPairing';
 
-// Stats ▸ Links, on a parent's account: getting one child onto their own phone.
+// Stats ▸ Settings ▸ Your child, on a parent's account: getting one child onto their own phone.
 //   idle    what it is, and "Get a code"
 //   code    the code, how long it lasts, the three steps on the child's phone
 //   linked  signed in, when it was last used, and a way to sign it out
