@@ -43,8 +43,8 @@ import {
   getSessionTimeLeft,
 } from '../storage/activeSession';
 import HomeSkeleton from '../components/HomeSkeleton';
-import BottomSheet from '../components/BottomSheet';
 import { getAllStudentMetrics } from '../utils/studentMetrics';
+import { getStudentDashboard } from '../storage/dashboardStorage';
 
 const HOME_CACHE_KEY = '@cache_home';
 // Couple card is fetched non-blocking (separate from the solo HOME_CACHE), so it
@@ -85,18 +85,9 @@ function formatTime(seconds) {
   return `${m}:${sc}`;
 }
 
-const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 const DAY_LETTERS = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
-const FEELING_EMOJI = { Hard: '😤', Struggled: '😰', Okay: '😐', Good: '🙂', Great: '🔥' };
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-
-function fmtTime(iso) {
-  const d = new Date(iso);
-  const h = d.getHours(), m = d.getMinutes();
-  const ampm = h >= 12 ? 'PM' : 'AM';
-  return `${h % 12 || 12}:${m.toString().padStart(2, '0')} ${ampm}`;
-}
 
 function currentWeekRange() {
   const now = new Date();
@@ -207,38 +198,39 @@ function TrainTitle({ label, canSwitch, disabled, onPress, sub }) {
 }
 
 // ─── This week: one segment per day, gold once a session is done ─────────────
-function WeekRail({ activity, goal, onDayPress }) {
+// The whole rail opens Trend, where each week breaks down in detail.
+function WeekRail({ activity, goal, onPress }) {
   const today = (new Date().getDay() + 6) % 7;
   const done = Object.values(activity || {}).reduce((n, d) => n + (d?.sessions?.length ?? 0), 0);
   const count = goal ? `${done} of ${plural(goal, 'session')}` : plural(done, 'session');
   return (
-    <View style={wk.wrap}>
+    <TouchableOpacity
+      style={wk.wrap}
+      onPress={onPress}
+      activeOpacity={0.6}
+      accessibilityRole="button"
+      accessibilityLabel={`This week, ${count}. Open your trend`}
+    >
       <View style={wk.top}>
         <Text style={wk.title}>This week</Text>
-        <Text style={wk.meta} numberOfLines={1}>{count} · {currentWeekRange()}</Text>
+        <View style={wk.metaRow}>
+          <Text style={wk.meta} numberOfLines={1}>{count} · {currentWeekRange()}</Text>
+          <Ionicons name="chevron-forward" size={11} color={INK_3} />
+        </View>
       </View>
       <View style={wk.days}>
         {DAY_LETTERS.map((letter, i) => {
-          const day = activity?.[i];
-          const trained = (day?.sessions?.length ?? 0) > 0;
-          const hasActivity = trained || (day?.classes?.length ?? 0) > 0;
+          const trained = (activity?.[i]?.sessions?.length ?? 0) > 0;
           const isToday = i === today;
           return (
-            <TouchableOpacity
-              key={i}
-              style={wk.day}
-              activeOpacity={0.6}
-              disabled={!hasActivity}
-              onPress={() => onDayPress(i)}
-              accessibilityLabel={`${DAY_NAMES[i]}${trained ? ', trained' : ''}`}
-            >
+            <View key={i} style={wk.day}>
               <View style={[wk.seg, trained ? wk.segDone : isToday && wk.segNow]} />
               <Text style={[wk.letter, isToday && wk.letterNow]}>{letter}</Text>
-            </TouchableOpacity>
+            </View>
           );
         })}
       </View>
-    </View>
+    </TouchableOpacity>
   );
 }
 
@@ -455,13 +447,13 @@ function TrainSwitchSkeleton({ cardWidth }) {
         <Bone width={90} height={10} radius={3} />
       </View>
       <View style={{ flexDirection: 'row', paddingHorizontal: SIDE, gap: CARD_GAP }}>
-        <View style={[fc.card, { width: cardWidth, height: 250, backgroundColor: INK }]}>
+        <View style={[fc.card, { width: cardWidth, height: 292, backgroundColor: INK }]}>
           <Bone width={96} height={10} radius={3} color={onDark} />
           <Bone width="80%" height={26} radius={6} color={onDark} style={{ marginTop: 16 }} />
           <Bone width="100%" height={13} radius={4} color={onDark} style={{ marginTop: 16 }} />
           <Bone width="100%" height={46} radius={23} color={onDark} style={{ marginTop: 'auto' }} />
         </View>
-        <View style={[fc.card, { width: cardWidth, height: 250, backgroundColor: INK }]} />
+        <View style={[fc.card, { width: cardWidth, height: 292, backgroundColor: INK }]} />
       </View>
     </Animated.View>
   );
@@ -524,7 +516,8 @@ export default function HomeScreen({ navigation }) {
   const [myUserId, setMyUserId] = useState(null);
   const [lockRemaining, setLockRemaining] = useState(0);
   const [pickerVisible, setPickerVisible] = useState(false);
-  const [dayModal, setDayModal] = useState(null);
+  // Trend bundle for "This week", prefetched per style so the tap opens at once.
+  const trendRef = useRef({ cat: undefined, data: null });
   // Latest reviewed lesson on each side, for "Read last lesson summary".
   const [lessons, setLessons] = useState({ solo: null, couple: null });
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -679,6 +672,11 @@ export default function HomeScreen({ navigation }) {
     }
     lastLoadRef.current = Date.now();
     loadLessons(coupleId).catch(() => {});
+    setTimeout(() => {
+      getStudentDashboard(cat)
+        .then((d) => { if (d) trendRef.current = { cat, data: d }; })
+        .catch(() => {});
+    }, 1500);
 
     // ─── Couple lock (category-independent) ──
     if (coupleId) {
@@ -926,6 +924,21 @@ export default function HomeScreen({ navigation }) {
       clearInterval(tick);
     };
   }, []));
+
+  async function openTrend() {
+    const cat = category;
+    let data = trendRef.current.cat === cat ? trendRef.current.data : null;
+    if (!data) {
+      data = await getStudentDashboard(cat).catch(() => null);
+      if (!data) return;
+      trendRef.current = { cat, data };
+    }
+    navigation.navigate('StatsDetail', {
+      kind: 'trend',
+      data,
+      scope: `${styleName}${paired ? ' · Solo' : ''}`,
+    });
+  }
 
   async function handleStartSession(focusPoint, rank, count) {
     if (starting || !focusPoint?.id) return;
@@ -1176,10 +1189,6 @@ export default function HomeScreen({ navigation }) {
 
   const lesson = isCouple ? lessons.couple : lessons.solo;
 
-  if (isLoading) {
-    return <HomeSkeleton />;
-  }
-
   const styleName = category === 'ballroom' ? 'Ballroom'
     : category === 'latin' ? 'Latin'
     : soloDoesLatin && !soloDoesBallroom ? 'Latin'
@@ -1187,10 +1196,17 @@ export default function HomeScreen({ navigation }) {
     : couple?.doesLatin ? 'Latin'
     : couple?.doesBallroom ? 'Ballroom'
     : 'Train';
-  const dancers = [firstName(user?.name), paired ? partnerFirst : null].filter(Boolean).join(' & ');
+
+  if (isLoading) {
+    return <HomeSkeleton />;
+  }
+
+  // Whose training is on screen: the dancer on Solo, the pair on Couple.
+  const me = firstName(user?.name);
+  const dancers = isCouple ? [me, partnerFirst].filter(Boolean).join(' & ') : me;
   const headerSub = isParent
     ? [dancers, 'parent’s account'].filter(Boolean).join(' · ')
-    : (paired ? dancers : null);
+    : (dancers || null);
 
   return (
     <View style={{ flex: 1, backgroundColor: PAGE }}>
@@ -1219,7 +1235,7 @@ export default function HomeScreen({ navigation }) {
         <WeekRail
           activity={weekActivity}
           goal={weeklySessionGoal(user?.solo_practice_frequency)}
-          onDayPress={setDayModal}
+          onPress={openTrend}
         />
 
         {showTabs ? <ModeTabs mode={viewMode} onChange={setMode} disabled={anyInProgress} /> : null}
@@ -1325,94 +1341,11 @@ export default function HomeScreen({ navigation }) {
         onClose={() => setPickerVisible(false)}
       />
 
-      <BottomSheet visible={dayModal !== null} onClose={() => setDayModal(null)} sheetStyle={dm.sheet}>
-            <View style={dm.handle} />
-            <Text style={dm.dayName}>{dayModal !== null ? DAY_NAMES[dayModal] : ''}</Text>
-            {(weekActivity[dayModal]?.sessions?.length ?? 0) > 0 && (
-              <View style={dm.section}>
-                <Text style={dm.sectionLabel}>Training Sessions</Text>
-                {weekActivity[dayModal].sessions.map((s) => (
-                  <View key={s.id} style={dm.row}>
-                    <View style={[dm.dot, dm.dotSession]} />
-                    <View style={{ flex: 1 }}>
-                      <Text style={dm.rowText}>{fmtTime(s.started_at)}</Text>
-                      {!!s.focusName && <Text style={dm.rowSub} numberOfLines={1}>{s.focusName}</Text>}
-                    </View>
-                    {!!s.feeling && <Text style={dm.feeling}>{FEELING_EMOJI[s.feeling] ?? s.feeling}</Text>}
-                  </View>
-                ))}
-              </View>
-            )}
-            {(weekActivity[dayModal]?.classes?.length ?? 0) > 0 && (
-              <View style={dm.section}>
-                <Text style={dm.sectionLabel}>Class Logs</Text>
-                {weekActivity[dayModal].classes.map((c) => (
-                  <View key={c.id} style={dm.row}>
-                    <View style={[dm.dot, dm.dotClass]} />
-                    <View style={{ flex: 1 }}>
-                      <Text style={dm.rowText}>{fmtTime(c.created_at)}</Text>
-                      {!!(c.title || c.ai_primary_focus || c.practice_point_1) && (
-                        <Text style={dm.rowSub} numberOfLines={1}>{c.title || c.ai_primary_focus || c.practice_point_1}</Text>
-                      )}
-                    </View>
-                  </View>
-                ))}
-              </View>
-            )}
-      </BottomSheet>
       </Animated.View>
     </SafeAreaView>
     </View>
   );
 }
-
-// ─── Day modal styles ─────────────────────────────────────────────────────────
-const dm = StyleSheet.create({
-  sheet: {
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    paddingHorizontal: 22,
-    paddingBottom: 36,
-    paddingTop: 12,
-  },
-  handle: {
-    width: 36, height: 4,
-    backgroundColor: 'rgba(17,12,17,0.12)',
-    borderRadius: 2,
-    alignSelf: 'center',
-    marginBottom: 18,
-  },
-  dayName: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 18,
-    color: '#111',
-    marginBottom: 16,
-  },
-  section: { marginBottom: 16 },
-  sectionLabel: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 10,
-    color: '#ACADB9',
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-    marginBottom: 8,
-  },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 10,
-    paddingVertical: 6,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#F2F2F2',
-  },
-  dot: { width: 8, height: 8, borderRadius: 4, marginTop: 4 },
-  dotSession: { backgroundColor: '#4A90D9' },
-  dotClass: { backgroundColor: '#4CD964' },
-  rowText: { fontFamily: Fonts.jakartaMedium, fontSize: 14, color: '#111' },
-  rowSub: { fontFamily: Fonts.jakartaRegular, fontSize: 12, color: '#ACADB9', marginTop: 2 },
-  feeling: { fontSize: 16, marginLeft: 'auto' },
-});
 
 // ─── Main styles ──────────────────────────────────────────────────────────────
 const s = StyleSheet.create({
@@ -1477,12 +1410,13 @@ const hd = StyleSheet.create({
 
 // ─── This week rail ───────────────────────────────────────────────────────────
 const wk = StyleSheet.create({
-  wrap: { paddingTop: 15, paddingHorizontal: SIDE },
+  wrap: { paddingTop: 24, paddingHorizontal: SIDE },
   top: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 },
   title: { fontFamily: Fonts.ttDemiBold, fontSize: 10, letterSpacing: 1.6, textTransform: 'uppercase', color: INK },
+  metaRow: { flexDirection: 'row', alignItems: 'center', gap: 4, flexShrink: 1 },
   meta: { fontFamily: Fonts.ttRegular, fontSize: 11.5, color: INK_2, flexShrink: 1 },
   days: { flexDirection: 'row', marginTop: 9, marginHorizontal: -2.5 },
-  day: { flex: 1, paddingHorizontal: 2.5, alignItems: 'stretch' },
+  day: { flex: 1, paddingHorizontal: 2.5 },
   seg: { height: 3, borderRadius: 2, backgroundColor: LINE },
   segDone: { backgroundColor: GOLD },
   segNow: { backgroundColor: INK_3 },
@@ -1527,7 +1461,7 @@ const fp = StyleSheet.create({
 
 // ─── Focus card ───────────────────────────────────────────────────────────────
 const fc = StyleSheet.create({
-  card: { borderRadius: 20, paddingVertical: 16, paddingHorizontal: 18 },
+  card: { minHeight: 292, borderRadius: 20, paddingVertical: 16, paddingHorizontal: 18 },
   body: { gap: 10 },
   top: { flexDirection: 'row', alignItems: 'center', gap: 9, minHeight: 27 },
   tag: { fontFamily: Fonts.ttDemiBold, fontSize: 9.5, letterSpacing: 1.33, textTransform: 'uppercase', color: GOLD },

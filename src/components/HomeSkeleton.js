@@ -96,7 +96,7 @@ const sk = StyleSheet.create({
     paddingTop: 6,
   },
   headerMid: { flex: 1, marginHorizontal: 11 },
-  rail: { paddingTop: 15, paddingHorizontal: 20 },
+  rail: { paddingTop: 24, paddingHorizontal: 20 },
   railTop: { flexDirection: 'row', justifyContent: 'space-between' },
   segs: { flexDirection: 'row', gap: 5, marginTop: 11 },
   head: {
@@ -110,7 +110,7 @@ const sk = StyleSheet.create({
   label: { paddingTop: 18, paddingBottom: 11, paddingHorizontal: 20 },
   track: { flexDirection: 'row', gap: 11, paddingHorizontal: 20 },
   card: {
-    height: 250,
+    height: 292,
     borderRadius: 20,
     paddingVertical: 17,
     paddingHorizontal: 18,
