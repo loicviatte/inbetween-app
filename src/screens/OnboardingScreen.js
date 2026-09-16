@@ -1347,8 +1347,8 @@ export default function OnboardingScreen({ navigation }) {
                 onPress={() => { setError(''); set({ editingInvite: true }); go('minorParent', -1); }}>
                 <Text style={s.laterT}>Correct their details</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={s.later} onPress={confirmStartOver} accessibilityRole="button">
-                <Text style={s.laterT}>Start over</Text>
+              <TouchableOpacity style={[s.later, s.laterDanger]} onPress={confirmStartOver} accessibilityRole="button">
+                <Text style={[s.laterT, s.laterDangerT]}>Start over</Text>
               </TouchableOpacity>
             </View>
           </Q>
@@ -1888,6 +1888,9 @@ const s = StyleSheet.create({
   later: { alignSelf: 'center', borderWidth: 1, borderColor: 'rgba(10,10,10,0.22)', borderRadius: 999,
     paddingVertical: 10, paddingHorizontal: 15, marginTop: 6 },
   laterT: { fontFamily: Fonts.ttDemiBold, fontSize: 12.5, color: T.ink },
+  // Start over deletes the invitation and the profile — the same red as errors.
+  laterDanger: { borderColor: 'rgba(163,40,27,0.45)' },
+  laterDangerT: { color: '#A3281B' },
 
   // .recap
   recap: { backgroundColor: T.card, borderWidth: 1, borderColor: T.line2, borderRadius: 14, overflow: 'hidden' },
