@@ -57,6 +57,17 @@ function Card({ title, side, children }) {
   );
 }
 
+// "What is …?" — what the number means, at the foot of every detail, so the
+// screen opens on the number itself rather than on a definition.
+function About({ q, paras }) {
+  return (
+    <View style={[s.card, s.about]}>
+      <Text style={s.aboutQ}>{q}</Text>
+      {paras.map((p, i) => <Text key={i} style={s.aboutP}>{p}</Text>)}
+    </View>
+  );
+}
+
 function Row({ label, value, sub, first }) {
   return (
     <View style={[s.lrow, !first && s.lrowSep]}>
@@ -248,7 +259,13 @@ function build(kind, d, navigation, scrollRef, coupleId) {
         n: `${readiness?.percent ?? 0}%`, word: 'ready for next private',
         percent: readiness?.percent ?? 0,
         note: readiness?.lastClassDate ? `From your ${fmt(readiness.lastClassDate)} lesson` : '',
-        intro: 'Every focus point your coach gives you needs a set number of training sessions before your next private — three for a critical one, two for the rest. Readiness is how many of those you have done.',
+        about: {
+          q: 'What is readiness?',
+          paras: [
+            'Every focus point your coach gives you needs a set number of training sessions before your next private lesson — three for a critical one, two for the others. Readiness is the share of those sessions you have done.',
+            'It follows your latest private lesson: its focus points are the plan, and only sessions trained since that lesson count. The next private lesson starts a new plan.',
+          ],
+        },
         say: left === 0
           ? 'Everything your coach asked for is trained.'
           : `${left} session${left > 1 ? 's' : ''} to go — about ${readiness?.minutesRemaining ?? 0} minutes.`,
@@ -296,7 +313,13 @@ function build(kind, d, navigation, scrollRef, coupleId) {
         n: String(weeksAtGoal), word: `of ${trendWeeks} weeks at your goal`,
         percent: Math.round((weeksAtGoal / Math.max(1, trendWeeks)) * 100),
         note: `Goal ${weeklyGoal} min a week · ${totalMinutes} min trained`,
-        intro: 'Your weekly goal lives in Settings. A week counts when the minutes you trained reach it.',
+        about: {
+          q: 'What is the trend?',
+          paras: [
+            'The trend shows the minutes you trained each week over the last 10 weeks, set against your weekly goal. A week counts as at goal once the minutes you trained reach it.',
+            'Your weekly goal lives in Settings — change it there and every week is measured against the new one.',
+          ],
+        },
         say: weeksTrained === 0
           ? 'No practice logged in this window yet.'
           : `You trained in ${weeksTrained} of the last ${trendWeeks} weeks.`,
@@ -310,6 +333,13 @@ function build(kind, d, navigation, scrollRef, coupleId) {
         word: momentum.band ? `out of 100 — ${momentum.band}` : 'not enough practice yet',
         percent: momentum.score ?? 0,
         note: 'Last 10 days against your 6-week baseline',
+        about: {
+          q: 'What is momentum?',
+          paras: [
+            'Momentum compares how regularly you have trained lately with what is normal for you: your last 10 days against your six-week baseline, scored out of 100.',
+            'It counts days you trained, not minutes or sessions. Around 55 you are training as usual; higher means more often than usual, lower means less often. It needs about three weeks of practice before it means anything.',
+          ],
+        },
         say: momentum.score === null
           ? 'We need about three weeks of practice before this means anything.'
           : `You are training about ${momentum.acutePerWeek} days a week against a ${momentum.chronicPerWeek}-day baseline.`,
@@ -346,6 +376,13 @@ function build(kind, d, navigation, scrollRef, coupleId) {
         n: String(streakWeeks), word: streakWeeks === 1 ? 'week unbroken' : 'weeks unbroken',
         percent: trendWeeks ? (weeksTrained / trendWeeks) * 100 : 0,
         note: `${weeksTrained} of the last ${trendWeeks} weeks trained`,
+        about: {
+          q: 'What is a streak?',
+          paras: [
+            'Your streak is the number of weeks in a row in which you trained at least once. One session is enough for a week to count.',
+            'The current week is still open: it doesn’t break your run until it ends without a session.',
+          ],
+        },
         say: streakWeeks === 0
           ? 'Train once this week to start a run — one session is enough.'
           : 'A week counts as soon as you train once in it.',
@@ -370,6 +407,13 @@ function build(kind, d, navigation, scrollRef, coupleId) {
         n: String(totalDanceSessions), word: 'practice sessions',
         percent: dances.length ? (dances[0].sessions / totalDanceSessions) * 100 : 0,
         note: `Across ${dances.length} dance${dances.length > 1 ? 's' : ''}`,
+        about: {
+          q: 'What does “Where you train” count?',
+          paras: [
+            'How your practice over the last six months splits across dances. Each session counts once for every dance its focus point is tagged with — a focus point on Rumba and Cha Cha adds a session to both.',
+            'Sessions on focus points with no dance aren’t counted here.',
+          ],
+        },
         say: dances.length
           ? `${dances[0].name} is ${Math.round((dances[0].sessions / totalDanceSessions) * 100)}% of your practice.`
           : 'No tagged practice yet.',
@@ -397,7 +441,12 @@ function build(kind, d, navigation, scrollRef, coupleId) {
         n: String(lessonCount), word: lessonCount === 1 ? 'lesson on record' : 'lessons on record',
         plain: true,
         note: lessons?.length ? `Most recent ${fmt(lessons[0].date)}` : '',
-        say: 'Every private your coach recorded, newest first.',
+        about: {
+          q: 'What counts as a lesson?',
+          paras: [
+            'Every lesson your coach recorded with you in InBetween, newest first. Open one to read its summary and the focus points it gave you.',
+          ],
+        },
         body: (
           <Card title="Lessons" side="newest first">
             {(lessons || []).map((l, i) => (
@@ -457,7 +506,6 @@ export default function StatsDetailScreen({ route, navigation }) {
 
         <ScrollView ref={scrollRef} contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}>
           <View style={s.hero}>
-            {!!v.intro && <Text style={s.intro}>{v.intro}</Text>}
             <View style={s.lede}>
               <Text style={s.heroNum} allowFontScaling={false}>{v.n}</Text>
               <Text style={s.heroWord}>{v.word}</Text>
@@ -467,6 +515,7 @@ export default function StatsDetailScreen({ route, navigation }) {
             {!!v.say && <Text style={s.say}>{v.say}</Text>}
           </View>
           {v.body}
+          {v.about ? <About q={v.about.q} paras={v.about.paras} /> : null}
         </ScrollView>
       </SafeAreaView>
     </View>
@@ -485,7 +534,6 @@ const s = StyleSheet.create({
 
   scroll: { paddingHorizontal: 20, paddingBottom: 48 },
   hero: { paddingBottom: 22 },
-  intro: { fontFamily: Fonts.ttRegular, fontSize: 14.5, lineHeight: 21, color: C.mut, marginBottom: 16 },
   lede: { flexDirection: 'row', alignItems: 'baseline', flexWrap: 'wrap', gap: 9 },
   heroNum: { fontFamily: Fonts.ttExtraBold, fontSize: 40, lineHeight: 42, letterSpacing: -1.6, color: C.ink },
   heroWord: { fontFamily: Fonts.ttRegular, fontSize: 15, color: C.mut },
@@ -502,6 +550,9 @@ const s = StyleSheet.create({
   side: { fontFamily: Fonts.ttRegular, fontSize: 13, color: C.mut },
   read: { fontFamily: Fonts.ttRegular, fontSize: 14, lineHeight: 21, color: C.ink2, marginTop: 16 },
   readB: { fontFamily: Fonts.ttDemiBold, color: C.ink },
+  about: { marginTop: 12, gap: 12 },
+  aboutQ: { fontFamily: Fonts.ttBold, fontSize: 18, letterSpacing: -0.3, color: C.ink, marginBottom: 2 },
+  aboutP: { fontFamily: Fonts.ttRegular, fontSize: 15, lineHeight: 22, color: C.ink2 },
 
   lrow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 14, paddingVertical: 15 },
   lrowSep: { borderTopWidth: 1, borderTopColor: C.line },
