@@ -8,6 +8,7 @@ import {
   Modal,
   Pressable,
   ScrollView,
+  RefreshControl,
   Dimensions,
 } from 'react-native';
 import Svg, { Circle, Path } from 'react-native-svg';
@@ -27,6 +28,7 @@ import {
   getWeekActivity,
   getTeacherContextForAI,
   getClassInputs,
+  invalidateCache,
 } from '../storage/storage';
 import {
   getTrainFocus,
@@ -520,6 +522,7 @@ export default function HomeScreen({ navigation }) {
   const trendRef = useRef({ cat: undefined, data: null });
   // Latest reviewed lesson on each side, for "Read last lesson summary".
   const [lessons, setLessons] = useState({ solo: null, couple: null });
+  const [refreshing, setRefreshing] = useState(false);
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const carouselRef = useRef(null);
   const carouselIdxRef = useRef(0);
@@ -925,6 +928,16 @@ export default function HomeScreen({ navigation }) {
     };
   }, []));
 
+  // Pull to refresh: everything Train shows is refetched — including the
+  // lessons list and the Trend bundle, which otherwise ride their caches.
+  async function handleRefresh() {
+    setRefreshing(true);
+    invalidateCache('classInputs');
+    trendRef.current = { cat: undefined, data: null };
+    try { await load(); } catch {}
+    setRefreshing(false);
+  }
+
   // The Profile dashboard bundle behind Trend and Readiness, for this style.
   async function dashboardBundle() {
     const cat = category;
@@ -1248,6 +1261,10 @@ export default function HomeScreen({ navigation }) {
         style={{ flex: 1 }}
         contentContainerStyle={s.scrollContent}
         showsVerticalScrollIndicator={false}
+        alwaysBounceVertical
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={GOLD_INK} colors={[GOLD]} />
+        }
       >
         <WeekRail
           activity={weekActivity}
