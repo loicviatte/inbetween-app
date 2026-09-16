@@ -818,17 +818,15 @@ export default function LogScreen({ navigation }) {
                   returnKeyType="search"
                 />
               </View>
+              {/* The same round + as on the lessons — here, in line with the search. */}
               <TouchableOpacity
-                style={nt.add}
+                style={[s.fab, nt.fabInline]}
                 onPress={() => navigation.navigate('NoteDetail', {})}
                 activeOpacity={0.85}
                 accessibilityRole="button"
                 accessibilityLabel="Write a note"
               >
-                <Text style={nt.addTxt}>ADD</Text>
-                <View style={nt.addCircle}>
-                  <Ionicons name="add" size={18} color="#FFFFFF" />
-                </View>
+                <Ionicons name="add" size={28} color={INK} />
               </TouchableOpacity>
             </View>
           ) : null}
@@ -966,12 +964,11 @@ const nt = StyleSheet.create({
   link: { flexDirection: 'row', alignItems: 'center', gap: 7, paddingTop: 3 },
   linkTxt: { flex: 1, fontFamily: Fonts.ttDemiBold, fontSize: 11, color: INK },
   none: { paddingTop: 26, textAlign: 'center', fontFamily: Fonts.ttRegular, fontSize: 13, lineHeight: 19, color: INK_50 },
-  foot: { flexDirection: 'row', gap: 9, paddingHorizontal: SIDE, paddingTop: 10, paddingBottom: 10 },
+  // paddingBottom 14 puts the + exactly where it floats on the lessons.
+  foot: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: SIDE, paddingTop: 10, paddingBottom: 14 },
   search: { flex: 1, minWidth: 0, height: 52, flexDirection: 'row', alignItems: 'center', gap: 9, paddingHorizontal: 16, borderRadius: 999, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: 'rgba(10,10,10,0.1)' },
   searchInput: { flex: 1, minWidth: 0, fontFamily: Fonts.ttRegular, fontSize: 14.5, color: INK, paddingVertical: 0 },
-  add: { height: 52, paddingLeft: 20, paddingRight: 8, borderRadius: 999, backgroundColor: GOLD, flexDirection: 'row', alignItems: 'center', gap: 10 },
-  addTxt: { fontFamily: Fonts.ttBold, fontSize: 13, letterSpacing: 1.17, color: INK },
-  addCircle: { width: 36, height: 36, borderRadius: 18, backgroundColor: INK, alignItems: 'center', justifyContent: 'center' },
+  fabInline: { position: 'relative', right: 0 },
 });
 
 // Month markers and rows
