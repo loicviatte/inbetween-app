@@ -11,7 +11,7 @@ import Svg, { Circle, Defs, Line, LinearGradient, Path, Polyline, Stop, Text as 
 import { Fonts } from '../theme';
 import { getStudentDashboard } from '../storage/dashboardStorage';
 import { categoryFromStyle } from '../utils/danceCategory';
-import { getMyCouple, getCoupleReadiness } from '../storage/coupleStorage';
+import { getMyCouple } from '../storage/coupleStorage';
 import { openFocusSession } from '../utils/openFocusSession';
 import ModeTabs from './ModeTabs';
 
@@ -236,7 +236,6 @@ export default function ProfileDashboard({ user, category, navigation, mode: mod
   const [modeState, setModeState] = useState('solo'); // 'solo' | 'couple'
   const mode = modeProp ?? modeState;
   const setMode = onChangeMode ?? setModeState;
-  const [coupleReadiness, setCoupleReadiness] = useState(null);
 
   useEffect(() => {
     getMyCouple().then(setCouple).catch(() => setCouple(null));
@@ -259,12 +258,6 @@ export default function ProfileDashboard({ user, category, navigation, mode: mod
 
   useEffect(() => { load(); }, [load]);
 
-  // Couple readiness is its own RPC; the retrospective cards are solo practice
-  // and have no couple equivalent yet, so couple mode shows only what is real.
-  useEffect(() => {
-    if (mode !== 'couple' || !couple?.id) { setCoupleReadiness(null); return; }
-    getCoupleReadiness(couple.id, cat).then(setCoupleReadiness).catch(() => setCoupleReadiness(null));
-  }, [mode, couple?.id, cat]);
 
   const showSeg = !!couple;
   // Same Solo | Couple tabs as Train.
@@ -283,58 +276,24 @@ export default function ProfileDashboard({ user, category, navigation, mode: mod
   }
 
   const {
-    readiness, weekMinutes, trend, momentum, streakWeeks,
-    weeksTrained, trendWeeks, dances, totalDanceSessions, lessonCount, lastLesson, hasAnyData,
+    readiness, trend, momentum, streakWeeks,
+    weeksTrained, trendWeeks, dances, totalDanceSessions, lessonCount, lastLesson,
   } = data;
 
   const isCouple = mode === 'couple';
   const scopeLabel = `${cat === 'ballroom' ? 'Ballroom' : 'Latin'}${couple ? ` · ${isCouple ? 'Couple' : 'Solo'}` : ''}`;
   const openDetail = (kind) =>
     navigation?.navigate('StatsDetail', { kind, data, scope: scopeLabel });
-  // Couple readiness is real; the retrospective cards below are solo practice
-  // and have no couple equivalent, so couple mode hides them rather than
-  // showing solo numbers under a Couple heading.
-  const activeReadiness = isCouple ? coupleReadiness : readiness;
-  const pct = activeReadiness?.percent ?? null;
-  const focuses = activeReadiness?.focuses || [];
+  // Every card below counts solo practice, which has no couple equivalent yet,
+  // so couple mode hides them rather than showing solo numbers under a Couple
+  // heading. (Readiness % lives on Train, for both sides.)
+  const focuses = readiness?.focuses || [];
   const peak = Math.max(1, ...trend.map((t) => t.minutes));
   const topDance = dances[0];
 
   return (
     <View style={s.root}>
       {scopeBar}
-
-      {/* ── hero: the one number they can still move ── */}
-      <View style={s.hero}>
-        {pct !== null ? (
-          <>
-            <View style={s.lede}>
-              <Text style={s.heroNum} allowFontScaling={false}>{pct}%</Text>
-              <Text style={s.heroWord}>ready for next private</Text>
-            </View>
-            <Meter
-              percent={pct}
-              style={s.heroMeter}
-              accessibilityRole="image"
-              accessibilityLabel={`${pct} percent ready for your next private lesson.`}
-            />
-          </>
-        ) : (
-          <>
-            <View style={s.lede}>
-              <Text style={s.heroNum} allowFontScaling={false}>{weekMinutes}</Text>
-              <Text style={s.heroWord}>min this week</Text>
-            </View>
-            <View style={s.hairline} />
-            <Text style={s.heroNote}>
-              {isCouple
-                ? 'No couple focus points yet'
-                : hasAnyData ? 'No focus points to train yet' : 'Log your first practice to start tracking'}
-            </Text>
-          </>
-        )}
-        {pct !== null && !isCouple && <Text style={s.heroNote}>{weekMinutes} min this week</Text>}
-      </View>
 
       {!isCouple && (<>
       {/* ── trend ── */}
@@ -522,15 +481,6 @@ const s = StyleSheet.create({
 
   // Solo | Couple tabs — the space below matches Train's.
   tabs: { marginBottom: 18 },
-
-  // hero — boxless, sits on the page itself
-  hero: { paddingBottom: 22 },
-  lede: { flexDirection: 'row', alignItems: 'baseline', flexWrap: 'wrap', gap: 9 },
-  heroNum: { fontFamily: Fonts.ttExtraBold, fontSize: 40, lineHeight: 42, letterSpacing: -1.6, color: C.goldInk },
-  heroWord: { fontFamily: Fonts.ttRegular, fontSize: 15, color: C.mut },
-  heroMeter: { marginTop: 20 },
-  heroNote: { fontFamily: Fonts.ttRegular, fontSize: 13, color: C.mut, textAlign: 'right', marginTop: 9 },
-  hairline: { height: 1, backgroundColor: C.line, marginTop: 22 },
 
   // a bar is ALWAYS a meter filled to this screen's own percentage
   meter: { height: 8, borderRadius: 99, backgroundColor: C.line, overflow: 'hidden' },
