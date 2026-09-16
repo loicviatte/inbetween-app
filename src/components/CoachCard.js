@@ -64,7 +64,16 @@ function Veil({ on, children, style }) {
   );
 }
 
-export default function CoachCard({ card, locked, observed }) {
+// `preview` is for the onboarding only: a coach who has just built his card has
+// captured nothing, so an earned section would be an empty padlock. With preview
+// it shows the shape of what will be there, blurred past reading under the lock.
+// Never pass it for a card a student reads — sample figures must not pass for his.
+const SAMPLE_OBSERVED = [
+  { k: 'Technique', v: 45 }, { k: 'Stability', v: 32 }, { k: 'Creativity', v: 23 },
+  { k: 'Strength', v: 14 }, { k: 'Musicality', v: 9 },
+];
+
+export default function CoachCard({ card, locked, observed, preview }) {
   const c = card || {};
   const alloc = c.alloc && Object.keys(c.alloc).length ? c.alloc
     : { Technique: 40, Musicality: 25, Mental: 20, Performance: 15 };
@@ -86,7 +95,7 @@ export default function CoachCard({ card, locked, observed }) {
 
   // A section earned by captured lessons: padlocked with its progress until
   // the threshold, then its content.
-  const Earned = ({ n, title, after, children }) => {
+  const Earned = ({ n, title, after, sample, children }) => {
     if (lessons >= after) return <Block n={n} title={title}>{children}</Block>;
     return (
       <View style={s.cblock}>
@@ -94,6 +103,7 @@ export default function CoachCard({ card, locked, observed }) {
           <Text style={s.cnum}>{n} · {title}</Text>
           <LockIcon size={13} />
         </View>
+        {preview && !!sample && <Veil on style={s.tierSample}>{sample}</Veil>}
         <Text style={s.tierT}>Unlocks after {after} lessons</Text>
         <View style={s.tierRow}>
           <View style={s.cbarTrack}>
@@ -156,7 +166,14 @@ export default function CoachCard({ card, locked, observed }) {
       </Block>
 
       {/* ── observed: earned by captured lessons ── */}
-      <Earned n="05" title="How I teach" after={UNLOCK_HOW_I_TEACH}>
+      <Earned n="05" title="How I teach" after={UNLOCK_HOW_I_TEACH} sample={(
+        <>
+          {!!c.howITeach && <Text style={s.cbody}>{c.howITeach}</Text>}
+          <Text style={s.subLab}>What I correct most</Text>
+          <Bars rows={SAMPLE_OBSERVED.slice(0, 3)} />
+          <Text style={s.obsNote}>Mostly in {(c.teaches || []).slice(0, 2).join(' · ') || 'your main dances'}</Text>
+        </>
+      )}>
         {!!c.howITeach && <Text style={s.cbody}>{c.howITeach}</Text>}
         {catTotal > 0 ? (
           <>
@@ -169,7 +186,14 @@ export default function CoachCard({ card, locked, observed }) {
         )}
       </Earned>
 
-      <Earned n="06" title="My vision" after={UNLOCK_MY_VISION}>
+      <Earned n="06" title="My vision" after={UNLOCK_MY_VISION} sample={(
+        <>
+          <Text style={s.subLab}>Where I plan the hour to go</Text>
+          <Bars rows={AXES.map((k) => ({ k, v: alloc[k] || 0 }))} />
+          <Text style={[s.subLab, s.subLabGap]}>Where it actually goes</Text>
+          <Bars rows={SAMPLE_OBSERVED} />
+        </>
+      )}>
         <Text style={s.subLab}>Where I plan the hour to go</Text>
         <Bars rows={AXES.map((k) => ({ k, v: alloc[k] || 0 }))} />
         <Text style={[s.subLab, s.subLabGap]}>
@@ -239,6 +263,7 @@ const s = StyleSheet.create({
   ctrackOn: { color: D.on, fontFamily: Fonts.travelsMedium },
   tierHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   tierT: { fontFamily: Fonts.travelsMedium, fontSize: 13, color: D.on2 },
+  tierSample: { paddingBottom: 6 },
   tierRow: { flexDirection: 'row', alignItems: 'center', gap: 9, paddingTop: 2 },
   tierFill: { backgroundColor: 'rgba(232,181,48,0.55)' },
   tierCount: { fontFamily: Fonts.travelsMedium, fontSize: 11.5, color: D.on3, minWidth: 44, textAlign: 'right' },

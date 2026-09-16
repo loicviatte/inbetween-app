@@ -1422,8 +1422,12 @@ export default function OnboardingScreen({ navigation }) {
           sub="Assembled from your own answers. This is what a student reads before booking you.">
           {/* cut by the fold, not dissolved: the scrim is the card's own black */}
           <Rise delay={0.15} duration={700}>
+            {/* scrollable, so the sections he earns with lessons — far below the
+                fold — can be reached; the scrim stays pinned to the fold */}
             <View style={s.peek}>
-              <CoachCard card={toCard(a)} observed={NO_LESSONS_YET} locked />
+              <ScrollView nestedScrollEnabled showsVerticalScrollIndicator={false} contentContainerStyle={s.peekScroll}>
+                <CoachCard card={toCard(a)} observed={NO_LESSONS_YET} locked preview />
+              </ScrollView>
               <LinearGradient colors={['rgba(10,10,10,0)', 'rgba(10,10,10,0.74)', D.bg]} locations={[0, 0.58, 1]}
                 style={s.peekFade} pointerEvents="none" />
             </View>
@@ -1445,7 +1449,7 @@ export default function OnboardingScreen({ navigation }) {
               <Text style={s.linkSlug}>{a.slug || slugify(a.name)}</Text>
             </View>
           </Rise>
-          <Rise delay={0.15} duration={700}><CoachCard card={toCard(a)} observed={NO_LESSONS_YET} /></Rise>
+          <Rise delay={0.15} duration={700}><CoachCard card={toCard(a)} observed={NO_LESSONS_YET} preview /></Rise>
           <Text style={s.lead}>Send it to anyone who asks about lessons. You can adjust it whenever you want.</Text>
         </Q>
       );
@@ -1794,6 +1798,7 @@ const s = StyleSheet.create({
   // the glimpse
   peek: { height: 392, borderTopLeftRadius: 18, borderTopRightRadius: 18, overflow: 'hidden' },
   peekFade: { position: 'absolute', left: 0, right: 0, bottom: 0, height: 112 },
+  peekScroll: { paddingBottom: 90 },
   lockbar: { flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: 12, backgroundColor: T.lockbar,
     paddingVertical: 12, paddingHorizontal: 14, marginTop: 16 },
   lockT: { flex: 1, fontFamily: Fonts.travelsRegular, fontSize: 13, lineHeight: 18, color: T.ink },
