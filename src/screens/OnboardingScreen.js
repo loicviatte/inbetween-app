@@ -1305,18 +1305,26 @@ export default function OnboardingScreen({ navigation }) {
 
       case 'minorParent': return (
         <Q h1={a.editingInvite ? 'Correct their details' : 'Who’s your parent or guardian?'}>
+          {/* The parent's details come first, under the question they answer; the
+              teen's own name sits apart — side by side, "Your first name" and
+              "Their first name" read as one person's first and last name. */}
           <View style={s.fields}>
-            {!a.editingInvite && (
-              <Rise delay={0}><Field label="Your first name" value={a.name} onChange={(t) => set({ name: t })}
-                placeholder="Emma" autoCapitalize="words" /></Rise>
-            )}
-            <Rise delay={0.04}><Field label="Their first name" value={a.parentFirstName}
+            <Rise delay={0}><Field label="Parent’s first name" value={a.parentFirstName}
               onChange={(t) => set({ parentFirstName: t })} placeholder="Sarah" autoCapitalize="words" /></Rise>
-            <Rise delay={0.08}><Field label="Their email" value={a.parentEmail} onChange={(t) => set({ parentEmail: t })}
+            <Rise delay={0.04}><Field label="Parent’s email" value={a.parentEmail} onChange={(t) => set({ parentEmail: t })}
               placeholder="sarah@email.com" autoCapitalize="none" autoCorrect={false} keyboardType="email-address" /></Rise>
-            <Rise delay={0.12}><Field label="Their mobile number" value={a.parentPhone} onChange={(t) => set({ parentPhone: t })}
+            <Rise delay={0.08}><Field label="Parent’s mobile number" value={a.parentPhone} onChange={(t) => set({ parentPhone: t })}
               placeholder="+44 7700 900123" keyboardType="phone-pad" /></Rise>
           </View>
+          {!a.editingInvite && (
+            <Rise delay={0.12}>
+              <View style={s.youBlock}>
+                <Field label="Your first name" value={a.name} onChange={(t) => set({ name: t })}
+                  placeholder="Emma" autoCapitalize="words" />
+                <Text style={s.youNote}>So they know who’s asking.</Text>
+              </View>
+            </Rise>
+          )}
           <Text style={s.fieldNote}>We’ll send them a link. Nothing is recorded until they approve.</Text>
           {!!error && <Text style={s.err}>{error}</Text>}
         </Q>
@@ -1830,6 +1838,8 @@ const s = StyleSheet.create({
   promptOkT: { fontFamily: Fonts.ttDemiBold, fontSize: 15, color: T.ink },
   para: { fontFamily: Fonts.travelsRegular, fontSize: 15, lineHeight: 23, color: T.ink2 },
   fieldNote: { marginTop: 14, fontFamily: Fonts.travelsRegular, fontSize: 13, lineHeight: 19, color: T.ink2 },
+  youBlock: { marginTop: 22, paddingTop: 20, borderTopWidth: 1, borderTopColor: T.line },
+  youNote: { marginTop: 8, fontFamily: Fonts.travelsRegular, fontSize: 12.5, lineHeight: 17, color: T.ink3 },
   waitActs: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 22 },
   bullet: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, paddingVertical: 12,
     borderBottomWidth: 1, borderBottomColor: T.line },
