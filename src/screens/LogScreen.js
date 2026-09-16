@@ -44,6 +44,7 @@ import LogModal from '../components/LogModal';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import TabHeader, { useIsParentAccount } from '../components/TabHeader';
 import StyleTitle from '../components/StyleTitle';
+import { useTabBarSpace } from '../components/CustomTabBar';
 import LogSkeleton from '../components/LogSkeleton';
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -540,6 +541,8 @@ export default function LogScreen({ navigation }) {
   // Header: the dancer (the child, on a parent's account) — style and first name.
   const [dancer, setDancer] = useState(null);
   const isParent = useIsParentAccount();
+  // Log's search / ADD bar sits at the foot: keep it clear of the floating tab bar.
+  const tabBarSpace = useTabBarSpace();
   // Paint the header at once from Train's cached user; load() refreshes it.
   useEffect(() => {
     AsyncStorage.getItem('@cache_home')
@@ -830,7 +833,7 @@ export default function LogScreen({ navigation }) {
         style={StyleSheet.absoluteFillObject}
       />
       <SafeAreaView style={styles.safe} edges={['top']}>
-        <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
+        <Animated.View style={{ flex: 1, opacity: fadeAnim, paddingBottom: tabBarSpace }}>
           <TabHeader
             navigation={navigation}
             style={styles.header}

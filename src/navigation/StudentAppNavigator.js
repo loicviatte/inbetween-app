@@ -34,7 +34,7 @@ function MainTabs() {
       )}
       <Tab.Navigator
         initialRouteName="TRAIN"
-        tabBar={(props) => <CustomTabBar {...props} />}
+        tabBar={(props) => <CustomTabBar {...props} overlay />}
         screenListeners={{
           state: (e) => {
             const r = e.data?.state?.routes?.[e.data.state.index];

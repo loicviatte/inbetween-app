@@ -23,6 +23,8 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import Svg, { Circle } from 'react-native-svg';
 import TabHeader, { useIsParentAccount } from '../components/TabHeader';
 import StyleTitle from '../components/StyleTitle';
+import { useTabBarSpace } from '../components/CustomTabBar';
+import MaskedView from '@react-native-masked-view/masked-view';
 import { categoryFromStyle } from '../utils/danceCategory';
 import { saveUserPreferences, getAccountUser, saveAccountName, clearSubjectCache, invalidateCache } from '../storage/storage';
 import { isGuardian, listChildren, setActiveChild } from '../storage/guardianStorage';
@@ -79,6 +81,10 @@ import {
   cancelCoupleChange,
 } from '../storage/coupleStorage';
 
+// Stats content padding, and the soft fade where it meets the header.
+const CONTENT_TOP = 2;
+const CONTENT_BOTTOM = 30;
+const EDGE_FADE = 14;
 const AVATAR_KEY = '@profile_photo';
 const PROFILE_CACHE_KEY = '@cache_profile';
 
@@ -1017,6 +1023,7 @@ export default function ProfileScreen({ navigation, route }) {
   const [refreshing, setRefreshing] = useState(false);
   const [dashRefreshKey, setDashRefreshKey] = useState(0);
   const isParent = useIsParentAccount();
+  const tabBarSpace = useTabBarSpace();
   // A guardian account follows one child at a time; the rest of the app never
   // sees this, since getUserId() already resolves to whichever one is active.
   const [children, setChildren] = useState([]);
@@ -1909,10 +1916,28 @@ export default function ProfileScreen({ navigation, route }) {
             )}
           />
 
-          {/* ── Per-tab scrollable content ── */}
+          {/* ── Per-tab scrollable content ── The cards dissolve as they slide
+              under the header and behind the floating tab bar: a real alpha
+              mask, since the page behind is a gradient, not a flat colour. The
+              mask starts EDGE_FADE above its slot and the content starts
+              EDGE_FADE lower, so at rest nothing sits in the fade. */}
+          <MaskedView
+            style={[styles.content, { marginTop: -EDGE_FADE }]}
+            maskElement={
+              <View style={{ flex: 1 }}>
+                <LinearGradient colors={['transparent', '#000']} style={{ height: EDGE_FADE }} />
+                <View style={{ flex: 1, backgroundColor: '#000' }} />
+                <LinearGradient
+                  colors={['#000', 'rgba(0,0,0,0.5)', 'transparent']}
+                  locations={[0, 0.55, 1]}
+                  style={{ height: tabBarSpace + 34 }}
+                />
+              </View>
+            }
+          >
           <ScrollView
             style={styles.content}
-            contentContainerStyle={styles.contentInner}
+            contentContainerStyle={[styles.contentInner, { paddingTop: CONTENT_TOP + EDGE_FADE, paddingBottom: CONTENT_BOTTOM + tabBarSpace }]}
             showsVerticalScrollIndicator={false}
             overScrollMode="never"
             refreshControl={
@@ -2139,6 +2164,7 @@ export default function ProfileScreen({ navigation, route }) {
               </View>
             )}
           </ScrollView>
+          </MaskedView>
 
           {/* Account / Dance style / Dance studio — one sheet, focused per mode */}
           <BottomSheet visible={!!profileModal} onClose={() => setProfileModal(null)} sheetStyle={em.sheet} avoidKeyboard>
@@ -2449,15 +2475,16 @@ const styles = StyleSheet.create({
   withdrawSub: { fontFamily: Fonts.ttRegular, fontSize: 12.5, color: '#6B6656', marginTop: 2 },
 
   // Same header rhythm as Train, so switching tabs doesn't shift it.
-  header: { paddingTop: 6 },
+  // paddingBottom leaves room for the content's top fade to start below the buttons.
+  header: { paddingTop: 6, paddingBottom: EDGE_FADE },
 
   content: { flex: 1 },
   contentInner: {
     paddingHorizontal: Spacing.side,
-    paddingTop: 4,
+    paddingTop: CONTENT_TOP,
     // Tuned so the visible gap between Log out and the floating tab bar is
     // ~2× the marginTop above Log out (≈ 36 px).
-    paddingBottom: 30,
+    paddingBottom: CONTENT_BOTTOM,
     gap: 0,
   },
 

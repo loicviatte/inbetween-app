@@ -19,6 +19,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Haptics from 'expo-haptics';
 import TabHeader, { useIsParentAccount } from '../components/TabHeader';
 import StyleTitle from '../components/StyleTitle';
+import { useTabBarSpace } from '../components/CustomTabBar';
 import ModeTabs, { COUPLE_BLUE } from '../components/ModeTabs';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
@@ -424,6 +425,8 @@ export default function HomeScreen({ navigation }) {
   const [metrics, setMetrics] = useState({ progression: 0, retention: 100, global: 0 });
   const [showFilter, setShowFilter] = useState(false);
   const isParent = useIsParentAccount();
+  // Train doesn't scroll: it keeps clear of the floating tab bar.
+  const tabBarSpace = useTabBarSpace();
   const [category, setCategory] = useState(null); // global: 'latin' | 'ballroom' | null
   const [categorySwitching, setCategorySwitching] = useState(false);
   // ── Couple feature ──
@@ -1207,7 +1210,7 @@ export default function HomeScreen({ navigation }) {
   return (
     <View style={{ flex: 1, backgroundColor: PAGE }}>
     <SafeAreaView style={s.safe} edges={['top', 'left', 'right']}>
-      <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
+      <Animated.View style={{ flex: 1, opacity: fadeAnim, paddingBottom: tabBarSpace }}>
 
       <TabHeader
         navigation={navigation}

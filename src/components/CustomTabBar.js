@@ -2,6 +2,8 @@ import React, { useRef, useEffect, useState, useMemo } from 'react';
 import { View, Text, Pressable, StyleSheet, Animated, PanResponder } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { useFonts } from 'expo-font';
+import { LinearGradient } from 'expo-linear-gradient';
+import MaskedView from '@react-native-masked-view/masked-view';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors, Fonts } from '../theme';
 
@@ -12,8 +14,21 @@ const HIDDEN_TABS = [];
 const LABEL_FONT = { 'Syne-ExtraBold': require('@expo-google-fonts/syne/800ExtraBold/Syne_800ExtraBold.ttf') };
 const PADDING = 5;
 const DRAG_THRESHOLD = 8;
+const BAR_HEIGHT = 58;
+const BAR_GAP = 8;          // below the pill, above the home indicator inset
+// How far the frosted veil reaches above the pill, fading in from nothing.
+const VEIL_REACH = 30;
 
-export default function CustomTabBar({ state, descriptors, navigation }) {
+// Room a screen must leave at its foot for the floating tab bar (overlay mode).
+export function useTabBarSpace() {
+  const insets = useSafeAreaInsets();
+  return BAR_HEIGHT + BAR_GAP + insets.bottom;
+}
+
+// overlay: the bar floats over the screen instead of taking its own row, so
+// content can pass behind it — under a frosted veil that fades in towards the
+// bottom. Screens then reserve useTabBarSpace() at their foot.
+export default function CustomTabBar({ state, descriptors, navigation, overlay = false }) {
   const insets = useSafeAreaInsets();
   // `state` is always supplied by React Navigation while mounted, but guard the
   // access so a teardown-time render (e.g. the tab navigator unmounting on
@@ -200,7 +215,25 @@ export default function CustomTabBar({ state, descriptors, navigation }) {
   });
 
   return (
-    <View style={[styles.wrapper, { paddingBottom: insets.bottom + 8 }]}>
+    <View
+      style={[styles.wrapper, overlay && styles.overlay, { paddingBottom: insets.bottom + BAR_GAP }]}
+      pointerEvents={overlay ? 'box-none' : 'auto'}
+    >
+      {overlay ? (
+        <MaskedView
+          pointerEvents="none"
+          style={[styles.veil, { height: BAR_HEIGHT + BAR_GAP + insets.bottom + VEIL_REACH }]}
+          maskElement={
+            <LinearGradient
+              colors={['transparent', 'rgba(0,0,0,0.85)', '#000']}
+              locations={[0, 0.45, 1]}
+              style={StyleSheet.absoluteFill}
+            />
+          }
+        >
+          <BlurView intensity={22} tint="light" style={StyleSheet.absoluteFill} />
+        </MaskedView>
+      ) : null}
       <View
         style={styles.container}
         onLayout={(e) => setContainerWidth(e.nativeEvent.layout.width)}
@@ -264,12 +297,24 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     backgroundColor: 'transparent',
   },
+  overlay: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+  },
+  veil: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+  },
   container: {
     flexDirection: 'row',
     backgroundColor: '#FFFFFF',
     borderRadius: 36,
     padding: 5,
-    height: 58,
+    height: BAR_HEIGHT,
     position: 'relative',
     shadowColor: '#000',
     shadowOpacity: 0.08,
