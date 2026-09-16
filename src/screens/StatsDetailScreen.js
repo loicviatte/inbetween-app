@@ -345,15 +345,6 @@ function build(kind, d, navigation, scrollRef, coupleId) {
           : `You are training about ${momentum.acutePerWeek} days a week against a ${momentum.chronicPerWeek}-day baseline.`,
         body: (
           <>
-            <Card title="What moves it">
-              <Row first label="Last 10 days" value={`${momentum.acutePerWeek} days/week`} />
-              <Row label="Six-week baseline" value={`${momentum.chronicPerWeek} days/week`} />
-              <Row label="Ratio" value={`${momentum.ratio ?? '–'}×`} sub={momentum.score === null ? '' : `score ${momentum.score}`} />
-              <Text style={s.read}>
-                <Text style={s.readB}>Momentum counts days you trained, not minutes.</Text>{' '}
-                Five sessions in one day move it exactly as much as one.
-              </Text>
-            </Card>
             <Card title="The bands">
               {[['Peaking', '80 – 100'], ['Building', '65 – 79'], ['Steady', '45 – 64'],
                 ['Cooling', '25 – 44'], ['Dormant', '0 – 24']].map(([name, range], i) => (
@@ -365,6 +356,15 @@ function build(kind, d, navigation, scrollRef, coupleId) {
                   <Text style={s.br}>{range}</Text>
                 </View>
               ))}
+            </Card>
+            <Card title="What moves it">
+              <Row first label="Last 10 days" value={`${momentum.acutePerWeek} days/week`} />
+              <Row label="Six-week baseline" value={`${momentum.chronicPerWeek} days/week`} />
+              <Row label="Ratio" value={`${momentum.ratio ?? '–'}×`} sub={momentum.score === null ? '' : `score ${momentum.score}`} />
+              <Text style={s.read}>
+                <Text style={s.readB}>Momentum counts days you trained, not minutes.</Text>{' '}
+                Five sessions in one day move it exactly as much as one.
+              </Text>
             </Card>
           </>
         ),
