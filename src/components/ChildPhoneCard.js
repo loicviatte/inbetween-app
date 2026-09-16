@@ -149,7 +149,9 @@ export default function ChildPhoneCard({ child }) {
     return (
       <View style={st.card}>
         <Text style={st.kicker}>Code for {first}’s phone</Text>
-        <Text style={[st.code, expired && st.codeOff]} selectable accessibilityLabel={`Code: ${code.code.split('').join(' ')}`}>
+        {/* Syne is wide: one line, shrunk to fit whatever the screen width. */}
+        <Text style={[st.code, expired && st.codeOff]} selectable numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.5}
+          accessibilityLabel={`Code: ${code.code.split('').join(' ')}`}>
           {formatPairingCode(code.code)}
         </Text>
         <Text style={[st.expiry, expired && { color: RED }]}>
@@ -223,7 +225,7 @@ const st = StyleSheet.create({
   body: { fontFamily: Fonts.ttRegular, fontSize: 14, lineHeight: 20, color: INK_2, marginTop: 14 },
 
   kicker: { fontFamily: Fonts.ttBold, fontSize: 11.5, letterSpacing: 1.1, textTransform: 'uppercase', color: GOLD_INK, textAlign: 'center' },
-  code: { fontFamily: Fonts.ttExtraBold, fontSize: 40, letterSpacing: 6, color: INK, textAlign: 'center', marginTop: 12 },
+  code: { fontFamily: Fonts.ttBold, fontSize: 30, letterSpacing: 3, color: INK, textAlign: 'center', marginTop: 12 },
   codeOff: { color: 'rgba(20,19,17,0.25)', textDecorationLine: 'line-through' },
   expiry: { fontFamily: Fonts.ttMedium, fontSize: 13, color: INK_2, textAlign: 'center', marginTop: 6 },
   steps: { marginTop: 18, borderTopWidth: 1, borderTopColor: 'rgba(20,19,17,0.08)', paddingTop: 16, gap: 12 },

@@ -31,12 +31,10 @@ export default function ChildPhoneNudge({ navigation }) {
       <View style={st.icon}>
         <Ionicons name="phone-portrait-outline" size={16} color="#7F5A0B" />
       </View>
-      <View style={st.text}>
-        <Text style={st.title} numberOfLines={2}>
-          {first ? `Want ${first} to use InBetween on their phone?` : 'Want your children to use InBetween on their phones?'}
-        </Text>
-        <Text style={st.sub} numberOfLines={1}>A one-time code — no password to share</Text>
-      </View>
+      {/* One line, always: a long name shrinks the text rather than wrapping it. */}
+      <Text style={st.title} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
+        {first ? `Want ${first} to use InBetween on their phone?` : 'Want your children to use InBetween on their phones?'}
+      </Text>
       <Ionicons name="chevron-forward" size={16} color="#7F5A0B" />
     </TouchableOpacity>
   );
@@ -44,14 +42,12 @@ export default function ChildPhoneNudge({ navigation }) {
 
 const st = StyleSheet.create({
   wrap: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
+    flexDirection: 'row', alignItems: 'center', gap: 10,
     marginHorizontal: Spacing.side, marginBottom: 10,
-    paddingVertical: 11, paddingLeft: 12, paddingRight: 14,
+    paddingVertical: 9, paddingLeft: 10, paddingRight: 12,
     borderRadius: 16, backgroundColor: 'rgba(232,181,48,0.16)',
     borderWidth: 1, borderColor: 'rgba(232,181,48,0.38)',
   },
-  icon: { width: 32, height: 32, borderRadius: 10, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' },
-  text: { flex: 1, minWidth: 0 },
-  title: { fontFamily: Fonts.ttBold, fontSize: 14, lineHeight: 18, color: '#141311' },
-  sub: { fontFamily: Fonts.ttRegular, fontSize: 12.5, color: '#6B6656', marginTop: 2 },
+  icon: { width: 30, height: 30, borderRadius: 9, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' },
+  title: { flex: 1, minWidth: 0, fontFamily: Fonts.ttBold, fontSize: 14, color: '#141311' },
 });
