@@ -156,9 +156,17 @@ const ADMIN_URL = 'https://inbetween-admin.vercel.app/age-proofs'
 async function submitProof(admin: SupabaseClient, req: Request, b: Row) {
   const user = await signedIn(admin, req)
   if (!user) return json({ error: 'Sign in again.' }, 401)
-  const { data: me } = await admin.from('users').select('name, age_check').eq('id', user.id).maybeSingle()
+  const { data: me } = await admin.from('users').select('name, age_check, age_check_at').eq('id', user.id).maybeSingle()
   if (me?.age_check !== 'minor_pending') return json({ error: 'Your account doesn’t need this.' }, 409)
   const path = String(b.path ?? '')
+  // One proof per lock: once sent, the student waits for the answer.
+  let sent = admin.from('age_reviews').select('id', { count: 'exact', head: true }).eq('student_id', user.id).eq('kind', 'proof')
+  if (me.age_check_at) sent = sent.gte('created_at', me.age_check_at)
+  const { count: alreadySent } = await sent
+  if ((alreadySent ?? 0) > 0) {
+    if (path.startsWith(`${user.id}/`)) await admin.storage.from(PROOF_BUCKET).remove([path])
+    return json({ error: 'You’ve already sent a proof of age.' }, 409)
+  }
   if (!path.startsWith(`${user.id}/`) || path.includes('..')) return json({ error: 'That upload isn’t yours.' }, 400)
   if (await limited(admin, `ageproof:user:${user.id}`, 5, 86400)) {
     return json({ error: 'You’ve sent a few already today. We’ll check the last one.' }, 429)
@@ -166,13 +174,6 @@ async function submitProof(admin: SupabaseClient, req: Request, b: Row) {
   const folder = path.split('/')[0], file = path.split('/').slice(1).join('/')
   const { data: listed } = await admin.storage.from(PROOF_BUCKET).list(folder, { search: file })
   if (!listed?.some((f: Row) => f.name === file)) return json({ error: 'The photo didn’t upload. Try again.' }, 400)
-
-  // One photo waiting at a time: a new one replaces the last.
-  const { data: older } = await admin.from('age_reviews').select('id, proof_path')
-    .eq('student_id', user.id).eq('kind', 'proof').eq('status', 'pending')
-  const stale = (older || []).map((r: Row) => r.proof_path).filter((p: string) => p && p !== path)
-  if (stale.length) await admin.storage.from(PROOF_BUCKET).remove(stale)
-  if (older?.length) await admin.from('age_reviews').delete().in('id', older.map((r: Row) => r.id))
 
   const { error } = await admin.from('age_reviews').insert({ student_id: user.id, kind: 'proof', proof_path: path })
   if (error) return json({ error: 'We couldn’t send it. Try again.' }, 500)

@@ -153,8 +153,10 @@ export default function AgeCheckScreen() {
 
   const invite = info?.invite;
   const coachDesc = info?.coachReview === 'pending' ? 'Asked · waiting for your coach' : 'They’ll take another look.';
+  // One proof only: once it's sent, the option just says where it stands.
+  const proofSent = !!info?.proofReview;
   const proofDesc = info?.proofReview === 'pending' ? 'Sent · we’re checking it'
-    : info?.proofReview === 'rejected' ? 'We couldn’t confirm it · send another'
+    : info?.proofReview === 'rejected' ? 'Checked · we’ve emailed you about it'
     : 'Only your date of birth is needed.';
   const parentDesc = invite ? `Invitation sent to ${invite.parentFirstName || 'your parent'}` : 'A parent approves your account.';
 
@@ -184,8 +186,8 @@ export default function AgeCheckScreen() {
               <Option
                 title={info?.coachReview === 'rejected' ? 'Send us proof of age' : 'Or send us proof of age'}
                 desc={proofDesc}
-                waiting={info?.proofReview === 'pending'}
-                onPress={() => go('proof')}
+                waiting={proofSent}
+                onPress={proofSent ? undefined : () => go('proof')}
               />
               <Option
                 title="I’m under 18"
