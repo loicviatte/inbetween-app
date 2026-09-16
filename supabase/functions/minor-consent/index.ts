@@ -17,8 +17,9 @@
 // Delivery: real email (Resend) and SMS (Twilio) when both are configured.
 // Otherwise, only if CONSENT_TEST_MODE=on, the messages go to the owner's
 // Telegram monitor — never back to the student's device, which would let a
-// minor approve their own account. Test-mode approvals are stamped as such in
-// the proof, because they are not proof of anything.
+// minor approve their own account. Codes are checked the same way in both
+// modes. Test-mode approvals are stamped as such in the proof, because they
+// are not proof of anything.
 import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { TERMS_VERSION, consentCopy } from '../_shared/consentCopy.ts'
 
@@ -298,31 +299,22 @@ async function update(admin: SupabaseClient, b: Row, ip: string) {
 async function verify(admin: SupabaseClient, b: Row, ip: string) {
   if (await limited(admin, `verify:ip:${ip}`, 20, 3600)) return json({ error: 'Too many attempts. Try again later.' }, 429)
   const token = normToken(b.token), code = str(b.code, 12).replace(/\D/g, '')
-  // ⚠️ TEST ONLY. While delivery is in test mode (no real email provider, and
-  // CONSENT_TEST_MODE=on), any code opens the most recent pending invitation,
-  // so the flow can be walked without reading the message. Configuring Resend
-  // makes delivery live, which switches this off on its own — in live mode it
-  // would let anyone approve any minor's account.
-  const anyCode = deliveryMode() === 'test'
-  if (!anyCode && token.length !== 12) return json({ error: 'Enter the code from the email.' }, 400)
-  if (!anyCode && SMS_ENABLED && code.length !== 6) return json({ error: 'Enter both codes.' }, 400)
+  // Codes are always checked, test mode included: a test invitation's codes
+  // reach the Telegram monitor, so the flow can still be walked with them. A
+  // "any code works" shortcut here once let anyone approve the newest pending
+  // minor and choose the password of the account holding their data.
+  if (token.length !== 12) return json({ error: 'Enter the code from the email.' }, 400)
+  if (SMS_ENABLED && code.length !== 6) return json({ error: 'Enter both codes.' }, 400)
 
-  let { data: row } = await admin.from('parental_consents').select('*')
+  const { data: row } = await admin.from('parental_consents').select('*')
     .eq('email_token_hash', await sha256(token)).eq('status', 'pending').maybeSingle()
-  if (!row && anyCode) {
-    ({ data: row } = await admin.from('parental_consents').select('*')
-      .eq('status', 'pending').not('child_id', 'is', null).gt('expires_at', new Date().toISOString())
-      .order('created_at', { ascending: false }).limit(1).maybeSingle())
-  }
-  if (!row || !row.child_id) {
-    return json({ error: anyCode ? 'No invitation is waiting. Send one from the student side first.' : "That invitation code isn't valid." }, 404)
-  }
+  if (!row || !row.child_id) return json({ error: "That invitation code isn't valid." }, 404)
   if (new Date(row.expires_at) < new Date()) {
     await admin.from('parental_consents').update({ status: 'expired' }).eq('id', row.id)
     return json({ error: 'This invitation has expired. Ask for a new one.' }, 410)
   }
   if (row.verify_attempts >= MAX_VERIFY_ATTEMPTS) return json({ error: 'Too many wrong codes. Ask for a new invitation.' }, 423)
-  if (SMS_ENABLED && !anyCode && row.sms_code_hash !== await sha256(code)) {
+  if (SMS_ENABLED && row.sms_code_hash !== await sha256(code)) {
     await admin.from('parental_consents').update({ verify_attempts: row.verify_attempts + 1 }).eq('id', row.id)
     return json({ error: "The text message code doesn't match." }, 401)
   }
@@ -549,9 +541,8 @@ async function smsCheck(admin: SupabaseClient, b: Row, ip: string) {
   if (!row || row.used_at) return json({ error: 'Send a new code.' }, 404)
   if (new Date(row.expires_at) < new Date()) return json({ error: 'That code has expired. Send a new one.' }, 410)
   if (row.attempts >= MAX_VERIFY_ATTEMPTS) return json({ error: 'Too many wrong codes. Send a new one.' }, 423)
-  // ⚠️ TEST ONLY: a code sent in test mode accepts any 6 digits, like the
-  // invitation code. A live code is always checked.
-  if (row.delivery_mode !== 'test' && row.code_hash !== await sha256(code)) {
+  // Always checked — a test-mode code reaches the Telegram monitor.
+  if (row.code_hash !== await sha256(code)) {
     await admin.from('phone_verifications').update({ attempts: row.attempts + 1 }).eq('id', row.id)
     return json({ error: "That code doesn't match." }, 401)
   }
