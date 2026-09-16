@@ -177,6 +177,16 @@ export default function LoginScreen({ navigation }) {
               Don't have an account? <Text style={styles.linkBold}>Create one</Text>
             </Text>
           </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.link}
+            onPress={() => navigation.navigate('PairChild')}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.linkText}>
+              Under 18? <Text style={styles.linkBold}>I have a code from my parent</Text>
+            </Text>
+          </TouchableOpacity>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>

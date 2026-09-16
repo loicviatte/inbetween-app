@@ -1464,7 +1464,7 @@ export default function OnboardingScreen({ navigation, route }) {
         );
         if (a.inviteStatus === 'approved') return (
           <Q h1={`${a.parentFirstName || 'Your parent'} said yes`}
-            sub="Sign in with their account to see your focus points. Your coach can start capturing your lessons." />
+            sub={`Now ask ${a.parentFirstName || 'them'} for a code to sign in on this phone — it’s in their InBetween app, under Stats ▸ Links. Your coach can start capturing your lessons.`} />
         );
         return (
           <Q h1={`Invitation sent to ${a.parentEmail || a.maskedEmail}`} sub="We’ve also texted them.">
@@ -1543,7 +1543,7 @@ export default function OnboardingScreen({ navigation, route }) {
 
       case 'parentDone': return (
         <Q big h1={`${a.consent?.childName || 'Your child'} is set up`}
-          sub="You’ll receive their focus points after every lesson. Manage everything from your account." />
+          sub={`You’ll receive their focus points after every lesson. To get ${a.consent?.childName || 'them'} on their own phone, sign in and open Stats ▸ Links.`} />
       );
 
       case 'recap': return (
@@ -1727,7 +1727,7 @@ export default function OnboardingScreen({ navigation, route }) {
   const ctaLabel = step === 'age' && isMinor ? 'Continue with a parent'
     : step === 'minorParent' ? (a.editingInvite ? 'Update and resend' : 'Send invitation')
     : step === 'minorWaiting' ? (a.inviteStatus === 'withdrawn' || a.inviteClosed ? 'Start again'
-      : a.inviteStatus === 'approved' ? 'Go to sign in' : 'Check again')
+      : a.inviteStatus === 'approved' ? 'Enter the code' : 'Check again')
     : step === 'signupPhone' ? (a.smsId ? 'Verify' : 'Text me a code')
     : step === 'parentConsent' || step === 'signupConsent' ? 'Give permission'
     : step === 'parentAccount' ? 'Finish'
@@ -1762,8 +1762,8 @@ export default function OnboardingScreen({ navigation, route }) {
         return resetInvite();
       }
       if (a.inviteStatus !== 'approved') return refreshInvite();
-      clearPendingInvite();
-      return navigation.navigate('Login');
+      // The invitation is forgotten once the code signs this phone in.
+      return navigation.navigate('PairChild');
     }
     if (step === 'parentDone') return navigation.navigate('Login');
     if (step === 'account') return submit();

@@ -32,6 +32,7 @@ import { isGuardian, listChildren, setActiveChild } from '../storage/guardianSto
 import { createChildAccount } from '../services/childAccount';
 import { withdrawChild, getConsentCopy, sendPhoneCode, checkPhoneCode } from '../services/minorConsent';
 import ProfileDashboard from '../components/ProfileDashboard';
+import ChildPhoneCard from '../components/ChildPhoneCard';
 import ProfileSkeleton from '../components/ProfileSkeleton';
 import StudioPicker from '../components/StudioPicker';
 import { useFocusEffect } from '@react-navigation/native';
@@ -1773,6 +1774,7 @@ export default function ProfileScreen({ navigation, route }) {
           <TabHeader
             navigation={navigation}
             style={styles.header}
+            hideChildNudge={activeTab === 'links'}
             lead={(
               <StyleTitle
                 label={dashCat === 'ballroom' ? 'Ballroom' : 'Latin'}
@@ -1845,6 +1847,12 @@ export default function ProfileScreen({ navigation, route }) {
           >
             {activeTab === 'links' && (
               <View style={styles.tabBody}>
+                {isParent && children.length > 0 && (
+                  <>
+                    <SecLabel text={children.length > 1 ? 'Their phones' : 'Their phone'} />
+                    {children.map((c) => <ChildPhoneCard key={c.id} child={c} />)}
+                  </>
+                )}
                 <SecLabel text="Your coach" />
                 {isDual ? (
                   <>

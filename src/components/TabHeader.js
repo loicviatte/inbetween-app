@@ -10,6 +10,7 @@ import { getNotifications } from '../storage/notificationsStorage';
 import { locallyRespondedAttendance } from '../storage/attendanceState';
 import { supabase } from '../services/supabase/client';
 import AccountSheet from './AccountSheet';
+import ChildPhoneNudge from './ChildPhoneNudge';
 
 // A parent's account shows their child's training through the same screens,
 // so the header says, on every tab, whose account this is.
@@ -49,7 +50,7 @@ export function HeaderIconButton({ icon, onPress, on = false, badge = 0, label }
   );
 }
 
-export default function TabHeader({ navigation, onProfilePress, editMode = false, center = null, right = null, lead = null, style = null, actions = null }) {
+export default function TabHeader({ navigation, onProfilePress, editMode = false, center = null, right = null, lead = null, style = null, actions = null, hideChildNudge = false }) {
   const { avatarUri, initials: contextInitials } = useProfile();
 
   const [cachedPhoto, setCachedPhoto] = useState(null);
@@ -182,6 +183,8 @@ export default function TabHeader({ navigation, onProfilePress, editMode = false
         </TouchableOpacity>
       ))}
     </View>
+
+    {isParent && !hideChildNudge ? <ChildPhoneNudge navigation={navigation} /> : null}
 
     <AccountSheet visible={accountOpen} onClose={() => setAccountOpen(false)} />
     </View>

@@ -53,3 +53,6 @@ verify_jwt = false
 # API gateway returns 401 before the function code runs.
 [functions.assemblyai-webhook]
 verify_jwt = false
+
+[functions.child-pairing]
+verify_jwt = false

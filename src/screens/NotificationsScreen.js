@@ -73,6 +73,7 @@ const TYPE_META = {
   couple_request_received: { group: 'other', icon: 'people-outline' },
   couple_request_accepted: { group: 'other', icon: 'people-outline' },
   couple_paired:           { group: 'other', icon: 'heart-outline' },
+  child_phone_linked:      { group: 'other', icon: 'phone-portrait-outline', cta: 'See their phone' },
 };
 const DEFAULT_META = { group: 'other', icon: 'notifications-outline' };
 
@@ -328,6 +329,9 @@ export default function NotificationsScreen({ navigation }) {
       // actionable landing spot. (Was navigating to an unregistered
       // 'MergeReview' route → dead no-op.)
       navigation.navigate('TrainerReview');
+    } else if (notif.type === 'child_phone_linked') {
+      // A parent's account: the phone is managed from Stats ▸ Links.
+      navigation.navigate('MainTabs', { screen: 'PROFILE', params: { tab: 'links' } });
     } else if (notif.type === 'coach_request_received') {
       // CoachHomeScreen is the STUDENTS tab inside CoachMainTabs and surfaces
       // pending requests at the top of the list with accept/reject buttons.

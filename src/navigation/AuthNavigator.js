@@ -16,6 +16,11 @@ export default function AuthNavigator() {
         name="Login"
         getComponent={() => require('../screens/LoginScreen').default}
       />
+      {/* A child signing in on their own phone with a code from their parent */}
+      <AuthStack.Screen
+        name="PairChild"
+        getComponent={() => require('../screens/PairChildScreen').default}
+      />
       {/* kept registered: the form-first flow this replaced, and its welcome */}
       <AuthStack.Screen
         name="Welcome"
