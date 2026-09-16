@@ -25,6 +25,7 @@ import TabHeader, { useIsParentAccount } from '../components/TabHeader';
 import StyleTitle from '../components/StyleTitle';
 import { useTabBarSpace } from '../components/CustomTabBar';
 import MaskedView from '@react-native-masked-view/masked-view';
+import PullLogo from '../components/PullLogo';
 import { categoryFromStyle } from '../utils/danceCategory';
 import { saveUserPreferences, getAccountUser, saveAccountName, clearSubjectCache, invalidateCache } from '../storage/storage';
 import { isGuardian, listChildren, setActiveChild } from '../storage/guardianStorage';
@@ -1024,6 +1025,7 @@ export default function ProfileScreen({ navigation, route }) {
   const [dashRefreshKey, setDashRefreshKey] = useState(0);
   const isParent = useIsParentAccount();
   const tabBarSpace = useTabBarSpace();
+  const pullLogoRef = useRef(null);
   // A guardian account follows one child at a time; the rest of the app never
   // sees this, since getUserId() already resolves to whichever one is active.
   const [children, setChildren] = useState([]);
@@ -1921,6 +1923,15 @@ export default function ProfileScreen({ navigation, route }) {
               mask, since the page behind is a gradient, not a flat colour. The
               mask starts EDGE_FADE above its slot and the content starts
               EDGE_FADE lower, so at rest nothing sits in the fade. */}
+          {/* Pull to refresh draws the InBetween mark in the gap the pull opens,
+              behind the content (iOS; Android keeps its native spinner). */}
+          {Platform.OS === 'ios' ? (
+            <View style={styles.pullLogoAnchor} pointerEvents="none">
+              <View style={styles.pullLogo}>
+                <PullLogo ref={pullLogoRef} refreshing={refreshing} />
+              </View>
+            </View>
+          ) : null}
           <MaskedView
             style={[styles.content, { marginTop: -EDGE_FADE }]}
             maskElement={
@@ -1940,8 +1951,10 @@ export default function ProfileScreen({ navigation, route }) {
             contentContainerStyle={[styles.contentInner, { paddingTop: CONTENT_TOP + EDGE_FADE, paddingBottom: CONTENT_BOTTOM + tabBarSpace }]}
             showsVerticalScrollIndicator={false}
             overScrollMode="never"
+            scrollEventThrottle={16}
+            onScroll={Platform.OS === 'ios' ? (e) => pullLogoRef.current?.setProgress((-e.nativeEvent.contentOffset.y - 8) / 56) : undefined}
             refreshControl={
-              <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor="#8A6414" colors={['#E8B530']} />
+              <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={Platform.OS === 'ios' ? 'transparent' : '#8A6414'} colors={['#E8B530']} />
             }
           >
             {activeTab === 'links' && (
@@ -2477,6 +2490,9 @@ const styles = StyleSheet.create({
   // Same header rhythm as Train, so switching tabs doesn't shift it.
   // paddingBottom leaves room for the content's top fade to start below the buttons.
   header: { paddingTop: 6, paddingBottom: EDGE_FADE },
+  // Zero-height anchor under the header: the mark hangs in the pulled gap.
+  pullLogoAnchor: { height: 0, zIndex: 0 },
+  pullLogo: { position: 'absolute', top: 16, left: 0, right: 0, alignItems: 'center' },
 
   content: { flex: 1 },
   contentInner: {

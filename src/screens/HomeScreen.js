@@ -7,7 +7,7 @@ import {
   Animated,
   ScrollView,
   RefreshControl,
-  ActivityIndicator,
+  Platform,
   PanResponder,
   Dimensions,
   Easing,
@@ -22,6 +22,7 @@ import TabHeader, { useIsParentAccount } from '../components/TabHeader';
 import StyleTitle from '../components/StyleTitle';
 import { useTabBarSpace } from '../components/CustomTabBar';
 import ModeTabs, { COUPLE_BLUE } from '../components/ModeTabs';
+import PullLogo from '../components/PullLogo';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import { Fonts } from '../theme';
@@ -455,7 +456,8 @@ export default function HomeScreen({ navigation }) {
   const [contentH, setContentH] = useState(0);
   const overflow = viewportH > 0 && contentH > viewportH + 1;
   const pullY = useRef(new Animated.Value(0)).current;
-  const pullRef = useRef({ enabled: false, busy: false, armed: false, refresh: null });
+  const pullLogoRef = useRef(null);
+  const pullRef = useRef({ enabled: false, busy: false, armed: false, refresh: null, logo: pullLogoRef });
   pullRef.current.enabled = !overflow;
   const pullResponder = useRef(PanResponder.create({
     // Capture: a pull that starts on a card or a button is still a pull.
@@ -467,6 +469,7 @@ export default function HomeScreen({ navigation }) {
       const y = pullDamp(g.dy);
       pullY.setValue(y);
       const p = pullRef.current;
+      p.logo.current?.setProgress(y / PULL_TRIGGER);  // the mark draws itself as the page comes down
       if (!p.armed && y >= PULL_TRIGGER) {
         p.armed = true;
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
@@ -478,18 +481,24 @@ export default function HomeScreen({ navigation }) {
       const p = pullRef.current;
       p.armed = false;
       if (pullDamp(g.dy) < PULL_TRIGGER) {
-        Animated.spring(pullY, { toValue: 0, useNativeDriver: true, bounciness: 0, speed: 18 }).start();
+        Animated.spring(pullY, { toValue: 0, useNativeDriver: true, bounciness: 0, speed: 18 })
+          .start(() => p.logo.current?.setProgress(0));
         return;
       }
       p.busy = true;
       Animated.spring(pullY, { toValue: PULL_REST, useNativeDriver: true, bounciness: 0, speed: 18 }).start();
       Promise.resolve(p.refresh?.()).finally(() => {
-        Animated.timing(pullY, { toValue: 0, duration: 220, useNativeDriver: true }).start(() => { p.busy = false; });
+        Animated.timing(pullY, { toValue: 0, duration: 220, useNativeDriver: true }).start(() => {
+          p.busy = false;
+          p.logo.current?.setProgress(0);
+        });
       });
     },
     onPanResponderTerminate: () => {
-      pullRef.current.armed = false;
-      Animated.spring(pullY, { toValue: 0, useNativeDriver: true, bounciness: 0, speed: 18 }).start();
+      const p = pullRef.current;
+      p.armed = false;
+      Animated.spring(pullY, { toValue: 0, useNativeDriver: true, bounciness: 0, speed: 18 })
+        .start(() => p.logo.current?.setProgress(0));
     },
     onPanResponderTerminationRequest: () => false,
   })).current;
@@ -1270,12 +1279,18 @@ export default function HomeScreen({ navigation }) {
       />
 
       <View style={{ flex: 1 }} {...pullResponder.panHandlers}>
-      <Animated.View
-        style={[s.pullSpinner, { opacity: pullY.interpolate({ inputRange: [0, 24, PULL_TRIGGER], outputRange: [0, 0, 1], extrapolate: 'clamp' }) }]}
-        pointerEvents="none"
-      >
-        <ActivityIndicator color={GOLD_INK} />
-      </Animated.View>
+      {/* The InBetween mark: drawn by the pull, then a line runs round it while
+          Train reloads. When the page scrolls (small phones) the system pull
+          drives it through onScroll instead — iOS only; Android keeps its
+          native spinner there. */}
+      {!(overflow && Platform.OS === 'android') ? (
+        <Animated.View
+          style={[s.pullSpinner, overflow ? null : { opacity: pullY.interpolate({ inputRange: [0, 6], outputRange: [0, 1], extrapolate: 'clamp' }) }]}
+          pointerEvents="none"
+        >
+          <PullLogo ref={pullLogoRef} refreshing={refreshing} />
+        </Animated.View>
+      ) : null}
       <Animated.View style={{ flex: 1, transform: [{ translateY: pullY }] }}>
       <ScrollView
         style={{ flex: 1 }}
@@ -1284,8 +1299,10 @@ export default function HomeScreen({ navigation }) {
         scrollEnabled={overflow}
         onLayout={(e) => setViewportH(e.nativeEvent.layout.height)}
         onContentSizeChange={(_, h) => setContentH(h)}
+        scrollEventThrottle={16}
+        onScroll={overflow ? (e) => pullLogoRef.current?.setProgress(-e.nativeEvent.contentOffset.y / PULL_TRIGGER) : undefined}
         refreshControl={overflow ? (
-          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={GOLD_INK} colors={[GOLD]} />
+          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={Platform.OS === 'ios' ? 'transparent' : GOLD_INK} colors={[GOLD]} />
         ) : undefined}
       >
         <WeekRail
@@ -1415,7 +1432,7 @@ const s = StyleSheet.create({
   safe: { flex: 1, backgroundColor: 'transparent' },
   header: { paddingTop: 6, paddingBottom: 0 },
   tabs: { marginTop: 16, marginHorizontal: SIDE },
-  pullSpinner: { position: 'absolute', top: (PULL_REST - 20) / 2, left: 0, right: 0, alignItems: 'center' },
+  pullSpinner: { position: 'absolute', top: (PULL_REST - 27) / 2, left: 0, right: 0, alignItems: 'center' },
   scrollContent: { flexGrow: 1, paddingBottom: 14 },
   // The summary card sits at the foot of the screen when there's room, and
   // simply follows the cards when there isn't.
