@@ -18,7 +18,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput,
-  ActivityIndicator, KeyboardAvoidingView, Platform, Animated, Easing, Linking,
+  ActivityIndicator, KeyboardAvoidingView, Platform, Animated, Easing, Linking, Keyboard,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -547,6 +547,18 @@ export default function OnboardingScreen({ navigation }) {
 
   useEffect(() => { scroller.current?.scrollTo({ y: 0, animated: false }); }, [step]);
   useEffect(() => () => setOnboardingHold(false), []);
+
+  // While the keyboard is up it already covers the home indicator, so the
+  // footer drops that inset — and the line of explanation above the button,
+  // which would otherwise take the room the list needs.
+  const [keyboardUp, setKeyboardUp] = useState(false);
+  useEffect(() => {
+    const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvt = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const a1 = Keyboard.addListener(showEvt, () => setKeyboardUp(true));
+    const a2 = Keyboard.addListener(hideEvt, () => setKeyboardUp(false));
+    return () => { a1.remove(); a2.remove(); };
+  }, []);
 
   // A student who closed the app while waiting comes back to the wait, not to
   // a fresh onboarding that would create a second pending profile.
@@ -1521,8 +1533,11 @@ export default function OnboardingScreen({ navigation }) {
 
   return (
     <View style={[s.phone, { paddingTop: insets.top }]}>
+      {/* offset 0: RN pads by frame.y + height − (keyboard top − offset), and this
+          view's frame.y already includes the top inset — any offset became
+          empty space above the keyboard */}
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={insets.top}>
+        keyboardVerticalOffset={0}>
         {!['cardLive', 'focusLive', 'confirm', 'analysing', 'minorWaiting', 'parentDone'].includes(step) && <TopBar onBack={back} progress={progress} />}
         <ScreenIn step={step} dir={dir}>
           <ScrollView ref={scroller} contentContainerStyle={s.scroll} showsVerticalScrollIndicator={false}
@@ -1531,9 +1546,9 @@ export default function OnboardingScreen({ navigation }) {
           </ScrollView>
         </ScreenIn>
         {step !== 'analysing' && (
-          <View style={[s.foot, { paddingBottom: insets.bottom + 20 }]}>
+          <View style={[s.foot, { paddingBottom: keyboardUp ? 12 : insets.bottom + 20 }]}>
             <LinearGradient colors={['rgba(242,240,235,0)', T.screen]} style={s.footFade} pointerEvents="none" />
-            {!!whyLine && <Text style={s.why}>{whyLine}</Text>}
+            {!!whyLine && !keyboardUp && <Text style={s.why}>{whyLine}</Text>}
             <Cta label={ctaLabel} onPress={onCta} disabled={!gate} busy={busy} />
           </View>
         )}
