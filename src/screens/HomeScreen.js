@@ -559,6 +559,10 @@ function FocusCard({
   );
 }
 
+// The "This week" card at the top of Train — hidden for now to see the screen
+// without it. Untouched below: set this back to true to bring it back.
+const SHOW_THIS_WEEK = false;
+
 export default function HomeScreen({ navigation }) {
   // Computed per-render (not a module const) so it survives Fast Refresh and
   // reacts to the actual window — drives the compact Train layout on short phones.
@@ -1203,6 +1207,7 @@ export default function HomeScreen({ navigation }) {
       />
 
       {/* ── This Week — anchored at the top, right under the header ── */}
+      {SHOW_THIS_WEEK && (
       <View style={[w.card, SMALL_SCREEN && w.cardSmall]}>
         <View style={[w.head, SMALL_SCREEN && w.headSmall]}>
           <Text style={w.title}>This week</Text>
@@ -1240,6 +1245,7 @@ export default function HomeScreen({ navigation }) {
           <View style={w.stat}><Text style={w.statNum}>{focusTrainedThisWeek}</Text><Text style={w.statLbl}>Focus trained</Text></View>
         </View>
       </View>
+      )}
 
       {/* Swap the focus cards + "Get ready" dock for a skeleton while they load
           — either a not-yet-prefetched style toggle, or the very first load
