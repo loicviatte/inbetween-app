@@ -22,6 +22,7 @@
 // are not proof of anything.
 import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { TERMS_VERSION, consentCopy } from '../_shared/consentCopy.ts'
+import { inviteEmail } from './inviteEmail.ts'
 
 const INVITE_TTL_H = 72
 const TICKET_TTL_MIN = 30
@@ -34,8 +35,6 @@ const MAX_RESENDS = 5
 const SMS_ENABLED = true
 const MINOR_AGES = ['Juvenile', 'Junior', 'Youth']
 const MANAGED_DOMAIN = 'managed.useinbetween.com'
-// The only URL scheme the installed build registers (not `inbetween`).
-const APP_SCHEME = 'com.loicviatte.inbetweenapp'
 const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTVWXYZ23456789'   // no 0/O, 1/I/L, U
 
 type Row = Record<string, any>
@@ -103,12 +102,12 @@ async function toTelegram(text: string) {
   if (!r.ok) throw new Error(`telegram ${r.status}`)
 }
 
-async function sendEmail(mode: 'live' | 'test', to: string, subject: string, text: string) {
+async function sendEmail(mode: 'live' | 'test', to: string, subject: string, text: string, html?: string) {
   if (mode === 'test') return toTelegram(`🧪 TEST · email to ${maskEmail(to)}\n${subject}\n\n${text}`)
   const r = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: { Authorization: `Bearer ${Deno.env.get('RESEND_API_KEY')}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ from: Deno.env.get('CONSENT_EMAIL_FROM'), to: [to], subject, text }),
+    body: JSON.stringify({ from: Deno.env.get('CONSENT_EMAIL_FROM'), to: [to], subject, text, ...(html ? { html } : {}) }),
   })
   if (!r.ok) throw new Error(`resend ${r.status}: ${await r.text()}`)
 }
@@ -129,17 +128,14 @@ async function sendSms(mode: 'live' | 'test', to: string, body: string) {
 }
 
 async function deliverInvite(mode: 'live' | 'test', row: Row, token: string, code: string) {
-  const child = row.child_name, coach = row.coach_name
-  const text = [
-    `Hi ${row.parent_first_name},`, '',
-    `${child} wants to use InBetween${coach ? ` with their coach ${coach}` : ''}. Because ${child} is under 18, nothing is recorded until you approve.`, '',
-    'On your phone, open this link:', `${APP_SCHEME}://consent?token=${formatToken(token)}`, '',
-    'Or open the InBetween app, choose Parent, then "I have an invitation code", and enter:', formatToken(token), '',
-    ...(SMS_ENABLED ? ["We've also sent you a text message with a 6-digit code. You'll need both."] : []),
-    `This invitation expires in ${INVITE_TTL_H} hours.`,
-  ].join('\n')
-  await sendEmail(mode, row.parent_email, `${child} needs your permission on InBetween`, text)
-  if (SMS_ENABLED && row.parent_phone) await sendSms(mode, row.parent_phone,
+  const child = row.child_name
+  const smsSent = SMS_ENABLED && !!row.parent_phone
+  const mail = inviteEmail({
+    parentFirstName: row.parent_first_name, childName: child, coachName: row.coach_name,
+    code: formatToken(token), smsSent, ttlHours: INVITE_TTL_H,
+  })
+  await sendEmail(mode, row.parent_email, mail.subject, mail.text, mail.html)
+  if (smsSent) await sendSms(mode, row.parent_phone,
     `InBetween: your code to approve ${child}'s account is ${code}. It expires in ${INVITE_TTL_H} hours.`)
 }
 
@@ -570,7 +566,27 @@ async function copy(admin: SupabaseClient, b: Row) {
   return json({ copy: consentCopy(childName, coachName), termsVersion: TERMS_VERSION })
 }
 
+// The website's approval page calls this from the parent's browser, so the
+// rate limits see the parent's own IP rather than one shared server address.
+const WEB_ORIGINS = ['https://www.useinbetween.com', 'https://useinbetween.com']
+function corsFor(req: Request): Record<string, string> {
+  const origin = req.headers.get('Origin') || ''
+  const allowed = WEB_ORIGINS.includes(origin) || /^http:\/\/localhost:\d+$/.test(origin)
+  return allowed
+    ? { 'Access-Control-Allow-Origin': origin, 'Access-Control-Allow-Methods': 'POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'content-type, authorization, apikey, x-client-info', 'Vary': 'Origin' }
+    : {}
+}
+
 Deno.serve(async (req: Request) => {
+  const cors = corsFor(req)
+  if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors })
+  const res = await handle(req)
+  for (const [k, v] of Object.entries(cors)) res.headers.set(k, v)
+  return res
+})
+
+async function handle(req: Request): Promise<Response> {
   if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405)
   let body: Row
   try { body = await req.json() } catch { return json({ error: 'Invalid JSON' }, 400) }
@@ -595,4 +611,4 @@ Deno.serve(async (req: Request) => {
     console.error('[minor-consent]', body.action, e)
     return json({ error: 'Something went wrong. Try again in a moment.' }, 500)
   }
-})
+}
