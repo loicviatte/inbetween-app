@@ -58,7 +58,6 @@ set search_path = ''
 as $$
 declare
   v_consent text;
-  v_coach_name text;
 begin
   if not exists (select 1 from public.users where id = auth.uid() and role = 'coach') then
     raise exception 'Only a coach can do this.';
@@ -83,7 +82,6 @@ begin
     return 'adult';
   end if;
 
-  select name into v_coach_name from public.users where id = auth.uid();
   update public.users
      set age_check = 'minor_pending', consent_status = 'pending',
          age_check_by = auth.uid(), age_check_at = now()
@@ -91,8 +89,8 @@ begin
   insert into public.notifications (user_id, type, title, body, data)
   values (
     p_student, 'age_check_required', 'Confirm your age',
-    coalesce(split_part(v_coach_name, ' ', 1), 'Your coach') || ' says you''re under 18. Open InBetween to sort it out.',
-    jsonb_build_object('coach_id', auth.uid())
+    'We need to check your age. Open InBetween to sort it out.',
+    '{}'::jsonb
   );
   return 'minor_pending';
 end;

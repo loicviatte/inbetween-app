@@ -62,12 +62,8 @@ async function signedIn(admin: SupabaseClient, req: Request) {
 async function status(admin: SupabaseClient, req: Request) {
   const user = await signedIn(admin, req)
   if (!user) return json({ error: 'Sign in again.' }, 401)
-  const { data: me } = await admin.from('users').select('age_check, consent_status, age_check_by').eq('id', user.id).maybeSingle()
-  let coachName: string | null = null
-  if (me?.age_check_by) {
-    const { data: coach } = await admin.from('users').select('name').eq('id', me.age_check_by).maybeSingle()
-    coachName = firstName(coach?.name) || null
-  }
+  // Never who flagged the account: the student only learns their age is being checked.
+  const { data: me } = await admin.from('users').select('age_check, consent_status').eq('id', user.id).maybeSingle()
   const { data: inv } = await admin.from('parental_consents')
     .select('status, parent_first_name, parent_email, parent_phone, expires_at')
     .eq('child_id', user.id).order('created_at', { ascending: false }).limit(1).maybeSingle()
@@ -80,7 +76,6 @@ async function status(admin: SupabaseClient, req: Request) {
   return json({
     ageCheck: me?.age_check ?? null,
     consentStatus: me?.consent_status ?? null,
-    coachName,
     email: user.email?.endsWith('@managed.useinbetween.com') ? null : maskEmail(user.email || ''),
     invite,
   })
@@ -99,11 +94,6 @@ async function sendAdultLink(admin: SupabaseClient, req: Request) {
     return json({ error: 'We’ve sent a few already. Check your inbox and spam, or try again in an hour.' }, 429)
   }
 
-  let coachName = 'Your coach'
-  if (me.age_check_by) {
-    const { data: coach } = await admin.from('users').select('name').eq('id', me.age_check_by).maybeSingle()
-    coachName = firstName(coach?.name) || coachName
-  }
   await admin.from('age_confirm_tokens').delete().eq('user_id', user.id).is('used_at', null)
   const token = randomToken(40)
   const { error } = await admin.from('age_confirm_tokens').insert({
@@ -117,7 +107,7 @@ async function sendAdultLink(admin: SupabaseClient, req: Request) {
   const subject = 'Confirm you’re 18 or over'
   const text = [
     `Hi${name ? ` ${name}` : ''},`, '',
-    `${coachName} marked your InBetween account as under 18, so it’s locked for now.`, '',
+    'We think you might be under 18, so your InBetween account is locked for now.', '',
     'If you’re 18 or over, confirm it here:', link, '',
     'If you’re under 18, don’t use this link: open the app and ask a parent to approve instead.', '',
     `The link works once, for ${LINK_TTL_H} hours.`,
@@ -129,7 +119,7 @@ async function sendAdultLink(admin: SupabaseClient, req: Request) {
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:480px;">
 <tr><td style="padding:0 0 40px;"><img src="https://www.useinbetween.com/images/logo-lockup-white.png" width="150" alt="InBetween" style="display:block;width:150px;height:auto;border:0;"></td></tr>
 <tr><td style="${F}font-size:28px;line-height:34px;font-weight:700;letter-spacing:-0.4px;color:#F7F6F3;padding:0 0 14px;">Confirm you&rsquo;re 18 or over</td></tr>
-<tr><td style="${F}font-size:16px;line-height:25px;color:#B5B5B5;padding:0 0 30px;">${esc(coachName)} marked your InBetween account as under 18, so it&rsquo;s locked for now. If you&rsquo;re 18 or over, confirm it and your account unlocks.</td></tr>
+<tr><td style="${F}font-size:16px;line-height:25px;color:#B5B5B5;padding:0 0 30px;">We think you might be under 18, so your InBetween account is locked for now. If you&rsquo;re 18 or over, confirm it and your account unlocks.</td></tr>
 <tr><td style="padding:0 0 30px;"><a href="${esc(link)}" style="display:inline-block;background:#F0C24A;color:#000000;${F}font-size:16px;line-height:20px;font-weight:700;text-decoration:none;padding:16px 30px;border-radius:999px;">Confirm I&rsquo;m 18 or over</a></td></tr>
 <tr><td style="${F}font-size:14px;line-height:22px;color:#B5B5B5;padding:0 0 24px;">If you&rsquo;re under 18, don&rsquo;t use this link: open the app and ask a parent to approve instead.</td></tr>
 <tr><td style="${F}font-size:13px;line-height:20px;color:#8A8A8A;border-top:1px solid #1F1F1F;padding:22px 0 0;">The link works once, for ${LINK_TTL_H} hours.</td></tr>

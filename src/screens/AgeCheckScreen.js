@@ -34,8 +34,6 @@ export default function AgeCheckScreen() {
   const [error, setError] = useState('');
   const [note, setNote] = useState('');
 
-  const coach = info?.coachName || 'Your coach';
-
   async function load() {
     try {
       const r = await getAgeCheckStatus();
@@ -122,9 +120,9 @@ export default function AgeCheckScreen() {
 
           {stage === 'choose' && (
             <>
-              <Text style={styles.h1}>{coach} says you’re under 18</Text>
+              <Text style={styles.h1}>We think you might be under 18</Text>
               <Text style={styles.sub}>
-                Your account is locked until that’s sorted, and your lessons can’t be captured. Which is true?
+                Your account is locked until we’ve checked, and your lessons can’t be captured. Which is true?
               </Text>
               <Option
                 title="I’m 18 or over"
