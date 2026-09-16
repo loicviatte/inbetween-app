@@ -352,6 +352,9 @@ const LEAVE = ['Cleaner technique', 'More confidence', 'Better musicality',
   'Presence on the floor', 'Solid foundations', 'A competitor’s mindset'];
 const WHO = ['Beginners', 'Regular amateurs', 'Pro-Am', 'Competitors', 'Children', 'Social couples'];
 const AXES = ['Technique', 'Musicality', 'Mental', 'Performance'];
+const TERMS_URL = 'https://www.useinbetween.com/terms';
+const PRIVACY_URL = 'https://www.useinbetween.com/privacy';
+
 const DANCES = {
   Latin: ['Cha Cha', 'Rumba', 'Samba', 'Paso Doble', 'Jive'],
   Ballroom: ['Waltz', 'Tango', 'Foxtrot', 'Quickstep', 'Viennese Waltz'],
@@ -503,6 +506,12 @@ function Welcome({ onStart, onSignIn }) {
         <TouchableOpacity onPress={onSignIn} style={s.ghost} accessibilityRole="button">
           <Text style={[s.ghostT, s.ghostOnDark]}>I already have an account</Text>
         </TouchableOpacity>
+        <Text style={s.legal0}>
+          By continuing you agree to our{' '}
+          <Text style={s.legal0Link} onPress={() => Linking.openURL(TERMS_URL)} accessibilityRole="link">Terms</Text>
+          {' '}and{' '}
+          <Text style={s.legal0Link} onPress={() => Linking.openURL(PRIVACY_URL)} accessibilityRole="link">Privacy Policy</Text>.
+        </Text>
       </Rise>
     </View>
   );
@@ -1946,6 +1955,10 @@ const s = StyleSheet.create({
   fpB: { fontFamily: Fonts.ttDemiBold, fontSize: 16.5, lineHeight: 21, letterSpacing: -0.25, color: T.ink },
   fpS: { fontFamily: Fonts.travelsRegular, fontSize: 12.5, lineHeight: 18, color: T.ink2 },
   ghostOnDark: { color: T.onDark },
+  // ≥6:1 on the welcome's black; the links are underlined, not just lighter
+  legal0: { fontFamily: Fonts.travelsRegular, fontSize: 11.5, lineHeight: 17, color: 'rgba(255,255,255,0.56)',
+    textAlign: 'center', paddingHorizontal: 12 },
+  legal0Link: { color: 'rgba(255,255,255,0.86)', textDecorationLine: 'underline' },
 
   // ── screen 00 ──
   w0: { flex: 1, paddingHorizontal: 24, paddingBottom: 8 },
