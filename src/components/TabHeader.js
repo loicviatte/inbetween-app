@@ -9,6 +9,7 @@ import { useProfile } from '../context/ProfileContext';
 import { getNotifications } from '../storage/notificationsStorage';
 import { locallyRespondedAttendance } from '../storage/attendanceState';
 import { supabase } from '../services/supabase/client';
+import AccountSheet from './AccountSheet';
 
 // A parent's account shows their child's training through the same screens,
 // so the header says, on every tab, whose account this is.
@@ -108,13 +109,13 @@ export default function TabHeader({ navigation, onProfilePress, editMode = false
   const photoUri = avatarUri || cachedPhoto;
   const initials = contextInitials || cachedInitials || 'ME';
 
+  // The avatar opens the Account sheet (photo, name, email) right where you are.
+  const [accountOpen, setAccountOpen] = useState(false);
   function handleProfilePress() {
     if (onProfilePress) {
       onProfilePress();
     } else {
-      // Straight to the account (photo, name, email): Stats opens its Account
-      // sheet on this param. A fresh value each tap, so it opens every time.
-      navigation.navigate('PROFILE', { openAccount: Date.now() });
+      setAccountOpen(true);
     }
   }
 
@@ -182,6 +183,7 @@ export default function TabHeader({ navigation, onProfilePress, editMode = false
       ))}
     </View>
 
+    <AccountSheet visible={accountOpen} onClose={() => setAccountOpen(false)} />
     </View>
   );
 }

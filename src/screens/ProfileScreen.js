@@ -22,11 +22,12 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import Svg, { Circle } from 'react-native-svg';
 import TabHeader, { useIsParentAccount } from '../components/TabHeader';
 import StyleTitle from '../components/StyleTitle';
+import AccountSheet from '../components/AccountSheet';
 import { useTabBarSpace } from '../components/CustomTabBar';
 import MaskedView from '@react-native-masked-view/masked-view';
 import PullLogo, { usePullRefresh } from '../components/PullLogo';
 import { categoryFromStyle } from '../utils/danceCategory';
-import { saveUserPreferences, getAccountUser, saveAccountName, clearSubjectCache, invalidateCache } from '../storage/storage';
+import { saveUserPreferences, getAccountUser, clearSubjectCache, invalidateCache } from '../storage/storage';
 import { isGuardian, listChildren, setActiveChild } from '../storage/guardianStorage';
 import { createChildAccount } from '../services/childAccount';
 import { withdrawChild, getConsentCopy, sendPhoneCode, checkPhoneCode } from '../services/minorConsent';
@@ -34,7 +35,6 @@ import ProfileDashboard from '../components/ProfileDashboard';
 import ProfileSkeleton from '../components/ProfileSkeleton';
 import StudioPicker from '../components/StudioPicker';
 import { useFocusEffect } from '@react-navigation/native';
-import * as ImagePicker from 'expo-image-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Colors, Fonts, Spacing } from '../theme';
 import {
@@ -1054,8 +1054,7 @@ export default function ProfileScreen({ navigation, route }) {
   const [viewingQuestion, setViewingQuestion] = useState(null);
   const [questionsExpanded, setQuestionsExpanded] = useState(false);
   const [profileModal, setProfileModal] = useState(null); // 'account' | 'style' | 'studio' | null
-  const [editName, setEditName] = useState('');
-  const [editEmail, setEditEmail] = useState('');
+  const [accountOpen, setAccountOpen] = useState(false);
   const [editStudio, setEditStudio] = useState(null);
   const [editStyle, setEditStyle] = useState('');
   const [saving, setSaving] = useState(false);
@@ -1282,73 +1281,12 @@ export default function ProfileScreen({ navigation, route }) {
     init();
   }, []));
 
-  async function handlePickPhoto() {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') return;
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.8,
-      base64: true,
-    });
-    if (result.canceled || !result.assets[0]?.uri) return;
-
-    const asset = result.assets[0];
-    const localUri = asset.uri;
-    setPhotoUri(localUri);
-
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      const userId = session?.user?.id;
-      if (!userId) throw new Error('Not authenticated');
-
-      if (!asset.base64) throw new Error('No base64 data from picker');
-      const bin = global.atob(asset.base64);
-      const bytes = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-
-      const ext = (localUri.split('.').pop() || 'jpg').toLowerCase();
-      const contentType = ext === 'png' ? 'image/png' : 'image/jpeg';
-      const path = `${userId}/avatar.${ext}`;
-
-      const { error: uploadError } = await supabase.storage
-        .from('avatars')
-        .upload(path, bytes, { upsert: true, contentType });
-
-      if (uploadError) throw uploadError;
-
-      const { data: { publicUrl } } = supabase.storage
-        .from('avatars')
-        .getPublicUrl(path);
-
-      const urlWithCache = `${publicUrl}?t=${Date.now()}`;
-
-      await supabase.from('users').update({ avatar_url: publicUrl }).eq('id', userId);
-      await AsyncStorage.setItem(AVATAR_KEY, urlWithCache);
-      setPhotoUri(urlWithCache);
-    } catch (e) {
-      console.error('Avatar upload failed:', e);
-      await AsyncStorage.setItem(AVATAR_KEY, localUri);
-    }
-  }
-
   // Account — name + profile photo + email (TabHeader "Edit" + Settings ▸ Account)
   const me = account || user;          // the account, falling back to self
 
   function openEdit() {
-    setEditName(me?.name || '');
-    setEditEmail(me?.email || '');
-    setProfileModal('account');
+    setAccountOpen(true);
   }
-  // The avatar in any tab header lands here with { openAccount } — open the
-  // Account sheet once the account is loaded, then clear the param.
-  useEffect(() => {
-    if (!route?.params?.openAccount || !me) return;
-    openEdit();
-    navigation.setParams({ openAccount: undefined });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [route?.params?.openAccount, me?.id]);
   function openGoalModal() {
     setEditGoal(user?.weekly_goal_minutes ?? 60);
     setProfileModal('goal');
@@ -1431,36 +1369,6 @@ export default function ProfileScreen({ navigation, route }) {
   function openStudioModal() {
     setEditStudio(user?.studio || null);
     setProfileModal('studio');
-  }
-
-  async function handleSaveAccount() {
-    if (saving) return;
-    setSaving(true);
-    const name = editName.trim();
-    const newEmail = editEmail.trim();
-    try {
-      if (name && name !== user?.name) {
-        // The name on this sheet belongs to the account, not to the dancer.
-        if (account) { await saveAccountName(name); setAccount(prev => ({ ...prev, name })); }
-        else { await saveUserProfile({ name }); setUser(prev => ({ ...prev, name })); }
-        const ini = name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
-        setInitials(ini);
-        AsyncStorage.setItem('@profile_name', name).catch(() => {});
-      }
-      let emailNotice = false;
-      if (newEmail && newEmail.toLowerCase() !== (me?.email || '').toLowerCase()) {
-        const { error } = await supabase.auth.updateUser({ email: newEmail });
-        if (error) throw error;
-        emailNotice = true;
-      }
-      setProfileModal(null);
-      if (emailNotice) {
-        Alert.alert('Confirm your new email', `We sent a confirmation link to ${newEmail}. Your email updates once you tap it.`);
-      }
-    } catch (e) {
-      Alert.alert('Could not save', e.message || 'Please try again.');
-    }
-    setSaving(false);
   }
 
   async function handleSaveStyle() {
@@ -1769,10 +1677,6 @@ export default function ProfileScreen({ navigation, route }) {
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [user?.id, refetchPartner]);
-
-  const initials = user?.name
-    ? user.name.split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase()
-    : 'AL';
 
   // Strongest radar area — for the strengths-card footer + the larger vertex
   const strongestIdx = radarScores.reduce(
@@ -2156,53 +2060,19 @@ export default function ProfileScreen({ navigation, route }) {
           </ScrollView>
           </MaskedView>
 
-          {/* Account / Dance style / Dance studio — one sheet, focused per mode */}
+          {/* Account (photo, name, email) — the same sheet the header avatar opens. */}
+          <AccountSheet
+            visible={accountOpen}
+            onClose={() => setAccountOpen(false)}
+            onSaved={({ name }) => {
+              if (account) setAccount((prev) => ({ ...prev, name }));
+              else setUser((prev) => ({ ...prev, name }));
+            }}
+          />
+
+          {/* Dance style / Weekly goal / Dance studio — one sheet, focused per mode */}
           <BottomSheet visible={!!profileModal} onClose={() => setProfileModal(null)} sheetStyle={em.sheet} avoidKeyboard>
                   <View style={em.handle} />
-
-                  {profileModal === 'account' && (
-                    <>
-                      <Text style={em.title}>Account</Text>
-
-                      <TouchableOpacity style={em.avatarWrap} onPress={handlePickPhoto} activeOpacity={0.85}>
-                        {photoUri
-                          ? <Image source={{ uri: photoUri }} style={em.avatarPhoto} />
-                          : <View style={em.avatar}><Text style={em.avatarInitials}>{initials}</Text></View>
-                        }
-                        <View style={em.editBadge}><Text style={em.editIcon}>✎</Text></View>
-                      </TouchableOpacity>
-
-                      <View style={em.field}>
-                        <Text style={em.fieldLabel}>Name</Text>
-                        <TextInput
-                          style={em.input}
-                          value={editName}
-                          onChangeText={setEditName}
-                          placeholder="Your name"
-                          placeholderTextColor="rgba(17,12,17,0.3)"
-                          autoCorrect={false}
-                        />
-                      </View>
-
-                      <View style={em.field}>
-                        <Text style={em.fieldLabel}>Email</Text>
-                        <TextInput
-                          style={em.input}
-                          value={editEmail}
-                          onChangeText={setEditEmail}
-                          placeholder="you@email.com"
-                          placeholderTextColor="rgba(17,12,17,0.3)"
-                          autoCapitalize="none"
-                          autoCorrect={false}
-                          keyboardType="email-address"
-                        />
-                      </View>
-
-                      <TouchableOpacity style={em.saveBtn} onPress={handleSaveAccount} activeOpacity={0.88} disabled={saving}>
-                        <Text style={em.saveBtnText}>{saving ? 'Saving…' : 'Save'}</Text>
-                      </TouchableOpacity>
-                    </>
-                  )}
 
                   {profileModal === 'style' && (
                     <>
