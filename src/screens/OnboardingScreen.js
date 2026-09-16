@@ -387,6 +387,10 @@ const MINOR_FLOW = ['role', 'style', 'level', 'age', 'minorExplain', 'solo', 'le
 
 // The weekly target agreed here IS the goal the Trend view scores against, so
 // it is written to users.weekly_goal_minutes rather than staying in onboarding.
+// The stepper stops at 10, which means "10 or more": read back as 10+ wherever
+// it's shown. The value stored stays 10.
+const lessonsLabel = (n) => (n >= 10 ? '10+' : String(n));
+
 function weeklyTarget(a) {
   return Math.max(30, Math.round((a.solo * 30 + (a.lessons / 4.33) * 45) / 10) * 10);
 }
@@ -978,7 +982,7 @@ export default function OnboardingScreen({ navigation }) {
                 <Text style={s.rndT}>−</Text>
               </TouchableOpacity>
               <Animated.Text style={[s.countN, { transform: [{ scale: bump }] }]} allowFontScaling={false} numberOfLines={1}>
-                {a.lessons}
+                {lessonsLabel(a.lessons)}
               </Animated.Text>
               <TouchableOpacity style={[s.rnd, a.lessons === 10 && s.rndOff]} onPress={() => stepLessons(1)}
                 disabled={a.lessons === 10} accessibilityRole="button" accessibilityLabel="One more lesson">
@@ -986,7 +990,7 @@ export default function OnboardingScreen({ navigation }) {
               </TouchableOpacity>
             </View>
             <Text style={s.cons}>
-              <Text style={s.consB}>{a.lessons * 12}</Text> a year · 45 min each
+              <Text style={s.consB}>{a.lessons * 12}{a.lessons >= 10 ? '+' : ''}</Text> a year · 45 min each
             </Text>
             <Text style={s.cons}>Set it to zero if you only take group classes.</Text>
           </View>
@@ -1300,7 +1304,7 @@ export default function OnboardingScreen({ navigation }) {
               {!isCoach && <Row k="Level" v={a.level} onPress={() => go('level', -1)} />}
               {!isCoach && <Row k="Age" v={a.age} onPress={() => go('age', -1)} />}
               {!isCoach && <Row k="Solo" v={a.soloLabel} onPress={() => go('solo', -1)} />}
-              {!isCoach && <Row k="Lessons" v={`${a.lessons} a month`} onPress={() => go('lessons', -1)} />}
+              {!isCoach && <Row k="Lessons" v={`${lessonsLabel(a.lessons)} a month`} onPress={() => go('lessons', -1)} />}
               <Row k="Studio" v={a.studioName || 'Not connected'} onPress={() => go('studio', -1)} />
               {!isCoach && <Row k="Coach" v={a.coachName || (a.noCoach ? 'Not connected' : '—')} onPress={() => go('coach', -1)} />}
             </View>
@@ -1394,7 +1398,7 @@ export default function OnboardingScreen({ navigation }) {
               <View style={s.meter}><View style={s.meterFill} /></View>
               <Text style={s.pp}>
                 Built from <Text style={s.ppB}>{a.soloLabel.toLowerCase() || 'solo practice'}</Text> and{' '}
-                <Text style={s.ppB}>{a.lessons} private lesson{a.lessons === 1 ? '' : 's'}</Text> a month.
+                <Text style={s.ppB}>{lessonsLabel(a.lessons)} private lesson{a.lessons === 1 ? '' : 's'}</Text> a month.
               </Text>
             </View>
           </Rise>
