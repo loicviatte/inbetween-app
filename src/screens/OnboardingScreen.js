@@ -977,7 +977,7 @@ export default function OnboardingScreen({ navigation }) {
                 disabled={a.lessons === 0} accessibilityRole="button" accessibilityLabel="One fewer lesson">
                 <Text style={s.rndT}>−</Text>
               </TouchableOpacity>
-              <Animated.Text style={[s.countN, { transform: [{ scale: bump }] }]} allowFontScaling={false}>
+              <Animated.Text style={[s.countN, { transform: [{ scale: bump }] }]} allowFontScaling={false} numberOfLines={1}>
                 {a.lessons}
               </Animated.Text>
               <TouchableOpacity style={[s.rnd, a.lessons === 10 && s.rndOff]} onPress={() => stepLessons(1)}
@@ -1718,7 +1718,7 @@ const s = StyleSheet.create({
   rndOff: { opacity: 0.4 },
   rndT: { fontFamily: Fonts.travelsRegular, fontSize: 26, lineHeight: 32, color: T.ink },
   countN: { fontFamily: Fonts.ttExtraBold, fontSize: 88, letterSpacing: -4.4, color: T.ink,
-    width: 116, textAlign: 'center', includeFontPadding: false },
+    minWidth: 116, textAlign: 'center', includeFontPadding: false },
   cons: { fontFamily: Fonts.travelsRegular, fontSize: 14, lineHeight: 20, color: T.ink2, textAlign: 'center' },
   consB: { fontFamily: Fonts.ttDemiBold, color: T.ink },
 
