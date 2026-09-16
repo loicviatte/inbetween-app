@@ -82,12 +82,13 @@ const haptic = () => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catc
 // @keyframes rise{from{opacity:0;transform:translateY(12px)}} .5s var(--out)
 // The comp stages a screen's content with nth-child delays; `delay` carries the
 // same numbers so the order of arrival is identical.
-function Rise({ delay = 0, duration = 500, style, children }) {
-  const v = useRef(new Animated.Value(0)).current;
+function Rise({ delay = 0, duration = 500, instant = false, style, children }) {
+  const v = useRef(new Animated.Value(instant ? 1 : 0)).current;
   useEffect(() => {
+    if (instant) { v.setValue(1); return; }
     v.setValue(0);
     Animated.timing(v, { toValue: 1, duration, delay: delay * 1000, easing: OUT, useNativeDriver: true }).start();
-  }, [v, delay, duration]);
+  }, [v, delay, duration, instant]);
   return (
     <Animated.View style={[style, { opacity: v, transform: [{ translateY: v.interpolate({ inputRange: [0, 1], outputRange: [12, 0] }) }] }]}>
       {children}
@@ -398,13 +399,28 @@ function weeklyTarget(a) {
 // ── screen 00 · welcome ─────────────────────────────────────────────────────
 // The comp's one fully authored moment: the gap between two lessons drawn as a
 // rail that fills, then the headline rising line by line out of its own mask.
+// The entrance is for the first sight of the app, not for every return to this
+// screen: once it has played, coming back (Back from the role step, signing out)
+// shows the finished frame. Module scope, so it plays again only after the app
+// process is killed.
+let welcomePlayed = false;
+
 function Welcome({ onStart, onSignIn }) {
-  const fill = useRef(new Animated.Value(0)).current;      // .rail .fill + .spark
-  const lit = useRef(new Animated.Value(0)).current;       // .rail .d.b
+  const [instant] = useState(() => welcomePlayed);
+  const fill = useRef(new Animated.Value(instant ? 1 : 0)).current;      // .rail .fill + .spark
+  const lit = useRef(new Animated.Value(instant ? 1 : 0)).current;       // .rail .d.b
   const drift = useRef(new Animated.Value(0)).current;     // .glow
   const [railW, setRailW] = useState(0);
 
   useEffect(() => {
+    welcomePlayed = true;
+    // the ambient drift is not part of the entrance, so it always runs
+    const loop = Animated.loop(Animated.sequence([
+      Animated.timing(drift, { toValue: 1, duration: 12000, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+      Animated.timing(drift, { toValue: 0, duration: 12000, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+    ]));
+    loop.start();
+    if (instant) return () => loop.stop();
     Animated.sequence([
       Animated.delay(420),
       Animated.timing(fill, { toValue: 1, duration: 900, easing: OUT, useNativeDriver: false }),
@@ -413,13 +429,8 @@ function Welcome({ onStart, onSignIn }) {
       Animated.delay(1300),
       Animated.timing(lit, { toValue: 1, duration: 400, easing: OUT, useNativeDriver: false }),
     ]).start();
-    const loop = Animated.loop(Animated.sequence([
-      Animated.timing(drift, { toValue: 1, duration: 12000, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-      Animated.timing(drift, { toValue: 0, duration: 12000, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-    ]));
-    loop.start();
     return () => loop.stop();
-  }, [fill, lit, drift]);
+  }, [fill, lit, drift, instant]);
 
   return (
     <View style={s.w0}>
@@ -443,10 +454,10 @@ function Welcome({ onStart, onSignIn }) {
         </Svg>
       </Animated.View>
 
-      <Rise delay={0.05} duration={700}><Text style={s.wordmark}>InBetween</Text></Rise>
+      <Rise delay={0.05} duration={700} instant={instant}><Text style={s.wordmark}>InBetween</Text></Rise>
 
       <View style={s.mass}>
-        <Rise delay={0.18} duration={600} style={s.span}>
+        <Rise delay={0.18} duration={600} style={s.span} instant={instant}>
           <View style={s.ends}>
             <Text style={s.endT}>Tue · lesson</Text>
             <Text style={s.endT}>Sat · lesson</Text>
@@ -465,23 +476,23 @@ function Welcome({ onStart, onSignIn }) {
               backgroundColor: lit.interpolate({ inputRange: [0, 1], outputRange: ['rgba(255,255,255,0.28)', T.gold] }),
             }]} />
           </View>
-          <Rise delay={0.9}><Text style={s.mid}>96 hours on your own</Text></Rise>
+          <Rise delay={0.9} instant={instant}><Text style={s.mid}>96 hours on your own</Text></Rise>
         </Rise>
 
         {/* @keyframes lineup — each line climbs out of its own overflow mask */}
         <View>
-          <LineUp delay={1.05}>The lesson ends.</LineUp>
-          <LineUp delay={1.17}>The work doesn’t.</LineUp>
+          <LineUp delay={1.05} instant={instant}>The lesson ends.</LineUp>
+          <LineUp delay={1.17} instant={instant}>The work doesn’t.</LineUp>
         </View>
 
-        <Rise delay={1.45} duration={600}>
+        <Rise delay={1.45} duration={600} instant={instant}>
           <Text style={s.w0p}>
             Every correction your coach gives you, kept — and turned into what you practise tonight.
           </Text>
         </Rise>
       </View>
 
-      <Rise delay={1.6} duration={600} style={s.acts0}>
+      <Rise delay={1.6} duration={600} style={s.acts0} instant={instant}>
         <Cta label="Start" onPress={onStart} />
         <TouchableOpacity onPress={onSignIn} style={s.ghost} accessibilityRole="button">
           <Text style={[s.ghostT, s.ghostOnDark]}>I already have an account</Text>
@@ -491,14 +502,27 @@ function Welcome({ onStart, onSignIn }) {
   );
 }
 
-function LineUp({ delay, children }) {
-  const v = useRef(new Animated.Value(0)).current;
+// Each sentence is one line that climbs out of its own mask. On two lines the
+// first was already inside the mask before the climb began — so each line is
+// held to one (the font shrinks to fit, as the comp's lines never wrap) and
+// starts exactly its own measured height below the mask.
+function LineUp({ delay, instant = false, children }) {
+  const v = useRef(new Animated.Value(instant ? 1 : 0)).current;
+  const [h, setH] = useState(0);
   useEffect(() => {
+    if (instant) { v.setValue(1); return; }
+    if (!h) return;
     Animated.timing(v, { toValue: 1, duration: 700, delay: delay * 1000, easing: OUT, useNativeDriver: true }).start();
-  }, [v, delay]);
+  }, [v, delay, instant, h]);
   return (
     <View style={s.lineMask}>
-      <Animated.Text style={[s.w0h2, { transform: [{ translateY: v.interpolate({ inputRange: [0, 1], outputRange: [46, 0] }) }] }]}>
+      <Animated.Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.6}
+        onLayout={(e) => { if (!h) setH(e.nativeEvent.layout.height); }}
+        style={[s.w0h2, {
+          // hidden until measured, so nothing shows before it has a place to start from
+          opacity: instant || h ? 1 : 0,
+          transform: [{ translateY: v.interpolate({ inputRange: [0, 1], outputRange: [Math.ceil(h * 1.05) || 60, 0] }) }],
+        }]}>
         {children}
       </Animated.Text>
     </View>
