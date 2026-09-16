@@ -157,7 +157,7 @@ export default function AgeCheckScreen() {
           {stage === 'choose' && (
             <>
               <Text style={styles.h1}>We need to confirm your age</Text>
-              <Text style={styles.sub}>Your coach indicated you may be under 18.</Text>
+              <Text style={styles.sub}>Our safety checks flagged that you may be under 18.</Text>
               {/* Once the coach has looked again and kept their answer, only the
                   other two ways are left. */}
               {info?.coachReview !== 'rejected' && (
