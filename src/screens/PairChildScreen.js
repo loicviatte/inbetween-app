@@ -4,11 +4,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet, KeyboardAvoidingView, Platform,
-  ActivityIndicator, ScrollView, Pressable,
+  ActivityIndicator, ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Haptics from 'expo-haptics';
+import * as Clipboard from 'expo-clipboard';
 import { Fonts, Spacing, Onboard } from '../theme';
 import { signInWithPairingCode } from '../services/childPairing';
 import { registerPushToken } from '../services/notifications';
@@ -45,6 +46,28 @@ export default function PairChildScreen({ navigation }) {
     }
   }
 
+  function take(text) {
+    const v = clean(text);
+    setCode(v);
+    if (error) setError('');
+    if (v.length === LEN) submit(v);
+  }
+
+  // Long-pressing the boxes offers the system Paste; this is the obvious way.
+  async function pasteCode() {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    try {
+      const text = await Clipboard.getStringAsync();
+      if (clean(text || '').length !== LEN) {
+        setError('There’s no 6-character code to paste. Copy it again, or type it.');
+        return;
+      }
+      take(text);
+    } catch {
+      setError('We couldn’t paste. Type the code instead.');
+    }
+  }
+
   const boxes = Array.from({ length: LEN }, (_, i) => code[i] || '');
 
   return (
@@ -65,8 +88,9 @@ export default function PairChildScreen({ navigation }) {
             They get it in their InBetween app: <Text style={styles.subStrong}>Stats ▸ Links ▸ Get a code</Text>. It works once, for 10 minutes.
           </Text>
 
-          {/* One real input behind six boxes: paste, autofill and delete all behave. */}
-          <Pressable style={styles.boxes} onPress={() => input.current?.focus()} accessibilityRole="none">
+          {/* One real input laid over six boxes: typing, deleting, autofill and the
+              long-press Paste menu all land in it. */}
+          <View style={styles.boxes}>
             {boxes.map((ch, i) => {
               const current = focused && (i === code.length || (i === LEN - 1 && code.length === LEN));
               return (
@@ -78,12 +102,7 @@ export default function PairChildScreen({ navigation }) {
             <TextInput
               ref={input}
               value={code}
-              onChangeText={(t) => {
-                const v = clean(t);
-                setCode(v);
-                if (error) setError('');
-                if (v.length === LEN) submit(v);
-              }}
+              onChangeText={take}
               onFocus={() => setFocused(true)}
               onBlur={() => setFocused(false)}
               autoCapitalize="characters"
@@ -91,12 +110,17 @@ export default function PairChildScreen({ navigation }) {
               autoComplete="one-time-code"
               textContentType="oneTimeCode"
               keyboardType={Platform.OS === 'ios' ? 'ascii-capable' : 'visible-password'}
-              maxLength={LEN + 2}
               caretHidden
-              style={styles.hiddenInput}
+              selectionColor="transparent"
+              style={styles.overlayInput}
               accessibilityLabel="Code from your parent, 6 characters"
             />
-          </Pressable>
+          </View>
+
+          <TouchableOpacity style={styles.paste} onPress={pasteCode} activeOpacity={0.7} accessibilityRole="button" hitSlop={8}>
+            <Ionicons name="clipboard-outline" size={15} color={Onboard.goldInk} />
+            <Text style={styles.pasteT}>Paste code</Text>
+          </TouchableOpacity>
 
           {!!error && <Text style={styles.error}>{error}</Text>}
 
@@ -138,7 +162,9 @@ const styles = StyleSheet.create({
   boxOn: { borderColor: Onboard.gold, borderWidth: 2 },
   boxErr: { borderColor: '#A3281B' },
   boxT: { fontFamily: Fonts.ttBold, fontSize: 24, color: Onboard.ink },
-  hiddenInput: { position: 'absolute', width: 1, height: 1, opacity: 0 },
+  overlayInput: { ...StyleSheet.absoluteFillObject, color: 'transparent', backgroundColor: 'transparent', fontSize: 1 },
+  paste: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, alignSelf: 'center', marginTop: 16, paddingVertical: 6, paddingHorizontal: 10 },
+  pasteT: { fontFamily: Fonts.ttDemiBold, fontSize: 14, color: Onboard.goldInk },
 
   error: { fontFamily: Fonts.travelsMedium, fontSize: 13, lineHeight: 18, color: '#A3281B', textAlign: 'center', marginTop: 14 },
   spacer: { flex: 1, minHeight: 24 },
