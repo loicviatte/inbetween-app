@@ -9,6 +9,7 @@ import {
   View, Text, TouchableOpacity, StyleSheet, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator, AppState,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Image } from 'expo-image';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
@@ -28,7 +29,8 @@ const EMAIL_OK = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 const haptic = () => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
 
 export default function AgeCheckScreen() {
-  const [stage, setStage] = useState('loading');   // loading | choose | proof | parentForm | parentSent
+  const [stage, setStage] = useState('loading');   // loading | choose | proof | proofPreview | parentForm | parentSent
+  const [photo, setPhoto] = useState(null);         // { uri, base64, mimeType, fromCamera } before it's sent
   const [info, setInfo] = useState(null);
   const [parent, setParent] = useState({ first: '', email: '', phone: '', country: DEFAULT_COUNTRY });
   const [busy, setBusy] = useState(null);           // which action is running
@@ -68,7 +70,8 @@ export default function AgeCheckScreen() {
     }
   }
 
-  async function sendProof(fromCamera) {
+  // Take or pick the photo, then look at it before it goes anywhere.
+  async function pickProof(fromCamera) {
     if (busy) return;
     haptic();
     setError(''); setNote('');
@@ -82,9 +85,18 @@ export default function AgeCheckScreen() {
     const opts = { mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.7, base64: true, exif: false };
     const result = fromCamera ? await ImagePicker.launchCameraAsync(opts) : await ImagePicker.launchImageLibraryAsync(opts);
     if (result.canceled || !result.assets?.[0]?.base64) return;
-    setBusy('proof');
+    const a = result.assets[0];
+    setPhoto({ uri: a.uri, base64: a.base64, mimeType: a.mimeType || 'image/jpeg', fromCamera });
+    setStage('proofPreview');
+  }
+
+  async function sendProof() {
+    if (busy || !photo) return;
+    haptic();
+    setBusy('proof'); setError(''); setNote('');
     try {
-      await submitProofOfAge({ base64: result.assets[0].base64, mimeType: result.assets[0].mimeType || 'image/jpeg' });
+      await submitProofOfAge({ base64: photo.base64, mimeType: photo.mimeType });
+      setPhoto(null);
       await load();
       setStage('choose');
       setNote('Sent. We’ll check it shortly, then delete it.');
@@ -203,6 +215,14 @@ export default function AgeCheckScreen() {
             </>
           )}
 
+          {stage === 'proofPreview' && photo && (
+            <>
+              <Text style={styles.h1}>Can you read your date of birth?</Text>
+              <Text style={styles.sub}>Check it’s sharp and nothing else you’d rather keep private is showing.</Text>
+              <Image source={{ uri: photo.uri }} style={styles.preview} contentFit="contain" accessibilityLabel="Your photo" />
+            </>
+          )}
+
           {stage === 'parentForm' && (
             <>
               <Text style={styles.h1}>Who’s your parent or guardian?</Text>
@@ -240,11 +260,21 @@ export default function AgeCheckScreen() {
 
           {stage === 'proof' && (
             <>
-              <TouchableOpacity style={styles.primary} onPress={() => sendProof(true)} disabled={!!busy} activeOpacity={0.85} accessibilityRole="button">
-                {busy === 'proof' ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.primaryT}>Take a photo</Text>}
+              <TouchableOpacity style={styles.primary} onPress={() => pickProof(true)} disabled={!!busy} activeOpacity={0.85} accessibilityRole="button">
+                <Text style={styles.primaryT}>Take a photo</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.secondary} onPress={() => sendProof(false)} disabled={!!busy} activeOpacity={0.85} accessibilityRole="button">
+              <TouchableOpacity style={styles.secondary} onPress={() => pickProof(false)} disabled={!!busy} activeOpacity={0.85} accessibilityRole="button">
                 <Text style={styles.secondaryT}>Choose a photo</Text>
+              </TouchableOpacity>
+            </>
+          )}
+          {stage === 'proofPreview' && (
+            <>
+              <TouchableOpacity style={styles.primary} onPress={sendProof} disabled={!!busy} activeOpacity={0.85} accessibilityRole="button">
+                {busy === 'proof' ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.primaryT}>Send</Text>}
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.secondary} onPress={() => pickProof(!!photo?.fromCamera)} disabled={!!busy} activeOpacity={0.85} accessibilityRole="button">
+                <Text style={styles.secondaryT}>{photo?.fromCamera ? 'Retake' : 'Choose another'}</Text>
               </TouchableOpacity>
             </>
           )}
@@ -258,7 +288,7 @@ export default function AgeCheckScreen() {
               <Text style={styles.linkT}>Log out</Text>
             </TouchableOpacity>
           ) : (
-            <TouchableOpacity style={styles.link} onPress={() => go('choose')} accessibilityRole="button">
+            <TouchableOpacity style={styles.link} onPress={() => { setPhoto(null); go(stage === 'proofPreview' ? 'proof' : 'choose'); }} accessibilityRole="button">
               <Text style={styles.linkT}>Back</Text>
             </TouchableOpacity>
           )}
@@ -309,6 +339,7 @@ const styles = StyleSheet.create({
   promise: { backgroundColor: Onboard.card, borderRadius: 14, borderWidth: 1, borderColor: Onboard.line, padding: 16, gap: 14 },
   promiseRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   promiseT: { flex: 1, fontFamily: Fonts.ttDemiBold, fontSize: 15, lineHeight: 20, color: Onboard.ink },
+  preview: { width: '100%', height: 300, borderRadius: 14, backgroundColor: '#0A0A0A' },
   fields: { gap: 13 },
   acts: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   small: { borderWidth: 1, borderColor: 'rgba(10,10,10,0.22)', borderRadius: 999, paddingVertical: 10, paddingHorizontal: 15 },
