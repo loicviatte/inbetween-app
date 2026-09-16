@@ -9,11 +9,9 @@ import { getNotifications, markAllNotificationsRead, deleteNotification } from '
 import { supabase } from '../services/supabase/client';
 import { readCachedRole } from '../services/auth/role';
 import { locallyRespondedAttendance, locallyResolvedNameMatches } from '../storage/attendanceState';
-import { respondToAttendance, getUser } from '../storage/storage';
+import { respondToAttendance } from '../storage/storage';
 import { GenericListSkeleton } from '../components/Skeleton';
 import NotificationDetailSheet from '../components/NotificationDetailSheet';
-import TabHeader, { useIsParentAccount } from '../components/TabHeader';
-import StyleTitle from '../components/StyleTitle';
 import PullLogo, { usePullRefresh } from '../components/PullLogo';
 
 // ─── Notifications (docs/design/notifications-list.html) ──────────────────────
@@ -232,7 +230,6 @@ const swipeStyles = StyleSheet.create({
 
 export default function NotificationsScreen({ navigation }) {
   const insets = useSafeAreaInsets();
-  const isParent = useIsParentAccount();
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -244,10 +241,9 @@ export default function NotificationsScreen({ navigation }) {
   // marked read in the background) until "Mark all read".
   const [unreadIds, setUnreadIds] = useState(new Set());
   const [filter, setFilter] = useState('all'); // 'all' | 'coach' | 'class'
-  // Header + "From <coach>" tab: who's reading (a coach gets a plain header).
+  // Who's reading: the second tab is "From <coach>" for a dancer, "Students"
+  // for a coach (who also has no settings button).
   const [isCoach, setIsCoach] = useState(false);
-  const [dancer, setDancer] = useState(null);
-  const [partnerName, setPartnerName] = useState(null);
   const [coachName, setCoachName] = useState(null);
 
   const scrollRef = useRef(null);
@@ -391,17 +387,14 @@ export default function NotificationsScreen({ navigation }) {
       setLoading(false);
       setTimeout(() => markAllNotificationsRead(), 2000);
     })();
-    // Who's reading: a coach, or a dancer (their style, names, coach).
+    // Who's reading: a coach, or a dancer (and their coach's name).
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       const role = await readCachedRole(session).catch(() => null);
       if (role === 'coach') { setIsCoach(true); return; }
-      getUser().then((u) => u && setDancer(u)).catch(() => {});
-      AsyncStorage.multiGet(['@cache_profile', '@cache_home_couple']).then(([[, profile], [, couple]]) => {
+      AsyncStorage.getItem('@cache_profile').then((profile) => {
         const p = profile && JSON.parse(profile);
         const coach = p?.myCoach?.name || p?.latinCoach?.name || p?.ballroomCoach?.name;
         if (coach) setCoachName(coach);
-        const partner = couple && JSON.parse(couple)?.couple?.partner?.name;
-        if (partner) setPartnerName(partner);
       }).catch(() => {});
     }).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -434,14 +427,6 @@ export default function NotificationsScreen({ navigation }) {
     if (!groups.length || groups[groups.length - 1].title !== g) groups.push({ title: g, items: [] });
     groups[groups.length - 1].items.push(n);
   }
-
-  const dancerStyle = dancer?.dance_style || '';
-  const styleLabel = dancerStyle.includes('Latin') && dancerStyle.includes('Ballroom') ? 'Latin & Ballroom'
-    : dancerStyle.includes('Ballroom') ? 'Ballroom'
-    : dancerStyle.includes('Latin') ? 'Latin'
-    : 'Notifications';
-  const dancers = [firstName(dancer?.name), firstName(partnerName)].filter(Boolean).join(' & ');
-  const headerSub = [dancers, isParent ? 'parent’s account' : null].filter(Boolean).join(' · ') || null;
 
   function renderRow(notif, index) {
     const meta = TYPE_META[notif.type] || DEFAULT_META;
@@ -514,24 +499,18 @@ export default function NotificationsScreen({ navigation }) {
   return (
     <View style={{ flex: 1, backgroundColor: PAGE }}>
       <SafeAreaView style={{ flex: 1 }} edges={['top', 'left', 'right']}>
-        {isCoach ? (
-          <TabHeader
-            navigation={navigation}
-            style={st.header}
-            onBack={() => navigation.goBack()}
-            right={<View style={{ width: 36 }} />}
-          />
-        ) : (
-          <TabHeader
-            navigation={navigation}
-            style={st.header}
-            bellActive
-            lead={<StyleTitle label={styleLabel} sub={headerSub} />}
-          />
-        )}
-
+        {/* Just the way back and the page's name. */}
         <View style={st.titleRow}>
-          <Text style={st.pageTitle}>Notifications</Text>
+          <TouchableOpacity
+            style={st.back}
+            onPress={() => navigation.goBack()}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel="Back"
+          >
+            <Ionicons name="chevron-back" size={19} color={INK} />
+          </TouchableOpacity>
+          <Text style={st.pageTitle} numberOfLines={1}>Notifications</Text>
           <TouchableOpacity onPress={markAllRead} disabled={unreadCount === 0} hitSlop={{ top: 10, bottom: 10, left: 10 }}>
             <Text style={[st.markAll, unreadCount === 0 && { color: INK_34 }]}>Mark all read</Text>
           </TouchableOpacity>
@@ -637,11 +616,12 @@ export default function NotificationsScreen({ navigation }) {
 }
 
 const st = StyleSheet.create({
-  header: { paddingTop: 6, paddingBottom: 0 },
-  titleRow: { flexDirection: 'row', alignItems: 'baseline', gap: 12, paddingTop: 18, paddingHorizontal: SIDE },
-  pageTitle: { flex: 1, fontFamily: Fonts.ttBold, fontSize: 27, letterSpacing: -0.95, lineHeight: 30, color: INK },
+  // Same height and place as the tab headers' first row.
+  titleRow: { flexDirection: 'row', alignItems: 'center', gap: 11, paddingTop: 6, paddingHorizontal: SIDE },
+  back: { width: 36, height: 36, borderRadius: 11, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center', shadowColor: INK, shadowOpacity: 0.07, shadowOffset: { width: 0, height: 1 }, shadowRadius: 2, elevation: 1 },
+  pageTitle: { flex: 1, fontFamily: Fonts.ttBold, fontSize: 24, letterSpacing: -0.84, lineHeight: 28, color: INK },
   markAll: { fontFamily: Fonts.ttDemiBold, fontSize: 12, color: GOLD_INK },
-  tabs: { flexDirection: 'row', alignItems: 'flex-end', gap: 22, marginTop: 14, marginHorizontal: SIDE, borderBottomWidth: 1, borderBottomColor: LINE },
+  tabs: { flexDirection: 'row', alignItems: 'flex-end', gap: 22, marginTop: 20, marginHorizontal: SIDE, borderBottomWidth: 1, borderBottomColor: LINE },
   tab: { paddingBottom: 9, marginBottom: -1, borderBottomWidth: 2, borderBottomColor: 'transparent', flexShrink: 1 },
   tabOn: { borderBottomColor: GOLD },
   tabLabel: { fontFamily: Fonts.ttDemiBold, fontSize: 15, letterSpacing: -0.3, color: INK_65 },
