@@ -33,6 +33,7 @@ import { filterStudios, hasExactMatch } from '../utils/studioMatch';
 import { setOnboardingHold } from '../utils/onboardingHold';
 import { recallToFocusPoints, saveOnboardingFocusPoints } from '../services/ai/onboardingRecall';
 import { createChildAccount } from '../services/childAccount';
+import { clearSubjectCache, invalidateCache } from '../storage/storage';
 import { COUNTRIES, DEFAULT_COUNTRY, countryByIso, toE164, splitE164 } from '../utils/phone';
 import {
   saveCoachCard, slugify, essenceFrom, howITeachFrom, myMethodFrom, credentialFrom,
@@ -1048,7 +1049,9 @@ export default function OnboardingScreen({ navigation, route }) {
   // session.
   async function submit() {
     setBusy(true); setError('');
-    if ((isCoach && COACH_CARD_ONBOARDING) || a.focus.length) setOnboardingHold(true);
+    // A parent's child is created after the account: hold the swap to the app
+    // until it exists, or the app opens on the parent's own empty profile.
+    if ((isCoach && COACH_CARD_ONBOARDING) || a.focus.length || isParent) setOnboardingHold(true);
     const dbRole = isCoach ? 'coach' : 'student';
     const metadata = { name: a.name.trim(), role: dbRole, dance_style: a.style };
     if (isParent) metadata.account_for = 'child';
@@ -1114,6 +1117,10 @@ export default function OnboardingScreen({ navigation, route }) {
           setError(childErr);
           return;
         }
+        // Anything that read "whose training is this" before the child existed
+        // answered "the parent's own".
+        clearSubjectCache();
+        invalidateCache();
       } else if (!isCoach) {
         const { error: stuErr } = await supabase.from('users').update({
           lessons_per_month: a.lessons, solo_practice_frequency: a.soloLabel,

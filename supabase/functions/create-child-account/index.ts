@@ -163,6 +163,8 @@ Deno.serve(async (req: Request) => {
   // The first child becomes the one the app follows; a sibling does not steal
   // the parent's current view out from under them.
   if (isFirst) await admin.from('users').update({ active_child_id: childId }).eq('id', parent.id)
+  // The row says what the auth metadata already says: this account is for a child.
+  await admin.from('users').update({ account_for: 'child' }).eq('id', parent.id)
 
   if (body.coachId) {
     // Which side the coach teaches follows the style the parent chose.

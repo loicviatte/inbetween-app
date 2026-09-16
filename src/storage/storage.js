@@ -37,8 +37,11 @@ export async function getUserId() {
   const chosen = me?.active_child_id && linked.includes(me.active_child_id)
     ? me.active_child_id
     : linked[0];
+  // No child yet (a sign-up still creating one): answer self, but don't keep
+  // that answer — the next read should find the child.
+  if (!chosen) return authId;
   _subjectFor = authId;
-  _subjectId = chosen || authId;           // no children yet → fall back to self
+  _subjectId = chosen;
   return _subjectId;
 }
 
