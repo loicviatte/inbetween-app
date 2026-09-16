@@ -140,9 +140,7 @@ export default function AgeCheckScreen() {
   }
 
   const invite = info?.invite;
-  const coachDesc = info?.coachReview === 'pending' ? 'Asked · waiting for your coach'
-    : info?.coachReview === 'rejected' ? 'Your coach kept their answer'
-    : 'They’ll take another look.';
+  const coachDesc = info?.coachReview === 'pending' ? 'Asked · waiting for your coach' : 'They’ll take another look.';
   const proofDesc = info?.proofReview === 'pending' ? 'Sent · we’re checking it'
     : info?.proofReview === 'rejected' ? 'We couldn’t confirm it · send another'
     : 'Only your date of birth is needed.';
@@ -160,15 +158,19 @@ export default function AgeCheckScreen() {
             <>
               <Text style={styles.h1}>We need to confirm your age</Text>
               <Text style={styles.sub}>Your coach indicated you may be under 18.</Text>
+              {/* Once the coach has looked again and kept their answer, only the
+                  other two ways are left. */}
+              {info?.coachReview !== 'rejected' && (
+                <Option
+                  title="Ask your coach to review"
+                  desc={coachDesc}
+                  waiting={info?.coachReview === 'pending'}
+                  busy={busy === 'coach'}
+                  onPress={info?.coachReview === 'pending' ? undefined : askCoach}
+                />
+              )}
               <Option
-                title="Ask your coach to review"
-                desc={coachDesc}
-                waiting={info?.coachReview === 'pending'}
-                busy={busy === 'coach'}
-                onPress={info?.coachReview === 'pending' ? undefined : askCoach}
-              />
-              <Option
-                title="Or send us proof of age"
+                title={info?.coachReview === 'rejected' ? 'Send us proof of age' : 'Or send us proof of age'}
                 desc={proofDesc}
                 waiting={info?.proofReview === 'pending'}
                 onPress={() => go('proof')}

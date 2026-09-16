@@ -45,6 +45,15 @@ begin
   if exists (select 1 from public.age_reviews where student_id = v_me.id and kind = 'coach' and status = 'pending') then
     return 'already_pending';
   end if;
+  -- The coach has already looked again during this lock and kept their answer:
+  -- what's left is a proof of age or a parent.
+  if exists (
+    select 1 from public.age_reviews
+     where student_id = v_me.id and kind = 'coach' and status = 'rejected'
+       and created_at >= coalesce(v_me.age_check_at, '-infinity'::timestamptz)
+  ) then
+    raise exception 'Your coach has already reviewed your age.';
+  end if;
   insert into public.age_reviews (student_id, kind, coach_id) values (v_me.id, 'coach', v_me.age_check_by);
   insert into public.notifications (user_id, type, title, body, data)
   values (

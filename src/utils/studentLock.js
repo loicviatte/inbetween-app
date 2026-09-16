@@ -29,8 +29,8 @@ export function showAgeReviewPopup(student, onDone) {
     }
   };
   Alert.alert(
-    `Is ${first} 18 or over?`,
-    `${first} asked you to check again.`,
+    'Please double-check',
+    `${first} asked you to confirm their age again. Is ${first} 18 or over? This helps us make sure we get it right.`,
     [
       { text: 'Later', style: 'cancel' },
       { text: 'Under 18', onPress: () => { answer(false); } },
