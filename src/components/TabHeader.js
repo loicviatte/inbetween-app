@@ -7,6 +7,7 @@ import { Colors, Fonts, Spacing } from '../theme';
 import { useProfile } from '../context/ProfileContext';
 import { getNotifications } from '../storage/notificationsStorage';
 import { locallyRespondedAttendance } from '../storage/attendanceState';
+import { supabase } from '../services/supabase/client';
 
 export default function TabHeader({ navigation, onProfilePress, editMode = false, center = null, right = null }) {
   const { avatarUri, initials: contextInitials } = useProfile();
@@ -14,6 +15,17 @@ export default function TabHeader({ navigation, onProfilePress, editMode = false
   const [cachedPhoto, setCachedPhoto] = useState(null);
   const [cachedInitials, setCachedInitials] = useState('');
   const [unreadCount, setUnreadCount] = useState(0);
+  // A parent's account shows their child's training through the same screens,
+  // so it says, on every tab, whose account this is.
+  const [isParent, setIsParent] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    const read = (session) => session?.user?.user_metadata?.account_for === 'child';
+    supabase.auth.getSession().then(({ data: { session } }) => { if (alive) setIsParent(read(session)); });
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => setIsParent(read(session)));
+    return () => { alive = false; sub?.subscription?.unsubscribe(); };
+  }, []);
 
   useEffect(() => {
     async function load() {
@@ -76,6 +88,7 @@ export default function TabHeader({ navigation, onProfilePress, editMode = false
   }
 
   return (
+    <View>
     <View style={styles.header}>
       <TouchableOpacity
         style={styles.notifBtn}
@@ -117,8 +130,23 @@ export default function TabHeader({ navigation, onProfilePress, editMode = false
         </TouchableOpacity>
       ))}
     </View>
+
+    {/* under the avatar, right-aligned: the centre of the row is taken by the
+        Latin/Ballroom toggle on Train */}
+    {isParent && (
+      <View style={styles.parentRow} pointerEvents="none">
+        <View style={styles.parentPill} accessibilityRole="text" accessibilityLabel="Parent's account">
+          <Ionicons name="people-outline" size={11} color={PARENT_INK} />
+          <Text style={styles.parentText}>Parent's account</Text>
+        </View>
+      </View>
+    )}
+    </View>
   );
 }
+
+// ≥5.2:1 on the pill's tint over any of the app's light grounds
+const PARENT_INK = '#7A5710';
 
 const styles = StyleSheet.create({
   header: {
@@ -167,6 +195,28 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.jakartaExtraBold,
     fontSize: 9,
     color: '#fff',
+  },
+  parentRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    paddingHorizontal: Spacing.side,
+    marginTop: -6,
+    paddingBottom: 8,
+  },
+  parentPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderRadius: 999,
+    paddingVertical: 4,
+    paddingHorizontal: 9,
+    backgroundColor: 'rgba(232,181,48,0.18)',
+  },
+  parentText: {
+    fontFamily: Fonts.travelsMedium,
+    fontSize: 11,
+    letterSpacing: 0.1,
+    color: PARENT_INK,
   },
   avatar: {
     width: 46,
