@@ -1035,6 +1035,17 @@ export default function ProfileScreen({ navigation, route }) {
       navigation.setParams({ tab: undefined });
     }
   }, [route?.params?.tab]);
+  // Links and Settings are detours: leaving for another tab brings the tab
+  // back to Stats. A screen pushed on top (a class, notifications) keeps the
+  // view, so coming back from it lands where you were.
+  useEffect(() => {
+    const unsub = navigation.addListener('blur', () => {
+      const st = navigation.getState?.();
+      const current = st?.routes?.[st.index]?.name;
+      if (current && current !== route?.name) setActiveTab('stats');
+    });
+    return unsub;
+  }, [navigation, route?.name]);
   const [stats, setStats] = useState({ totalClasses: 0, totalSessions: 0, activeFocusAreas: 0 });
   const [activityStats, setActivityStats] = useState({ bestStreakDays: 0, monthMinutes: 0 });
   const [radarScores, setRadarScores] = useState([0, 0, 0, 0, 0]);
