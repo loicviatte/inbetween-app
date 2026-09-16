@@ -610,7 +610,7 @@ function LineUp({ delay, instant = false, children }) {
 }
 
 // ── the flow ────────────────────────────────────────────────────────────────
-export default function OnboardingScreen({ navigation }) {
+export default function OnboardingScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
   const [a, setA] = useState({
     role: '', style: '', level: '', age: '', solo: 0, soloLabel: '', lessons: 3,
@@ -685,6 +685,16 @@ export default function OnboardingScreen({ navigation }) {
     });
     return () => { alive = false; };
   }, []);
+
+  // Sign in ▸ "Create one" comes back here past the welcome, straight to the
+  // first question — or to the wait, if this device already invited a parent.
+  const startAt = route?.params?.startAt;
+  useEffect(() => {
+    if (!startAt) return;
+    setDir(1);
+    setStep(a.inviteId ? 'minorWaiting' : startAt);
+    navigation.setParams({ startAt: undefined });
+  }, [startAt]);
 
   // The invitation email opens the app on a link carrying the email code.
   useEffect(() => {

@@ -169,7 +169,8 @@ export default function LoginScreen({ navigation }) {
 
           <TouchableOpacity
             style={styles.link}
-            onPress={() => navigation.navigate('Register')}
+            // Onboarding is the sign-up now; it sits under this screen, past its welcome.
+            onPress={() => navigation.navigate('Onboarding', { startAt: 'role' })}
             activeOpacity={0.7}
           >
             <Text style={styles.linkText}>
