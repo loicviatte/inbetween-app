@@ -18,7 +18,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput,
-  ActivityIndicator, KeyboardAvoidingView, Platform, Animated, Easing, Linking, Keyboard, Modal,
+  ActivityIndicator, KeyboardAvoidingView, Platform, Animated, Easing, Linking, Keyboard, Modal, Alert,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -38,7 +38,7 @@ import {
 } from '../storage/coachCardStorage';
 import CoachCard from '../components/CoachCard';
 import {
-  inviteParent, getInviteStatus, resendInvite, updateInvite, verifyInvitation, approveInvitation,
+  inviteParent, getInviteStatus, resendInvite, updateInvite, cancelInvite, verifyInvitation, approveInvitation,
   savePendingInvite, loadPendingInvite, clearPendingInvite, tokenFromUrl, getConsentCopy,
   sendPhoneCode, checkPhoneCode,
 } from '../services/minorConsent';
@@ -794,6 +794,39 @@ export default function OnboardingScreen({ navigation }) {
     catch (e) { if ([404, 409, 410].includes(e.status)) set({ inviteClosed: true }); else setError(e.message); }
   }
 
+  // Back to the start with nothing left behind: the server drops the pending
+  // profile (and the coach's request) before this device forgets the invitation.
+  function resetInvite() {
+    clearPendingInvite();
+    set({ inviteId: '', deviceSecret: '', inviteStatus: '', inviteClosed: false, inviteNote: '',
+      parentFirstName: '', parentEmail: '', parentPhone: '' });
+    setError('');
+    go('welcome', -1);
+  }
+
+  function confirmStartOver() {
+    Alert.alert(
+      'Start over?',
+      `Your invitation to ${a.parentFirstName || 'your parent'} will be cancelled and nothing is kept.`,
+      [
+        { text: 'Keep waiting', style: 'cancel' },
+        {
+          text: 'Start over',
+          style: 'destructive',
+          onPress: async () => {
+            setError('');
+            try {
+              await cancelInvite(a.inviteId, a.deviceSecret);
+              resetInvite();
+            } catch (e) {
+              setError(e.message);
+            }
+          },
+        },
+      ],
+    );
+  }
+
   async function doResend() {
     setError(''); set({ inviteNote: '' });
     try { await resendInvite(a.inviteId, a.deviceSecret); set({ inviteNote: 'Sent again.', inviteStatus: 'pending' }); }
@@ -1314,6 +1347,9 @@ export default function OnboardingScreen({ navigation }) {
                 onPress={() => { setError(''); set({ editingInvite: true }); go('minorParent', -1); }}>
                 <Text style={s.laterT}>Correct their details</Text>
               </TouchableOpacity>
+              <TouchableOpacity style={s.later} onPress={confirmStartOver} accessibilityRole="button">
+                <Text style={s.laterT}>Start over</Text>
+              </TouchableOpacity>
             </View>
           </Q>
         );
@@ -1586,11 +1622,9 @@ export default function OnboardingScreen({ navigation }) {
   function onCta() {
     if (step === 'minorWaiting') {
       if (a.inviteStatus === 'withdrawn' || a.inviteClosed) {
-        clearPendingInvite();
-        set({ inviteId: '', deviceSecret: '', inviteStatus: '', inviteClosed: false, inviteNote: '',
-          parentFirstName: '', parentEmail: '', parentPhone: '' });
-        setError('');
-        return go('welcome', -1);
+        // Usually nothing is left to cancel here; if something is, it goes.
+        cancelInvite(a.inviteId, a.deviceSecret).catch(() => {});
+        return resetInvite();
       }
       if (a.inviteStatus !== 'approved') return refreshInvite();
       clearPendingInvite();

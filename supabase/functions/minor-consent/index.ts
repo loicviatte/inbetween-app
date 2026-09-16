@@ -4,14 +4,15 @@
 //   invite   the student names a parent; a pending student profile is created
 //            that nothing can record, and the parent is sent an email code and
 //            a separate SMS code
-//   status / resend / update
+//   status / resend / update / cancel
 //            the student's own device follows the invitation, proven by a
-//            device secret handed back at invite time
+//            device secret handed back at invite time; cancel removes the
+//            pending profile so starting over leaves nothing behind
 //   verify   the parent proves both channels — the email code AND the SMS code
 //   approve  three explicit agreements, an account, and the proof written down
 //   withdraw one action from the parent's account deletes everything
 //
-// No JWT for the first six: the student and the parent have no account yet.
+// No JWT for the first seven: the student and the parent have no account yet.
 // withdraw checks the parent's JWT itself.
 //
 // Delivery: real email (Resend) and SMS (Twilio) when both are configured.
@@ -289,6 +290,25 @@ async function update(admin: SupabaseClient, b: Row, ip: string) {
   if (SMS_ENABLED && !parentPhone) return json({ error: 'Add the mobile number with its country code, like +44 7700 900123.' }, 400)
   if (await limited(admin, `invite:ip:${ip}`, 5, 3600)) return json({ error: 'Too many invitations from here. Try again later.' }, 429)
   return reissue(admin, row, { parent_first_name: parentFirst, parent_email: parentEmail, parent_phone: parentPhone || row.parent_phone || null })
+}
+
+// The student starts over: the pending profile, its coach requests and the
+// invitation go (purge_pending_minor refuses anything a parent approved).
+// Invitations nobody cancels are cleared by the daily purge-expired-minor-invites job.
+async function cancel(admin: SupabaseClient, b: Row) {
+  const row = await byDevice(admin, b)
+  if (!row) return json({ ok: true })   // already gone
+  if (row.status === 'approved' || row.status === 'withdrawn') return json({ error: 'This invitation is already closed.' }, 409)
+  if (row.child_id) {
+    const { data: purged, error } = await admin.rpc('purge_pending_minor', { p_child: row.child_id })
+    if (error || purged !== true) {
+      console.error('[minor-consent] cancel failed', error?.message ?? 'refused')
+      return json({ error: "We couldn't cancel this invitation. Try again in a moment." }, 500)
+    }
+  } else {
+    await admin.from('parental_consents').delete().eq('id', row.id)
+  }
+  return json({ ok: true })
 }
 
 // ── the parent ──────────────────────────────────────────────────────────────
@@ -599,6 +619,7 @@ async function handle(req: Request): Promise<Response> {
       case 'status': return await status(admin, body)
       case 'resend': return await resend(admin, body)
       case 'update': return await update(admin, body, ip)
+      case 'cancel': return await cancel(admin, body)
       case 'verify': return await verify(admin, body, ip)
       case 'approve': return await approve(admin, body, ip)
       case 'withdraw': return await withdraw(admin, req, body, ip)

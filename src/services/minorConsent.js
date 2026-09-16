@@ -27,6 +27,8 @@ export const inviteParent = (payload) => call('invite', payload);
 export const getInviteStatus = (inviteId, deviceSecret) => call('status', { inviteId, deviceSecret });
 export const resendInvite = (inviteId, deviceSecret) => call('resend', { inviteId, deviceSecret });
 export const updateInvite = (inviteId, deviceSecret, contact) => call('update', { inviteId, deviceSecret, ...contact });
+// Starting over: the pending profile and its coach request go with the invitation.
+export const cancelInvite = (inviteId, deviceSecret) => call('cancel', { inviteId, deviceSecret });
 export const verifyInvitation = (token, code) => call('verify', { token, code });
 export const approveInvitation = (ticket, checks, password) => call('approve', { ticket, checks, password });
 export const withdrawChild = (childId) => call('withdraw', { childId });
