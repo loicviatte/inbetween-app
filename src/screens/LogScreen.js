@@ -652,7 +652,6 @@ export default function LogScreen({ navigation }) {
                 <HeaderIconButton
                   icon="document-text-outline"
                   on={view === 'notes'}
-                  badge={notes.length}
                   label={`Notes, ${plural(notes.length, 'note')}`}
                   onPress={() => setView(view === 'notes' ? 'list' : 'notes')}
                 />
