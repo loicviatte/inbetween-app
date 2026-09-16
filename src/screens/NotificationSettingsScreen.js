@@ -4,6 +4,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import * as Haptics from 'expo-haptics';
 import { Fonts } from '../theme';
 import { getUser, saveUserPreferences } from '../storage/storage';
 
@@ -172,7 +173,17 @@ export default function NotificationSettingsScreen({ navigation, route }) {
     Alert.alert('Could not save', 'That setting was not changed. Check your connection and try again.');
   }
 
-  function setPref(key, value) {
+  // A light tick on every change; the pause, which silences everything, lands
+  // a little heavier.
+  function tick(style = 'selection') {
+    const p = style === 'selection'
+      ? Haptics.selectionAsync()
+      : Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    p.catch(() => {});
+  }
+
+  function setPref(key, value, haptic = 'selection') {
+    tick(haptic);
     const before = prefs;
     // The phone's time zone travels with the settings, so quiet hours are
     // counted in the dancer's local time on the server.
@@ -184,6 +195,7 @@ export default function NotificationSettingsScreen({ navigation, route }) {
   }
 
   function setColumn(field, value, set, before) {
+    tick();
     set(value);
     saveUserPreferences({ [field]: value }).catch(() => { set(before); notSaved(); });
   }
@@ -192,6 +204,7 @@ export default function NotificationSettingsScreen({ navigation, route }) {
   // confirm you were there, then you get them. Say so before switching off.
   function setAttendance(on) {
     if (on) { setPref('attendance', true); return; }
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
     Alert.alert(
       'Turn off attendance check-ins?',
       `After a group class, ${coachFirst || 'your coach'} asks whether you were there. Confirming is what sends you that class’s focus points — without this notification, you may miss them.`,
@@ -282,7 +295,7 @@ export default function NotificationSettingsScreen({ navigation, route }) {
           />
           <TouchableOpacity
             style={[st.mute, paused && st.muteOn]}
-            onPress={() => setPref('paused_until', paused ? null : new Date(Date.now() + 24 * 3600 * 1000).toISOString())}
+            onPress={() => setPref('paused_until', paused ? null : new Date(Date.now() + 24 * 3600 * 1000).toISOString(), 'impact')}
             activeOpacity={0.85}
           >
             <Ionicons name="notifications-off-outline" size={16} color={paused ? '#FFFFFF' : INK} />
