@@ -550,7 +550,8 @@ const s = StyleSheet.create({
   side: { fontFamily: Fonts.ttRegular, fontSize: 13, color: C.mut },
   read: { fontFamily: Fonts.ttRegular, fontSize: 14, lineHeight: 21, color: C.ink2, marginTop: 16 },
   readB: { fontFamily: Fonts.ttDemiBold, color: C.ink },
-  about: { marginTop: 12, gap: 12 },
+  // Explanation, not data: a light grey card, so it doesn't read as another stat.
+  about: { marginTop: 12, gap: 12, backgroundColor: '#ECEAE5', borderWidth: 1, borderColor: 'rgba(20,19,17,0.06)' },
   aboutQ: { fontFamily: Fonts.ttBold, fontSize: 18, letterSpacing: -0.3, color: C.ink, marginBottom: 2 },
   aboutP: { fontFamily: Fonts.ttRegular, fontSize: 15, lineHeight: 22, color: C.ink2 },
 
