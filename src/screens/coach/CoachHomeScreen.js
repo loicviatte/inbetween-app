@@ -599,7 +599,7 @@ export default function CoachHomeScreen({ navigation, route }) {
   }, [couples]);
 
   const openStudent = (s) =>
-    guardStudent(s, () => navigation.navigate('StudentDetail', { studentId: s.id, studentName: s.name }));
+    guardStudent(s, () => navigation.navigate('StudentDetail', { studentId: s.id, studentName: s.name }), () => refresh());
 
   if (loading) return <CoachHomeScreenSkeleton />;
 

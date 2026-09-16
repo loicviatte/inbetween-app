@@ -29,7 +29,7 @@ import * as Notifications from 'expo-notifications';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Colors, Fonts, Spacing } from '../../theme';
 import { useCoachData } from '../../context/CoachDataContext';
-import { isAwaitingVerification, showVerificationPopup } from '../../utils/studentLock';
+import { isAwaitingVerification, guardStudent } from '../../utils/studentLock';
 import { useDjiSync } from '../../context/DjiSyncContext';
 import { getStudentFocusPoints, getStudentQuestions, getStudentOpenQuestions, getStudentRecentActivity, getStartClassRoster, markQuestionCovered, linkCoveredQuestionsToClass, getCoachStudentDetailBundle } from '../../storage/coachStorage';
 import { getLessonReadiness } from '../../storage/storage';
@@ -2244,7 +2244,7 @@ export default function StartClassScreen({ navigation }) {
   // one first (so readiness/debrief are scoped to it); otherwise open directly
   // on the single style this coach coaches them in.
   const pickStudent = useCallback((student) => {
-    if (isAwaitingVerification(student)) return showVerificationPopup(student?.name);
+    if (isAwaitingVerification(student)) return guardStudent(student, () => {});
     const styles = student?.coachStyles || [];
     if (styles.includes('latin') && styles.includes('ballroom')) {
       setStylePicker(student);

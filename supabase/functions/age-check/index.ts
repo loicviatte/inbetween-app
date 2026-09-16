@@ -3,11 +3,16 @@
 // student's account is locked. The student gets it back one of two ways:
 //
 //   status            the locked student's phone: where things stand
-//   send-adult-link   the student says they're 18 or over: an email with a
-//                     one-time link (24 hours) to confirm it
-//   confirm-adult     the website page behind that link: unlocks the account
+//   submit-proof      the student uploaded a photo of an ID (date of birth
+//                     showing, the rest hidden) to the private age-proofs
+//                     bucket: it is queued for InBetween, which decides from
+//                     the admin dashboard and deletes the photo straight away
+//   send-adult-link / confirm-adult
+//                     an email link to self-confirm (no longer offered in the
+//                     app; kept so links already sent still work)
 //
-// The other way — a parent approves — runs in minor-consent (invite-self).
+// Asking the coach to review is an SQL function (request_coach_age_review);
+// a parent approving runs in minor-consent (invite-self).
 // status / send-adult-link check the student's JWT; confirm-adult is public
 // and proven by the link, and answers CORS for the website only.
 import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
@@ -63,10 +68,16 @@ async function status(admin: SupabaseClient, req: Request) {
   const user = await signedIn(admin, req)
   if (!user) return json({ error: 'Sign in again.' }, 401)
   // Never who flagged the account: the student only learns their age is being checked.
-  const { data: me } = await admin.from('users').select('age_check, consent_status').eq('id', user.id).maybeSingle()
+  const { data: me } = await admin.from('users').select('age_check, consent_status, age_check_at').eq('id', user.id).maybeSingle()
   const { data: inv } = await admin.from('parental_consents')
     .select('status, parent_first_name, parent_email, parent_phone, expires_at')
     .eq('child_id', user.id).order('created_at', { ascending: false }).limit(1).maybeSingle()
+  // Only reviews of this lock: an answer from an earlier one says nothing now.
+  let reviewQuery = admin.from('age_reviews').select('kind, status, created_at')
+    .eq('student_id', user.id).order('created_at', { ascending: false })
+  if (me?.age_check_at) reviewQuery = reviewQuery.gte('created_at', me.age_check_at)
+  const { data: reviews } = await reviewQuery
+  const latest = (kind: string) => (reviews || []).find((r: Row) => r.kind === kind)?.status ?? null
   const invite = inv && inv.status === 'pending' ? {
     status: new Date(inv.expires_at) < new Date() ? 'expired' : 'pending',
     parentFirstName: inv.parent_first_name,
@@ -76,6 +87,8 @@ async function status(admin: SupabaseClient, req: Request) {
   return json({
     ageCheck: me?.age_check ?? null,
     consentStatus: me?.consent_status ?? null,
+    coachReview: latest('coach'),     // pending | approved | rejected | null
+    proofReview: latest('proof'),
     email: user.email?.endsWith('@managed.useinbetween.com') ? null : maskEmail(user.email || ''),
     invite,
   })
@@ -137,6 +150,47 @@ async function sendAdultLink(admin: SupabaseClient, req: Request) {
   return json({ maskedEmail: maskEmail(email) })
 }
 
+const PROOF_BUCKET = 'age-proofs'
+const ADMIN_URL = 'https://inbetween-admin.vercel.app/age-proofs'
+
+async function submitProof(admin: SupabaseClient, req: Request, b: Row) {
+  const user = await signedIn(admin, req)
+  if (!user) return json({ error: 'Sign in again.' }, 401)
+  const { data: me } = await admin.from('users').select('name, age_check').eq('id', user.id).maybeSingle()
+  if (me?.age_check !== 'minor_pending') return json({ error: 'Your account doesn’t need this.' }, 409)
+  const path = String(b.path ?? '')
+  if (!path.startsWith(`${user.id}/`) || path.includes('..')) return json({ error: 'That upload isn’t yours.' }, 400)
+  if (await limited(admin, `ageproof:user:${user.id}`, 5, 86400)) {
+    return json({ error: 'You’ve sent a few already today. We’ll check the last one.' }, 429)
+  }
+  const folder = path.split('/')[0], file = path.split('/').slice(1).join('/')
+  const { data: listed } = await admin.storage.from(PROOF_BUCKET).list(folder, { search: file })
+  if (!listed?.some((f: Row) => f.name === file)) return json({ error: 'The photo didn’t upload. Try again.' }, 400)
+
+  // One photo waiting at a time: a new one replaces the last.
+  const { data: older } = await admin.from('age_reviews').select('id, proof_path')
+    .eq('student_id', user.id).eq('kind', 'proof').eq('status', 'pending')
+  const stale = (older || []).map((r: Row) => r.proof_path).filter((p: string) => p && p !== path)
+  if (stale.length) await admin.storage.from(PROOF_BUCKET).remove(stale)
+  if (older?.length) await admin.from('age_reviews').delete().in('id', older.map((r: Row) => r.id))
+
+  const { error } = await admin.from('age_reviews').insert({ student_id: user.id, kind: 'proof', proof_path: path })
+  if (error) return json({ error: 'We couldn’t send it. Try again.' }, 500)
+
+  const token = Deno.env.get('TELEGRAM_BOT_TOKEN'), chat = Deno.env.get('TELEGRAM_CHAT_ID')
+  if (token && chat) {
+    await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chat,
+        text: `🪪 Proof of age to check: ${firstName(me.name) || 'a student'}\n${ADMIN_URL}`,
+        link_preview_options: { is_disabled: true },
+      }),
+    }).catch(() => {})
+  }
+  return json({ ok: true })
+}
+
 async function confirmAdult(admin: SupabaseClient, b: Row) {
   const token = String(b.token ?? '').trim()
   if (token.length < 20 || token.length > 80) return json({ error: 'invalid_link' }, 400)
@@ -192,6 +246,7 @@ async function handle(req: Request): Promise<Response> {
     switch (body.action) {
       case 'status': return await status(admin, req)
       case 'send-adult-link': return await sendAdultLink(admin, req)
+      case 'submit-proof': return await submitProof(admin, req, body)
       case 'confirm-adult': return await confirmAdult(admin, body)
       default: return json({ error: 'Unknown action' }, 400)
     }

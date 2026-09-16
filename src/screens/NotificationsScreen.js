@@ -13,6 +13,7 @@ import { respondToAttendance } from '../storage/storage';
 import { GenericListSkeleton } from '../components/Skeleton';
 import NotificationDetailSheet from '../components/NotificationDetailSheet';
 import PullLogo, { usePullRefresh } from '../components/PullLogo';
+import { showAgeReviewPopup } from '../utils/studentLock';
 
 // ─── Notifications (docs/design/notifications-list.html) ──────────────────────
 const PAGE = '#F2F0EB';
@@ -76,6 +77,9 @@ const TYPE_META = {
   child_phone_linked:      { group: 'other', icon: 'phone-portrait-outline', cta: 'See their phone' },
   age_check_required:      { group: 'coach', icon: 'lock-closed-outline' },
   age_check_adult_confirmed: { group: 'coach', icon: 'checkmark-circle-outline' },
+  age_review_requested:    { group: 'coach', icon: 'person-circle-outline', cta: 'Review' },
+  age_check_unlocked:      { group: 'coach', icon: 'lock-open-outline' },
+  age_review_declined:     { group: 'coach', icon: 'lock-closed-outline' },
 };
 const DEFAULT_META = { group: 'other', icon: 'notifications-outline' };
 
@@ -331,6 +335,9 @@ export default function NotificationsScreen({ navigation }) {
       // actionable landing spot. (Was navigating to an unregistered
       // 'MergeReview' route → dead no-op.)
       navigation.navigate('TrainerReview');
+    } else if (notif.type === 'age_review_requested' && notif.data?.student_id) {
+      // The coach answers right here; the student unlocks on their phone.
+      showAgeReviewPopup({ id: notif.data.student_id, name: notif.data.student_name });
     } else if (notif.type === 'child_phone_linked') {
       // A parent's account: the phone is managed from Stats ▸ Settings.
       navigation.navigate('MainTabs', { screen: 'PROFILE', params: { tab: 'settings' } });

@@ -36,6 +36,40 @@ export async function isAgeLocked() {
 }
 
 export const getAgeCheckStatus = () => invoke('age-check', 'status');
-export const sendAdultLink = () => invoke('age-check', 'send-adult-link');
+
+// Student: ask the coach who flagged the account to look again.
+export async function requestCoachReview() {
+  const { data, error } = await supabase.rpc('request_coach_age_review');
+  if (error) throw new Error(error.message);
+  return data;   // 'requested' | 'already_pending'
+}
+
+// Student: a photo of an ID, date of birth showing. It goes straight into the
+// private age-proofs bucket (the student can't even read it back) and is
+// queued for InBetween, which deletes it once it has decided.
+export async function submitProofOfAge({ base64, mimeType }) {
+  const { data: { session } } = await supabase.auth.getSession();
+  const uid = session?.user?.id;
+  if (!uid) throw new Error('Sign in again.');
+  const bin = global.atob(base64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const ext = mimeType === 'image/png' ? 'png' : 'jpg';
+  const path = `${uid}/${Date.now()}.${ext}`;
+  const { error } = await supabase.storage.from('age-proofs').upload(path, bytes, { contentType: mimeType || 'image/jpeg' });
+  if (error) throw new Error('The photo didn’t upload. Try again.');
+  return invoke('age-check', 'submit-proof', { path });
+}
+
+// Coach: is this student waiting on me to look again? And my second answer.
+export async function coachReviewPending(studentId) {
+  const { data } = await supabase.rpc('coach_age_review_pending', { p_student: studentId });
+  return data === true;
+}
+export async function coachReviewStudentAge(studentId, adult) {
+  const { data, error } = await supabase.rpc('coach_review_student_age', { p_student: studentId, p_adult: !!adult });
+  if (error) throw new Error(error.message);
+  return data;   // 'unlocked' | 'kept' | 'not_pending'
+}
 export const inviteParentForMe = (contact) => invoke('minor-consent', 'invite-self', contact);
 export const resendParentInvite = () => invoke('minor-consent', 'resend-self');

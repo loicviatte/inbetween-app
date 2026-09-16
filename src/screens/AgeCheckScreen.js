@@ -1,15 +1,17 @@
-// The student's app, locked: a coach said this student is under 18 and they
-// came without a parent. Two ways back in — confirm by email they're 18 or
-// over, or have a parent approve. AgeCheckGate shows this instead of the app
-// and lifts it on its own once the account unlocks.
+// The student's app, locked: a coach indicated this student may be under 18
+// and they came without a parent. Three ways out — the coach looks again,
+// InBetween checks a proof of age, or a parent approves. AgeCheckGate shows
+// this instead of the app and lifts it on its own once the account unlocks.
+// It never says which coach, or anything the coach wrote.
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
-  View, Text, TouchableOpacity, StyleSheet, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator,
+  View, Text, TouchableOpacity, StyleSheet, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator, AppState,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Haptics from 'expo-haptics';
+import * as ImagePicker from 'expo-image-picker';
 import { Fonts, Spacing, Onboard } from '../theme';
 import { supabase } from '../services/supabase/client';
 import { clearPushToken } from '../services/notifications';
@@ -17,7 +19,7 @@ import { clearUserCaches } from '../storage/userCaches';
 import PhoneField, { TextField } from '../components/PhoneField';
 import { DEFAULT_COUNTRY, toE164 } from '../utils/phone';
 import {
-  getAgeCheckStatus, sendAdultLink, inviteParentForMe, resendParentInvite,
+  getAgeCheckStatus, requestCoachReview, submitProofOfAge, inviteParentForMe, resendParentInvite,
 } from '../services/ageCheck';
 import { markFirstScreenReady } from '../utils/firstPaint';
 
@@ -26,41 +28,70 @@ const EMAIL_OK = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 const haptic = () => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
 
 export default function AgeCheckScreen() {
-  const [stage, setStage] = useState('loading');   // loading | choose | adult | parentForm | parentSent
-  const [info, setInfo] = useState(null);           // status from age-check
-  const [maskedEmail, setMaskedEmail] = useState('');
+  const [stage, setStage] = useState('loading');   // loading | choose | proof | parentForm | parentSent
+  const [info, setInfo] = useState(null);
   const [parent, setParent] = useState({ first: '', email: '', phone: '', country: DEFAULT_COUNTRY });
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(null);           // which action is running
   const [error, setError] = useState('');
   const [note, setNote] = useState('');
 
-  async function load() {
+  const load = useCallback(async () => {
     try {
       const r = await getAgeCheckStatus();
       setInfo(r);
       return r;
     } catch { return null; }
-  }
+  }, []);
 
   useEffect(() => {
     markFirstScreenReady();   // this is the first screen: let the launch logo go
-    load().then((r) => setStage(r?.invite ? 'parentSent' : 'choose'));
-  }, []);
+    load().then(() => setStage('choose'));
+    const t = setInterval(load, 15000);
+    const sub = AppState.addEventListener('change', (st) => { if (st === 'active') load(); });
+    return () => { clearInterval(t); sub.remove(); };
+  }, [load]);
 
   function go(next) { haptic(); setError(''); setNote(''); setStage(next); }
 
-  async function emailMe() {
+  async function askCoach() {
     if (busy) return;
-    setBusy(true); setError(''); setNote('');
+    haptic();
+    setBusy('coach'); setError(''); setNote('');
     try {
-      const r = await sendAdultLink();
-      setMaskedEmail(r.maskedEmail);
-      if (stage === 'adult') setNote('Sent again.');
-      setStage('adult');
+      await requestCoachReview();
+      await load();
+      setNote('Your coach has been asked to take another look.');
     } catch (e) {
       setError(e.message);
     } finally {
-      setBusy(false);
+      setBusy(null);
+    }
+  }
+
+  async function sendProof(fromCamera) {
+    if (busy) return;
+    haptic();
+    setError(''); setNote('');
+    const perm = fromCamera
+      ? await ImagePicker.requestCameraPermissionsAsync()
+      : await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (perm.status !== 'granted') {
+      setError(fromCamera ? 'Allow camera access in Settings to take the photo.' : 'Allow photo access in Settings to choose the photo.');
+      return;
+    }
+    const opts = { mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.7, base64: true, exif: false };
+    const result = fromCamera ? await ImagePicker.launchCameraAsync(opts) : await ImagePicker.launchImageLibraryAsync(opts);
+    if (result.canceled || !result.assets?.[0]?.base64) return;
+    setBusy('proof');
+    try {
+      await submitProofOfAge({ base64: result.assets[0].base64, mimeType: result.assets[0].mimeType || 'image/jpeg' });
+      await load();
+      setStage('choose');
+      setNote('Sent. We’ll check it shortly, then delete it.');
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(null);
     }
   }
 
@@ -70,7 +101,7 @@ export default function AgeCheckScreen() {
     if (!parent.first.trim()) return setError('Add your parent’s first name.');
     if (!EMAIL_OK.test(parent.email.trim())) return setError('That email doesn’t look right.');
     if (!/^\+[0-9]{8,15}$/.test(phone)) return setError('Check the mobile number.');
-    setBusy(true); setError(''); setNote('');
+    setBusy('parent'); setError(''); setNote('');
     try {
       await inviteParentForMe({ parentFirstName: parent.first.trim(), parentEmail: parent.email.trim(), parentPhone: phone });
       await load();
@@ -78,13 +109,13 @@ export default function AgeCheckScreen() {
     } catch (e) {
       setError(e.message);
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   }
 
   async function resend() {
     if (busy) return;
-    setBusy(true); setError(''); setNote('');
+    setBusy('resend'); setError(''); setNote('');
     try {
       await resendParentInvite();
       await load();
@@ -92,7 +123,7 @@ export default function AgeCheckScreen() {
     } catch (e) {
       setError(e.message);
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   }
 
@@ -109,6 +140,13 @@ export default function AgeCheckScreen() {
   }
 
   const invite = info?.invite;
+  const coachDesc = info?.coachReview === 'pending' ? 'Asked · waiting for your coach'
+    : info?.coachReview === 'rejected' ? 'Your coach kept their answer'
+    : 'They’ll take another look.';
+  const proofDesc = info?.proofReview === 'pending' ? 'Sent · we’re checking it'
+    : info?.proofReview === 'rejected' ? 'We couldn’t confirm it · send another'
+    : 'Only your date of birth is needed.';
+  const parentDesc = invite ? `Invitation sent to ${invite.parentFirstName || 'your parent'}` : 'A parent approves your account.';
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -120,33 +158,45 @@ export default function AgeCheckScreen() {
 
           {stage === 'choose' && (
             <>
-              <Text style={styles.h1}>We think you might be under 18</Text>
-              <Text style={styles.sub}>
-                Your account is locked until we’ve checked your age. Choose the option that applies to you.
-              </Text>
+              <Text style={styles.h1}>We need to confirm your age</Text>
+              <Text style={styles.sub}>Your coach indicated you may be under 18.</Text>
               <Option
-                title="I’m 18 or over"
-                desc="We’ll email you a link to confirm it."
-                onPress={emailMe}
-                busy={busy}
+                title="Ask your coach to review"
+                desc={coachDesc}
+                waiting={info?.coachReview === 'pending'}
+                busy={busy === 'coach'}
+                onPress={info?.coachReview === 'pending' ? undefined : askCoach}
+              />
+              <Option
+                title="Or send us proof of age"
+                desc={proofDesc}
+                waiting={info?.proofReview === 'pending'}
+                onPress={() => go('proof')}
               />
               <Option
                 title="I’m under 18"
-                desc="A parent approves your account. You keep this account and this phone."
-                onPress={() => go('parentForm')}
+                desc={parentDesc}
+                waiting={!!invite}
+                onPress={() => go(invite ? 'parentSent' : 'parentForm')}
               />
             </>
           )}
 
-          {stage === 'adult' && (
+          {stage === 'proof' && (
             <>
-              <Text style={styles.h1}>Check your email</Text>
-              <Text style={styles.sub}>
-                We sent a link to <Text style={styles.strong}>{maskedEmail}</Text>. Tap it to confirm you’re 18 or over and your account unlocks by itself. It works for 24 hours — check your spam too.
-              </Text>
-              <View style={styles.acts}>
-                <SmallButton label={busy ? 'Sending…' : 'Send it again'} onPress={emailMe} />
-                <SmallButton label="I’m under 18" onPress={() => go('parentForm')} />
+              <Text style={styles.h1}>Send us proof of age</Text>
+              <Text style={styles.sub}>A photo of an ID — a passport, a driving licence or an ID card.</Text>
+              <View style={styles.promise}>
+                {[
+                  ['calendar-outline', 'Only your date of birth is needed.'],
+                  ['eye-off-outline', 'You can hide everything else.'],
+                  ['trash-outline', 'We check it and delete it immediately.'],
+                ].map(([icon, line]) => (
+                  <View key={line} style={styles.promiseRow}>
+                    <Ionicons name={icon} size={17} color={Onboard.goldInk} />
+                    <Text style={styles.promiseT}>{line}</Text>
+                  </View>
+                ))}
               </View>
             </>
           )}
@@ -175,9 +225,8 @@ export default function AgeCheckScreen() {
               </Text>
               {invite?.status === 'expired' && <Text style={styles.err}>This invitation has expired. Send it again.</Text>}
               <View style={styles.acts}>
-                <SmallButton label={busy ? 'Sending…' : 'Send it again'} onPress={resend} />
+                <SmallButton label={busy === 'resend' ? 'Sending…' : 'Send it again'} onPress={resend} />
                 <SmallButton label="Correct their details" onPress={() => go('parentForm')} />
-                <SmallButton label="I’m 18 or over" onPress={emailMe} />
               </View>
             </>
           )}
@@ -187,19 +236,28 @@ export default function AgeCheckScreen() {
 
           <View style={styles.spacer} />
 
-          {stage === 'parentForm' && (
+          {stage === 'proof' && (
             <>
-              <TouchableOpacity style={styles.primary} onPress={inviteParent} disabled={busy} activeOpacity={0.85} accessibilityRole="button">
-                {busy ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.primaryT}>Send invitation</Text>}
+              <TouchableOpacity style={styles.primary} onPress={() => sendProof(true)} disabled={!!busy} activeOpacity={0.85} accessibilityRole="button">
+                {busy === 'proof' ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.primaryT}>Take a photo</Text>}
               </TouchableOpacity>
-              <TouchableOpacity style={styles.link} onPress={() => go(invite ? 'parentSent' : 'choose')} accessibilityRole="button">
-                <Text style={styles.linkT}>Back</Text>
+              <TouchableOpacity style={styles.secondary} onPress={() => sendProof(false)} disabled={!!busy} activeOpacity={0.85} accessibilityRole="button">
+                <Text style={styles.secondaryT}>Choose a photo</Text>
               </TouchableOpacity>
             </>
           )}
-          {stage !== 'parentForm' && (
+          {stage === 'parentForm' && (
+            <TouchableOpacity style={styles.primary} onPress={inviteParent} disabled={!!busy} activeOpacity={0.85} accessibilityRole="button">
+              {busy === 'parent' ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.primaryT}>Send invitation</Text>}
+            </TouchableOpacity>
+          )}
+          {stage === 'choose' ? (
             <TouchableOpacity style={styles.link} onPress={logOut} accessibilityRole="button">
               <Text style={styles.linkT}>Log out</Text>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity style={styles.link} onPress={() => go('choose')} accessibilityRole="button">
+              <Text style={styles.linkT}>Back</Text>
             </TouchableOpacity>
           )}
         </ScrollView>
@@ -208,14 +266,16 @@ export default function AgeCheckScreen() {
   );
 }
 
-function Option({ title, desc, onPress, busy }) {
+function Option({ title, desc, onPress, busy, waiting }) {
   return (
-    <TouchableOpacity style={styles.option} onPress={onPress} disabled={busy} activeOpacity={0.8} accessibilityRole="button">
+    <TouchableOpacity style={[styles.option, waiting && styles.optionWaiting]} onPress={onPress} disabled={!onPress || busy}
+      activeOpacity={0.8} accessibilityRole="button">
+      <Ionicons name="arrow-forward" size={17} color={Onboard.goldInk} />
       <View style={{ flex: 1, minWidth: 0 }}>
         <Text style={styles.optionT}>{title}</Text>
-        <Text style={styles.optionD}>{desc}</Text>
+        <Text style={[styles.optionD, waiting && styles.optionDWaiting]}>{desc}</Text>
       </View>
-      {busy ? <ActivityIndicator color={Onboard.goldInk} /> : <Ionicons name="chevron-forward" size={18} color={Onboard.ink3} />}
+      {busy ? <ActivityIndicator color={Onboard.goldInk} /> : null}
     </TouchableOpacity>
   );
 }
@@ -238,19 +298,26 @@ const styles = StyleSheet.create({
   strong: { fontFamily: Fonts.ttDemiBold, color: Onboard.ink },
   option: {
     flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: Onboard.card,
-    borderRadius: 14, borderWidth: 1, borderColor: Onboard.line, padding: 16, marginBottom: 10,
+    borderRadius: 14, borderWidth: 1, borderColor: Onboard.line, paddingVertical: 15, paddingHorizontal: 16, marginBottom: 10,
   },
+  optionWaiting: { backgroundColor: 'rgba(232,181,48,0.08)', borderColor: 'rgba(232,181,48,0.35)' },
   optionT: { fontFamily: Fonts.ttDemiBold, fontSize: 16, color: Onboard.ink },
   optionD: { fontFamily: Fonts.travelsRegular, fontSize: 13, lineHeight: 18, color: Onboard.ink2, marginTop: 3 },
+  optionDWaiting: { fontFamily: Fonts.travelsMedium, color: Onboard.goldInk },
+  promise: { backgroundColor: Onboard.card, borderRadius: 14, borderWidth: 1, borderColor: Onboard.line, padding: 16, gap: 14 },
+  promiseRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  promiseT: { flex: 1, fontFamily: Fonts.ttDemiBold, fontSize: 15, lineHeight: 20, color: Onboard.ink },
   fields: { gap: 13 },
   acts: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   small: { borderWidth: 1, borderColor: 'rgba(10,10,10,0.22)', borderRadius: 999, paddingVertical: 10, paddingHorizontal: 15 },
   smallT: { fontFamily: Fonts.ttDemiBold, fontSize: 12.5, color: Onboard.ink },
-  note: { fontFamily: Fonts.travelsMedium, fontSize: 13, color: Onboard.ink2, marginTop: 14 },
+  note: { fontFamily: Fonts.travelsMedium, fontSize: 13, lineHeight: 18, color: Onboard.ink2, marginTop: 14 },
   err: { fontFamily: Fonts.travelsMedium, fontSize: 13, lineHeight: 18, color: RED, marginTop: 14 },
   spacer: { flex: 1, minHeight: 24 },
   primary: { backgroundColor: Onboard.ink, borderRadius: 14, paddingVertical: 15, alignItems: 'center' },
   primaryT: { fontFamily: Fonts.ttDemiBold, fontSize: 15, color: '#FFFFFF' },
+  secondary: { borderRadius: 14, paddingVertical: 14, alignItems: 'center', borderWidth: 1, borderColor: 'rgba(10,10,10,0.18)', marginTop: 10 },
+  secondaryT: { fontFamily: Fonts.ttDemiBold, fontSize: 15, color: Onboard.ink },
   link: { alignItems: 'center', marginTop: 14, paddingVertical: 6 },
   linkT: { fontFamily: Fonts.ttDemiBold, fontSize: 13.5, color: Onboard.ink2 },
 });

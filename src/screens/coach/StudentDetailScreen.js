@@ -29,7 +29,8 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import Svg, { Circle, Path } from 'react-native-svg';
 import { Colors, Fonts, Spacing } from '../../theme';
 import { supabase } from '../../services/supabase/client';
-import { showVerificationPopup } from '../../utils/studentLock';
+import { showVerificationPopup, showAgeReviewPopup } from '../../utils/studentLock';
+import { coachReviewPending } from '../../services/ageCheck';
 import {
   getStudentProfile,
   getCoachStudentDetail,
@@ -428,9 +429,13 @@ export default function StudentDetailScreen({ route, navigation }) {
   useEffect(() => {
     let alive = true;
     supabase.from('users').select('age_check').eq('id', studentId).maybeSingle().then(({ data }) => {
-      if (alive && data?.age_check === 'minor_pending') {
-        showVerificationPopup(studentName, () => { if (navigation.canGoBack()) navigation.goBack(); });
-      }
+      if (!alive || data?.age_check !== 'minor_pending') return;
+      const back = () => { if (navigation.canGoBack()) navigation.goBack(); };
+      coachReviewPending(studentId).catch(() => false).then((pending) => {
+        if (!alive) return;
+        if (pending) showAgeReviewPopup({ id: studentId, name: studentName }, (r) => { if (r !== 'unlocked') back(); });
+        else showVerificationPopup(studentName, back);
+      });
     });
     return () => { alive = false; };
   }, [studentId]);
