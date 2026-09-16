@@ -78,6 +78,8 @@ const GOLD = '#E8B530';
 const GOLD_300 = '#F6D27A';
 const GOLD_INK = '#8A6414';
 const NAVY = '#22314D';
+// Couple accent on the cream page — the Couple side's gold.
+const COUPLE_BLUE = '#3C66AE';
 const SIDE = 20;
 const CARD_GAP = 11;
 // Pull to refresh on a page that doesn't scroll: how far the page must be
@@ -210,7 +212,7 @@ function TrainTitle({ label, canSwitch, disabled, onPress, sub }) {
 
 // ─── This week: one segment per day, gold once a session is done ─────────────
 // The whole rail opens Trend, where each week breaks down in detail.
-function WeekRail({ activity, goal, onPress }) {
+function WeekRail({ activity, goal, onPress, accent = GOLD, accentInk = GOLD_INK }) {
   const today = (new Date().getDay() + 6) % 7;
   const done = Object.values(activity || {}).reduce((n, d) => n + (d?.sessions?.length ?? 0), 0);
   const count = goal ? `${done} of ${plural(goal, 'session')}` : plural(done, 'session');
@@ -235,8 +237,8 @@ function WeekRail({ activity, goal, onPress }) {
           const isToday = i === today;
           return (
             <View key={i} style={wk.day}>
-              <View style={[wk.seg, trained ? wk.segDone : isToday && wk.segNow]} />
-              <Text style={[wk.letter, isToday && wk.letterNow]}>{letter}</Text>
+              <View style={[wk.seg, trained ? { backgroundColor: accent } : isToday && wk.segNow]} />
+              <Text style={[wk.letter, isToday && [wk.letterNow, { color: accentInk }]]}>{letter}</Text>
             </View>
           );
         })}
@@ -248,12 +250,12 @@ function WeekRail({ activity, goal, onPress }) {
 function ModeTabs({ mode, onChange, disabled }) {
   return (
     <View style={md.row}>
-      {[['solo', 'Solo'], ['couple', 'Couple']].map(([key, label]) => {
+      {[['solo', 'Solo', GOLD], ['couple', 'Couple', COUPLE_BLUE]].map(([key, label, color]) => {
         const on = mode === key;
         return (
           <TouchableOpacity
             key={key}
-            style={[md.tab, on && md.tabOn]}
+            style={[md.tab, on && { borderBottomColor: color }]}
             onPress={() => onChange(key)}
             disabled={disabled}
             activeOpacity={0.7}
@@ -273,7 +275,7 @@ const DIAL_ARC = 'M 18.18 81.82 A 45 45 0 1 1 81.82 81.82';
 const DIAL_LEN = 212.06;
 const DIAL_SIZE = 132;
 
-function ReadyDial({ percent }) {
+function ReadyDial({ percent, color = GOLD }) {
   const pc = Math.max(0, Math.min(100, Math.round(percent || 0)));
   const th = ((135 + 2.7 * pc) * Math.PI) / 180;
   return (
@@ -284,14 +286,14 @@ function ReadyDial({ percent }) {
           <Path
             d={DIAL_ARC}
             fill="none"
-            stroke={GOLD}
+            stroke={color}
             strokeWidth={3}
             strokeLinecap="round"
             strokeDasharray={[DIAL_LEN, DIAL_LEN]}
             strokeDashoffset={DIAL_LEN * (1 - pc / 100)}
           />
         ) : null}
-        <Circle cx={50 + 45 * Math.cos(th)} cy={50 + 45 * Math.sin(th)} r={4.4} fill={GOLD} />
+        <Circle cx={50 + 45 * Math.cos(th)} cy={50 + 45 * Math.sin(th)} r={4.4} fill={color} />
       </Svg>
       <View style={rd.center} pointerEvents="none">
         <Text style={rd.pct} allowFontScaling={false}>
@@ -1336,6 +1338,8 @@ export default function HomeScreen({ navigation }) {
           activity={weekActivity}
           goal={weeklySessionGoal(user?.solo_practice_frequency)}
           onPress={openTrend}
+          accent={isCouple ? COUPLE_BLUE : GOLD}
+          accentInk={isCouple ? COUPLE_BLUE : GOLD_INK}
         />
 
         {showTabs ? <ModeTabs mode={viewMode} onChange={setMode} disabled={anyInProgress} /> : null}
@@ -1358,7 +1362,7 @@ export default function HomeScreen({ navigation }) {
               accessibilityRole="button"
               accessibilityLabel={`${sideReadiness?.percent ?? 0}% ready. ${lead}. Open readiness`}
             >
-              <ReadyDial percent={sideReadiness?.percent ?? 0} />
+              <ReadyDial percent={sideReadiness?.percent ?? 0} color={isCouple ? COUPLE_BLUE : GOLD} />
               <View style={rd.copy}>
                 <Text style={rd.lead}>{lead}</Text>
                 <Text style={rd.sub}>{sub}</Text>
@@ -1531,7 +1535,6 @@ const wk = StyleSheet.create({
   days: { flexDirection: 'row', marginTop: 9, marginHorizontal: -2.5 },
   day: { flex: 1, paddingHorizontal: 2.5 },
   seg: { height: 3, borderRadius: 2, backgroundColor: LINE },
-  segDone: { backgroundColor: GOLD },
   segNow: { backgroundColor: INK_3 },
   letter: { fontFamily: Fonts.ttRegular, fontSize: 9, letterSpacing: 0.9, color: INK_2, textAlign: 'center', paddingTop: 5 },
   letterNow: { fontFamily: Fonts.ttBold, color: GOLD_INK },
@@ -1541,7 +1544,6 @@ const wk = StyleSheet.create({
 const md = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'flex-end', gap: 24, marginTop: 16, marginHorizontal: SIDE, borderBottomWidth: 1, borderBottomColor: LINE },
   tab: { paddingBottom: 9, marginBottom: -1, borderBottomWidth: 2, borderBottomColor: 'transparent' },
-  tabOn: { borderBottomColor: GOLD },
   label: { fontFamily: Fonts.ttDemiBold, fontSize: 17, letterSpacing: -0.34, color: INK_2 },
   labelOn: { color: INK },
 });
