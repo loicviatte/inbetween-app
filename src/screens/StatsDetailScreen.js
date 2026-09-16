@@ -233,7 +233,7 @@ function Chevron() {
   );
 }
 
-function build(kind, d, navigation, scrollRef) {
+function build(kind, d, navigation, scrollRef, coupleId) {
   const { readiness, trend, momentum, streakWeeks, weeksTrained, trendWeeks,
     dances, totalDanceSessions, sessionCount, totalMinutes,
     lessonCount, lessons, weeklyGoal = 60, weeksAtGoal = 0, thisWeek } = d;
@@ -262,7 +262,7 @@ function build(kind, d, navigation, scrollRef) {
                   activeOpacity={0.7}
                   accessibilityRole="button"
                   accessibilityLabel={`Train ${f.name}. Trained ${f.done ?? 0} of ${f.target ?? 0}.`}
-                  onPress={() => openFocusSession(navigation, f.focusPointId)}
+                  onPress={() => openFocusSession(navigation, f.focusPointId, { coupleId })}
                 >
                   <View style={s.fdh}>
                     <Text style={s.fdn}>{f.name}</Text>
@@ -425,10 +425,11 @@ function build(kind, d, navigation, scrollRef) {
 }
 
 export default function StatsDetailScreen({ route, navigation }) {
-  const { kind, data, scope } = route.params || {};
+  // coupleId: set when Train opens the Couple readiness, so its rows train as the couple.
+  const { kind, data, scope, coupleId } = route.params || {};
   const scrollRef = useRef(null);            // declared before any early return
   if (!data) return null;
-  const v = build(kind, data, navigation, scrollRef);
+  const v = build(kind, data, navigation, scrollRef, coupleId);
 
   return (
     <View style={{ flex: 1 }}>

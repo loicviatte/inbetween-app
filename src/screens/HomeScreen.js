@@ -925,18 +925,35 @@ export default function HomeScreen({ navigation }) {
     };
   }, []));
 
-  async function openTrend() {
+  // The Profile dashboard bundle behind Trend and Readiness, for this style.
+  async function dashboardBundle() {
     const cat = category;
-    let data = trendRef.current.cat === cat ? trendRef.current.data : null;
-    if (!data) {
-      data = await getStudentDashboard(cat).catch(() => null);
-      if (!data) return;
-      trendRef.current = { cat, data };
-    }
+    if (trendRef.current.cat === cat && trendRef.current.data) return trendRef.current.data;
+    const data = await getStudentDashboard(cat).catch(() => null);
+    if (data) trendRef.current = { cat, data };
+    return data;
+  }
+
+  async function openTrend() {
+    const data = await dashboardBundle();
+    if (!data) return;
     navigation.navigate('StatsDetail', {
       kind: 'trend',
       data,
       scope: `${styleName}${paired ? ' · Solo' : ''}`,
+    });
+  }
+
+  // Opens on the side on screen, with the very readiness the dial shows, so the
+  // detail can't disagree with it.
+  async function openReadiness() {
+    const data = await dashboardBundle();
+    if (!data) return;
+    navigation.navigate('StatsDetail', {
+      kind: 'readiness',
+      data: { ...data, readiness: sideReadiness },
+      scope: `${styleName}${paired ? (isCouple ? ' · Couple' : ' · Solo') : ''}`,
+      coupleId: isCouple ? couple?.coupleId : undefined,
     });
   }
 
@@ -1248,7 +1265,16 @@ export default function HomeScreen({ navigation }) {
           <TrainSwitchSkeleton cardWidth={windowWidth - SIDE * 2 - CARD_PEEK} />
         ) : (
           <>
-            <View style={rd.head}>
+            {/* Dial + copy open the readiness detail — once there is something
+                to break down. */}
+            <TouchableOpacity
+              style={rd.head}
+              onPress={openReadiness}
+              disabled={focuses.length === 0}
+              activeOpacity={0.7}
+              accessibilityRole="button"
+              accessibilityLabel={`${sideReadiness?.percent ?? 0}% ready. ${lead}. Open readiness`}
+            >
               <ReadyDial percent={sideReadiness?.percent ?? 0} />
               <View style={rd.copy}>
                 <Text style={rd.lead}>{lead}</Text>
@@ -1259,7 +1285,8 @@ export default function HomeScreen({ navigation }) {
                   </TouchableOpacity>
                 ) : null}
               </View>
-            </View>
+              {focuses.length > 0 ? <Ionicons name="chevron-forward" size={13} color={INK_3} /> : null}
+            </TouchableOpacity>
 
             {items.length > 0 ? (
               <>

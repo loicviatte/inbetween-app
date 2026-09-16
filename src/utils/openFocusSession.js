@@ -11,7 +11,11 @@ import { getActiveSession } from '../storage/activeSession';
 //
 // `rank` / `sessionCount` are Train-carousel context (position in the plan) and
 // are left at their defaults here, where there is no carousel.
-export async function openFocusSession(navigation, focusPointId) {
+//
+// Pass `coupleId` for a couple focus point: the session then runs as the
+// couple's, exactly like Train's couple Start (the couple lock is taken inside
+// the session).
+export async function openFocusSession(navigation, focusPointId, { coupleId } = {}) {
   if (!navigation || !focusPointId) return;
 
   // One session at a time. Train refuses silently; say why instead, since from
@@ -25,5 +29,9 @@ export async function openFocusSession(navigation, focusPointId) {
   }
 
   const sessionId = await startTrainingSession(focusPointId, null);
-  navigation.navigate('FocusSession', { focusPointId, sessionId });
+  navigation.navigate('FocusSession', {
+    focusPointId,
+    sessionId,
+    ...(coupleId ? { couple: true, coupleId } : {}),
+  });
 }
