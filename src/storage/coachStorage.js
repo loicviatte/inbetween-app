@@ -271,15 +271,25 @@ async function _getMyStudentsImpl() {
 
   // Finished sessions per week over the last six weeks, oldest first — the
   // small activity bars on the Students roster.
+  // …and minutes practised per week over ten weeks, oldest first — the
+  // group practice chart on Home. A session counts for at most 3 hours.
   const WEEK = 7 * 86400000;
   const weeklyByStudent = {};
+  const weeklyMinutesByStudent = {};
   const nowMs = Date.now();
   for (const l of allLogs || []) {
     if (!l.completed_at) continue;
     const ago = Math.floor((nowMs - new Date(l.completed_at).getTime()) / WEEK);
-    if (ago < 0 || ago > 5) continue;
-    const w = (weeklyByStudent[l.student_id] ||= [0, 0, 0, 0, 0, 0]);
-    w[5 - ago] += 1;
+    if (ago < 0 || ago > 9) continue;
+    if (ago <= 5) {
+      const w = (weeklyByStudent[l.student_id] ||= [0, 0, 0, 0, 0, 0]);
+      w[5 - ago] += 1;
+    }
+    const mins = l.started_at
+      ? Math.min(180, Math.max(0, (new Date(l.completed_at).getTime() - new Date(l.started_at).getTime()) / 60000))
+      : 0;
+    const m = (weeklyMinutesByStudent[l.student_id] ||= new Array(10).fill(0));
+    m[9 - ago] += mins;
   }
 
   // Build the set of class_input_ids that have non-past FPs per student.
@@ -424,6 +434,7 @@ async function _getMyStudentsImpl() {
         // "under 18" still waiting on the student (read by the roster chips and
         // Start class). They were fetched but never passed on.
         weeklySessions: weeklyByStudent[s.id] || [0, 0, 0, 0, 0, 0],
+        weeklyMinutes: weeklyMinutesByStudent[s.id] || new Array(10).fill(0),
         pendingFocusCount: pendingFocusCountByStudent[s.id] || 0,
         consent_status: s.consent_status || 'not_required',
         age_check: s.age_check || null,
