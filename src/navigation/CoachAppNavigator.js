@@ -58,7 +58,7 @@ function CoachMainTabs() {
           }}
         >
           <Tab.Screen name="STUDENTS" component={CoachHomeScreen} />
-          <Tab.Screen name="DASHBOARD" component={DashboardScreen} />
+          <Tab.Screen name="DASHBOARD" component={DashboardScreen} options={{ tabBarLabel: 'HOME' }} />
           <Tab.Screen name="CLASS" component={CoachClassesScreen} />
         </Tab.Navigator>
       </View>
