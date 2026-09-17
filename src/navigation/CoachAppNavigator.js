@@ -36,7 +36,8 @@ const CoachStack = createNativeStackNavigator();
 
 function CoachMainTabs() {
   const [activeRoute, setActiveRoute] = useState('DASHBOARD');
-  const headerBg = activeRoute === 'DASHBOARD' ? '#F2F2EF' : '#FFFFFF';
+  // The header sits on each tab's page colour (Students: the warm paper of its redesign).
+  const headerBg = activeRoute === 'DASHBOARD' ? '#F2F2EF' : activeRoute === 'STUDENTS' ? '#F2F0EB' : '#FFFFFF';
   return (
     <View style={{ flex: 1, backgroundColor: '#FFFFFF' }}>
       <SafeAreaView style={{ backgroundColor: headerBg }} edges={['top']}>

@@ -250,6 +250,8 @@ async function _getMyStudentsImpl() {
       (questionCountByStudent[m.student_id] || 0) + 1;
   }
   const pendingReviewStudents = new Set((pendingFPs || []).map(v => v.user_id));
+  const pendingFocusCountByStudent = {};
+  for (const v of pendingFPs || []) pendingFocusCountByStudent[v.user_id] = (pendingFocusCountByStudent[v.user_id] || 0) + 1;
 
   const activeFocuses = (allFocuses || []).filter(f => f.status === 'active');
   const activeFocusCountByStudent = {};
@@ -265,6 +267,19 @@ async function _getMyStudentsImpl() {
     if (l.completed_at) {
       lastPracticeByStudent[l.student_id] = l.started_at;
     }
+  }
+
+  // Finished sessions per week over the last six weeks, oldest first — the
+  // small activity bars on the Students roster.
+  const WEEK = 7 * 86400000;
+  const weeklyByStudent = {};
+  const nowMs = Date.now();
+  for (const l of allLogs || []) {
+    if (!l.completed_at) continue;
+    const ago = Math.floor((nowMs - new Date(l.completed_at).getTime()) / WEEK);
+    if (ago < 0 || ago > 5) continue;
+    const w = (weeklyByStudent[l.student_id] ||= [0, 0, 0, 0, 0, 0]);
+    w[5 - ago] += 1;
   }
 
   // Build the set of class_input_ids that have non-past FPs per student.
@@ -408,6 +423,8 @@ async function _getMyStudentsImpl() {
         // Whether they can be recorded: a parent's permission, and a coach's
         // "under 18" still waiting on the student (read by the roster chips and
         // Start class). They were fetched but never passed on.
+        weeklySessions: weeklyByStudent[s.id] || [0, 0, 0, 0, 0, 0],
+        pendingFocusCount: pendingFocusCountByStudent[s.id] || 0,
         consent_status: s.consent_status || 'not_required',
         age_check: s.age_check || null,
         age_review_pending: s.age_check === 'minor_pending' && reviewPending.has(s.id),
