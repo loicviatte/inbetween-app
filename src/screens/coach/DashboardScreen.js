@@ -204,7 +204,7 @@ export default function DashboardScreen({ navigation }) {
   // A denied iOS permission is invisible: the nightly sync-reminder rows are
   // still created server-side, but no push can ever be delivered. Surface it
   // only when it matters: permission not granted AND a class waiting for audio.
-  const { pendingUploadCount, devPreviewReminder } = useDjiSync() ?? {};
+  const { pendingUploadCount } = useDjiSync() ?? {};
   const [notifPerm, setNotifPerm] = useState('granted'); // optimistic — no flash
   const notifPermRef = useRef('granted');
   useEffect(() => {
@@ -358,22 +358,6 @@ export default function DashboardScreen({ navigation }) {
         </TouchableOpacity>
       )}
 
-      {/* Dev builds only: preview the evening upload reminder. */}
-      {__DEV__ && devPreviewReminder && (
-        <View style={st.devRow}>
-          <Text style={st.devLabel}>REMINDER</Text>
-          {[
-            { label: 'N1', tier: 1, count: 1 },
-            { label: 'N2', tier: 2, count: 2 },
-            { label: 'N3', tier: 3, count: 4 },
-            { label: 'N4·6', tier: 4, count: 6 },
-          ].map((p) => (
-            <TouchableOpacity key={p.label} style={st.devChip} onPress={() => devPreviewReminder(p.tier, p.count, students)} activeOpacity={0.8}>
-              <Text style={st.devChipT}>{p.label}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-      )}
 
       {/* ── Group readiness, practice, what's waiting, Start class ── */}
       <View style={st.att}>
@@ -484,10 +468,6 @@ const st = StyleSheet.create({
   },
   nudgeT: { flex: 1, fontFamily: Fonts.ttMedium, fontSize: 12, color: 'rgba(255,255,255,0.8)' },
   nudgeA: { fontFamily: Fonts.ttBold, color: GOLD },
-  devRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginHorizontal: Spacing.side, marginBottom: 6 },
-  devLabel: { fontFamily: Fonts.ttBold, fontSize: 8, letterSpacing: 1.4, color: 'rgba(0,0,0,0.3)', marginRight: 2 },
-  devChip: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8, backgroundColor: 'rgba(0,0,0,0.06)' },
-  devChipT: { fontFamily: Fonts.ttBold, fontSize: 10, color: 'rgba(0,0,0,0.55)' },
 
   att: { marginHorizontal: Spacing.side, gap: 16, paddingTop: 12, paddingBottom: 18, borderBottomWidth: 1, borderBottomColor: LINE },
   big: { flexDirection: 'row', alignItems: 'flex-end', gap: 6 },
@@ -500,7 +480,7 @@ const st = StyleSheet.create({
   chart: { height: CHART_H },
   bars: { ...StyleSheet.absoluteFillObject, flexDirection: 'row', alignItems: 'flex-end', gap: 7 },
   barCol: { flex: 1, backgroundColor: INK, borderRadius: 3 },
-  barNow: { backgroundColor: GOLD, shadowColor: GOLD, shadowOpacity: 0.9, shadowOffset: { width: 0, height: 4 }, shadowRadius: 7 },
+  barNow: { backgroundColor: GOLD },
   avgLine: { position: 'absolute', left: 0, right: 0, borderTopWidth: 1, borderTopColor: 'rgba(10,10,10,0.16)' },
   avgLabel: {
     position: 'absolute', left: 0, top: -7, paddingRight: 6, backgroundColor: PAGE,
