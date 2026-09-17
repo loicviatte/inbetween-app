@@ -90,7 +90,7 @@ function ClassPickerModal({ visible, onClose, onSelect, currentId }) {
       <View style={picker.overlay}>
         <View style={picker.sheet}>
           <View style={picker.header}>
-            <Text style={picker.title}>Link to class</Text>
+            <Text style={picker.title}>Link to a lesson</Text>
             <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
               <Ionicons name="close" size={20} color={Colors.secondary} />
             </TouchableOpacity>
@@ -114,7 +114,7 @@ function ClassPickerModal({ visible, onClose, onSelect, currentId }) {
                 >
                   <View style={picker.itemLeft}>
                     <Text style={picker.itemDate}>{formatDate(item.created_at)}</Text>
-                    <Text style={picker.itemFocus} numberOfLines={1}>{item.title || 'Class Log'}</Text>
+                    <Text style={picker.itemFocus} numberOfLines={1}>{item.title || 'Lesson'}</Text>
                     {item.practice_point_1 && <Text style={picker.itemText} numberOfLines={1}>{item.practice_point_1}</Text>}
                   </View>
                   {isSelected && <Ionicons name="checkmark" size={18} color={Colors.activeLog} />}

@@ -23,7 +23,7 @@ const INK_950 = '#0A0A0A';
 const LINE = 'rgba(10,10,10,0.09)';
 
 const CLASS_STYLES = [
-  { key: 'all', label: 'All classes' },
+  { key: 'all', label: 'All lessons' },
   { key: 'latin', label: 'Latin group' },
   { key: 'ballroom', label: 'Ballroom group' },
 ];
@@ -44,7 +44,7 @@ export default function CoachTabHeader({ mode = null, links = false }) {
     style: tabView.classesStyle, setStyle: tabView.setClassesStyle,
   };
   const initial = user?.name ? user.name[0].toUpperCase() : 'C';
-  const classesLabel = classes.style === 'latin' ? 'Latin group' : classes.style === 'ballroom' ? 'Ballroom group' : 'Classes';
+  const classesLabel = classes.style === 'latin' ? 'Latin group' : classes.style === 'ballroom' ? 'Ballroom group' : 'Lessons';
   const toggleView = (v) => classes.setView(classes.view === v ? 'list' : v);
 
   return (

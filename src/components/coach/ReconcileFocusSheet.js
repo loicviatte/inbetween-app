@@ -101,7 +101,7 @@ export default function ReconcileFocusSheet({
         <View style={s.hero}>
           <HeroCardGradient />
           <View style={s.kheadrow}>
-            <Text style={s.keyebrow}>Critical focus point for next class</Text>
+            <Text style={s.keyebrow}>Critical focus point for the next lesson</Text>
             <View style={s.klock}>
               <Ionicons name="lock-closed" size={12} color={C.gold300} />
             </View>

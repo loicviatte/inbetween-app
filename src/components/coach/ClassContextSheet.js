@@ -17,10 +17,10 @@ export default function ClassContextSheet({ fp, onClose }) {
   const src = Array.isArray(fp?.source_class_input) ? fp.source_class_input[0] : fp?.source_class_input;
   if (!src) return null;
 
-  const title = src.title || src.ai_primary_focus || 'Class';
+  const title = src.title || src.ai_primary_focus || 'Lesson';
   const dateLabel = formatDate(src.created_at).toUpperCase();
   const isGroup = src.lesson_type === 'public' || src.lesson_type === 'group';
-  const kindLabel = isGroup ? 'Group class' : 'Private lesson';
+  const kindLabel = isGroup ? 'Group lesson' : 'Private lesson';
   const subtitle = src.teacher_name ? `${kindLabel} · ${src.teacher_name}` : kindLabel;
 
   return (

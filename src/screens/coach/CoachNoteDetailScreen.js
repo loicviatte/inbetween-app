@@ -236,7 +236,7 @@ export default function CoachNoteDetailScreen({ route, navigation }) {
         if (!active || !data) return;
         setLinkedClass({
           id: data.id,
-          title: data.title || data.ai_primary_focus || 'Class',
+          title: data.title || data.ai_primary_focus || 'Lesson',
           lessonType: data.lesson_type || null,
           createdAt: data.created_at,
         });
@@ -451,7 +451,7 @@ export default function CoachNoteDetailScreen({ route, navigation }) {
                 <Text style={styles.linkedText} numberOfLines={1}>
                   Linked to{' '}
                   <Text style={styles.linkedClassName}>
-                    {linkedClass.title || 'class'}
+                    {linkedClass.title || 'lesson'}
                   </Text>
                 </Text>
               </TouchableOpacity>

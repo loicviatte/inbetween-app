@@ -39,7 +39,7 @@ const PRIVACY_URL = 'https://www.useinbetween.com/privacy';
 
 const ROLE_OPTIONS = [
   { value: 'student', title: 'Student', desc: 'Train your focus points', icon: 'person-outline' },
-  { value: 'coach', title: 'Coach', desc: 'Run classes & assign focus', icon: 'megaphone-outline' },
+  { value: 'coach', title: 'Coach', desc: 'Run lessons & assign focus', icon: 'megaphone-outline' },
 ];
 
 const DANCE_OPTIONS = [
@@ -414,7 +414,7 @@ export default function RegisterScreen({ navigation }) {
             <Text style={styles.finalTitle}>You're all set,{'\n'}{firstName}.</Text>
             <Text style={styles.finalSub}>
               {role === 'coach'
-                ? 'Your coach dashboard is ready for your first class.'
+                ? 'Your coach dashboard is ready for your first lesson.'
                 : 'Your home screen is ready for your first focus points.'}
             </Text>
             <View style={styles.recap}>
@@ -604,7 +604,7 @@ export default function RegisterScreen({ navigation }) {
     body = (
       <>
         <Text style={styles.h1}>Find your{'\n'}studio</Text>
-        <Text style={styles.sub}>Connect to sync your coaches & classes.</Text>
+        <Text style={styles.sub}>Connect to sync your coaches & lessons.</Text>
 
         <View style={styles.search}>
           <Ionicons name="search" size={16} color={Onboard.ink3} />

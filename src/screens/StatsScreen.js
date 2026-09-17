@@ -1125,7 +1125,7 @@ export default function StatsScreen({ navigation, route }) {
     if (nextId !== currentId && user?.studio?.name) {
       Alert.alert(
         'Change studio?',
-        `You'll lose access to ${user.studio.name}'s past and upcoming group classes. Your new studio's classes will show instead.`,
+        `You'll lose access to ${user.studio.name}'s past and upcoming group lessons. Your new studio's lessons will show instead.`,
         [
           { text: 'Cancel', style: 'cancel' },
           { text: 'Change studio', style: 'destructive', onPress: commit },
@@ -1672,7 +1672,7 @@ export default function StatsScreen({ navigation, route }) {
                 <View style={set.card}>
                   <SettingRow
                     label="Notification settings"
-                    value="From your coach, classes, delivery"
+                    value="From your coach, lessons, delivery"
                     onPress={() => navigation.navigate('NotificationSettings', { coachName: myCoach?.name || latinCoach?.name || ballroomCoach?.name || null })}
                     isLast
                   />

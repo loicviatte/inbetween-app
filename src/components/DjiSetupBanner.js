@@ -593,7 +593,7 @@ function renderStep(step, foundCount) {
                   Plug in after each class and new ones sync automatically.
                 </>
               ) : (
-                <>Plug your mic in after each class to sync your recordings — automatically.</>
+                <>Plug your mic in after each lesson to sync your recordings — automatically.</>
               )}
             </Text>
           </View>

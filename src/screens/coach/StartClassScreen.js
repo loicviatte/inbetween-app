@@ -646,7 +646,7 @@ export default function StartClassScreen({ navigation }) {
         Notifications.scheduleNotificationAsync({
           content: {
             title: '🎙️ Microphone disconnected',
-            body: `Your mic disconnected mid-class${fallback}. Open InBetween to keep going or stop the class.`,
+            body: `Your mic disconnected mid-lesson${fallback}. Open InBetween to keep going or end the lesson.`,
             sound: 'default',
             interruptionLevel: 'timeSensitive',
             badge: 1,
@@ -657,10 +657,10 @@ export default function StartClassScreen({ navigation }) {
 
       Alert.alert(
         '🎙️ Microphone disconnected',
-        `Your microphone disconnected mid-class${fallback}. The recording is continuing on the next available source.`,
+        `Your microphone disconnected mid-lesson${fallback}. The recording is continuing on the next available source.`,
         [
           { text: 'Keep recording', style: 'cancel' },
-          { text: 'Stop class', style: 'destructive', onPress: () => stopClass() },
+          { text: 'End the lesson', style: 'destructive', onPress: () => stopClass() },
         ],
       );
     });
@@ -1352,7 +1352,7 @@ export default function StartClassScreen({ navigation }) {
     } catch { return; }
     Alert.alert(
       'Lock-screen widget unavailable',
-      "Recording will continue normally even if you lock your phone. To see a Live Activity on your lock screen showing the class is recording, enable Live Activities for InBetween: Settings → InBetween → Live Activities.",
+      "Recording will continue normally even if you lock your phone. To see a Live Activity on your lock screen showing the lesson is recording, enable Live Activities for InBetween: Settings → InBetween → Live Activities.",
       [{ text: 'Got it', style: 'default' }],
     );
   }
@@ -1510,7 +1510,7 @@ export default function StartClassScreen({ navigation }) {
         recordingIdRef.current = null;
         userIdRef.current = null;
         startingRef.current = false;
-        Alert.alert('Waiting for a parent', 'Someone in this class is under 18 and can’t be recorded until their parent gives permission.');
+        Alert.alert('Waiting for a parent', 'Someone in this lesson is under 18 and can’t be recorded until their parent gives permission.');
         return;
       }
       console.warn('[StartClass] new pipeline init failed, falling back to legacy:', err);
@@ -1735,7 +1735,7 @@ export default function StartClassScreen({ navigation }) {
         Notifications.scheduleNotificationAsync({
           content: {
             title: '🔋 Time to charge your mic',
-            body: "You've used your Bluetooth mic for 4h. Charge it before your next class.",
+            body: "You've used your Bluetooth mic for 4h. Charge it before your next lesson.",
             sound: 'default',
             interruptionLevel: 'active',
           },
@@ -2374,7 +2374,7 @@ export default function StartClassScreen({ navigation }) {
 
     const who = view === 'private-briefing' ? selectedStudent?.name
       : view === 'couple-briefing' ? selectedCouple?.name
-      : 'Group class';
+      : 'Group lesson';
     const figures = [
       carryoverFocuses.length > 0 && { value: carryoverFocuses.length - keptCount, label: 'to retire' },
       carryoverFocuses.length > 0 && { value: keptCount, label: 'kept' },
@@ -3132,7 +3132,7 @@ export default function StartClassScreen({ navigation }) {
                   <Ionicons name="people" size={18} color={L.GOLD} />
                 </View>
               )}
-              name="Group class"
+              name="Group lesson"
               meta={`${plural(totalStudents, 'student')} · everyone is included`}
               onPress={loadGroupData}
             />
@@ -3374,7 +3374,7 @@ export default function StartClassScreen({ navigation }) {
     );
   }
 
-  // ── Group class ────────────────────────────────────────────────────────
+  // ── Group lesson ────────────────────────────────────────────────────────
   if (view === 'group-briefing') {
     const totalStudents = students.length;
     const onTrack = students.filter((x) => x.status === 'on_track').length;
@@ -3386,7 +3386,7 @@ export default function StartClassScreen({ navigation }) {
 
     return (
       <SafeAreaView style={lessonStyles.page} edges={['top']}>
-        <TopBar onBack={backFromBriefing} title="Group class" sub={plural(totalStudents, 'student')} />
+        <TopBar onBack={backFromBriefing} title="Group lesson" sub={plural(totalStudents, 'student')} />
         <ScrollView
           contentContainerStyle={[lessonStyles.scroll, { paddingBottom: 110 + insets.bottom }]}
           showsVerticalScrollIndicator={false}
@@ -3395,7 +3395,7 @@ export default function StartClassScreen({ navigation }) {
             <FadeIn>
               <Hero
                 big={onTrackPct}
-                title="Group class"
+                title="Group lesson"
                 label="On track this week"
                 gauge={onTrackPct}
                 figures={[

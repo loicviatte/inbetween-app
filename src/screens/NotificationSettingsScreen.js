@@ -207,7 +207,7 @@ export default function NotificationSettingsScreen({ navigation, route }) {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
     Alert.alert(
       'Turn off attendance check-ins?',
-      `After a group class, ${coachFirst || 'your coach'} asks whether you were there. Confirming is what sends you that class’s focus points — without this notification, you may miss them.`,
+      `After a group lesson, ${coachFirst || 'your coach'} asks whether you were there. Confirming is what sends you that lesson’s focus points — without this notification, you may miss them.`,
       [
         { text: 'Keep them on', style: 'cancel' },
         { text: 'Turn off', style: 'destructive', onPress: () => setPref('attendance', false) },
@@ -265,10 +265,10 @@ export default function NotificationSettingsScreen({ navigation, route }) {
               value={prefs.coach_comments} onChange={(v) => setPref('coach_comments', v)} />
           </View>
 
-          <Section title="Classes" />
+          <Section title="Lessons" />
           <View style={st.card}>
             <SwitchRow first title="Attendance check-ins"
-              sub={`When ${coachFirst || 'your coach'} asks whether you were at a group class`}
+              sub={`When ${coachFirst || 'your coach'} asks whether you were at a group lesson`}
               value={prefs.attendance} onChange={setAttendance} />
           </View>
 

@@ -64,7 +64,7 @@ function CoachMainTabs() {
         >
           <Tab.Screen name="STUDENTS" component={CoachHomeScreen} />
           <Tab.Screen name="DASHBOARD" component={DashboardScreen} options={{ tabBarLabel: 'HOME' }} />
-          <Tab.Screen name="CLASS" component={CoachClassesScreen} />
+          <Tab.Screen name="CLASS" component={CoachClassesScreen} options={{ tabBarLabel: 'LESSONS' }} />
         </Tab.Navigator>
       </View>
     </View>
@@ -102,7 +102,7 @@ function useCoachStartupEffects(navigationRef) {
         if (persisted) {
           Alert.alert(
             'Recording interrupted',
-            'Keep the app open to continue recording the class. Tap Continue to pick up where you left off.',
+            'Keep the app open to continue recording the lesson. Tap Continue to pick up where you left off.',
             [
               {
                 text: 'Continue',
@@ -119,7 +119,7 @@ function useCoachStartupEffects(navigationRef) {
         } else {
           Alert.alert(
             'Recording interrupted',
-            'Your previous recording was interrupted. The class was not saved. Please start a new one.',
+            'Your previous recording was interrupted. The lesson was not saved. Please start a new one.',
             [{ text: 'OK', style: 'default' }],
           );
         }

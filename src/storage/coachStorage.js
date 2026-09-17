@@ -955,7 +955,7 @@ export async function dismissQuestion(messageId) {
 // link is persisted too, so the class detail screen can list every
 // question addressed in that lesson under the summary.
 export async function markQuestionCovered(messageId, classInputId = null) {
-  const update = { status: 'replied', reply: 'Covered in your last class.' };
+  const update = { status: 'replied', reply: 'Covered in your last lesson.' };
   if (classInputId) update.covered_class_input_id = classInputId;
   await supabase
     .from('coach_messages')
@@ -1552,7 +1552,7 @@ export async function getCoachNotes() {
     (classes || []).forEach(c => {
       classMap[c.id] = {
         id: c.id,
-        title: c.title || c.ai_primary_focus || 'Class',
+        title: c.title || c.ai_primary_focus || 'Lesson',
         lessonType: c.lesson_type || null,
         createdAt: c.created_at,
       };
@@ -1592,7 +1592,7 @@ export async function getCoachNoteById(id) {
     if (cls) {
       data.linkedClass = {
         id: cls.id,
-        title: cls.title || cls.ai_primary_focus || 'Class',
+        title: cls.title || cls.ai_primary_focus || 'Lesson',
         lessonType: cls.lesson_type || null,
         createdAt: cls.created_at,
       };

@@ -602,7 +602,7 @@ export default function StudentDetailScreen({ route, navigation }) {
               count={pendingFPs.length}
               tone="red"
               title={pendingFPs.length === 1 ? 'Focus point to validate' : 'Focus points to validate'}
-              sub={`From the last class, before ${first} sees ${pendingFPs.length === 1 ? 'it' : 'them'}`}
+              sub={`From the last lesson, before ${first} sees ${pendingFPs.length === 1 ? 'it' : 'them'}`}
               open={open === 'validate'}
               onToggle={() => toggle('validate')}
             >

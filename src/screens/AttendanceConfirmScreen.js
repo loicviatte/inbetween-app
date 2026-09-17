@@ -39,13 +39,13 @@ export default function AttendanceConfirmScreen({ navigation, route }) {
         <View style={s.iconWrap}>
           <Text style={s.icon}>🕺</Text>
         </View>
-        <Text style={s.title}>Were you at {coachName ?? 'your coach'}'s group class?</Text>
+        <Text style={s.title}>Were you at {coachName ?? 'your coach'}'s group lesson?</Text>
         {!!classDate && <Text style={s.date}>{classDate}</Text>}
-        <Text style={s.sub}>Confirm your attendance to receive your focus points from this class.</Text>
+        <Text style={s.sub}>Confirm your attendance to receive your focus points from this lesson.</Text>
 
         {done ? (
           <View style={s.doneWrap}>
-            <Text style={s.doneText}>{answer === 'yes' ? '✓ Confirmed!' : '✓ Noted, no focus points for this class.'}</Text>
+            <Text style={s.doneText}>{answer === 'yes' ? '✓ Confirmed!' : '✓ Noted, no focus points for this lesson.'}</Text>
           </View>
         ) : (
           <View style={s.buttons}>

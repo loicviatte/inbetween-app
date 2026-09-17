@@ -307,7 +307,7 @@ function Veil({ on, children, style }) {
 const ROLES = [
   { v: 'student', t: 'Student', d: 'Train your focus points between lessons' },
   { v: 'parent', t: 'Parent', d: 'Follow your child’s training between lessons' },
-  { v: 'coach', t: 'Coach', d: 'Run classes and assign focus points' },
+  { v: 'coach', t: 'Coach', d: 'Run lessons and assign focus points' },
 ];
 // A parent holds the account and follows a child's training, so every question
 // in the student flow is asked about someone else. Only the wording changes —
@@ -1218,13 +1218,13 @@ export default function OnboardingScreen({ navigation, route }) {
             <Text style={s.cons}>
               <Text style={s.consB}>{a.lessons * 12}{a.lessons >= 10 ? '+' : ''}</Text> a year · 45 min each
             </Text>
-            <Text style={s.cons}>Set it to zero if you only take group classes.</Text>
+            <Text style={s.cons}>Set it to zero if you only take group lessons.</Text>
           </View>
         </Q>
       );
       case 'studio': return (
         <Q plan={planLine} {...qc(copy('studio', 'Find your studio',
-          isCoach ? 'Connect it to sync your classes and your student list.' : 'Connect it and your coach’s corrections land straight in your app.'))}>
+          isCoach ? 'Connect it to sync your lessons and your student list.' : 'Connect it and your coach’s corrections land straight in your app.'))}>
           <View style={s.search}>
             <SearchIcon />
             <TextInput style={s.searchIn} value={query} placeholder="Search studios…" placeholderTextColor={T.ink3}
@@ -1738,7 +1738,7 @@ export default function OnboardingScreen({ navigation, route }) {
   const whyLine = {
     role: 'Switch roles any time — nothing is locked in.',
     studio: isCoach ? 'Submitting a studio never holds up your setup.'
-      : 'Connecting a studio pulls in your coaches and classes.',
+      : 'Connecting a studio pulls in your coaches and lessons.',
     coach: 'They’ll see you in their student list once you join.',
     words: `${a.words.length} of 3 chosen`,
     leave: `${a.leave.length} of 2 chosen`,
@@ -1802,7 +1802,7 @@ export default function OnboardingScreen({ navigation, route }) {
         <KeyboardAvoidingView style={s.promptBackdrop} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={s.prompt}>
             <Text style={s.promptTitle}>Your studio’s name</Text>
-            <Text style={s.promptSub}>We’ll add it with your account, so your classes and students can sync to it.</Text>
+            <Text style={s.promptSub}>We’ll add it with your account, so your lessons and students can sync to it.</Text>
             <View style={[s.fieldIn, s.promptField]}>
               <TextInput style={s.input} value={studioDraft} onChangeText={setStudioDraft} autoFocus
                 placeholder="Studio name" placeholderTextColor={T.ink3} autoCapitalize="words" returnKeyType="done"

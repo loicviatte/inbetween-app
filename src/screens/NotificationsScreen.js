@@ -429,7 +429,7 @@ export default function NotificationsScreen({ navigation }) {
   const tabs = [
     ['all', 'All'],
     ['coach', isCoach ? 'Students' : coachFirst ? `From ${coachFirst}` : 'From coach'],
-    ['class', 'Classes'],
+    ['class', 'Lessons'],
   ];
   const shown = notifications.filter((n) => filter === 'all' || (TYPE_META[n.type] || DEFAULT_META).group === filter);
   const groups = [];

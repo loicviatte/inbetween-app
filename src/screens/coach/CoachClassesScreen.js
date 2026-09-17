@@ -41,10 +41,10 @@ const KINDS = [['all', 'All'], ['group', 'Group'], ['private', 'Private']];
 const isGroup = (c) => c.lesson_type === 'group' || c.lesson_type === 'public';
 const kindLabel = (c) => (isGroup(c) ? 'Group' : c.lesson_type === 'couple' ? 'Couple' : 'Private');
 const isProcessing = (c) => ['processing', 'pending', 'extracted'].includes(c.status);
-const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 'es'}`;
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 function titleOf(c) {
-  return c.title || c.ai_primary_focus || (isProcessing(c) ? 'Processing class…' : 'Untitled class');
+  return c.title || c.ai_primary_focus || (isProcessing(c) ? 'Processing lesson…' : 'Untitled lesson');
 }
 
 // `dance` is "Rumba", "Cha Cha, Rumba" or a JSON list.
@@ -118,7 +118,7 @@ function ClassRow({ c, first, goldIds, onPress }) {
       onPress={onPress}
       style={({ pressed }) => [st.cl, !first && st.clLine, pressed && { backgroundColor: '#FBFAF7' }]}
       accessibilityRole="button"
-      accessibilityLabel={`${kindLabel(c)} class, ${MONTHS[d.getMonth()]} ${d.getDate()}: ${titleOf(c)}`}
+      accessibilityLabel={`${kindLabel(c)} lesson, ${MONTHS[d.getMonth()]} ${d.getDate()}: ${titleOf(c)}`}
     >
       <View style={[st.dt, priv && st.dtPriv]}>
         <Text style={[st.dtD, priv && { color: NAVY }]}>{d.getDate()}</Text>
@@ -332,8 +332,8 @@ export default function CoachClassesScreen({ navigation }) {
   const onAdd = () => (view === 'notes' ? navigation.navigate('CoachNoteDetail', {}) : navigation.navigate('StartClass'));
 
   const count = shownView === 'notes' ? `${notes.length} note${notes.length === 1 ? '' : 's'}`
-    : shownView === 'cal' ? `${plural(monthClasses.length, 'class')} in ${MONTHS[month.m]}`
-    : plural(filtered.length, 'class');
+    : shownView === 'cal' ? `${plural(monthClasses.length, 'lesson')} in ${MONTHS[month.m]}`
+    : plural(filtered.length, 'lesson');
 
   return (
     <View style={st.page}>
@@ -462,14 +462,14 @@ export default function CoachClassesScreen({ navigation }) {
               ) : (
                 <Animated.View style={kindSlide}>
                   {months.length === 0 ? (
-                    <Empty text={classes.length === 0 ? 'No classes yet. Tap + to start recording one.' : 'No class matches this filter.'} />
+                    <Empty text={classes.length === 0 ? 'No lessons yet. Tap + to start recording one.' : 'No lesson matches this filter.'} />
                   ) : (
                     <FadeIn>
                       {months.map((mo) => (
                         <View key={mo.key}>
                           <View style={st.mk}>
                             <Text style={st.mkT}>{mo.label}</Text>
-                            <Text style={st.mkN}>{plural(mo.list.length, 'class')}</Text>
+                            <Text style={st.mkN}>{plural(mo.list.length, 'lesson')}</Text>
                           </View>
                           <Rows list={mo.list} goldIds={goldIds} onOpen={openClass} />
                         </View>
@@ -488,7 +488,7 @@ export default function CoachClassesScreen({ navigation }) {
         onPress={onAdd}
         activeOpacity={0.85}
         accessibilityRole="button"
-        accessibilityLabel={view === 'notes' ? 'Add a note' : 'Start a class'}
+        accessibilityLabel={view === 'notes' ? 'Add a note' : 'Start a lesson'}
       >
         <Ionicons name="add" size={28} color={INK} />
       </TouchableOpacity>

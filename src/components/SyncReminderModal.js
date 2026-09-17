@@ -138,9 +138,9 @@ function isMorningNow() {
 
 function labelFor(row) {
   if (row.studentName) return row.studentName;
-  if (row.lessonType === 'group') return 'Group class';
-  if (row.lessonType === 'couple') return 'Couple class';
-  return 'Private class';
+  if (row.lessonType === 'group') return 'Group lesson';
+  if (row.lessonType === 'couple') return 'Couple lesson';
+  return 'Private lesson';
 }
 
 const NUM = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'];

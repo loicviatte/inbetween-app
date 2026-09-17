@@ -31,10 +31,10 @@ export default function QuestionDetailSheet({ question, role = 'student', onClos
   const eyebrowR = isCoach ? 'YOUR REPLY' : "COACH'S REPLY";
   const eyebrowC = isCoach ? "YOUR RESPONSE" : "COACH'S RESPONSE";
   const inClassText = isCoach
-    ? 'You will cover this question in the next class.'
-    : 'Your coach will cover this question in your next class.';
+    ? 'You will cover this question in the next lesson.'
+    : 'Your coach will cover this question in your next lesson.';
   const pendingText = isCoach
-    ? 'Pending — reply, or commit to covering it in class.'
+    ? 'Pending — reply, or commit to covering it in the lesson.'
     : 'Waiting for your coach to respond…';
 
   return (

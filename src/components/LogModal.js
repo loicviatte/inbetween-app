@@ -573,7 +573,7 @@ export default function LogModal({ visible, onClose, onSubmitted, initialDraft }
               <View style={styles.handle} />
               <View style={styles.headerRow}>
                 <View>
-                  <Text style={styles.headerTitle}>Log a class</Text>
+                  <Text style={styles.headerTitle}>Log a lesson</Text>
                   <Text style={styles.headerStep}>Step {step} of 2</Text>
                 </View>
                 <TouchableOpacity onPress={handleClose} style={styles.closeBtn} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
@@ -594,7 +594,7 @@ export default function LogModal({ visible, onClose, onSubmitted, initialDraft }
               {step === 1 ? (
                 <>
                   {/* ── Class details ─────────────────────────────── */}
-                  <Text style={styles.sectionTitle}>Class details</Text>
+                  <Text style={styles.sectionTitle}>Lesson details</Text>
                   <View style={styles.metaCard}>
 
                     {/* Type */}
@@ -678,11 +678,11 @@ export default function LogModal({ visible, onClose, onSubmitted, initialDraft }
                   </View>
 
                   {/* ── Class Summary ─────────────────────────────── */}
-                  <Text style={styles.sectionTitleBold}>Class Summary</Text>
+                  <Text style={styles.sectionTitleBold}>Lesson summary</Text>
                   <VoiceInput
                     value={class_summary}
                     onChangeText={setClassSummary}
-                    placeholder="What did you work on in this class?"
+                    placeholder="What did you work on in this lesson?"
                   />
 
                   {/* ── Focus 1 ───────────────────────────────────── */}
@@ -804,7 +804,7 @@ export default function LogModal({ visible, onClose, onSubmitted, initialDraft }
                   {/* ── Date ──────────────────────────────────────── */}
                   <View style={styles.dateSeparator} />
                   <TouchableOpacity style={styles.dateBtn} onPress={() => setShowDatePicker(!showDatePicker)} activeOpacity={0.75}>
-                    <Text style={styles.dateBtnLabel}>Class date</Text>
+                    <Text style={styles.dateBtnLabel}>Lesson date</Text>
                     <Text style={styles.dateBtnValue}>{formatDateLabel(classDate)} ▾</Text>
                   </TouchableOpacity>
                   {showDatePicker && (
@@ -898,7 +898,7 @@ export default function LogModal({ visible, onClose, onSubmitted, initialDraft }
                         <Text style={styles.primaryBtnText}>Generating…</Text>
                       </View>
                     ) : (
-                      <Text style={styles.primaryBtnText}>Save class</Text>
+                      <Text style={styles.primaryBtnText}>Save lesson</Text>
                     )}
                   </TouchableOpacity>
 

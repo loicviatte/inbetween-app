@@ -221,7 +221,7 @@ export default function AllFocusPointsScreen({ navigation, route }) {
     : {
         solo:   { title: 'Nothing in progress', body: 'Log a private lesson to get your next focus points.' },
         couple: { title: 'No couple focus points', body: 'Your shared focus points from couple lessons show up here.' },
-        group:  { title: 'No recent group focus', body: 'Focus points from your last group classes show up here.' },
+        group:  { title: 'No recent group focus', body: 'Focus points from your last group lessons show up here.' },
       }[activeTab];
 
   // "past" is not the same as "graduated": a coach can retire a focus point,
@@ -231,7 +231,7 @@ export default function AllFocusPointsScreen({ navigation, route }) {
     : {
         solo:   `${list.length} in progress · from your last private`,
         couple: `${list.length} shared · from your last couple lesson`,
-        group:  `${list.length} · from your last 2 group classes`,
+        group:  `${list.length} · from your last 2 group lessons`,
       }[activeTab];
 
   // ── Practice launch ──

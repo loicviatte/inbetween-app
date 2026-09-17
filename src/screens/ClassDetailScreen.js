@@ -298,7 +298,7 @@ export default function ClassDetailScreen({ route, navigation }) {
   }
 
   const linkedIds = linkedNotes.map((n) => n.id);
-  const title = item.title || item.ai_primary_focus || 'Class Log';
+  const title = item.title || item.ai_primary_focus || 'Lesson';
   const isRecorded = !!item.transcript;
   const teacherDisplay = item.teacher_name || item._teacher_fallback || null;
   const teacherInitials = getInitials(teacherDisplay);
@@ -399,7 +399,7 @@ export default function ClassDetailScreen({ route, navigation }) {
                   <Text style={s.summaryText}>{item.class_summary}</Text>
                 </View>
               ) : (
-                <Text style={s.placeholder}>No summary yet for this class.</Text>
+                <Text style={s.placeholder}>No summary yet for this lesson.</Text>
               )}
               {coveredQuestions.length > 0 && (
                 <View style={s.coveredBlock}>
@@ -427,7 +427,7 @@ export default function ClassDetailScreen({ route, navigation }) {
                   ))}
                 </View>
               ) : (
-                <Text style={s.placeholder}>No focus points extracted from this class.</Text>
+                <Text style={s.placeholder}>No focus points extracted from this lesson.</Text>
               )}
             </>
           )}
@@ -442,7 +442,7 @@ export default function ClassDetailScreen({ route, navigation }) {
                   </View>
                   <View style={{ flex: 1, minWidth: 0 }}>
                     <Text style={s.linkATitle}>No notes linked</Text>
-                    <Text style={s.linkASubtitle}>Tie a saved note to this class.</Text>
+                    <Text style={s.linkASubtitle}>Tie a saved note to this lesson.</Text>
                   </View>
                   <TouchableOpacity
                     style={s.linkABtn}

@@ -116,7 +116,7 @@ export default function PendingFocusCard({
           {!!src && !!onShowContext && (
             <TouchableOpacity style={s.contextBtn} onPress={() => onShowContext(fp)} activeOpacity={0.7}>
               <Ionicons name="book-outline" size={14} color="rgba(255,255,255,0.85)" />
-              <Text style={s.contextBtnText}>Read class context</Text>
+              <Text style={s.contextBtnText}>Read lesson context</Text>
               <Ionicons name="chevron-forward" size={14} color="rgba(255,255,255,0.45)" />
             </TouchableOpacity>
           )}

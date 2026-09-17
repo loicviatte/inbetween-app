@@ -138,7 +138,7 @@ function lessonMeta(lesson) {
   if (!lesson) return '';
   const d = new Date(lesson.created_at);
   const parts = [`${WEEKDAYS[d.getDay()]} ${d.getDate()} ${MONTHS[d.getMonth()]}`];
-  if (lesson.lesson_type === 'group') parts.push('group class');
+  if (lesson.lesson_type === 'group') parts.push('group lesson');
   else {
     const teacher = firstName(lesson.teacher_name || lesson._teacher_fallback);
     if (teacher) parts.push(`with ${teacher}`);
@@ -1157,10 +1157,10 @@ export default function HomeScreen({ navigation }) {
   const drillsLeft = focuses.reduce((n, f) => n + Math.max(0, (f.target ?? 0) - (f.done ?? 0)), 0);
   const soloPending = !isCouple && !!pendingValidation;
   const lead = focuses.length === 0
-    ? (soloPending ? 'Your latest class is being reviewed' : 'Nothing to prepare yet')
+    ? (soloPending ? 'Your latest lesson is being reviewed' : 'Nothing to prepare yet')
     : openN === 0
-      ? 'You’re set for your next class'
-      : `${plural(openN, 'focus point')} left before next class`;
+      ? 'You’re set for your next lesson'
+      : `${plural(openN, 'focus point')} left before your next lesson`;
   const sub = focuses.length === 0
     ? (isCouple
       ? 'Your couple private lesson brings shared focus points.'

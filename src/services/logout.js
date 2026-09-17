@@ -87,7 +87,7 @@ export function logOutCoachWithChecks({ djiUploading = false } = {}) {
     await supabase.auth.signOut({ scope: 'local' });
   };
   if (activeClass || djiUploading) {
-    const what = activeClass ? 'a class is still recording' : 'a DJI import is still uploading';
+    const what = activeClass ? 'a lesson is still recording' : 'a DJI import is still uploading';
     Alert.alert('In progress', `You have ${what}. Logging out will discard it. Continue?`, [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Discard & log out', style: 'destructive', onPress: () => { go(); } },

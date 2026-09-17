@@ -584,13 +584,13 @@ export async function refreshNudgeMessage() {
     if (weekCount >= 3) {
       nudge = `Strong week — ${weekCount} sessions logged.`;
     } else if (!user?.last_active_date) {
-      nudge = "You haven't logged a session yet. Log your first class to get started.";
+      nudge = "You haven't logged a session yet. Log your first lesson to get started.";
     } else {
       const daysSince = Math.floor(
         (Date.now() - new Date(user.last_active_date).getTime()) / 86400000
       );
       if (daysSince > 5) {
-        nudge = `You haven't logged a session in ${daysSince} days. Log your next class to update your focus.`;
+        nudge = `You haven't logged a session in ${daysSince} days. Log your next lesson to update your focus.`;
       }
     }
     await supabase.from('users').update({ nudge_message: nudge }).eq('id', userId);

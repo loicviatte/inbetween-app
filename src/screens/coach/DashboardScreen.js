@@ -465,7 +465,7 @@ export default function DashboardScreen({ navigation }) {
         {activeClass ? (
           <TouchableOpacity style={[st.start, st.startLive]} onPress={() => navigation.navigate('StartClass')} activeOpacity={0.88}>
             <View style={st.liveDot} />
-            <Text style={[st.startT, { color: '#FFFFFF' }]}>Class in progress</Text>
+            <Text style={[st.startT, { color: '#FFFFFF' }]}>Lesson in progress</Text>
             <Text style={st.liveTimer}>{chronoLabel}</Text>
           </TouchableOpacity>
         ) : switching ? (
@@ -483,7 +483,7 @@ export default function DashboardScreen({ navigation }) {
             }}
           >
             <Ionicons name="play" size={17} color={INK} />
-            <Text style={st.startT}>Start class</Text>
+            <Text style={st.startT}>Start a lesson</Text>
           </TouchableOpacity>
         )}
       </View>

@@ -158,7 +158,7 @@ export default function CoachSettingsScreen({ navigation }) {
               <Text style={em.fieldLabel}>Main studio</Text>
               <StudioPicker value={editStudio} onChange={setEditStudio} />
             </View>
-            <Text style={em.studioNote}>Your studio decides which group classes and students you see.</Text>
+            <Text style={em.studioNote}>Your studio decides which group lessons and students you see.</Text>
             {!!studioError && <Text style={em.error}>{studioError}</Text>}
             <TouchableOpacity style={em.saveBtn} onPress={saveStudio} activeOpacity={0.88} disabled={saving}>
               <Text style={em.saveBtnText}>{saving ? 'Saving…' : 'Save'}</Text>

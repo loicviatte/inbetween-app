@@ -433,7 +433,7 @@ function CompleteScreen({ summary, imported, unmatched, pendingReview = 0 }) {
     pendingReview > 0
       ? ` ${pendingReview} held for review before ${pendingReview === 1 ? 'it goes' : 'they go'} live.`
       : unmatched > 0
-        ? ` ${unmatched} couldn't be matched to a class — saved for review.`
+        ? ` ${unmatched} couldn't be matched to a lesson — saved for review.`
         : ' Ready when you are to tag them.';
   return (
     <>

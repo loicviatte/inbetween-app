@@ -252,7 +252,7 @@ export default function CoachLinksView({ bottomSpace = 0 }) {
     const first = user?.name ? user.name.split(' ')[0] : 'your coach';
     try {
       await Share.share({
-        message: `Join me on InBetween — I'll send your focus points after every class.\n\nUse my invite code: ${code}`,
+        message: `Join me on InBetween — I'll send your focus points after every lesson.\n\nUse my invite code: ${code}`,
         title: `Connect with ${first} on InBetween`,
       });
     } catch (err) {

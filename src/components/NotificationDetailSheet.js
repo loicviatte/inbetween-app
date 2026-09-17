@@ -100,7 +100,7 @@ function AttendanceEditView({ notif, priorAttendance, onChange, onClose }) {
     if (hasPrior && priorAttendance === true && newAnswer === false) {
       Alert.alert(
         'Are you sure?',
-        'The focus points your coach assigned from this class will be removed.',
+        'The focus points your coach assigned from this lesson will be removed.',
         [
           { text: 'Cancel', style: 'cancel' },
           { text: 'Remove', style: 'destructive', onPress: () => applyChange(false) },
@@ -114,7 +114,7 @@ function AttendanceEditView({ notif, priorAttendance, onChange, onClose }) {
   return (
     <View>
       <Text style={[s.category, { color: Colors.orange }]}>Attendance</Text>
-      <Text style={s.title}>Were you at {coachName}'s group class?</Text>
+      <Text style={s.title}>Were you at {coachName}'s group lesson?</Text>
       {!!classDate && <Text style={s.date}>{formatDate(classDate)}</Text>}
 
       {hasPrior && (

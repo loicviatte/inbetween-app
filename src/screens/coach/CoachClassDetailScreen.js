@@ -384,7 +384,7 @@ function StudentPickerModal({ visible, existingIds, onClose, onSelect }) {
         <View style={picker.sheet}>
           <View style={picker.handle} />
           <View style={picker.header}>
-            <Text style={picker.title}>Add student to class</Text>
+            <Text style={picker.title}>Add student to lesson</Text>
             <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
               <Ionicons name="close" size={20} color={FG_2} />
             </TouchableOpacity>
@@ -436,7 +436,7 @@ function StudentPickerModal({ visible, existingIds, onClose, onSelect }) {
               ListEmptyComponent={
                 <Text style={picker.empty}>
                   {remaining.length === 0
-                    ? 'All your students are already on this class.'
+                    ? 'All your students are already on this lesson.'
                     : 'No students match your search.'}
                 </Text>
               }
@@ -476,7 +476,7 @@ function NotePickerModal({ visible, onClose, onSelect, onCreateNew }) {
         <View style={picker.sheet}>
           <View style={picker.handle} />
           <View style={picker.header}>
-            <Text style={picker.title}>Link a note to this class</Text>
+            <Text style={picker.title}>Link a note to this lesson</Text>
             <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
               <Ionicons name="close" size={20} color={FG_2} />
             </TouchableOpacity>
@@ -646,7 +646,7 @@ export default function CoachClassDetailScreen({ route, navigation }) {
       const studentLabel = studentSaid === 'yes' ? 'present' : 'absent';
       const newLabel = next === 'yes' ? 'present' : 'absent';
       const tail = next === 'no'
-        ? ' On save, the focus points assigned to them from this class will be removed.'
+        ? ' On save, the focus points assigned to them from this lesson will be removed.'
         : '';
       Alert.alert(
         "Override student's reply?",
@@ -752,7 +752,7 @@ export default function CoachClassDetailScreen({ route, navigation }) {
   }
 
   async function handleUnlinkNote(note) {
-    Alert.alert('Unlink note', 'Remove this note from the class? The note itself stays.', [
+    Alert.alert('Unlink note', 'Remove this note from the lesson? The note itself stays.', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Unlink',
@@ -789,7 +789,7 @@ export default function CoachClassDetailScreen({ route, navigation }) {
       <SafeAreaView style={s.safe} edges={['top']}>
         <TopBar onBack={() => navigation.goBack()} />
         <View style={s.errorWrap}>
-          <Text style={s.errorText}>Class not found.</Text>
+          <Text style={s.errorText}>Lesson not found.</Text>
         </View>
       </SafeAreaView>
     );
@@ -803,7 +803,7 @@ export default function CoachClassDetailScreen({ route, navigation }) {
     cls.title ||
     cls.ai_primary_focus ||
     (cls.practice_point_1 || '').split(' ').slice(0, 6).join(' ') ||
-    (isPrivate ? 'Private lesson' : 'Group class');
+    (isPrivate ? 'Private lesson' : 'Group lesson');
 
   const datePill = formatDatePill(cls.created_at);
 
@@ -1013,13 +1013,13 @@ function SummaryTab({ cls, isProcessing }) {
     const failed = cls.status === 'error' || cls.status === 'failed';
     const stuck = isProcessing && Date.now() - new Date(cls.created_at).getTime() > 24 * 3600 * 1000;
     if (failed || stuck) {
-      const mail = `mailto:hello@useinbetween.com?subject=${encodeURIComponent('Class not processed')}&body=${encodeURIComponent(`Class ${cls.id}`)}`;
+      const mail = `mailto:hello@useinbetween.com?subject=${encodeURIComponent('Lesson not processed')}&body=${encodeURIComponent(`Lesson ${cls.id}`)}`;
       return (
         <View>
           <Text style={s.placeholder}>
             {failed
-              ? 'We couldn’t process this class. Its recording is kept: write to us and we’ll run it again.'
-              : 'This class is taking much longer than usual to process. Write to us and we’ll look at it.'}
+              ? 'We couldn’t process this lesson. Its recording is kept: write to us and we’ll run it again.'
+              : 'This lesson is taking much longer than usual to process. Write to us and we’ll look at it.'}
           </Text>
           <TouchableOpacity onPress={() => Linking.openURL(mail).catch(() => {})} activeOpacity={0.7} style={{ marginTop: 10 }}>
             <Text style={[s.placeholder, { color: '#8A6414', fontFamily: Fonts.semiBold }]}>Contact us</Text>
@@ -1030,8 +1030,8 @@ function SummaryTab({ cls, isProcessing }) {
     return (
       <Text style={s.placeholder}>
         {isProcessing
-          ? 'Class is still being processed. Summary will appear once transcription completes.'
-          : 'No summary yet for this class.'}
+          ? 'The lesson is still being processed. The summary appears once transcription completes.'
+          : 'No summary yet for this lesson.'}
       </Text>
     );
   }
@@ -1092,7 +1092,7 @@ function AttendanceTab({
   if (attendeesWithStatus.length === 0) {
     return (
       <View style={s.emptyState}>
-        <Text style={s.placeholder}>No students recorded for this class yet.</Text>
+        <Text style={s.placeholder}>No students recorded for this lesson yet.</Text>
         {!isPrivate && (
           <TouchableOpacity style={s.bigAddBtn} onPress={onAdd} activeOpacity={0.85}>
             <Ionicons name="add" size={16} color="#fff" />
@@ -1119,7 +1119,7 @@ function AttendanceTab({
 
       <Text style={s.attHint}>
         {isPrivate
-          ? 'Private class — attendance is locked to the booked student.'
+          ? 'Private lesson — attendance is locked to the booked student.'
           : 'Tap Present or Absent to mark each student. Rows where your mark disagrees with the student’s reply are highlighted.'}
       </Text>
 
@@ -1141,7 +1141,7 @@ function NotesTab({ notes, onOpen, onUnlink, onLink }) {
         <Text style={s.linkNoteBtnText}>Link a note</Text>
       </TouchableOpacity>
       {notes.length === 0 ? (
-        <Text style={s.placeholder}>No notes linked to this class yet.</Text>
+        <Text style={s.placeholder}>No notes linked to this lesson yet.</Text>
       ) : (
         notes.map(note => (
           <View key={note.id} style={s.noteRow}>

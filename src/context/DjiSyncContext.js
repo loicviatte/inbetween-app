@@ -1298,8 +1298,8 @@ export function DjiSyncProvider({ children }) {
     const n = rows.length;
     const head =
       n === 1
-        ? `${who ?? 'A class'} is still waiting for ${who ? 'her' : 'its'} audio.`
-        : `${n} classes are still waiting for their audio${who ? ` (${who}…)` : ''}.`;
+        ? `${who ?? 'A lesson'} is still waiting for ${who ? 'her' : 'its'} audio.`
+        : `${n} lessons are still waiting for their audio${who ? ` (${who}…)` : ''}.`;
     return `${head} ${suffix}`;
   }, []);
 
@@ -1316,7 +1316,7 @@ export function DjiSyncProvider({ children }) {
    */
   const remindTomorrowMorning = useCallback(() => {
     setReminderOpen(false);
-    scheduleMorningNotification(pendingBlurb('Import it before today’s classes.'));
+    scheduleMorningNotification(pendingBlurb('Import it before today’s lessons.'));
   }, [pendingBlurb]);
 
   /** "Not tonight" / "the mic isn't with me" — the evening is already marked. */
