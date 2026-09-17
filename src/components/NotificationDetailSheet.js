@@ -9,6 +9,7 @@ import {
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Colors, Fonts } from '../theme';
+import { dayLabel } from '../utils/dates';
 
 const ATTENDANCE_TYPES = new Set(['attendance_check', 'group_class_attendance']);
 
@@ -30,7 +31,7 @@ function formatDate(dateStr) {
   if (!dateStr) return '';
   const d = new Date(dateStr);
   if (Number.isNaN(d.getTime())) return dateStr;
-  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+  return dayLabel(d);
 }
 
 export default function NotificationDetailSheet({ notif, priorAttendance, onClose, onAttendanceChange }) {

@@ -30,21 +30,11 @@ export function initialsOf(name) {
   return ((w[0]?.[0] || '?') + (w[1]?.[0] || '')).toUpperCase();
 }
 
-const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-export function daysAgo(date) {
-  return Math.round((startOfDay(new Date()) - startOfDay(new Date(date))) / 86400000);
-}
-// "Today", "Yesterday", "Mon 8 Sep" (with the year when it isn't this one).
-export function dayLabel(date) {
-  const d = new Date(date);
-  const n = daysAgo(d);
-  if (n === 0) return 'Today';
-  if (n === 1) return 'Yesterday';
-  const base = `${DAYS[d.getDay()]} ${d.getDate()} ${MONTHS[d.getMonth()]}`;
-  return d.getFullYear() === new Date().getFullYear() ? base : `${base} ${d.getFullYear()}`;
-}
+// Dates come from one place for the whole app (see utils/dates), and are
+// re-exported here so the coach kit stays a single import.
+import { daysAgo, dayLabel } from '../../utils/dates';
+
+export { daysAgo, dayLabel };
 // "since Mon 8 Sep", "since yesterday", "today"; no date → "in the last 7 days".
 export function sincePhrase(date) {
   if (!date) return 'in the last 7 days';

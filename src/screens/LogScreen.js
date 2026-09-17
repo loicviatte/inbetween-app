@@ -36,6 +36,7 @@ import StyleTitle from '../components/StyleTitle';
 import { useTabBarSpace } from '../components/CustomTabBar';
 import PullLogo, { usePullRefresh } from '../components/PullLogo';
 import LogSkeleton from '../components/LogSkeleton';
+import { dayLabel } from '../utils/dates';
 
 const LOG_CACHE_KEY = '@cache_log';
 const SKIP_ADD_REMINDER_KEY = '@skip_add_class_reminder';
@@ -61,7 +62,6 @@ const SIDE = 20;
 
 const MONTH_FULL = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const WEEKDAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const DOW = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -233,13 +233,7 @@ function noteGroups(notes) {
   return Array.from(map.values());
 }
 
-function noteDate(iso) {
-  const ago = daysAgo(iso);
-  if (ago === 0) return 'Today';
-  if (ago === 1) return 'Yesterday';
-  const d = new Date(iso);
-  return `${WEEKDAY_SHORT[d.getDay()]} ${d.getDate()} ${MONTH_SHORT[d.getMonth()]}`;
-}
+const noteDate = (iso) => dayLabel(iso);
 
 function NoteGroupHeader({ title, count }) {
   return (

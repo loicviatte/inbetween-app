@@ -33,6 +33,7 @@ import CoachLinksView from '../../components/CoachLinksView';
 import { useCoachTabView } from '../../context/CoachTabView';
 import { useCoachData } from '../../context/CoachDataContext';
 import { getStudentsReadiness } from '../../storage/storage';
+import { dateLabel } from '../../utils/dates';
 
 // ─── Coach ▸ Students (docs/design/coach-students.html) ─────────────────────
 // Students | Couples, a roster summary (ready vs behind, questions asked, focus
@@ -71,7 +72,7 @@ function lessonDate(iso) {
   const days = Math.floor((Date.now() - d.getTime()) / 86400000);
   if (days === 0) return 'Today';
   if (days === 1) return 'Yesterday';
-  return d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+  return dateLabel(d);
 }
 
 // ── Pieces ───────────────────────────────────────────────────────────────────

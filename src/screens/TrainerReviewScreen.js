@@ -16,6 +16,7 @@ import { Fonts, Spacing } from '../theme';
 import { supabase } from '../services/supabase/client';
 import { clearUserCaches } from '../storage/userCaches';
 import { clearPushToken } from '../services/notifications';
+import { dateLabel } from '../utils/dates';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -585,7 +586,7 @@ function ClassCard({ classGroup, onPress }) {
             const raw = classGroup.candidates[0]?.created_at;
             const d = raw ? new Date(raw) : null;
             return d && !Number.isNaN(d.getTime())
-              ? d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+              ? dateLabel(d)
               : '';
           })()}
         </Text>

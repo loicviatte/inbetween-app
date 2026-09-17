@@ -12,6 +12,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { Fonts, Spacing } from '../theme';
 import { supabase } from '../services/supabase/client';
 import { GenericListSkeleton } from '../components/Skeleton';
+import { dateLabel } from '../utils/dates';
 
 const BG = '#0D0D12';
 const CARD_BG = '#18181F';
@@ -337,7 +338,7 @@ function formatDate(iso) {
   const hhmm = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
   if (isToday) return `Today · ${hhmm}`;
   if (isYesterday) return `Yesterday · ${hhmm}`;
-  return `${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} · ${hhmm}`;
+  return `${dateLabel(d)} · ${hhmm}`;
 }
 
 export default function TrainerFocusHistoryScreen({ route, navigation }) {

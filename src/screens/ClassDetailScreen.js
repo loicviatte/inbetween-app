@@ -16,8 +16,8 @@ import { Colors, Fonts, Spacing } from '../theme';
 import { getClassInputs, getNotesLinkedToClass, getNotes, saveNote } from '../storage/storage';
 import { getQuestionsCoveredInClass } from '../storage/coachStorage';
 import { SkeletonBox } from '../components/Skeleton';
+import { longDate } from '../utils/dates';
 
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 // Editorial palette — same constants used across the redesigned screens.
 const GOLD_500 = '#E8B530';
@@ -33,10 +33,8 @@ const SOFT_INK_BG = 'rgba(10,10,10,0.04)';
 const PAGE_GRADIENT_COLORS = ['#F2F2EF', '#F8F2E2', '#F4EAD0', '#FFFFFF', '#FFFFFF'];
 const PAGE_GRADIENT_LOCATIONS = [0, 0.4, 0.7, 0.85, 1];
 
-function formatDate(isoOrTs) {
-  const d = new Date(isoOrTs);
-  return `${MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
-}
+// The detail page's own heading carries the date in full.
+const formatDate = (isoOrTs) => longDate(isoOrTs);
 
 function getInitials(name) {
   if (!name) return '';

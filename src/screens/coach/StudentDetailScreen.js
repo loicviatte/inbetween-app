@@ -68,8 +68,6 @@ const RED = '#A8412F';
 
 const STYLE_NAME = { latin: 'Latin', ballroom: 'Ballroom' };
 const TIER_LABEL = { critical: 'Critical focus', important: 'Important focus', supporting: 'Supporting focus' };
-const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -78,24 +76,7 @@ function initialsOf(name) {
   return ((w[0]?.[0] || '?') + (w[1]?.[0] || '')).toUpperCase();
 }
 
-const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-const daysAgo = (date) => Math.round((startOfDay(new Date()) - startOfDay(new Date(date))) / 86400000);
-
-// "Today", "Yesterday", "Mon 14" this week, "14 Sep" this year, else "14 Sep 2025".
-function dayLabel(date) {
-  const d = new Date(date);
-  const n = daysAgo(d);
-  if (n === 0) return 'Today';
-  if (n === 1) return 'Yesterday';
-  if (n < 7) return `${DAYS[d.getDay()]} ${d.getDate()}`;
-  const md = `${d.getDate()} ${MONTHS[d.getMonth()]}`;
-  return d.getFullYear() === new Date().getFullYear() ? md : `${md} ${d.getFullYear()}`;
-}
-
-function agoLabel(date) {
-  const n = daysAgo(date);
-  return n === 0 ? 'Today' : n === 1 ? 'Yesterday' : `${n} days ago`;
-}
+import { daysAgo, dayLabel, agoLabel } from '../../utils/dates';
 
 function animateNext() {
   LayoutAnimation.configureNext({

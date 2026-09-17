@@ -21,6 +21,7 @@ import {
 import { getActiveSession } from '../storage/activeSession';
 import { GenericListSkeleton } from '../components/Skeleton';
 import HeroCardGradient from '../components/HeroCardGradient';
+import { dayLabel } from '../utils/dates';
 
 const GOLD = '#F6D27A';
 const CBLUE = '#2E4670';
@@ -38,11 +39,7 @@ const TIER_LABEL = {
   supporting:'Supporting',
 };
 
-function formatDate(iso) {
-  if (!iso) return null;
-  const d = new Date(iso);
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-}
+const formatDate = (iso) => (iso ? dayLabel(iso) : null);
 
 function FocusCard({ item, tab, accent, onPractice, starting }) {
   const cls = item.class_inputs;

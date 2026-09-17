@@ -62,6 +62,7 @@ import {
   clearActiveSession,
   getSessionTimeLeft,
 } from '../storage/activeSession';
+import { dayLabel, longDate } from '../utils/dates';
 import {
   startFocusPoint as laStartFocusPoint,
   updateFocusPoint as laUpdateFocusPoint,
@@ -162,11 +163,7 @@ function SessionSkeletonBones() {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function formatDate(iso) {
-  if (!iso) return '';
-  const d = new Date(iso);
-  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
-}
+const formatDate = (iso) => (iso ? dayLabel(iso) : '');
 
 // ─── Class Input Detail Modal ─────────────────────────────────────────────────
 
@@ -1522,7 +1519,7 @@ export default function FocusSessionScreen({ route, navigation }) {
       : 'No focus points recorded.';
 
     const classLines = classInputs.slice(0, 8).map(inp => {
-      const date = new Date(inp.created_at).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
+      const date = longDate(inp.created_at);
       const lines = [`--- Class: ${inp.title ?? date} (${date}) ---`];
       if (inp.class_summary) lines.push(`Summary: ${inp.class_summary}`);
       if (inp.practice_point_1) lines.push(`Primary point: ${inp.practice_point_1} (priority ${inp.priority_score_1}/10)`);

@@ -49,6 +49,7 @@ import Svg, {
 import { Fonts } from '../theme';
 import { useDjiSync } from '../context/DjiSyncContext';
 import { skipDelayMsFor, asksReason, nightsWaiting, MAX_TIER } from '../services/syncReminder';
+import { dateLabel, weekdayLong, weekdayShort } from '../utils/dates';
 
 const GRAIN_IMG = require('../../assets/grain-warm.png');
 
@@ -107,7 +108,7 @@ function fmtWhen(date, now) {
     return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
   }
   if (isYesterday(date, now)) return 'Yesterday';
-  return date.toLocaleDateString(undefined, { weekday: 'short' });
+  return weekdayShort(date);
 }
 
 /** Prose form — "tonight" / "yesterday" / "Monday" / "Mon 13 Jul" past a week. */
@@ -119,8 +120,8 @@ function fmtWhenLong(date, now) {
       new Date(date.getFullYear(), date.getMonth(), date.getDate())) /
       86400000,
   );
-  if (days < 7) return date.toLocaleDateString(undefined, { weekday: 'long' });
-  return date.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+  if (days < 7) return weekdayLong(date);
+  return dateLabel(date);
 }
 
 function fmtDuration(sec) {
