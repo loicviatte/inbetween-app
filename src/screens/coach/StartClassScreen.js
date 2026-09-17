@@ -456,6 +456,7 @@ export default function StartClassScreen({ navigation }) {
   // no refs that could go stale (which sent back to the roster mid-recording).
   useEffect(() => {
     const unsub = navigation.addListener('beforeRemove', (e) => {
+      if (exitingRef.current) return;
       if (view !== 'select' && !classStartedAt) {
         e.preventDefault();
         setView('select');
@@ -680,6 +681,20 @@ export default function StartClassScreen({ navigation }) {
   // success banner. Without this, popToTop fires on a stale navigation
   // ref and triggers a React warning / potential crash.
   const popToTopTimerRef = useRef(null);
+  // Set when the class is done and we're leaving on purpose (see the
+  // beforeRemove guard, which otherwise sends every exit back to the roster).
+  const exitingRef = useRef(false);
+
+  // Home after a class: the coach lands on their Home tab, not on the picker
+  // they started from.
+  function goHomeAfterClass() {
+    exitingRef.current = true;
+    try {
+      navigation.navigate('CoachMainTabs', { screen: 'DASHBOARD' });
+    } catch {
+      try { navigation.popToTop(); } catch {}
+    }
+  }
 
   // End-of-class debrief modal
   const [debriefOpen, setDebriefOpen] = useState(false);
@@ -1963,7 +1978,7 @@ export default function StartClassScreen({ navigation }) {
       popToTopTimerRef.current = setTimeout(() => {
         popToTopTimerRef.current = null;
         setClassRecorded(false);
-        try { navigation.popToTop(); } catch {}
+        goHomeAfterClass();
       }, 2500);
       return;
     }
@@ -1991,10 +2006,10 @@ export default function StartClassScreen({ navigation }) {
       popToTopTimerRef.current = setTimeout(() => {
         popToTopTimerRef.current = null;
         setClassRecorded(false);
-        try { navigation.popToTop(); } catch {}
+        goHomeAfterClass();
       }, 2500);
     } else {
-      navigation.popToTop();
+      goHomeAfterClass();
     }
   }
 
