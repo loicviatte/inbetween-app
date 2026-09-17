@@ -132,6 +132,14 @@ export async function setStudentLink(studentId, { latin, ballroom }) {
   return data;
 }
 
+// A coach moving studio: sets the studio and ends every student and couple link
+// (coach_change_studio). Returns { students, couples } — how many were unlinked.
+export async function changeCoachStudio(studioId) {
+  const { data, error } = await supabase.rpc('coach_change_studio', { p_studio: studioId || null });
+  if (error) throw new Error(error.message);
+  return data;
+}
+
 // ─── Students ─────────────────────────────────────────────────────────────────
 
 // In-flight dedup: on a cold start BOTH CoachDataContext.loadAll AND

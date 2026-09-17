@@ -174,49 +174,6 @@ export function SessionsFeedScreenSkeleton() {
   );
 }
 
-// ─── CoachProfileScreen skeleton ─────────────────────────────────────────────
-
-export function CoachProfileScreenSkeleton() {
-  return (
-    <View style={s.safe}>
-      {/* Header: logo + edit */}
-      <View style={s.header}>
-        <SkeletonBox width={32} height={20} borderRadius={4} />
-        <SkeletonBox width={36} height={16} borderRadius={4} />
-      </View>
-
-      {/* Avatar + name + role */}
-      <View style={s.avatarSection}>
-        <SkeletonBox width={80} height={80} borderRadius={40} style={{ marginBottom: 14 }} />
-        <SkeletonBox width={130} height={18} borderRadius={5} style={{ marginBottom: 8 }} />
-        <SkeletonBox width={60} height={12} borderRadius={4} style={{ marginBottom: 6 }} />
-        <SkeletonBox width={100} height={11} borderRadius={4} />
-      </View>
-
-      {/* Stat card */}
-      <View style={s.statCard}>
-        <View style={{ alignItems: 'center', gap: 6 }}>
-          <SkeletonBox width={40} height={28} borderRadius={5} />
-          <SkeletonBox width={60} height={11} borderRadius={4} />
-        </View>
-      </View>
-
-      {/* Section label */}
-      <SkeletonBox width={110} height={11} borderRadius={4} style={{ marginBottom: 12 }} />
-
-      {/* Invite card */}
-      <View style={s.inviteCard}>
-        <View style={{ flex: 1, gap: 8 }}>
-          <SkeletonBox width={120} height={22} borderRadius={5} />
-          <SkeletonBox width="90%" height={11} borderRadius={4} />
-          <SkeletonBox width="70%" height={11} borderRadius={4} />
-        </View>
-        <SkeletonBox width={64} height={40} borderRadius={10} />
-      </View>
-    </View>
-  );
-}
-
 // ─── Generic list skeleton ────────────────────────────────────────────────────
 // A pragmatic default: header + title + N card rows. Used wherever we
 // previously showed a centered <ActivityIndicator /> for a full-screen load.
@@ -346,27 +303,6 @@ const s = StyleSheet.create({
     padding: 14,
     marginBottom: 8,
     gap: 8,
-  },
-  avatarSection: {
-    alignItems: 'center',
-    marginBottom: 24,
-  },
-  statCard: {
-    backgroundColor: '#F8F8F8',
-    borderRadius: 4,
-    paddingVertical: 18,
-    paddingHorizontal: 20,
-    marginBottom: 28,
-    alignItems: 'center',
-  },
-  inviteCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F8F8F8',
-    borderRadius: 14,
-    paddingHorizontal: 16,
-    paddingVertical: 16,
-    gap: 12,
   },
   genericCard: {
     flexDirection: 'row',

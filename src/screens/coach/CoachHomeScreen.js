@@ -697,7 +697,7 @@ export default function CoachHomeScreen({ navigation, route }) {
             <Text style={st.empty}>
               {searchQuery.trim() ? `Nobody matches “${searchQuery.trim()}”.`
                 : allStudents.length > 0 ? `No ${styleFilter === 'ballroom' ? 'Ballroom' : 'Latin'} students yet.`
-                : 'No students yet. Share your invite code from your profile to add them.'}
+                : 'No students yet. Share your invite code from Students ▸ Links to add them.'}
             </Text>
           ) : shownTab === 'readiness' ? (
             <>

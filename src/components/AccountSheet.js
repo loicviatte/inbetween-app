@@ -18,8 +18,9 @@ import { logOutWithChecks } from '../services/logout';
 const AVATAR_KEY = '@profile_photo';
 
 // onOpenSettings: pass it (the header avatar does) to add Settings and Log out
-// under Save; Stats ▸ Settings ▸ Account opens it without them.
-export default function AccountSheet({ visible, onClose, onSaved, onOpenSettings }) {
+// under Save; Stats ▸ Settings ▸ Account opens it without them. onLogout
+// replaces the student's log out (the coach app has its own checks).
+export default function AccountSheet({ visible, onClose, onSaved, onOpenSettings, onLogout }) {
   const { avatarUri, setAvatarUri, setInitials } = useProfile();
   const [account, setAccount] = useState(null);
   const [editName, setEditName] = useState('');
@@ -182,7 +183,11 @@ export default function AccountSheet({ visible, onClose, onSaved, onOpenSettings
           <View style={em.shortcutSep} />
           <TouchableOpacity
             style={em.shortcut}
-            onPress={() => { onClose(); logOutWithChecks({ resetProfile: () => { setAvatarUri(null); setInitials(null); } }); }}
+            onPress={() => {
+              onClose();
+              if (onLogout) onLogout();
+              else logOutWithChecks({ resetProfile: () => { setAvatarUri(null); setInitials(null); } });
+            }}
             activeOpacity={0.7}
             accessibilityRole="button"
           >

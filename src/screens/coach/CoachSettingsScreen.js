@@ -11,6 +11,9 @@ import { Colors, Fonts, Spacing } from '../../theme';
 import { useCoachData } from '../../context/CoachDataContext';
 import { useDjiSync } from '../../context/DjiSyncContext';
 import { saveUserProfile } from '../../storage/storage';
+import { changeCoachStudio } from '../../storage/coachStorage';
+import { getMyCouples } from '../../storage/coupleStorage';
+import HoldToConfirm from '../../components/HoldToConfirm';
 import { logOutCoachWithChecks } from '../../services/logout';
 import AccountSheet from '../../components/AccountSheet';
 import BottomSheet from '../../components/BottomSheet';
@@ -20,16 +23,58 @@ import { SecLabel, SettingsCard, SettingRow, LogoutButton } from '../../componen
 const STYLES = ['Latin', 'Ballroom', 'Latin & Ballroom'];
 
 export default function CoachSettingsScreen({ navigation }) {
-  const { user, refresh } = useCoachData();
+  const { user, students, refresh } = useCoachData();
   const djiPhase = useDjiSync()?.phase;
   const [accountOpen, setAccountOpen] = useState(false);
-  const [sheet, setSheet] = useState(null);          // 'style' | 'studio' | null
+  const [sheet, setSheet] = useState(null);          // 'style' | 'studio' | 'studioConfirm' | null
   const [editStyle, setEditStyle] = useState('');
   const [editStudio, setEditStudio] = useState(null);
   const [saving, setSaving] = useState(false);
 
+  const [couplesCount, setCouplesCount] = useState(null); // null until read
+  const [studioError, setStudioError] = useState('');
+
   function openStyle() { setEditStyle(user?.dance_style || ''); setSheet('style'); }
-  function openStudio() { setEditStudio(user?.studio || null); setSheet('studio'); }
+  function openStudio() {
+    setEditStudio(user?.studio || null);
+    setStudioError('');
+    setSheet('studio');
+    setCouplesCount(null);
+    getMyCouples().then((c) => setCouplesCount((c || []).length)).catch(() => {});
+  }
+
+  // Changing studio ends the links with current students and couples, so it
+  // asks first (hold 3 s); with nobody linked it just saves. Couples not read
+  // yet count as maybe linked.
+  const linkedCount = students.length + (couplesCount ?? 1);
+  function saveStudio() {
+    const next = editStudio?.id || null;
+    if (next === (user?.studio?.id || null)) { setSheet(null); return; }
+    if (linkedCount === 0) { confirmStudio(); return; }
+    setStudioError('');
+    setSheet('studioConfirm');
+  }
+  async function confirmStudio() {
+    if (saving) return;
+    setSaving(true);
+    setStudioError('');
+    try {
+      await changeCoachStudio(editStudio?.id || null);
+      await refresh();
+      setSheet(null);
+    } catch (e) {
+      setStudioError(e.message || 'Nothing was changed. Check your connection and try again.');
+    } finally {
+      setSaving(false);
+    }
+  }
+  const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+  const linkedLabel = couplesCount == null
+    ? 'current students and couples'
+    : [
+      students.length ? plural(students.length, 'student') : null,
+      couplesCount ? plural(couplesCount, 'couple') : null,
+    ].filter(Boolean).join(' and ');
 
   async function save(patch) {
     if (saving) return;
@@ -114,9 +159,27 @@ export default function CoachSettingsScreen({ navigation }) {
               <StudioPicker value={editStudio} onChange={setEditStudio} />
             </View>
             <Text style={em.studioNote}>Your studio decides which group classes and students you see.</Text>
-            <TouchableOpacity style={em.saveBtn} onPress={() => save({ studio_id: editStudio?.id || null })} activeOpacity={0.88} disabled={saving}>
+            {!!studioError && <Text style={em.error}>{studioError}</Text>}
+            <TouchableOpacity style={em.saveBtn} onPress={saveStudio} activeOpacity={0.88} disabled={saving}>
               <Text style={em.saveBtnText}>{saving ? 'Saving…' : 'Save'}</Text>
             </TouchableOpacity>
+          </>
+        )}
+        {sheet === 'studioConfirm' && (
+          <>
+            <Text style={em.title}>Change studio?</Text>
+            <Text style={em.confirmBody}>
+              Moving to {editStudio?.name || 'no studio'} removes your links with your {linkedLabel}.
+              They’ll need your invite code to link to you again.
+            </Text>
+            {!!studioError && <Text style={em.error}>{studioError}</Text>}
+            <HoldToConfirm
+              label="Hold to change studio"
+              busyLabel="Changing studio…"
+              busy={saving}
+              onConfirm={confirmStudio}
+            />
+            <Text style={em.holdHint}>Press and hold for 3 seconds.</Text>
           </>
         )}
         <TouchableOpacity style={em.cancelBtn} onPress={() => setSheet(null)} activeOpacity={0.7}>
@@ -153,5 +216,8 @@ const em = StyleSheet.create({
   saveBtnText: { fontFamily: Fonts.jakartaBold, fontSize: 15, color: Colors.white },
   cancelBtn: { paddingVertical: 14, alignItems: 'center' },
   cancelBtnText: { fontFamily: Fonts.jakartaRegular, fontSize: 14, color: Colors.secondary },
+  confirmBody: { fontFamily: Fonts.jakartaRegular, fontSize: 14.5, lineHeight: 21, color: '#3D3A33', textAlign: 'center', marginTop: -10, marginBottom: 22 },
+  holdHint: { fontFamily: Fonts.jakartaRegular, fontSize: 12.5, color: 'rgba(13,13,18,0.5)', textAlign: 'center', marginTop: 10 },
+  error: { fontFamily: Fonts.jakartaRegular, fontSize: 13, lineHeight: 18, color: '#A3281B', textAlign: 'center', marginBottom: 12 },
   studioNote: { fontFamily: Fonts.jakartaRegular, fontSize: 12, color: 'rgba(13,13,18,0.5)', lineHeight: 16, marginTop: -6, marginBottom: 14 },
 });

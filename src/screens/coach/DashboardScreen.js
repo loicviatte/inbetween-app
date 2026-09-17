@@ -514,7 +514,7 @@ export default function DashboardScreen({ navigation }) {
             <Text style={st.empty}>
               {allStudents.length > 0
                 ? `No ${styleFilter === 'ballroom' ? 'Ballroom' : 'Latin'} students yet.`
-                : 'No students yet. Share your invite code from your profile to add them.'}
+                : 'No students yet. Share your invite code from Students ▸ Links to add them.'}
             </Text>
           ) : (
             <FadeIn style={st.gridFade}>

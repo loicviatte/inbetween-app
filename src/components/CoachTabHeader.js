@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { Image } from 'expo-image';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -9,6 +9,9 @@ import { useCoachData } from '../context/CoachDataContext';
 import DjiSetupBanner from './DjiSetupBanner';
 import DjiSyncPill from './DjiSyncPill';
 import StyleTitle from './StyleTitle';
+import AccountSheet from './AccountSheet';
+import { useDjiSync } from '../context/DjiSyncContext';
+import { logOutCoachWithChecks } from '../services/logout';
 import { useCoachTabView } from '../context/CoachTabView';
 
 // May 2026 design refresh — gold/ink scale aligned with DashboardScreen.
@@ -31,7 +34,10 @@ const CLASS_STYLES = [
 // links: the Students tab's link button beside settings, which opens its Links.
 export default function CoachTabHeader({ mode = null, links = false }) {
   const navigation = useNavigation();
-  const { user, unreadCount, styleFilter, setStyleFilter, canSwitchStyle, notes } = useCoachData();
+  const { user, unreadCount, styleFilter, setStyleFilter, canSwitchStyle, notes, refresh } = useCoachData();
+  const djiPhase = useDjiSync()?.phase;
+  // The avatar opens Account (photo, name, email) with Settings and Log out, as for a student.
+  const [accountOpen, setAccountOpen] = useState(false);
   const tabView = useCoachTabView();
   const classes = {
     view: tabView.classesView, setView: tabView.setClassesView,
@@ -149,8 +155,10 @@ export default function CoachTabHeader({ mode = null, links = false }) {
             blooms the gold halo around the outside. */}
         <TouchableOpacity
           style={styles.avatarWrap}
-          onPress={() => navigation.navigate('CoachProfile')}
+          onPress={() => setAccountOpen(true)}
           activeOpacity={0.85}
+          accessibilityRole="button"
+          accessibilityLabel="Account"
         >
           {user?.photo_url ? (
             <Image source={{ uri: user.photo_url }} style={styles.avatarPhoto} />
@@ -166,6 +174,14 @@ export default function CoachTabHeader({ mode = null, links = false }) {
           )}
         </TouchableOpacity>
       </View>
+
+      <AccountSheet
+        visible={accountOpen}
+        onClose={() => { setAccountOpen(false); refresh(); }}
+        onSaved={() => refresh()}
+        onOpenSettings={() => navigation.navigate('CoachSettings')}
+        onLogout={() => logOutCoachWithChecks({ djiUploading: djiPhase === 'syncing' })}
+      />
     </View>
   );
 }
