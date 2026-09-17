@@ -438,8 +438,8 @@ async function approve(admin: SupabaseClient, b: Row, ip: string) {
     return json({ error: 'This approval has expired. Enter your codes again.' }, 410)
   }
   const checks = Array.isArray(b.checks) ? b.checks : []
-  if (checks.length !== 3 || !checks.every((c: unknown) => c === true)) {
-    return json({ error: 'All three boxes need to be ticked.' }, 400)
+  if (checks.length !== 4 || !checks.every((c: unknown) => c === true)) {
+    return json({ error: 'Every box needs to be ticked.' }, 400)
   }
 
   const { data: existing } = await admin.from('users').select('id, role').eq('email', row.parent_email).maybeSingle()

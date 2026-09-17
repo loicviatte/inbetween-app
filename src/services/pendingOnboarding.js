@@ -23,6 +23,11 @@ export async function applyPendingOnboarding(session) {
     const { error: clearErr } = await supabase.auth.updateUser({ data: { pending_onboarding: null } });
     if (clearErr) return;
 
+    // Health-data permission, given at sign-up before the session existed.
+    if (plan.healthConsentAt) {
+      await supabase.from('users').update({ health_data_consent_at: plan.healthConsentAt }).eq('id', userId);
+    }
+
     if (plan.role === 'coach') {
       let studioId = plan.studioId || null;
       if (plan.createStudio) {

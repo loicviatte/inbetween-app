@@ -357,6 +357,13 @@ const LEAVE = ['Cleaner technique', 'More confidence', 'Better musicality',
 const WHO = ['Beginners', 'Regular amateurs', 'Pro-Am', 'Competitors', 'Children', 'Social couples'];
 const AXES = ['Technique', 'Musicality', 'Mental', 'Performance'];
 const TERMS_URL = 'https://www.useinbetween.com/terms';
+// Health data needs its own, explicit permission: a lesson's audio can carry an
+// injury, a pain, a limitation, and that is a special category under the GDPR.
+// Asked of every account — coach, student and parent — and written to
+// users.health_data_consent_at when the account is made.
+const HEALTH_CONSENT =
+  'Lessons are recorded and transcribed. Conversations during a lesson may include references to injuries, '
+  + 'pain or physical limitations. I explicitly consent to InBetween processing this information as part of lesson content.';
 const PRIVACY_URL = 'https://www.useinbetween.com/privacy';
 
 const DANCES = {
@@ -559,7 +566,8 @@ export default function OnboardingScreen({ navigation, route }) {
     recall: '', focus: [],
     parentFirstName: '', parentEmail: '', parentPhone: '', parentPhoneCountry: DEFAULT_COUNTRY,
     inviteId: '', deviceSecret: '', maskedEmail: '', inviteStatus: '', inviteNote: '', editingInvite: false, inviteClosed: false,
-    invToken: '', invCode: '', consent: null, checks: [false, false, false], parentPassword: '', hasInvite: null, signupCopy: null,
+    invToken: '', invCode: '', consent: null, checks: [false, false, false, false], parentPassword: '', hasInvite: null, signupCopy: null,
+    healthConsent: false,
     signupPhone: '', signupPhoneCountry: DEFAULT_COUNTRY, smsId: '', smsMasked: '', smsCode: '', phoneToken: '',
     alloc: { Technique: 40, Musicality: 25, Mental: 20, Performance: 15 },
     name: '', childName: '', email: '', password: '', slug: '',
@@ -903,7 +911,7 @@ export default function OnboardingScreen({ navigation, route }) {
     try {
       const r = await verifyInvitation(a.invToken, a.invCode);
       // Every box starts empty, every time the codes are entered.
-      set({ consent: r, checks: [false, false, false], parentPassword: '' });
+      set({ consent: r, checks: [false, false, false, false], parentPassword: '' });
       go('parentContext');
     } catch (e) {
       setError(e.message);
@@ -957,7 +965,7 @@ export default function OnboardingScreen({ navigation, route }) {
     try {
       const r = await getConsentCopy(a.childName.trim(), a.coachId || null);
       // every box starts empty, every time the wording is shown
-      set({ signupCopy: r, checks: [false, false, false] });
+      set({ signupCopy: r, checks: [false, false, false, false] });
     } catch (e) {
       set({ signupCopy: null });
       setError(e.message);
@@ -1031,6 +1039,9 @@ export default function OnboardingScreen({ navigation, route }) {
         correct: a.correct, signature: a.signature, leave: a.leave, cred: a.cred,
       } : null,
       child: childProfile,
+      // The health-data permission, carried through email confirmation like the
+      // rest, so the proof isn't lost when the session only arrives later.
+      healthConsentAt: a.healthConsent ? new Date().toISOString() : null,
       student: !isCoach && !isParent ? {
         lessons: a.lessons, soloLabel: a.soloLabel, weeklyGoal: weeklyTarget(a),
         coachId: a.coachId || null, cats: coachCats, focus: a.focus,
@@ -1054,6 +1065,11 @@ export default function OnboardingScreen({ navigation, route }) {
       await supabase.auth.updateUser({ data: { pending_onboarding: null } }).catch(() => {});
     }
     holdPendingOnboarding(false);
+
+    if (userId && a.healthConsent) {
+      supabase.from('users').update({ health_data_consent_at: new Date().toISOString() }).eq('id', userId)
+        .then(({ error }) => { if (error) console.warn('[onboarding] health consent not saved:', error.message); });
+    }
 
     let studioId = a.studioId;
     if (isCoach && a.createStudio && query.trim()) {
@@ -1150,7 +1166,7 @@ export default function OnboardingScreen({ navigation, route }) {
     signature: !!a.signature, alloc: allocLeft === 0, leave: a.leave.length > 0,
     who: a.who.length > 0, cred: true, cardLocked: true, planReady: true, cardLive: true, confirm: true,
     account: !!(a.name.trim() && a.email.trim() && a.password.length >= 6
-      && (!isParent || a.childName.trim())),
+      && a.healthConsent && (!isParent || a.childName.trim())),
   }[step];
 
   const planLine = [a.role && (isCoach ? 'Coach' : isParent ? 'Parent' : 'Student'), a.style, a.level].filter(Boolean).join(' · ');
@@ -1702,6 +1718,13 @@ export default function OnboardingScreen({ navigation, route }) {
             <Rise delay={0.12}><Field label="Password" value={a.password} onChange={(t) => set({ password: t })}
               placeholder="Min. 6 characters" secureTextEntry textContentType="newPassword" /></Rise>
           </View>
+          <Rise delay={0.18}>
+            <CheckRow
+              label={HEALTH_CONSENT}
+              on={a.healthConsent}
+              onPress={() => { haptic(); set({ healthConsent: !a.healthConsent }); }}
+            />
+          </Rise>
           {!!error && <Text style={s.err}>{error}</Text>}
         </Q>
       );

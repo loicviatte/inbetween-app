@@ -13,8 +13,12 @@
 //     which need read access), so the claim can't be made honestly.
 //   · "delete everything / all data" — a withdrawal deletes the child's data but
 //     deliberately keeps the record that permission was given and withdrawn.
+// v3 added the fourth check: a lesson's audio can carry an injury, a pain, a
+// limitation — special-category data under the GDPR, which needs its own
+// explicit consent rather than the blanket one in the terms. Every account is
+// asked the same sentence at sign-up (users.health_data_consent_at).
 // Bump TERMS_VERSION with every change: an app showing older wording is refused.
-export const TERMS_VERSION = 'minor-consent-v2-2026-09-14'
+export const TERMS_VERSION = 'minor-consent-v3-2026-09-18'
 
 export function consentCopy(child: string, coach: string | null) {
   const coachRef = coach || 'Their coach'
@@ -30,6 +34,9 @@ export function consentCopy(child: string, coach: string | null) {
       `I am ${child}'s parent or legal guardian`,
       `I consent to ${child}'s lessons being captured and processed as described above`,
       `I understand I can withdraw this consent and delete ${child}'s data at any time`,
+      'Lessons are recorded and transcribed. Conversations during a lesson may include references to injuries, '
+        + 'pain or physical limitations. I explicitly consent to InBetween processing this information as part of '
+        + 'lesson content.',
     ],
   }
 }

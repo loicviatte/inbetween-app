@@ -53,12 +53,12 @@ Deno.serve(async (req: Request) => {
   const childName = (typeof body.childName === 'string' ? body.childName : '').trim().slice(0, 80)
   if (childName.length < 1) return json({ error: 'The child needs a name.' }, 400)
 
-  // No child without a permission: the same three statements an invited parent
-  // ticks, in the wording of the version they were actually shown.
+  // No child without a permission: the same statements an invited parent ticks,
+  // in the wording of the version they were actually shown.
   const consent = body.consent && typeof body.consent === 'object' ? body.consent as Record<string, unknown> : {}
   const checks = Array.isArray(consent.checks) ? consent.checks : []
-  if (checks.length !== 3 || !checks.every((c) => c === true)) {
-    return json({ error: 'All three boxes need to be ticked.' }, 400)
+  if (checks.length !== 4 || !checks.every((c) => c === true)) {
+    return json({ error: 'Every box needs to be ticked.' }, 400)
   }
   if (consent.termsVersion !== TERMS_VERSION) {
     return json({ error: 'The permission wording has changed. Go back and read it again.', termsVersion: TERMS_VERSION }, 409)
