@@ -3,7 +3,8 @@
 -- evaluates them once per query (Supabase advisor auth_rls_initplan). Same
 -- rules, same rows visible — verified by comparing every RLS table's visible
 -- row count for six real accounts before and after, in one transaction.
--- Generated from the live policy definitions.
+-- Generated from the live policy definitions, after 20260917_audit_security.sql
+-- (it rewrites the policies that migration creates, so it must sort after it).
 
 alter policy "ai_call_logs_trainer_read" on public.ai_call_logs using ((((select auth.jwt()) ->> 'email'::text) = 'loic@danceuniteduk.com'::text));
 alter policy "ai_feedback_trainer_all" on public.ai_feedback using ((((select auth.jwt()) ->> 'email'::text) = 'loic@danceuniteduk.com'::text)) with check ((((select auth.jwt()) ->> 'email'::text) = 'loic@danceuniteduk.com'::text));
