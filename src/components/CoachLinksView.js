@@ -5,26 +5,51 @@ import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import MaskedView from '@react-native-masked-view/masked-view';
+import { useNavigation } from '@react-navigation/native';
 import { Colors, Fonts, Spacing } from '../theme';
 import { useCoachData } from '../context/CoachDataContext';
 import { getOrCreateInviteCode } from '../storage/coachStorage';
+import { getMyCouples } from '../storage/coupleStorage';
+import { guardStudent, isAwaitingVerification } from '../utils/studentLock';
 import { getMyCoachCard, getCoachObserved } from '../storage/coachCardStorage';
 import { SecLabel } from './settings/SettingsUI';
 import BottomSheet from './BottomSheet';
 import CoachCardModal from './CoachCardModal';
 
 // Coach ▸ Students ▸ Links (the header's link button): how students find the
-// coach — the invite code they type, and the coach card. Built like the
-// student's Stats ▸ Links: a section label over row cards, each opening a sheet.
+// coach — the invite code they type, and the coach card — then every student
+// and couple linked to them. Built like the student's Stats ▸ Links: a section
+// label over row cards.
 
 const EDGE_FADE = 14;
+
+const STYLE_NAMES = { latin: 'Latin', ballroom: 'Ballroom' };
+const stylesLabel = (keys) => keys.map((k) => STYLE_NAMES[k]).filter(Boolean).join(' & ');
 
 function initialsOf(name) {
   return (name || '').split(/\s+/).filter(Boolean).map((w) => w[0]).join('').slice(0, 2).toUpperCase() || 'C';
 }
 
+// One linked student or couple: initials, what they're coached in, the name.
+function LinkRow({ initials, role, name, muted, onPress }) {
+  return (
+    <TouchableOpacity style={row.card} onPress={onPress} activeOpacity={0.75} accessibilityRole="button">
+      <View style={[row.init, muted && row.initMuted]}>
+        <Text style={row.initTxt}>{initials}</Text>
+      </View>
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={row.role} numberOfLines={1}>{role}</Text>
+        <Text style={[row.name, muted && row.nameMuted]} numberOfLines={1}>{name}</Text>
+      </View>
+      <Ionicons name="chevron-forward" size={16} color="rgba(10,10,10,0.3)" />
+    </TouchableOpacity>
+  );
+}
+
 export default function CoachLinksView({ bottomSpace = 0 }) {
-  const { user, students } = useCoachData();
+  const navigation = useNavigation();
+  const { user, students, refresh } = useCoachData();
+  const [couples, setCouples] = useState(null); // null while loading
   const [code, setCode] = useState(null);       // null while loading, '' if it couldn't be read
   const [card, setCard] = useState(null);
   const [observed, setObserved] = useState(null);
@@ -38,6 +63,7 @@ export default function CoachLinksView({ bottomSpace = 0 }) {
     getOrCreateInviteCode().then((c) => { if (alive) setCode(c || ''); }).catch(() => { if (alive) setCode(''); });
     getMyCoachCard().then((c) => { if (alive) setCard(c); }).catch(() => {});
     getCoachObserved().then((o) => { if (alive) setObserved(o); }).catch(() => {});
+    getMyCouples().then((c) => { if (alive) setCouples(c || []); }).catch(() => { if (alive) setCouples([]); });
     return () => { alive = false; clearTimeout(copiedTimer.current); };
   }, []);
 
@@ -63,7 +89,13 @@ export default function CoachLinksView({ bottomSpace = 0 }) {
     }
   }
 
-  const n = students.length;
+  const byName = (a, b) => (a.name || '').localeCompare(b.name || '');
+  const linkedStudents = [...students].sort(byName);
+  const linkedCouples = [...(couples || [])].sort(byName);
+  const coupleStyles = (c) => [
+    c.latinCoupleCoachId === user?.id && 'latin',
+    c.ballroomCoupleCoachId === user?.id && 'ballroom',
+  ].filter(Boolean);
 
   return (
     <View style={{ flex: 1 }}>
@@ -84,8 +116,8 @@ export default function CoachLinksView({ bottomSpace = 0 }) {
           <SecLabel text="Invite students" />
           <TouchableOpacity style={row.card} onPress={() => setCodeOpen(true)} activeOpacity={0.75}
             accessibilityRole="button" accessibilityLabel={code ? `Invite code ${code.split('').join(' ')}` : 'Invite code'}>
-            <View style={row.init}>
-              <Ionicons name="key-outline" size={20} color="#141311" />
+            <View style={[row.init, row.initAdd]}>
+              <Text style={[row.initTxt, row.initTxtAdd]}>+</Text>
             </View>
             <View style={{ flex: 1, minWidth: 0 }}>
               <Text style={row.role}>Invite code</Text>
@@ -95,9 +127,6 @@ export default function CoachLinksView({ bottomSpace = 0 }) {
             </View>
             <Ionicons name="chevron-forward" size={16} color="rgba(10,10,10,0.3)" />
           </TouchableOpacity>
-          <Text style={row.note}>
-            {n > 0 ? `${n} student${n === 1 ? '' : 's'} connected so far.` : 'No students yet — share your code to get your first connection.'}
-          </Text>
 
           {!!card && (
             <>
@@ -114,6 +143,36 @@ export default function CoachLinksView({ bottomSpace = 0 }) {
               </TouchableOpacity>
             </>
           )}
+
+          <SecLabel text={`Students · ${linkedStudents.length}`} />
+          {linkedStudents.length === 0 ? (
+            <Text style={row.note}>No students yet — share your code to get your first connection.</Text>
+          ) : linkedStudents.map((s) => {
+            const waiting = isAwaitingVerification(s);
+            return (
+              <LinkRow
+                key={s.id}
+                initials={initialsOf(s.name)}
+                role={waiting ? 'Awaiting verification' : `${stylesLabel(s.coachStyles || []) || 'Coached'} · Student`}
+                name={s.name || 'Student'}
+                muted={waiting}
+                onPress={() => guardStudent(s, () => navigation.navigate('StudentDetail', { studentId: s.id, studentName: s.name }), () => refresh())}
+              />
+            );
+          })}
+
+          <SecLabel text={couples == null ? 'Couples' : `Couples · ${linkedCouples.length}`} />
+          {couples == null ? null : linkedCouples.length === 0 ? (
+            <Text style={row.note}>No couples yet. When a couple picks you as their couple coach, they’ll appear here.</Text>
+          ) : linkedCouples.map((c) => (
+            <LinkRow
+              key={c.coupleId}
+              initials={`${c.dancerA?.name?.[0] || '?'}${c.dancerB?.name?.[0] || '?'}`.toUpperCase()}
+              role={`${stylesLabel(coupleStyles(c)) || 'Coached'} · Couple`}
+              name={`${c.dancerA?.name || 'Dancer'} & ${c.dancerB?.name || 'Dancer'}`}
+              onPress={() => navigation.navigate('CoupleDetail', { coupleId: c.coupleId, coupleName: c.name })}
+            />
+          ))}
         </ScrollView>
       </MaskedView>
 
@@ -153,12 +212,15 @@ const row = StyleSheet.create({
     width: 50, height: 50, borderRadius: 25, backgroundColor: '#E2AA20', borderWidth: 1, borderColor: '#A87A10',
     alignItems: 'center', justifyContent: 'center',
   },
+  initAdd: { backgroundColor: '#F4F2EC', borderStyle: 'dashed', borderColor: 'rgba(20,19,17,0.45)' },
+  initMuted: { backgroundColor: '#F4F2EC', borderColor: 'rgba(20,19,17,0.2)' },
   initTxt: { fontFamily: Fonts.jakartaExtraBold, fontSize: 16, color: '#141311', letterSpacing: -0.3 },
+  initTxtAdd: { color: '#6B6656', fontSize: 24 },
   role: { fontFamily: Fonts.jakartaExtraBold, fontSize: 11, color: '#7F5A0B', letterSpacing: 1.4, textTransform: 'uppercase' },
   name: { fontFamily: Fonts.jakartaExtraBold, fontSize: 17, color: '#141311', letterSpacing: -0.34, marginTop: 4 },
   code: { letterSpacing: 2 },
   nameMuted: { color: 'rgba(10,10,10,0.45)', letterSpacing: -0.34 },
-  note: { fontFamily: Fonts.jakartaRegular, fontSize: 12.5, lineHeight: 17, color: '#6B6656', paddingHorizontal: 4, marginTop: -2 },
+  note: { fontFamily: Fonts.jakartaRegular, fontSize: 13, lineHeight: 18, color: '#6B6656', paddingHorizontal: 4 },
 });
 
 // Stats ▸ Settings sheets (`em`), with the code and a Copy button.
