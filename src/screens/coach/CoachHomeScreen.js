@@ -282,7 +282,12 @@ function useSlideSwap(value, rightValue) {
 // ── Screen ───────────────────────────────────────────────────────────────────
 
 export default function CoachHomeScreen({ navigation, route }) {
-  const { students, requests, initialLoading: loading, refresh, updateRequests } = useCoachData();
+  // Students and couples are the header's group (Latin / Ballroom). Requests
+  // aren't: each says which style it's for, and none should hide in the other group.
+  const {
+    students: allStudents, styleStudents: students, styleFilter, styleCategory, canSwitchStyle, user,
+    requests, initialLoading: loading, refresh, updateRequests,
+  } = useCoachData();
   const tabBarSpace = useTabBarSpace();
 
   // Lesson readiness % per student — the ring and the number on each row.
@@ -292,16 +297,17 @@ export default function CoachHomeScreen({ navigation, route }) {
   useEffect(() => {
     if (!students || students.length === 0) {
       setReadinessByStudent({});
+      lastReadinessSigRef.current = null; // an empty group, then back: read it again
       return;
     }
-    const signature = students.map((s) => s.id).sort().join('|');
+    const signature = `${styleCategory}:${students.map((s) => s.id).sort().join('|')}`;
     if (signature === lastReadinessSigRef.current) return;
     lastReadinessSigRef.current = signature;
 
     let alive = true;
     (async () => {
       try {
-        const map = await getStudentsReadiness(students.map((s) => s.id));
+        const map = await getStudentsReadiness(students.map((s) => s.id), styleCategory);
         if (!alive) return;
         const byStudent = {};
         for (const s of students) {
@@ -314,7 +320,7 @@ export default function CoachHomeScreen({ navigation, route }) {
       }
     })();
     return () => { alive = false; };
-  }, [students]);
+  }, [students, styleCategory]);
 
   const [tab, setTab] = useState('readiness'); // 'readiness' | 'last'
   // Readiness ↔ Last private lesson, like Train's Solo ↔ Couple.
@@ -322,7 +328,15 @@ export default function CoachHomeScreen({ navigation, route }) {
   const [view, setView] = useState('students'); // 'students' | 'couples'
   // Students ↔ Couples: the summary and the roster slide the same way.
   const [shownView, viewSlideStyle] = useSlideSwap(view, 'couples');
-  const [couples, setCouples] = useState([]);
+  const [allCouples, setCouples] = useState([]);
+  // The group's couples: the ones this coach coaches in that style.
+  const couples = useMemo(() => {
+    if (!canSwitchStyle) return allCouples;
+    const ballroom = styleFilter === 'ballroom';
+    return allCouples.filter((c) => (user?.id
+      ? (ballroom ? c.ballroomCoupleCoachId : c.latinCoupleCoachId) === user.id
+      : (ballroom ? c.doesBallroom : c.doesLatin)));
+  }, [allCouples, canSwitchStyle, styleFilter, user?.id]);
   const [coupleReqs, setCoupleReqs] = useState([]);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -423,24 +437,30 @@ export default function CoachHomeScreen({ navigation, route }) {
 
   const aliveRef = useRef(true);
   useEffect(() => () => { aliveRef.current = false; }, []);
+  // Couple readiness is read for the group's style; a newer load wins.
+  const styleCatRef = useRef(styleCategory);
+  styleCatRef.current = styleCategory;
+  const couplesLoadRef = useRef(0);
   async function loadCouples() {
+    const seq = ++couplesLoadRef.current;
+    const category = styleCatRef.current;
     const [cs, crs] = await Promise.all([
       getMyCouples().catch(() => []),
       getPendingCoupleCoachRequests().catch(() => []),
     ]);
-    if (!aliveRef.current) return;
+    if (!aliveRef.current || seq !== couplesLoadRef.current) return;
     setCoupleReqs(crs);
     setCouples(cs); // show fast, then enrich with readiness + last private below
     const enriched = await Promise.all((cs || []).map(async (c) => {
-      const r = await getCoupleReadiness(c.coupleId, null).catch(() => null);
+      const r = await getCoupleReadiness(c.coupleId, category).catch(() => null);
       const days = r?.lastClassDate
         ? Math.floor((Date.now() - new Date(r.lastClassDate).getTime()) / 86400000)
         : null;
       return { ...c, lastPrivateDays: days, lastClassDate: r?.lastClassDate ?? null, readiness: r?.percent ?? null };
     }));
-    if (aliveRef.current) setCouples(enriched);
+    if (aliveRef.current && seq === couplesLoadRef.current) setCouples(enriched);
   }
-  useEffect(() => { loadCouples(); }, []);
+  useEffect(() => { loadCouples(); }, [styleCategory]);
 
   // ── Pull to refresh, from the fixed top ──
   const pull = usePullDown(async () => {
@@ -451,7 +471,7 @@ export default function CoachHomeScreen({ navigation, route }) {
   async function handleAcceptCoupleCoach(reqId) {
     await respondToCoupleCoachRequest(reqId, true);
     setCoupleReqs((prev) => prev.filter((r) => r.id !== reqId));
-    setCouples(await getMyCouples().catch(() => []));
+    loadCouples();
   }
   async function handleRejectCoupleCoach(reqId) {
     await respondToCoupleCoachRequest(reqId, false);
@@ -650,7 +670,9 @@ export default function CoachHomeScreen({ navigation, route }) {
         {isStudents ? (
           filteredStudents.length === 0 ? (
             <Text style={st.empty}>
-              {searchQuery.trim() ? `Nobody matches “${searchQuery.trim()}”.` : 'No students yet. Share your invite code from your profile to add them.'}
+              {searchQuery.trim() ? `Nobody matches “${searchQuery.trim()}”.`
+                : allStudents.length > 0 ? `No ${styleFilter === 'ballroom' ? 'Ballroom' : 'Latin'} students yet.`
+                : 'No students yet. Share your invite code from your profile to add them.'}
             </Text>
           ) : shownTab === 'readiness' ? (
             <>
@@ -674,7 +696,10 @@ export default function CoachHomeScreen({ navigation, route }) {
             </>
           )
         ) : couples.length === 0 ? (
-          <Text style={st.empty}>No couples yet. When a couple picks you as their couple coach, they’ll appear here.</Text>
+          <Text style={st.empty}>
+            {allCouples.length > 0 ? `No ${styleFilter === 'ballroom' ? 'Ballroom' : 'Latin'} couples yet.`
+              : 'No couples yet. When a couple picks you as their couple coach, they’ll appear here.'}
+          </Text>
         ) : (
           <>
             <GroupHead label={shownTab === 'last' ? 'Longest since a private lesson' : 'Couples'} count={couples.length} tone="ok" />

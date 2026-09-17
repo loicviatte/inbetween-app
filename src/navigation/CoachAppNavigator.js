@@ -41,7 +41,7 @@ function CoachMainTabs() {
   return (
     <View style={{ flex: 1, backgroundColor: headerBg }}>
       <SafeAreaView style={{ backgroundColor: headerBg }} edges={['top']}>
-        <CoachTabHeader />
+        <CoachTabHeader showStyle={activeRoute === 'DASHBOARD' || activeRoute === 'STUDENTS'} />
       </SafeAreaView>
       <View style={{ flex: 1 }}>
         <Tab.Navigator

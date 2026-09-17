@@ -8,6 +8,7 @@ import { Fonts, Spacing } from '../theme';
 import { useCoachData } from '../context/CoachDataContext';
 import DjiSetupBanner from './DjiSetupBanner';
 import DjiSyncPill from './DjiSyncPill';
+import StyleTitle from './StyleTitle';
 
 // May 2026 design refresh — gold/ink scale aligned with DashboardScreen.
 const GOLD_500 = '#E8B530';
@@ -17,9 +18,11 @@ const INK_50 = '#F7F6F3';
 const INK_950 = '#0A0A0A';
 const LINE = 'rgba(10,10,10,0.09)';
 
-export default function CoachTabHeader() {
+// showStyle: Home and Students put "Latin group ▾" after the bell — the group
+// their numbers are for (a menu when the coach teaches both).
+export default function CoachTabHeader({ showStyle = false }) {
   const navigation = useNavigation();
-  const { user, unreadCount } = useCoachData();
+  const { user, unreadCount, styleFilter, setStyleFilter, canSwitchStyle } = useCoachData();
   const initial = user?.name ? user.name[0].toUpperCase() : 'C';
 
   return (
@@ -40,6 +43,15 @@ export default function CoachTabHeader() {
           )}
         </TouchableOpacity>
       </View>
+
+      {showStyle && (
+        <StyleTitle
+          label={styleFilter === 'ballroom' ? 'Ballroom group' : 'Latin group'}
+          category={styleFilter}
+          canSwitch={canSwitchStyle}
+          onSelect={setStyleFilter}
+        />
+      )}
 
       {/* First-run DJI auto-sync prompt. Only visible when a coach in
           local-recording mode has a pending class but no folder
@@ -100,6 +112,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    gap: 10,
     backgroundColor: 'transparent',
   },
   leftGroup: {

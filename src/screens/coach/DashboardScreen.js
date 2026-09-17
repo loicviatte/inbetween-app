@@ -168,7 +168,8 @@ function StudentSquare({ s, readiness, onPress }) {
 // ── Screen ───────────────────────────────────────────────────────────────────
 
 export default function DashboardScreen({ navigation }) {
-  const { students, actionCounts, refresh, initialLoading: loading } = useCoachData();
+  // Everything below is for the header's group (Latin / Ballroom).
+  const { students: allStudents, styleStudents: students, styleFilter, styleCategory, actionCounts, refresh, initialLoading: loading } = useCoachData();
 
   // Cold-start: once the coach dashboard's initial data has loaded, let App.js
   // drop the logo overlay (mirrors HomeScreen's reveal() on the student side).
@@ -277,13 +278,14 @@ export default function DashboardScreen({ navigation }) {
   useEffect(() => {
     if (!students || students.length === 0) {
       setReadinessByStudent({});
+      lastSigRef.current = null; // an empty group, then back: read it again
       return;
     }
-    const signature = students.map((s) => s.id).sort().join('|');
+    const signature = `${styleCategory}:${students.map((s) => s.id).sort().join('|')}`;
     if (signature === lastSigRef.current) return;
     lastSigRef.current = signature;
     let alive = true;
-    getStudentsReadiness(students.map((s) => s.id))
+    getStudentsReadiness(students.map((s) => s.id), styleCategory)
       .then((map) => {
         if (!alive) return;
         const byStudent = {};
@@ -292,7 +294,7 @@ export default function DashboardScreen({ navigation }) {
       })
       .catch(() => { if (alive) setReadinessByStudent({}); });
     return () => { alive = false; };
-  }, [students]);
+  }, [students, styleCategory]);
 
   const withLesson = students.filter((s) => readinessByStudent[s.id] != null);
   const groupReadiness = withLesson.length
@@ -327,7 +329,7 @@ export default function DashboardScreen({ navigation }) {
     const m = gridMetrics.current;
     setMore(m.content - m.h - m.y > 8);
   };
-  useEffect(() => { gridRef.current?.scrollTo({ y: 0, animated: false }); gridMetrics.current.y = 0; updateMore(); }, [sort]);
+  useEffect(() => { gridRef.current?.scrollTo({ y: 0, animated: false }); gridMetrics.current.y = 0; updateMore(); }, [sort, styleFilter]);
 
   const openStudent = (s) =>
     guardStudent(s, () => navigation.navigate('StudentDetail', { studentId: s.id, studentName: s.name }), () => refresh());
@@ -435,7 +437,11 @@ export default function DashboardScreen({ navigation }) {
           onScroll={(e) => { gridMetrics.current.y = e.nativeEvent.contentOffset.y; updateMore(); }}
         >
           {sorted.length === 0 ? (
-            <Text style={st.empty}>No students yet. Share your invite code from your profile to add them.</Text>
+            <Text style={st.empty}>
+              {allStudents.length > 0
+                ? `No ${styleFilter === 'ballroom' ? 'Ballroom' : 'Latin'} students yet.`
+                : 'No students yet. Share your invite code from your profile to add them.'}
+            </Text>
           ) : sorted.map((s) => (
             <View key={s.id} style={st.cell}>
               <StudentSquare s={s} readiness={readinessByStudent[s.id] ?? null} onPress={() => openStudent(s)} />
