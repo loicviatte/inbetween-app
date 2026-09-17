@@ -13,6 +13,7 @@ import {
 import { Image } from 'expo-image';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { LinearGradient } from 'expo-linear-gradient';
+import MaskedView from '@react-native-masked-view/masked-view';
 import { Fonts, Spacing } from '../../theme';
 import DashboardSkeleton from '../../components/DashboardSkeleton';
 import { useCoachData } from '../../context/CoachDataContext';
@@ -44,6 +45,7 @@ const PAGE = '#F2F0EB';
 const GOLD = '#E8B530';
 const RED = '#A8412F';
 const CHART_H = 74;
+const EDGE_FADE = 14; // the squares fade out under the sort row as they scroll
 
 const SORTS = [['need', 'Least practised'], ['ready', 'Readiness'], ['az', 'A–Z']];
 
@@ -488,6 +490,15 @@ export default function DashboardScreen({ navigation }) {
 
       {/* ── Students ── */}
       <View style={st.gridWrap}>
+        <MaskedView
+          style={{ flex: 1 }}
+          maskElement={
+            <View style={{ flex: 1 }}>
+              <LinearGradient colors={['transparent', '#000']} style={{ height: EDGE_FADE }} />
+              <View style={{ flex: 1, backgroundColor: '#000' }} />
+            </View>
+          }
+        >
         <ScrollView
           ref={gridRef}
           contentContainerStyle={st.grid}
@@ -515,6 +526,7 @@ export default function DashboardScreen({ navigation }) {
             </FadeIn>
           )}
         </ScrollView>
+        </MaskedView>
         {more && (
           <View pointerEvents="none" style={st.moreWrap}>
             <LinearGradient colors={['rgba(242,240,235,0)', 'rgba(242,240,235,0.8)', PAGE]} locations={[0, 0.55, 1]} style={StyleSheet.absoluteFill} />
@@ -580,14 +592,15 @@ const st = StyleSheet.create({
   liveDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#D06A5A' },
   liveTimer: { fontFamily: Fonts.ttBold, fontSize: 15, color: GOLD, fontVariant: ['tabular-nums'] },
 
-  sort: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: Spacing.side, paddingTop: 16, paddingBottom: 10 },
+  sort: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: Spacing.side, paddingTop: 16 },
   sortCount: { flex: 1, fontFamily: Fonts.ttDemiBold, fontSize: 9.5, letterSpacing: 1.5, textTransform: 'uppercase', color: 'rgba(10,10,10,0.6)' },
   sortBtn: { borderRadius: 999, paddingVertical: 4, paddingHorizontal: 10, borderWidth: 1, borderColor: 'rgba(10,10,10,0.14)' },
   sortBtnOn: { backgroundColor: INK, borderColor: INK },
   sortBtnT: { fontFamily: Fonts.ttDemiBold, fontSize: 10.5, color: 'rgba(10,10,10,0.6)' },
 
   gridWrap: { flex: 1 },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: Spacing.side - 4.5, paddingBottom: 16 },
+  // paddingTop keeps the first row clear of the fade at rest (same gap under the sort row as before).
+  grid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: Spacing.side - 4.5, paddingTop: 10, paddingBottom: 16 },
   cell: { width: '50%', padding: 4.5 },
   gridFade: { width: '100%', flexDirection: 'row', flexWrap: 'wrap' },
   square: {
