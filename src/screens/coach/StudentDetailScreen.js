@@ -77,6 +77,14 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
+// A question asked while training carries the focus it came from, as a tag
+// FocusSessionScreen appends: "… [Focus: Staccato footwork]".
+function splitFocusTag(message) {
+  const m = /\s*\[Focus:\s*([^\]]+)\]\s*$/i.exec(message || '');
+  if (!m) return { text: (message || '').trim(), focusName: null };
+  return { text: (message || '').slice(0, m.index).trim(), focusName: m[1].trim() };
+}
+
 function initialsOf(name) {
   const w = (name || '').trim().split(/\s+/).filter(Boolean);
   return ((w[0]?.[0] || '?') + (w[1]?.[0] || '')).toUpperCase();
@@ -164,13 +172,16 @@ function ActionCard({ count, tone = 'gold', title, sub, open, onToggle, onPress,
 }
 
 function QuestionRow({ q, onAnswer }) {
+  // The focus it was asked from reads better as a line of its own than as a
+  // tag trailing the question.
+  const { text, focusName } = splitFocusTag(q.message);
   return (
     <Pressable onPress={onAnswer} style={({ pressed }) => [st.qRow, pressed && { backgroundColor: '#FBFAF7' }]}
       accessibilityRole="button" accessibilityLabel={`Question: ${q.message}. Answer`}>
       <Text style={st.qMark}>“</Text>
       <View style={st.qBody}>
-        <Text style={st.qText}>{q.message}</Text>
-        <Text style={st.qMeta}>{agoLabel(q.created_at)}</Text>
+        <Text style={st.qText}>{text || q.message}</Text>
+        <Text style={st.qMeta}>{[agoLabel(q.created_at), focusName].filter(Boolean).join(' · ')}</Text>
       </View>
       <View style={st.qBtn}><Text style={st.qBtnT}>Answer</Text></View>
     </Pressable>
@@ -257,21 +268,62 @@ function StudentDetailSkeleton({ name, onBack }) {
 }
 
 // ── Question sheet (reply modal) ────────────────────────────────────────────
-function QuestionSheet({ visible, question, onClose, onDone }) {
+// The draft lives in the screen so leaving for the focus point or the lesson
+// doesn't throw away what the coach had started typing.
+function QuestionSheet({ visible, question, reply, onReplyChange, focusPoints, studentId, onOpenFocus, onOpenClass, onClose, onDone }) {
   const insets = useSafeAreaInsets();
-  const [reply, setReply] = useState('');
   const [sending, setSending] = useState(false);
+  const [context, setContext] = useState(null); // { focus, cls } | null while loading
+  const [expanded, setExpanded] = useState(false);
 
+  const { text: questionText, focusName } = splitFocusTag(question?.message);
+
+  // What the question is about: the focus point by name, and the lesson it was
+  // set in. Looked up when the sheet opens — questions carry no foreign key.
   useEffect(() => {
-    if (!visible) setReply('');
-  }, [visible]);
+    if (!visible || !question) { setContext(null); setExpanded(false); return undefined; }
+    if (!focusName) { setContext({ focus: null, cls: null }); return undefined; }
+    let alive = true;
+    setContext(null);
+    (async () => {
+      let focus = null;
+      try {
+        const { data } = await supabase
+          .from('focus_points')
+          .select('id, name, subtitle, drill, tier, status, created_at, class_input_id, source_class_input_id')
+          .eq('user_id', studentId)
+          .eq('is_deleted', false)
+          .ilike('name', focusName)
+          .order('created_at', { ascending: false })
+          .limit(1);
+        focus = data?.[0] || null;
+      } catch {}
+      if (!focus) {
+        focus = (focusPoints || []).find((f) => (f.name || '').trim().toLowerCase() === focusName.toLowerCase()) || null;
+      }
+      let cls = null;
+      const classId = focus?.class_input_id || focus?.source_class_input_id || null;
+      if (classId) {
+        try {
+          const { data } = await supabase
+            .from('class_inputs')
+            .select('id, title, dance, class_summary, created_at')
+            .eq('id', classId)
+            .maybeSingle();
+          cls = data || null;
+        } catch {}
+      }
+      if (alive) setContext({ focus, cls });
+    })();
+    return () => { alive = false; };
+  }, [visible, question?.id, focusName, studentId]);
 
   async function handleReply() {
     if (!reply.trim()) return;
     setSending(true);
     await replyToQuestion(question.id, reply.trim());
     setSending(false);
-    setReply('');
+    onReplyChange('');
     onDone();
   }
 
@@ -290,13 +342,74 @@ function QuestionSheet({ visible, question, onClose, onDone }) {
             <View style={qs.handle} />
             <Text style={qs.title}>Question from student</Text>
             <View style={qs.bubble}>
-              <Text style={qs.bubbleText}>{question.message}</Text>
+              <Text style={qs.bubbleText}>{questionText || question.message}</Text>
             </View>
+
+            {!!focusName && (
+              <View style={qs.ctx}>
+                <Pressable
+                  onPress={() => setExpanded((e) => !e)}
+                  style={({ pressed }) => [qs.ctxHead, pressed && { backgroundColor: '#FBFAF7' }]}
+                  accessibilityRole="button"
+                  accessibilityState={{ expanded }}
+                  accessibilityLabel={`About ${context?.focus?.name || focusName}`}
+                >
+                  <View style={qs.ctxDot} />
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={qs.ctxName} numberOfLines={1}>{context?.focus?.name || focusName}</Text>
+                    <Text style={qs.ctxMeta} numberOfLines={1}>
+                      {context == null
+                        ? 'Looking it up…'
+                        : [TIER_LABEL[context.focus?.tier] || 'Focus point',
+                           context.cls ? `set ${dayLabel(context.cls.created_at)}` : null].filter(Boolean).join(' · ')}
+                    </Text>
+                  </View>
+                  <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={14} color="rgba(10,10,10,0.4)" />
+                </Pressable>
+
+                {expanded && context != null && (
+                  <View style={qs.ctxBody}>
+                    {!!context.focus?.subtitle && <Text style={qs.ctxText}>{context.focus.subtitle}</Text>}
+                    {!!context.focus?.drill && (
+                      <>
+                        <Text style={qs.ctxLabel}>How they train it</Text>
+                        <Text style={qs.ctxText}>{context.focus.drill}</Text>
+                      </>
+                    )}
+                    {!!context.cls?.class_summary && (
+                      <>
+                        <Text style={qs.ctxLabel}>From the lesson</Text>
+                        <Text style={qs.ctxText} numberOfLines={5}>{context.cls.class_summary}</Text>
+                      </>
+                    )}
+                    {!context.focus?.subtitle && !context.focus?.drill && !context.cls?.class_summary && (
+                      <Text style={qs.ctxText}>No notes were written on this focus point.</Text>
+                    )}
+                    <View style={qs.ctxActions}>
+                      {!!context.focus?.id && (
+                        <TouchableOpacity style={qs.ctxBtn} activeOpacity={0.8} onPress={() => onOpenFocus(context.focus)}
+                          accessibilityRole="button">
+                          <Ionicons name="locate-outline" size={13} color={INK} />
+                          <Text style={qs.ctxBtnT}>The focus point</Text>
+                        </TouchableOpacity>
+                      )}
+                      {!!context.cls?.id && (
+                        <TouchableOpacity style={qs.ctxBtn} activeOpacity={0.8} onPress={() => onOpenClass(context.cls.id)}
+                          accessibilityRole="button">
+                          <Ionicons name="document-text-outline" size={13} color={INK} />
+                          <Text style={qs.ctxBtnT}>The lesson</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  </View>
+                )}
+              </View>
+            )}
             <View style={qs.inputRow}>
               <TextInput
                 style={qs.input}
                 value={reply}
-                onChangeText={setReply}
+                onChangeText={onReplyChange}
                 placeholder="Type your reply…"
                 placeholderTextColor="rgba(10,10,10,0.4)"
                 multiline
@@ -366,6 +479,7 @@ export default function StudentDetailScreen({ route, navigation }) {
   const [rejectingPendingFp, setRejectingPendingFp] = useState(null);
   const [activeQuestion, setActiveQuestion] = useState(null);
   const [questionSheetVisible, setQuestionSheetVisible] = useState(false);
+  const [questionReply, setQuestionReply] = useState(''); // kept while the coach goes looking for context
   const [editingFocus, setEditingFocus] = useState(null);
   const [lessonMinutes, setLessonMinutes] = useState(null);
   const [lessonCount, setLessonCount] = useState(null); // every lesson logged for them
@@ -722,7 +836,15 @@ export default function StudentDetailScreen({ route, navigation }) {
               onToggle={() => toggle('questions')}
             >
               {questions.map((q) => (
-                <QuestionRow key={q.id} q={q} onAnswer={() => { setActiveQuestion(q); setQuestionSheetVisible(true); }} />
+                <QuestionRow
+                  key={q.id}
+                  q={q}
+                  onAnswer={() => {
+                    if (q.id !== activeQuestion?.id) setQuestionReply('');
+                    setActiveQuestion(q);
+                    setQuestionSheetVisible(true);
+                  }}
+                />
               ))}
             </ActionCard>
           )}
@@ -888,10 +1010,24 @@ export default function StudentDetailScreen({ route, navigation }) {
       <QuestionSheet
         visible={questionSheetVisible}
         question={activeQuestion}
+        reply={questionReply}
+        onReplyChange={setQuestionReply}
+        focusPoints={focusPoints}
+        studentId={studentId}
+        // Two sheets can't be on screen at once: let this one dismiss first.
+        onOpenFocus={(fp) => {
+          setQuestionSheetVisible(false);
+          setTimeout(() => setEditingFocus(fp), 320);
+        }}
+        onOpenClass={(classId) => {
+          setQuestionSheetVisible(false);
+          setTimeout(() => navigation.navigate('CoachClassDetail', { classId }), 320);
+        }}
         onClose={() => setQuestionSheetVisible(false)}
         onDone={() => {
           setQuestionSheetVisible(false);
           setActiveQuestion(null);
+          setQuestionReply('');
           animateNext();
           setQuestions((prev) => prev.filter((x) => x.id !== activeQuestion?.id));
           refreshCoachData();
@@ -1060,6 +1196,20 @@ const qs = StyleSheet.create({
   title: { fontFamily: Fonts.ttBold, fontSize: 17, color: INK, marginBottom: 14 },
   bubble: { backgroundColor: '#FBFAF7', borderRadius: 16, padding: 14, marginBottom: 14, borderLeftWidth: 3, borderLeftColor: GOLD },
   bubbleText: { fontFamily: Fonts.ttMedium, fontSize: 14, color: INK, lineHeight: 20 },
+  ctx: { borderRadius: 16, borderWidth: 1, borderColor: 'rgba(10,10,10,0.1)', overflow: 'hidden', marginBottom: 14 },
+  ctxHead: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 13, paddingVertical: 11 },
+  ctxDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: GOLD },
+  ctxName: { fontFamily: Fonts.ttDemiBold, fontSize: 13.5, letterSpacing: -0.2, color: INK },
+  ctxMeta: { fontFamily: Fonts.ttRegular, fontSize: 11, color: INK_62, marginTop: 2 },
+  ctxBody: { paddingHorizontal: 13, paddingBottom: 13, gap: 6, borderTopWidth: 1, borderTopColor: 'rgba(10,10,10,0.07)', paddingTop: 11 },
+  ctxLabel: { fontFamily: Fonts.ttDemiBold, fontSize: 9, letterSpacing: 1.2, textTransform: 'uppercase', color: INK_62, marginTop: 4 },
+  ctxText: { fontFamily: Fonts.ttRegular, fontSize: 12.5, lineHeight: 18, color: 'rgba(10,10,10,0.75)' },
+  ctxActions: { flexDirection: 'row', gap: 8, marginTop: 10 },
+  ctxBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 6, height: 34, paddingHorizontal: 12, borderRadius: 999,
+    borderWidth: 1, borderColor: 'rgba(10,10,10,0.16)',
+  },
+  ctxBtnT: { fontFamily: Fonts.ttDemiBold, fontSize: 12, color: INK },
   inputRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, marginBottom: 12 },
   input: {
     flex: 1, backgroundColor: '#F4F2EC', borderRadius: 16, paddingHorizontal: 14, paddingVertical: 12,
