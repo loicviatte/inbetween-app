@@ -460,7 +460,9 @@ export default function CoachHomeScreen({ navigation, route }) {
 
   return (
     <View style={st.page}>
-      <ScrollView contentContainerStyle={st.scroll} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+      {/* Fixed: titles, summary and the Readiness | Last private lesson toggle.
+          Only the roster below it scrolls. */}
+      <View style={st.fixed}>
         {/* Students / Couples, and search */}
         <View style={st.titleRow}>
           <TouchableOpacity onPress={() => setView('students')} activeOpacity={0.7}>
@@ -531,7 +533,9 @@ export default function CoachHomeScreen({ navigation, route }) {
             </TouchableOpacity>
           ))}
         </View>
+      </View>
 
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={st.scroll} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
         {/* Requests waiting on the coach */}
         {isStudents && requests.length > 0 && (
           <>
@@ -612,6 +616,7 @@ export default function CoachHomeScreen({ navigation, route }) {
 
 const st = StyleSheet.create({
   page: { flex: 1, backgroundColor: PAGE },
+  fixed: { paddingHorizontal: Spacing.side },
   scroll: { paddingHorizontal: Spacing.side, paddingBottom: 120 },
 
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingTop: 12 },
