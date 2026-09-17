@@ -1552,6 +1552,29 @@ export async function getCoachNotesForStudent(studentId) {
 
 // ─── Coach Classes ───────────────────────────────────────────────────────────
 
+// How long a recorded class ran, from its class_recordings rows: the mic
+// file's length (DJI imports) or the recording's start → end. The longest row
+// wins and a row is capped at 3 h, as the server's lesson_minutes does, so a
+// recording left open for days doesn't read as a marathon. null = unknown.
+const RECORDING_COLUMNS = 'class_input_id, started_at, ended_at, mic_file_duration_sec';
+function recordingMinutes(r) {
+  let min = null;
+  if (r.mic_file_duration_sec > 0) min = r.mic_file_duration_sec / 60;
+  else if (r.started_at && r.ended_at) {
+    const ms = new Date(r.ended_at) - new Date(r.started_at);
+    if (ms > 0) min = ms / 60000;
+  }
+  return min == null ? null : Math.min(180, min);
+}
+function minutesByClassInput(rows) {
+  const out = {};
+  for (const r of rows || []) {
+    const min = recordingMinutes(r);
+    if (min != null) out[r.class_input_id] = Math.max(out[r.class_input_id] || 0, min);
+  }
+  return out;
+}
+
 // Total minutes coached, summed across all class_recordings rows that
 // belong to this coach's class_inputs. Classes with no recording don't
 // contribute. Returns minutes (Number); the UI rounds to hours.
@@ -1566,14 +1589,15 @@ export async function getTotalCoachedMinutes() {
   if (list.length === 0) return 0;
 
   // Real recorded durations, when a class was captured with the recorder.
-  const { data: recordings } = await supabase
-    .from('class_recordings')
-    .select('class_input_id, duration_ms')
-    .in('class_input_id', list.map((c) => c.id));
-  const recMsByClass = {};
-  for (const r of recordings || []) {
-    recMsByClass[r.class_input_id] = (recMsByClass[r.class_input_id] || 0) + (r?.duration_ms || 0);
+  // (It read a duration_ms column that doesn't exist, so the query failed and
+  // every class fell back to the estimate.)
+  const ids = list.map((c) => c.id);
+  const recordings = [];
+  for (let i = 0; i < ids.length; i += 150) {
+    const { data } = await supabase.from('class_recordings').select(RECORDING_COLUMNS).in('class_input_id', ids.slice(i, i + 150));
+    recordings.push(...(data || []));
   }
+  const recMinByClass = minutesByClassInput(recordings);
 
   // Manually-logged classes (no recording, or zero-length) still count toward
   // coached hours — estimated at a typical lesson length per type. Hours were
@@ -1581,8 +1605,8 @@ export async function getTotalCoachedMinutes() {
   const DEFAULT_MIN = { private: 45, couple: 45, group: 60 };
   let totalMin = 0;
   for (const c of list) {
-    const ms = recMsByClass[c.id] || 0;
-    totalMin += ms > 0 ? ms / 60000 : (DEFAULT_MIN[c.lesson_type] ?? 45);
+    const min = recMinByClass[c.id] || 0;
+    totalMin += min > 0 ? min : (DEFAULT_MIN[c.lesson_type] ?? 45);
   }
   return Math.round(totalMin);
 }
@@ -1686,7 +1710,7 @@ export async function getMyClasses() {
   };
   const [{ data: cisRows }, { data: recRows }, { data: coupleRows }] = await Promise.all([
     inBatches('class_input_students', 'class_input_id, student_id'),
-    inBatches('class_recordings', 'class_input_id, started_at, ended_at, mic_file_duration_sec'),
+    inBatches('class_recordings', RECORDING_COLUMNS),
     coupleIds.length
       ? supabase.from('couples').select('id, user_a_id, user_b_id').in('id', coupleIds)
       : Promise.resolve({ data: [] }),
@@ -1707,16 +1731,7 @@ export async function getMyClasses() {
   }
   for (const r of cisRows || []) add(r.class_input_id, r.student_id);
 
-  const minutesByClass = {};
-  for (const r of recRows || []) {
-    let min = null;
-    if (r.mic_file_duration_sec > 0) min = r.mic_file_duration_sec / 60;
-    else if (r.started_at && r.ended_at) {
-      const ms = new Date(r.ended_at) - new Date(r.started_at);
-      if (ms > 0) min = ms / 60000;
-    }
-    if (min != null) minutesByClass[r.class_input_id] = (minutesByClass[r.class_input_id] || 0) + min;
-  }
+  const minutesByClass = minutesByClassInput(recRows);
 
   const studentIds = [...new Set(Object.values(studentsByClass).flat())];
   let studentMap = {};
@@ -1755,12 +1770,14 @@ export async function getCoachClassDetail(classId) {
     .maybeSingle();
   if (!cls) return null;
 
-  // Class recording (if any) — used for the duration stat in the UI header.
-  const { data: recordingRow } = await supabase
+  // Class recording(s), if any — the duration stat in the UI header. (It
+  // selected a duration_ms column that doesn't exist, so no class ever showed
+  // a duration.)
+  const { data: recordingRows } = await supabase
     .from('class_recordings')
-    .select('duration_ms, started_at, ended_at')
-    .eq('class_input_id', classId)
-    .maybeSingle();
+    .select(RECORDING_COLUMNS)
+    .eq('class_input_id', classId);
+  const recordingRow = recordingRows?.[0] || null;
 
   // Recorded students for this class (group classes only — private lessons
   // store the single student in class_inputs.student_id).
@@ -1838,14 +1855,8 @@ export async function getCoachClassDetail(classId) {
     .filter(fp => !fp.is_other && fp.status !== 'past')
     .length;
 
-  // Duration: prefer the recorded duration; fall back to start/end diff.
-  let durationMin = null;
-  if (recordingRow?.duration_ms != null) {
-    durationMin = Math.max(1, Math.round(recordingRow.duration_ms / 60000));
-  } else if (recordingRow?.started_at && recordingRow?.ended_at) {
-    const diff = new Date(recordingRow.ended_at) - new Date(recordingRow.started_at);
-    if (diff > 0) durationMin = Math.max(1, Math.round(diff / 60000));
-  }
+  const recordedMin = minutesByClassInput(recordingRows)[classId];
+  const durationMin = recordedMin != null ? Math.max(1, Math.round(recordedMin)) : null;
 
   // Recorded = the class came in via the audio pipeline (transcript present
   // OR a class_recordings row exists for it).
