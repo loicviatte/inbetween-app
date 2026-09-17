@@ -1161,12 +1161,6 @@ const styles = StyleSheet.create({
   },
 
   // ── Inputs ─────────────────────────────────────────────
-  inputBlock: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 8,
-    marginBottom: 12,
-  },
   filledInput: {
     flex: 1,
     backgroundColor: Colors.white,
@@ -1181,11 +1175,8 @@ const styles = StyleSheet.create({
     borderColor: '#EFEFEF',
     lineHeight: 21,
   },
-  drillInput: { minHeight: 64, backgroundColor: '#F9F9F9' },
-  micWrap: { paddingTop: 2 },
   micBtn:       { width: 34, height: 34, alignItems: 'center', justifyContent: 'center' },
   micBtnActive: {},
-  micIcon:      { fontSize: 18 },
 
   // ── Urgency ────────────────────────────────────────────
   urgencyRow: {
@@ -1210,7 +1201,6 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
     borderRadius: 8,
   },
-  urgencyValue: { fontFamily: Fonts.jakartaMedium, fontSize: 11, color: Colors.secondary, textAlign: 'right', marginTop: -4 },
   sliderWrap:   { marginBottom: 12 },
   slider:       { width: '100%', height: 40 },
 

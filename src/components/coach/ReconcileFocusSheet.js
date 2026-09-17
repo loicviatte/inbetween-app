@@ -229,8 +229,6 @@ const s = StyleSheet.create({
   klock: { width: 24, height: 24, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.12)', alignItems: 'center', justifyContent: 'center' },
   kname: { fontFamily: Fonts.jakartaExtraBold, fontSize: 27, color: '#FFFFFF', letterSpacing: -0.6, marginTop: 9 },
   kmeta: { flexDirection: 'row', alignItems: 'center', gap: 11, marginTop: 14 },
-  kpill: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: C.gold, borderRadius: 999, paddingHorizontal: 11, paddingVertical: 4 },
-  kpillText: { fontFamily: Fonts.travelsMedium, fontSize: 9.5, letterSpacing: 1.1, color: C.ink },
   ktrained: { fontFamily: Fonts.travelsMedium, fontSize: 12, color: 'rgba(247,246,243,0.62)' },
 
   dropk: { flexDirection: 'row', alignItems: 'baseline', paddingHorizontal: 22, paddingTop: 18, paddingBottom: 9 },

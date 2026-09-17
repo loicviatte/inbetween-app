@@ -275,7 +275,6 @@ export default function TrainerStudentsScreen({ navigation }) {
 
 const s = StyleSheet.create({
   safe: { flex: 1, backgroundColor: BG },
-  loadingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   header: {
     flexDirection: 'row',
     alignItems: 'center',

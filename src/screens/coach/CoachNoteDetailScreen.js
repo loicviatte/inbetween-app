@@ -791,22 +791,6 @@ const vm = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   video: { width: '100%', height: 300 },
-  errorBox: {
-    backgroundColor: '#1a1a1a',
-    borderRadius: 16,
-    padding: 24,
-    margin: 32,
-    alignItems: 'center',
-    gap: 16,
-  },
-  errorText: { fontSize: 15, color: '#ccc', textAlign: 'center' },
-  errorBtn: {
-    paddingHorizontal: 24,
-    paddingVertical: 10,
-    backgroundColor: '#333',
-    borderRadius: 10,
-  },
-  errorBtnText: { fontSize: 15, color: '#fff' },
 });
 
 const picker = StyleSheet.create({

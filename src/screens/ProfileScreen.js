@@ -2341,21 +2341,6 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   heroActOn: { backgroundColor: '#141311' },
-  styleChip: {
-    alignSelf: 'flex-start',
-    marginTop: 7,
-    paddingHorizontal: 11,
-    paddingVertical: 3,
-    borderRadius: 999,
-    backgroundColor: 'rgba(232,181,48,0.16)',
-  },
-  styleChipText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 9,
-    color: '#A8801A',
-    letterSpacing: 1.3,
-    textTransform: 'uppercase',
-  },
 
   // ── Tab body — content column inside the per-tab scroll ──
   tabBody: { paddingTop: 4 },
@@ -2626,54 +2611,6 @@ const cc = StyleSheet.create({
 
 // ─── Statistics tab — counts triad + month/streak mini-card ───────────────────
 const stat = StyleSheet.create({
-  triad: {
-    flexDirection: 'row',
-    backgroundColor: 'rgba(255,255,255,0.55)',
-    borderWidth: 1,
-    borderColor: 'rgba(10,10,10,0.09)',
-    borderRadius: 15,
-  },
-  cell: { flex: 1, alignItems: 'center', paddingVertical: 12, gap: 1 },
-  cellDivider: { width: 1, marginVertical: 12, backgroundColor: 'rgba(10,10,10,0.05)' },
-  num: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 22,
-    color: '#0A0A0A',
-    letterSpacing: -0.6,
-  },
-  lbl: {
-    fontFamily: Fonts.jakartaSemiBold,
-    fontSize: 10,
-    color: 'rgba(10,10,10,0.45)',
-  },
-  miniCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: 'rgba(255,255,255,0.55)',
-    borderWidth: 1,
-    borderColor: 'rgba(10,10,10,0.09)',
-    borderRadius: 15,
-    paddingHorizontal: 16,
-    paddingVertical: 13,
-    marginTop: 12,
-  },
-  miniHalf: { alignItems: 'flex-start' },
-  miniHalfRight: { alignItems: 'flex-end' },
-  miniLabel: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 8.5,
-    color: '#A8801A',
-    letterSpacing: 1.2,
-    textTransform: 'uppercase',
-  },
-  miniVal: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 15.5,
-    color: '#0A0A0A',
-    letterSpacing: -0.1,
-    marginTop: 2,
-  },
 });
 
 // ─── Settings tab ─────────────────────────────────────────────────────────────
@@ -2693,14 +2630,6 @@ const set = StyleSheet.create({
   rowBorder: {
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(20,19,17,0.10)',
-  },
-  icon: {
-    width: 30,
-    height: 30,
-    borderRadius: 9,
-    backgroundColor: 'rgba(10,10,10,0.05)',
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   label: {
     flexShrink: 0,
@@ -2756,45 +2685,6 @@ const meterStyles = StyleSheet.create({
 });
 
 const ready = StyleSheet.create({
-  card: {
-    backgroundColor: '#1F1810',
-    borderWidth: 1,
-    borderColor: 'rgba(240,194,74,0.28)',
-    borderRadius: 20,
-    padding: 18,
-    paddingBottom: 6,
-    overflow: 'hidden',
-    shadowColor: '#0A0A0A',
-    shadowOpacity: 0.5,
-    shadowOffset: { width: 0, height: 14 },
-    shadowRadius: 22,
-    elevation: 8,
-  },
-  meterRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-    marginBottom: 14,
-  },
-  title: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 14.5,
-    color: '#fff',
-    letterSpacing: -0.2,
-    lineHeight: 19,
-  },
-  subtitle: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 11.5,
-    color: 'rgba(255,255,255,0.55)',
-    marginTop: 5,
-    lineHeight: 16,
-  },
-  divider: {
-    height: 0.5,
-    backgroundColor: 'rgba(255,255,255,0.10)',
-    marginHorizontal: -18,
-  },
   focusRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2874,82 +2764,13 @@ const ready = StyleSheet.create({
     color: '#8BD98F',
     letterSpacing: 0.8,
   },
-  sectionLabel: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 10,
-    color: '#F6D27A',
-    letterSpacing: 1.2,
-    textTransform: 'uppercase',
-    marginTop: 14,
-    marginBottom: 10,
-  },
-  sectionToggle: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 4,
-    marginTop: 14,
-    marginBottom: 4,
-  },
-  sectionLabelInline: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 10,
-    color: '#F6D27A',
-    letterSpacing: 1.2,
-    textTransform: 'uppercase',
-  },
 });
 
 
 const strengths = StyleSheet.create({
-  card: {
-    backgroundColor: 'rgba(255,255,255,0.55)',
-    borderWidth: 1,
-    borderColor: 'rgba(10,10,10,0.09)',
-    borderRadius: 20,
-    paddingTop: 12,
-    paddingHorizontal: 10,
-    paddingBottom: 12,
-  },
-  foot: {
-    marginTop: 4,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    backgroundColor: 'rgba(255,255,255,0.55)',
-    borderWidth: 1,
-    borderColor: 'rgba(10,10,10,0.09)',
-    borderRadius: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  star: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: '#E8B530',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  footText: {
-    flex: 1,
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 12,
-    color: 'rgba(10,10,10,0.72)',
-    lineHeight: 16,
-  },
-  footStrong: {
-    fontFamily: Fonts.jakartaExtraBold,
-    color: '#0A0A0A',
-  },
 });
 
 const em = StyleSheet.create({
-  overlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    justifyContent: 'flex-end',
-  },
   sheet: {
     backgroundColor: Colors.white,
     borderTopLeftRadius: 28,
@@ -2974,21 +2795,6 @@ const em = StyleSheet.create({
     letterSpacing: -0.2,
   },
 
-  avatarWrap: { alignSelf: 'center', position: 'relative', marginBottom: 24 },
-  avatar: {
-    width: 72, height: 72, borderRadius: 36,
-    backgroundColor: 'rgba(255,157,0,0.08)',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  avatarPhoto: { width: 72, height: 72, borderRadius: 36 },
-  avatarInitials: { fontFamily: Fonts.jakartaExtraBold, fontSize: 24, color: Colors.orange },
-  editBadge: {
-    position: 'absolute', bottom: 0, right: 0,
-    width: 22, height: 22, borderRadius: 11,
-    backgroundColor: Colors.black,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  editIcon: { color: Colors.white, fontSize: 11 },
 
   field: { marginBottom: 18 },
   fieldLabel: {
@@ -2998,17 +2804,6 @@ const em = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 1,
     marginBottom: 8,
-  },
-  input: {
-    backgroundColor: Colors.statCardBg,
-    borderWidth: 0.5,
-    borderColor: Colors.statCardBorder,
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 13,
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 15,
-    color: Colors.black,
   },
 
   pillRow: { flexDirection: 'row', gap: 8 },
@@ -3147,11 +2942,6 @@ const pm = StyleSheet.create({
   myCodeRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: 'rgba(13,13,18,0.04)', borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12, marginBottom: 14 },
   myCodeLabel: { fontFamily: Fonts.jakartaBold, fontSize: 11, letterSpacing: 0.6, color: 'rgba(13,13,18,0.4)' },
   myCodeVal: { fontFamily: Fonts.jakartaExtraBold, fontSize: 18, letterSpacing: 2, color: Colors.black },
-  readyToggle: { flexDirection: 'row', gap: 8, marginBottom: 12 },
-  readyTab: { paddingHorizontal: 16, paddingVertical: 7, borderRadius: 999, backgroundColor: 'rgba(13,13,18,0.05)' },
-  readyTabOn: { backgroundColor: Colors.black },
-  readyTabTxt: { fontFamily: Fonts.jakartaSemiBold, fontSize: 13, color: 'rgba(13,13,18,0.6)' },
-  readyTabTxtOn: { color: '#fff' },
   // Final-validation ("Confirm & pair") hero + setup summary card.
   confirmHero: { alignItems: 'center', marginBottom: 18, marginTop: 2 },
   confirmAvatar: { width: 64, height: 64, borderRadius: 32, backgroundColor: '#2E4670', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', marginBottom: 10 },

@@ -2564,13 +2564,6 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
     marginTop: -8,
   },
-  timerIdle: { color: 'rgba(17,12,17,0.2)' },
-  timerHint: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 13,
-    color: Colors.secondary,
-    marginTop: 8,
-  },
   progressTrack: {
     width: '100%',
     height: 4,
@@ -2585,15 +2578,6 @@ const styles = StyleSheet.create({
   doneCheck: { fontSize: 48 },
   doneTitle: { fontFamily: Fonts.jakartaExtraBold, fontSize: 20, color: Colors.black },
 
-  tools: {
-    marginHorizontal: Spacing.side,
-    backgroundColor: Colors.statCardBg,
-    borderWidth: 0.5,
-    borderColor: Colors.statCardBorder,
-    borderRadius: 14,
-    paddingVertical: 4,
-    marginBottom: 14,
-  },
   metroPill: {
     backgroundColor: '#1A1A1A',
     height: 48,
@@ -2613,29 +2597,10 @@ const styles = StyleSheet.create({
     fontSize: 20,
     color: '#FFFFFF',
   },
-  metroPulse: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: Colors.orange,
-  },
   metroPillContent: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-  },
-  metroPillClose: {
-    position: 'absolute',
-    top: 8,
-    right: 10,
-    width: 28,
-    height: 28,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  metroPillCloseText: {
-    fontSize: 12,
-    color: 'rgba(255,255,255,0.4)',
   },
   ctaWrap: {
     paddingHorizontal: Spacing.side,
@@ -2701,14 +2666,6 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(17,12,17,0.15)',
     overflow: 'hidden',
   },
-  stopBtnFill: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    bottom: 0,
-    backgroundColor: Colors.orange,
-    borderRadius: 14,
-  },
   stopBtnText: { fontFamily: Fonts.jakartaMedium, fontSize: 14, color: Colors.secondary },
 
   validateBtn: { backgroundColor: Colors.black, borderRadius: 14, paddingVertical: 17, alignItems: 'center', overflow: 'hidden' },
@@ -2770,9 +2727,6 @@ const styles = StyleSheet.create({
   },
 
   // ── AI card (inside focusCard, inherits its padding/bg) ──
-  aiCard: {
-    paddingBottom: 8,
-  },
   aiToggleBtn: {
     position: 'absolute',
     top: 14,
@@ -3012,65 +2966,12 @@ const ln = StyleSheet.create({
     textTransform: 'uppercase',
     marginBottom: 6,
   },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 7,
-    paddingHorizontal: 10,
-    backgroundColor: 'rgba(255,255,255,0.07)',
-    borderRadius: 8,
-    gap: 8,
-    marginBottom: 4,
-  },
-  date: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 11,
-    color: 'rgba(255,255,255,0.35)',
-    minWidth: 44,
-  },
-  text: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 12,
-    color: 'rgba(255,255,255,0.75)',
-    flex: 1,
-  },
-  arrow: {
-    fontSize: 14,
-    color: 'rgba(255,255,255,0.3)',
-  },
-  pageHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 0,
-  },
-  swipeHint: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 10,
-    color: 'rgba(255,255,255,0.25)',
-    letterSpacing: 0.3,
-  },
   coachNoteText: {
     fontFamily: Fonts.jakartaRegular,
     fontSize: 13,
     color: 'rgba(255,255,255,0.85)',
     lineHeight: 20,
     marginTop: 4,
-  },
-  dots: {
-    flexDirection: 'row',
-    gap: 5,
-    marginTop: 10,
-    justifyContent: 'center',
-  },
-  dot: {
-    width: 5,
-    height: 5,
-    borderRadius: 3,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-  },
-  dotActive: {
-    backgroundColor: 'rgba(255,255,255,0.7)',
   },
 });
 
@@ -3190,9 +3091,6 @@ const m = StyleSheet.create({
     alignItems: 'center',
     paddingRight: 12,
   },
-  band: {
-    display: 'none',
-  },
   col: {
     flex: 2,
     height: M_ITEM_H * 3,
@@ -3236,13 +3134,6 @@ const m = StyleSheet.create({
     alignSelf: 'center',
     marginHorizontal: 4,
   },
-  itemAdjacent: {
-    fontSize: 10,
-    color: 'rgba(255,255,255,0.25)',
-  },
-  itemFar: {
-    color: 'rgba(255,255,255,0)',
-  },
   right: {
     flexDirection: 'column',
     alignItems: 'center',
@@ -3251,26 +3142,6 @@ const m = StyleSheet.create({
     paddingRight: 4,
     marginLeft: 8,
     flexShrink: 0,
-  },
-  beatDots: {
-    flexDirection: 'row',
-    gap: 4,
-    alignItems: 'center',
-  },
-  dot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-  },
-  dotActive: {
-    backgroundColor: '#FFFFFF',
-  },
-  dotAccent: {
-    backgroundColor: Colors.orange,
-    width: 8,
-    height: 8,
-    borderRadius: 4,
   },
   playBtn: {
     width: 36,
@@ -3317,9 +3188,6 @@ const fm = StyleSheet.create({
     flex: 1,
     backgroundColor: '#050505',
   },
-  content: {
-    alignItems: 'center',
-  },
   // ── Cinematic backdrop layers ──────────────────────────────────────────
   cineCanvas: {
     ...StyleSheet.absoluteFillObject,
@@ -3331,14 +3199,6 @@ const fm = StyleSheet.create({
     right: 0,
     bottom: 0,
     height: '70%',
-  },
-  cineGlowTop: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    top: 0,
-    height: '40%',
-    opacity: 1,
   },
   cineHorizon: {
     position: 'absolute',
@@ -3514,187 +3374,11 @@ const fm = StyleSheet.create({
     color: '#0A0A0A',
     letterSpacing: 0.4,
   },
-  skipBtn: {
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  skipText: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 13,
-    color: 'rgba(255,255,255,0.45)',
-  },
-  motivationRow: {
-    flexDirection: 'row',
-    gap: 10,
-    marginTop: 4,
-    width: '100%',
-  },
-  motivationBtn: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: 'rgba(17,12,17,0.1)',
-    borderRadius: 14,
-    paddingVertical: 12,
-    paddingHorizontal: 8,
-    alignItems: 'center',
-    backgroundColor: Colors.statCardBg,
-  },
-  motivationBtnOn: {
-    borderColor: Colors.orange,
-    backgroundColor: 'rgba(232,168,56,0.1)',
-  },
-  motivationEmoji: {
-    fontSize: 24,
-    marginBottom: 4,
-  },
-  motivationLabel: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 11,
-    color: Colors.secondary,
-  },
-  motivationLabelOn: {
-    fontFamily: Fonts.jakartaBold,
-    color: Colors.black,
-  },
 });
 
 // ─── Chat styles ─────────────────────────────────────────────────────────────
 
 const chat = StyleSheet.create({
-  wrap: {
-    flex: 1,
-    backgroundColor: Colors.background,
-  },
-  sessionBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: Spacing.side,
-    paddingVertical: 8,
-    backgroundColor: 'rgba(76,175,80,0.07)',
-    borderBottomWidth: 0.5,
-    borderBottomColor: 'rgba(76,175,80,0.2)',
-  },
-  sessionDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-    backgroundColor: Colors.activeLog,
-  },
-  sessionText: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 12,
-    color: Colors.activeLog,
-  },
-  header: {
-    paddingHorizontal: Spacing.side,
-    paddingTop: 16,
-    paddingBottom: 12,
-    borderBottomWidth: 0.5,
-    borderBottomColor: "rgba(17,12,17,0.08)",
-  },
-  title: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 18,
-    color: Colors.black,
-  },
-  subtitle: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 12,
-    color: Colors.secondary,
-    marginTop: 2,
-  },
-  messageList: {
-    flex: 1,
-  },
-  messageListContent: {
-    padding: Spacing.side,
-    paddingBottom: 16,
-    gap: 10,
-  },
-  emptyState: {
-    paddingTop: 40,
-    paddingHorizontal: 8,
-    alignItems: "center",
-  },
-  emptyText: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 14,
-    color: Colors.secondary,
-    textAlign: "center",
-    lineHeight: 22,
-  },
-  bubble: {
-    maxWidth: "85%",
-    borderRadius: 16,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-  },
-  bubbleUser: {
-    alignSelf: "flex-end",
-    backgroundColor: Colors.black,
-    borderBottomRightRadius: 4,
-  },
-  bubbleBot: {
-    alignSelf: "flex-start",
-    backgroundColor: Colors.statCardBg,
-    borderBottomLeftRadius: 4,
-    borderWidth: 0.5,
-    borderColor: Colors.statCardBorder,
-    minWidth: 60,
-    alignItems: "center",
-  },
-  bubbleText: {
-    fontSize: 14,
-    lineHeight: 21,
-    fontFamily: Fonts.jakartaRegular,
-  },
-  bubbleTextUser: {
-    color: Colors.white,
-  },
-  bubbleTextBot: {
-    color: Colors.black,
-  },
-  inputBar: {
-    flexDirection: "row",
-    alignItems: "flex-end",
-    gap: 10,
-    paddingHorizontal: Spacing.side,
-    paddingVertical: 12,
-    borderTopWidth: 0.5,
-    borderTopColor: "rgba(17,12,17,0.08)",
-  },
-  input: {
-    flex: 1,
-    minHeight: 42,
-    maxHeight: 100,
-    backgroundColor: Colors.statCardBg,
-    borderRadius: 14,
-    paddingHorizontal: 14,
-    paddingTop: 11,
-    paddingBottom: 11,
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 14,
-    color: Colors.black,
-    borderWidth: 0.5,
-    borderColor: Colors.statCardBorder,
-  },
-  sendBtn: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: Colors.black,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  sendBtnDisabled: {
-    opacity: 0.3,
-  },
-  sendBtnIcon: {
-    fontSize: 18,
-    color: Colors.white,
-    fontWeight: "bold",
-  },
 });
 
 // Too-short session prompt — dark hero card with gold accents matching the

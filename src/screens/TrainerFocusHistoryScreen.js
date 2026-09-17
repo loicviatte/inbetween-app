@@ -617,7 +617,6 @@ function DetailsSnippet({ details }) {
 
 const s = StyleSheet.create({
   safe: { flex: 1, backgroundColor: BG },
-  loadingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -708,12 +707,6 @@ const s = StyleSheet.create({
     fontFamily: Fonts.jakartaExtraBold,
     color: WHITE,
   },
-  formulaOp: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 12,
-    color: FAINT,
-    lineHeight: 20,
-  },
   formulaCaption: {
     color: FAINT,
     fontFamily: Fonts.jakartaMedium,
@@ -783,12 +776,6 @@ const s = StyleSheet.create({
     letterSpacing: 0.2,
     marginTop: 2,
   },
-  backfillTag: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 9,
-    color: FAINT,
-    letterSpacing: 1.2,
-  },
   breakdownBox: {
     marginTop: 10,
     paddingLeft: 2,
@@ -825,10 +812,6 @@ const s = StyleSheet.create({
     color: FAINT,
     marginTop: 3,
     letterSpacing: 0.2,
-  },
-  eventScoreRow: {
-    marginTop: 8,
-    gap: 6,
   },
   eventScoreText: {
     fontFamily: Fonts.jakartaMedium,

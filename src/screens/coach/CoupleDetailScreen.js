@@ -410,8 +410,6 @@ const styles = StyleSheet.create({
   readyDivider: { height: 0.5, backgroundColor: 'rgba(255,255,255,0.10)', marginHorizontal: -18 },
   readyFocusRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12 },
   readyFocusRowBorder: { borderBottomWidth: 0.5, borderBottomColor: 'rgba(255,255,255,0.08)' },
-  readyCheck: { width: 24, height: 24, borderRadius: 12, borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.20)', alignItems: 'center', justifyContent: 'center' },
-  readyCheckPartial: { borderColor: '#E8B530', backgroundColor: 'rgba(232,181,48,0.18)' },
   readyFocusName: { fontFamily: Fonts.jakartaExtraBold, fontSize: 13.5, color: '#fff', letterSpacing: -0.05, lineHeight: 16 },
   readyFocusMeta: { fontFamily: Fonts.jakartaRegular, fontSize: 10.5, color: 'rgba(255,255,255,0.55)', marginTop: 3 },
   readyFocusProgress: { fontFamily: Fonts.jakartaExtraBold, fontSize: 13, color: '#F6D27A', letterSpacing: -0.2 },

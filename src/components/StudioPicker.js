@@ -202,11 +202,6 @@ const s = StyleSheet.create({
   },
   fieldPlaceholder: { color: 'rgba(17,12,17,0.3)' },
 
-  overlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-    justifyContent: 'flex-end',
-  },
   sheet: {
     backgroundColor: Colors.white,
     borderTopLeftRadius: 24,

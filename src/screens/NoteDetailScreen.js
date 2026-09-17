@@ -718,31 +718,6 @@ const vm = StyleSheet.create({
     width: '100%',
     height: 300,
   },
-  errorBox: {
-    backgroundColor: '#1a1a1a',
-    borderRadius: 16,
-    padding: 24,
-    margin: 32,
-    alignItems: 'center',
-    gap: 16,
-  },
-  errorText: {
-    fontFamily: 'System',
-    fontSize: 15,
-    color: '#ccc',
-    textAlign: 'center',
-  },
-  errorBtn: {
-    paddingHorizontal: 24,
-    paddingVertical: 10,
-    backgroundColor: '#333',
-    borderRadius: 10,
-  },
-  errorBtnText: {
-    fontFamily: 'System',
-    fontSize: 15,
-    color: '#fff',
-  },
 });
 
 // ─── Class picker styles ──────────────────────────────────────────────────────
@@ -771,7 +746,6 @@ const picker = StyleSheet.create({
     borderBottomColor: 'rgba(13,13,18,0.08)',
   },
   title: { fontFamily: Fonts.jakartaExtraBold, fontSize: 16, color: Colors.black },
-  close: { fontSize: 18, color: Colors.secondary },
   unlinkBtn: {
     marginHorizontal: 20,
     marginTop: 12,

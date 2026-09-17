@@ -1211,17 +1211,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: SECONDARY,
   },
-  classTitleRow: {
-    paddingHorizontal: Spacing.side,
-    paddingBottom: 8,
-  },
-  classTitleText: {
-    fontFamily: Fonts.jakartaSemiBold,
-    fontSize: 12,
-    color: ORANGE,
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-  },
   center: {
     flex: 1,
     alignItems: 'center',
@@ -1287,10 +1276,6 @@ const tabStyles = StyleSheet.create({
   },
   tabPillTextActive: {
     color: BG,
-  },
-  tabBadge: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 13,
   },
 });
 
@@ -1655,20 +1640,6 @@ const vStyles = StyleSheet.create({
     marginBottom: 5,
     letterSpacing: -0.4,
   },
-  subtitle: {
-    fontFamily: Fonts.jakartaSemiBold,
-    fontSize: 14,
-    color: 'rgba(255,255,255,0.85)',
-    marginBottom: 10,
-    lineHeight: 20,
-  },
-  context: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 13,
-    color: SECONDARY,
-    lineHeight: 19,
-    marginBottom: 10,
-  },
   reasoningBox: {
     backgroundColor: 'rgba(255,255,255,0.04)',
     borderRadius: 8,
@@ -1692,14 +1663,6 @@ const vStyles = StyleSheet.create({
     color: 'rgba(255,255,255,0.5)',
     lineHeight: 17,
     fontStyle: 'italic',
-  },
-  drill: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 12,
-    color: 'rgba(255,157,0,0.7)',
-    fontStyle: 'italic',
-    marginBottom: 10,
-    lineHeight: 17,
   },
   danceRow: {
     flexDirection: 'row',
