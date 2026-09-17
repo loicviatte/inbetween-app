@@ -621,16 +621,15 @@ export default function ActionNeededScreen({ navigation, route }) {
         }}
       />
 
-      <Modal visible={!!editingFp} transparent animationType="fade" onRequestClose={() => setEditingFp(null)}>
-        {editingFp && (
-          <FocusPointEditSheet
-            fp={editingFp}
-            onSave={handleSaveEdit}
-            onClose={() => setEditingFp(null)}
-            saveLabel="Save & Approve"
-          />
-        )}
-      </Modal>
+      {!!editingFp && (
+        <FocusPointEditSheet
+          visible
+          fp={editingFp}
+          onSave={handleSaveEdit}
+          onClose={() => setEditingFp(null)}
+          saveLabel="Save & Approve"
+        />
+      )}
 
       <RejectFocusSheet
         visible={!!rejectingFp}

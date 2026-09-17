@@ -5,16 +5,15 @@ import {
   TextInput,
   TouchableOpacity,
   ScrollView,
-  KeyboardAvoidingView,
-  Platform,
   StyleSheet,
 } from 'react-native';
+import BottomSheet from './BottomSheet';
 import { Colors, Fonts } from '../theme';
 
 // Reusable edit sheet for a focus point. Caller supplies onSave(fpId, updates)
 // and controls what persistence to run (e.g. updateFocusPoint vs
 // editAndApproveFocusPoint) and what button label to show.
-export default function FocusPointEditSheet({ fp, onSave, onClose, saveLabel = 'Save' }) {
+export default function FocusPointEditSheet({ visible, fp, onSave, onClose, saveLabel = 'Save' }) {
   const [name, setName] = useState(fp.name ?? '');
   const [subtitle, setSubtitle] = useState(fp.subtitle ?? '');
   const [context, setContext] = useState(fp.context ?? '');
@@ -36,11 +35,8 @@ export default function FocusPointEditSheet({ fp, onSave, onClose, saveLabel = '
   ];
 
   return (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      style={es.overlay}
-    >
-      <View style={es.sheet}>
+    <BottomSheet visible={visible} onClose={onClose} avoidKeyboard overlayColor="rgba(10,10,10,0.45)" sheetStyle={es.sheet}>
+      <>
         <View style={es.handle} />
         <Text style={es.title}>Edit Focus Point</Text>
         <ScrollView showsVerticalScrollIndicator={false}>
@@ -83,13 +79,12 @@ export default function FocusPointEditSheet({ fp, onSave, onClose, saveLabel = '
         <TouchableOpacity style={es.cancelBtn} onPress={onClose} activeOpacity={0.7}>
           <Text style={es.cancelText}>Cancel</Text>
         </TouchableOpacity>
-      </View>
-    </KeyboardAvoidingView>
+      </>
+    </BottomSheet>
   );
 }
 
 const es = StyleSheet.create({
-  overlay: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.4)' },
   sheet: {
     backgroundColor: Colors.white,
     borderTopLeftRadius: 28,

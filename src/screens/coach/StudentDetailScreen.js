@@ -787,9 +787,9 @@ export default function StudentDetailScreen({ route, navigation }) {
         }}
       />
 
-      <Modal visible={!!editingFocus} transparent animationType="fade" onRequestClose={() => setEditingFocus(null)}>
-        {editingFocus && (
+      {!!editingFocus && (
           <FocusPointEditSheet
+            visible
             fp={editingFocus}
             saveLabel="Save"
             onSave={async (fpId, updates) => {
@@ -802,19 +802,17 @@ export default function StudentDetailScreen({ route, navigation }) {
             }}
             onClose={() => setEditingFocus(null)}
           />
-        )}
-      </Modal>
+      )}
 
-      <Modal visible={!!editingPendingFp} transparent animationType="fade" onRequestClose={() => setEditingPendingFp(null)}>
-        {editingPendingFp && (
+      {!!editingPendingFp && (
           <FocusPointEditSheet
+            visible
             fp={editingPendingFp}
             saveLabel="Save & Approve"
             onSave={handleSavePendingFpEdit}
             onClose={() => setEditingPendingFp(null)}
           />
-        )}
-      </Modal>
+      )}
 
       <RejectFocusSheet
         visible={!!rejectingPendingFp}
