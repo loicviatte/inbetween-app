@@ -54,38 +54,40 @@ export default function CoachTabHeader() {
           there's nothing to sync. */}
       <DjiSyncPill />
 
-      {/* Settings, beside the avatar — the same page a student has. */}
-      <TouchableOpacity
-        onPress={() => navigation.navigate('CoachSettings')}
-        style={[styles.notifBtn, styles.settingsBtn]}
-        activeOpacity={0.7}
-        accessibilityRole="button"
-        accessibilityLabel="Settings"
-      >
-        <Ionicons name="options-outline" size={18} color={INK_950} />
-      </TouchableOpacity>
+      {/* Right: settings (the student's Stats button, exactly) beside the avatar. */}
+      <View style={styles.rightGroup}>
+        <TouchableOpacity
+          onPress={() => navigation.navigate('CoachSettings')}
+          style={styles.settingsBtn}
+          activeOpacity={0.7}
+          accessibilityRole="button"
+          accessibilityLabel="Settings"
+        >
+          <Ionicons name="options-outline" size={18} color="#141311" />
+        </TouchableOpacity>
 
-      {/* Avatar with white inner ring + gold halo via shadow. The
-          borderWidth on the wrap acts as the white ring, the shadow
-          blooms the gold halo around the outside. */}
-      <TouchableOpacity
-        style={styles.avatarWrap}
-        onPress={() => navigation.navigate('CoachProfile')}
-        activeOpacity={0.85}
-      >
-        {user?.photo_url ? (
-          <Image source={{ uri: user.photo_url }} style={styles.avatarPhoto} />
-        ) : (
-          <LinearGradient
-            colors={[GOLD_200, GOLD_300]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={styles.avatarGradient}
-          >
-            <Text style={styles.avatarText}>{initial}</Text>
-          </LinearGradient>
-        )}
-      </TouchableOpacity>
+        {/* Avatar with white inner ring + gold halo via shadow. The
+            borderWidth on the wrap acts as the white ring, the shadow
+            blooms the gold halo around the outside. */}
+        <TouchableOpacity
+          style={styles.avatarWrap}
+          onPress={() => navigation.navigate('CoachProfile')}
+          activeOpacity={0.85}
+        >
+          {user?.photo_url ? (
+            <Image source={{ uri: user.photo_url }} style={styles.avatarPhoto} />
+          ) : (
+            <LinearGradient
+              colors={[GOLD_200, GOLD_300]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.avatarGradient}
+            >
+              <Text style={styles.avatarText}>{initial}</Text>
+            </LinearGradient>
+          )}
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
@@ -145,7 +147,15 @@ const styles = StyleSheet.create({
   // The gold halo is approximated as a soft shadow of GOLD_500 with
   // opacity 0.45 — it blooms around the outside since RN can't stack
   // multiple borders.
-  settingsBtn: { marginRight: 10 },
+  rightGroup: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  // Stats ▸ header button (ProfileScreen styles.heroActBtn), unchanged.
+  settingsBtn: {
+    width: 36, height: 36, borderRadius: 18,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: '#FFFFFF',
+    shadowColor: '#282214', shadowOpacity: 0.10, shadowOffset: { width: 0, height: 4 }, shadowRadius: 10,
+    elevation: 2,
+  },
   avatarWrap: {
     width: 40,
     height: 40,
