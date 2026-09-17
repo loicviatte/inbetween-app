@@ -106,6 +106,15 @@ function handleNotificationTap(data) {
     navigationRef.navigate('Notifications');
     return;
   }
+  if ((type === 'attendance_check' || type === 'group_class_attendance') && data?.class_input_id) {
+    // "Were you in this class?" → the answer screen itself, as from the list.
+    navigationRef.navigate('AttendanceConfirm', {
+      classInputId: data.class_input_id,
+      coachName: data.coach_name,
+      classDate: data.lesson_date ?? data.class_date,
+    });
+    return;
+  }
   if (type === 'sync_reminder') {
     // Coach-only nudge → the full-screen evening reminder, which names the
     // classes and leads straight into the mic import. Required lazily: this

@@ -402,6 +402,7 @@ export default function StudentDetailScreen({ route, navigation }) {
       await editAndApproveFocusPoint(fpId, updates);
       setPendingFPs((prev) => prev.filter((fp) => fp.id !== fpId));
       setEditingPendingFp(null);
+      refreshCoachData();
     } catch {}
   }
 
@@ -758,6 +759,7 @@ export default function StudentDetailScreen({ route, navigation }) {
                       await supabase.from('merge_requests').update({ status: 'merged', resolved_at: new Date().toISOString(), resolved_by: 'coach' }).eq('id', mr.id);
                       animateNext();
                       setMergeRequests((prev) => prev.filter((m) => m.id !== mr.id));
+                      refreshCoachData();
                     }}
                     onKeepBoth={async () => {
                       // The newer one goes through normal review instead of vanishing.
@@ -775,6 +777,7 @@ export default function StudentDetailScreen({ route, navigation }) {
                       await supabase.from('merge_requests').update({ status: 'rejected', resolved_at: new Date().toISOString(), resolved_by: 'coach' }).eq('id', mr.id);
                       animateNext();
                       setMergeRequests((prev) => prev.filter((m) => m.id !== mr.id));
+                      refreshCoachData();
                     }}
                   />
                 ))}
@@ -803,6 +806,7 @@ export default function StudentDetailScreen({ route, navigation }) {
                       await deleteNotification(notif.id);
                       animateNext();
                       setNameMatches((prev) => prev.filter((n) => n.id !== notif.id));
+                      refreshCoachData();
                     }}
                     onReject={async () => {
                       const { focus_point_ids } = notif.data || {};
@@ -812,6 +816,7 @@ export default function StudentDetailScreen({ route, navigation }) {
                       await deleteNotification(notif.id);
                       animateNext();
                       setNameMatches((prev) => prev.filter((n) => n.id !== notif.id));
+                      refreshCoachData();
                     }}
                   />
                 ))}
@@ -941,6 +946,7 @@ export default function StudentDetailScreen({ route, navigation }) {
             onConfirm={async (removedId) => {
               await applyReconcile(removedId);
               setShowReconcile(false);
+              refreshCoachData();
               getReconcileNeeded([studentId]).then((g) => setReconcileGroup(g[0] || null)).catch(() => {});
             }}
             onClose={() => setShowReconcile(false)}

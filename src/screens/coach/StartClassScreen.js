@@ -571,6 +571,9 @@ export default function StartClassScreen({ navigation }) {
   // chunk URI twice into audioUrisRef and double-trigger finalize-class
   // (idempotent server-side but messy locally).
   const stoppingRef = useRef(false);
+  // Start is async (a consent re-read, then the recording rows): a second tap
+  // before the first finishes would start a second recorder and orphan one.
+  const startingRef = useRef(false);
   const CHUNK_MS = 3 * 60 * 1000; // 3 minutes
   // New server-side pipeline (feature-flagged per user). When enabled, each
   // chunk is uploaded to Supabase Storage during the class and a
@@ -1480,22 +1483,37 @@ export default function StartClassScreen({ navigation }) {
     );
   }
 
+  // Who in this private or couple class can't be recorded yet, re-read from
+  // their rows (the roster's copy can be minutes old). [title, message] or null.
+  async function recordingBlock() {
+    const people = view === 'private-briefing' && selectedStudent?.id ? [selectedStudent]
+      : view === 'couple-briefing' && selectedCouple ? [selectedCouple.dancerA, selectedCouple.dancerB].filter((d) => d?.id)
+      : [];
+    if (!people.length) return null;
+    const { data } = await supabase.from('users').select('id, consent_status, age_check').in('id', people.map((p) => p.id));
+    for (const p of people) {
+      const row = (data || []).find((r) => r.id === p.id);
+      if (!row) continue;
+      if (row.age_check === 'minor_pending') {
+        return ['Waiting for verification',
+          `You marked ${p.name || 'this student'} as under 18. Recording works once they confirm they’re 18 or over, or a parent gives permission.`];
+      }
+      if (CONSENT_BLOCKED.includes(row.consent_status)) {
+        return ['Waiting for a parent', `${p.name || 'This student'} is under 18. Recording works as soon as their parent gives permission.`];
+      }
+    }
+    return null;
+  }
+
   async function startClassNow() {
-    // The roster's copy of the student can be stale; the row is not.
-    if (view === 'private-briefing' && selectedStudent?.id) {
-      const { data: st } = await supabase.from('users').select('consent_status, age_check').eq('id', selectedStudent.id).maybeSingle();
-      if (st?.age_check === 'minor_pending') {
-        setAudioModalOpen(false);
-        Alert.alert('Waiting for verification',
-          `You marked ${selectedStudent.name || 'this student'} as under 18. Recording works once they confirm they’re 18 or over, or a parent gives permission.`);
-        return;
-      }
-      if (st && CONSENT_BLOCKED.includes(st.consent_status)) {
-        setAudioModalOpen(false);
-        Alert.alert('Waiting for a parent',
-          `${selectedStudent.name || 'This student'} is under 18. Recording works as soon as their parent gives permission.`);
-        return;
-      }
+    if (startingRef.current || classStartedAt) return;
+    startingRef.current = true;
+    const block = await recordingBlock().catch(() => null);
+    if (block) {
+      startingRef.current = false;
+      setAudioModalOpen(false);
+      Alert.alert(block[0], block[1]);
+      return;
     }
     setAudioModalOpen(false);
 
@@ -1545,6 +1563,7 @@ export default function StartClassScreen({ navigation }) {
     // Hoisted so the audio-recording block below can see it. Defaults to
     // false (legacy real-time recording path) if the user fetch fails.
     let localMode = false;
+    let createdRecordingId = null;
     try {
       const { data: { user } } = await supabase.auth.getUser();
       // Resolve local mode from the freshly-fetched user so we don't race
@@ -1573,6 +1592,7 @@ export default function StartClassScreen({ navigation }) {
           .single();
         if (insertErr) throw insertErr;
         const recordingId = rec.id;
+        createdRecordingId = recordingId;
         await supabase
           .from('class_recordings')
           .update({ audio_folder: `${user.id}/${recordingId}/` })
@@ -1602,6 +1622,23 @@ export default function StartClassScreen({ navigation }) {
         userIdRef.current = user.id;
       }
     } catch (err) {
+      // The database refused a dancer (no parent permission yet): stop here —
+      // never fall back to recording on the phone for someone who can't be recorded.
+      if (/parent must approve/i.test(err?.message || '')) {
+        if (createdRecordingId) {
+          supabase.from('class_recordings').update({ status: 'discarded' }).eq('id', createdRecordingId).then(() => {}, () => {});
+        }
+        clearActiveCoachClass();
+        setClassStartedAt(null);
+        setChronoMs(0);
+        chronoMsRef.current = 0;
+        newPipelineRef.current = false;
+        recordingIdRef.current = null;
+        userIdRef.current = null;
+        startingRef.current = false;
+        Alert.alert('Waiting for a parent', 'Someone in this class is under 18 and can’t be recorded until their parent gives permission.');
+        return;
+      }
       console.warn('[StartClass] new pipeline init failed, falling back to legacy:', err);
       // Reset so we definitely don't try to use partial state.
       newPipelineRef.current = false;
@@ -1811,6 +1848,7 @@ export default function StartClassScreen({ navigation }) {
     setClassStartedAt(null);
     setChronoMs(0);
     chronoMsRef.current = 0;
+    startingRef.current = false;
 
     // Cumulative BT mic airtime: every 4h trigger a reminder both in-app
     // (banner inside the debrief sheet) and as a system notification.
@@ -3009,20 +3047,11 @@ export default function StartClassScreen({ navigation }) {
   }
 
   async function handleStartTap(phoneMic) {
-    if (view === 'private-briefing' && selectedStudent?.id) {
-      // The roster's copy can be a few minutes old; the row is not.
-      const { data: st } = await supabase.from('users').select('consent_status, age_check').eq('id', selectedStudent.id).maybeSingle();
-      const fresh = { ...selectedStudent, ...(st || {}) };
-      if (fresh.age_check === 'minor_pending') {
-        Alert.alert('Waiting for verification',
-          `You marked ${fresh.name || 'this student'} as under 18. Recording works once they confirm they’re 18 or over, or a parent gives permission.`);
-        return;
-      }
-      if (CONSENT_BLOCKED.includes(fresh.consent_status)) {
-        Alert.alert('Waiting for a parent',
-          `${fresh.name || 'This student'} is under 18. Recording works as soon as their parent gives permission.`);
-        return;
-      }
+    if (startingRef.current || classStartedAt) return;
+    const block = await recordingBlock().catch(() => null);
+    if (block) {
+      Alert.alert(block[0], block[1]);
+      return;
     }
     // First class ever for this coach → consent gate before anything else.
     if (!consentGiven) {
@@ -3320,13 +3349,17 @@ export default function StartClassScreen({ navigation }) {
             ) : (
               couples.map((c) => {
                 const lp = c.lastPrivateClassDate ? new Date(c.lastPrivateClassDate) : null;
-                const meta = lp
+                // A dancer who can't be recorded yet greys the couple, as for a private student.
+                const dancers = [c.dancerA, c.dancerB];
+                const waitLabel = dancers.some((d) => d?.age_check === 'minor_pending') ? 'Awaiting verification'
+                  : dancers.some((d) => CONSENT_BLOCKED.includes(d?.consent_status)) ? 'Awaiting parent approval' : null;
+                const meta = waitLabel || (lp
                   ? `Last private · ${MONTHS[lp.getMonth()]} ${lp.getDate()}`
-                  : 'No couple private yet';
+                  : 'No couple private yet');
                 return (
                 <TouchableOpacity
                   key={c.coupleId}
-                  style={sc.card}
+                  style={[sc.card, waitLabel && { opacity: 0.5 }]}
                   activeOpacity={0.85}
                   onPress={() => loadCoupleDetail(c)}
                 >

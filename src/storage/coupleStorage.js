@@ -410,15 +410,21 @@ export async function getMyCouples() {
   if (!data || data.length === 0) return [];
 
   const ids = Array.from(new Set(data.flatMap(c => [c.user_a_id, c.user_b_id])));
-  const { data: users } = await supabase.from('users').select('id, name, avatar_url').in('id', ids);
+  // consent_status / age_check: Start class keeps a couple with a dancer who
+  // can't be recorded yet greyed, as it does for a private student.
+  const { data: users } = await supabase.from('users').select('id, name, avatar_url, consent_status, age_check').in('id', ids);
   const byId = new Map((users || []).map(u => [u.id, u]));
+  const dancer = (id, u) => ({
+    id, name: u?.name || 'Dancer', avatarUrl: u?.avatar_url || null,
+    consent_status: u?.consent_status || 'not_required', age_check: u?.age_check || null,
+  });
 
   return data.map(c => {
     const a = byId.get(c.user_a_id), b = byId.get(c.user_b_id);
     return {
       coupleId: c.id,
-      dancerA: { id: c.user_a_id, name: a?.name || 'Dancer', avatarUrl: a?.avatar_url || null },
-      dancerB: { id: c.user_b_id, name: b?.name || 'Dancer', avatarUrl: b?.avatar_url || null },
+      dancerA: dancer(c.user_a_id, a),
+      dancerB: dancer(c.user_b_id, b),
       name: `${(a?.name || '?').split(' ')[0]} & ${(b?.name || '?').split(' ')[0]}`,
       doesLatin: c.does_latin,
       doesBallroom: c.does_ballroom,

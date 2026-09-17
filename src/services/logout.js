@@ -4,8 +4,9 @@ import { Alert } from 'react-native';
 import { endFocusPoint as laEndFocusPoint } from 'live-activities';
 import { supabase } from './supabase/client';
 import { clearPushToken } from './notifications';
-import { pairedChildInfo, forgetPairedChild } from './childPairing';
+import { pairedChildInfo, forgetPairedChild, forgetChildPhones } from './childPairing';
 import { clearUserCaches } from '../storage/userCaches';
+import { invalidateCache, clearSubjectCache } from '../storage/storage';
 import { getActiveSession, clearActiveSession, clearChatMessages } from '../storage/activeSession';
 import { getActiveCoachClass, clearActiveCoachClass } from '../storage/activeCoachClass';
 
@@ -44,6 +45,15 @@ function afterSessionCheck(resetProfile) {
   performLogout(resetProfile);
 }
 
+// The in-memory reads (lessons, teacher context, whose training this is, a
+// parent's child phones) aren't keyed by account: the next person signing in
+// on this phone would get them for up to a minute.
+function forgetMemoryCaches() {
+  invalidateCache();
+  clearSubjectCache();
+  forgetChildPhones();
+}
+
 async function performLogout(resetProfile) {
   // A focus session runs off a plain JS module (activeSession) whose in-memory
   // holder survives clearUserCaches() (that only wipes AsyncStorage): cleared
@@ -54,6 +64,7 @@ async function performLogout(resetProfile) {
   clearChatMessages();
   resetProfile?.();
   await clearUserCaches();
+  forgetMemoryCaches();
   forgetPairedChild();
   // Drop this device's push token from the user's row BEFORE sign-out so a
   // shared device stops receiving pushes tied to the ended session. Fire-and-
@@ -70,6 +81,7 @@ export function logOutCoachWithChecks({ djiUploading = false } = {}) {
   const go = async () => {
     clearActiveCoachClass();
     await clearUserCaches();
+    forgetMemoryCaches();
     const { data: { session } } = await supabase.auth.getSession();
     clearPushToken(session?.user?.id);
     await supabase.auth.signOut({ scope: 'local' });

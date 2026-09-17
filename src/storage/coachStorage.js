@@ -71,42 +71,10 @@ export async function getPendingCoachRequests() {
 }
 
 export async function respondToCoachRequest(requestId, accept) {
-  const coachId = await getCoachId();
-  const status = accept ? 'accepted' : 'declined';
-
-  // Update the request status and retrieve category + student_id
-  const { data: req } = await supabase
-    .from('coach_requests')
-    .update({ status })
-    .eq('id', requestId)
-    .eq('coach_id', coachId)
-    .select('student_id, category')
-    .single();
-
-  if (!req?.student_id) return;
-
-  // Determine which coach column(s) to write.
-  // category === null means general/no-style-split → set both columns.
-  const isLatin    = req.category === 'latin';
-  const isBallroom = req.category === 'ballroom';
-  const isBoth     = !isLatin && !isBallroom; // null or unknown → treat as both
-
-  if (accept) {
-    const updates = {};
-    if (isLatin  || isBoth) updates.latin_coach_id    = coachId;
-    if (isBallroom || isBoth) updates.ballroom_coach_id = coachId;
-    await supabase.from('users').update(updates).eq('id', req.student_id);
-  } else {
-    // Clear only the relevant column(s) if they were pointing to this coach
-    if (isLatin || isBoth) {
-      await supabase.from('users').update({ latin_coach_id: null })
-        .eq('id', req.student_id).eq('latin_coach_id', coachId);
-    }
-    if (isBallroom || isBoth) {
-      await supabase.from('users').update({ ballroom_coach_id: null })
-        .eq('id', req.student_id).eq('ballroom_coach_id', coachId);
-    }
-  }
+  // Server-side: the request's status and, on accept, the student's coach
+  // column for its style (a coach can't write the student's row directly).
+  const { error } = await supabase.rpc('coach_respond_request', { p_request: requestId, p_accept: !!accept });
+  if (error) throw new Error(error.message);
 }
 
 // ─── Links ▸ Edit ─────────────────────────────────────────────────────────────

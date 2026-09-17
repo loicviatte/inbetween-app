@@ -71,6 +71,26 @@ Deno.serve(async (req: Request) => {
     if (payload.event !== 'practice_log') {
       return new Response(JSON.stringify({ error: 'Forbidden' }), { status: 403 })
     }
+    // A client may only score its own practice (or, for a parent, their child's).
+    const { data: log } = await supabase
+      .from('practice_logs')
+      .select('student_id')
+      .eq('id', payload.practice_log_id)
+      .maybeSingle()
+    if (!log) {
+      return new Response(JSON.stringify({ error: 'Not found' }), { status: 404 })
+    }
+    if (log.student_id !== user.id) {
+      const { data: guardian } = await supabase
+        .from('guardians')
+        .select('child_id')
+        .eq('guardian_id', user.id)
+        .eq('child_id', log.student_id)
+        .maybeSingle()
+      if (!guardian) {
+        return new Response(JSON.stringify({ error: 'Forbidden' }), { status: 403 })
+      }
+    }
   }
 
   try {

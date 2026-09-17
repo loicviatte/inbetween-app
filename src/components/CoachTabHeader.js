@@ -160,8 +160,8 @@ export default function CoachTabHeader({ mode = null, links = false }) {
           accessibilityRole="button"
           accessibilityLabel="Account"
         >
-          {user?.photo_url ? (
-            <Image source={{ uri: user.photo_url }} style={styles.avatarPhoto} />
+          {user?.avatar_url ? (
+            <Image source={{ uri: user.avatar_url }} style={styles.avatarPhoto} />
           ) : (
             <LinearGradient
               colors={[GOLD_200, GOLD_300]}
