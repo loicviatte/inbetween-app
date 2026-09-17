@@ -5,12 +5,11 @@ import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import MaskedView from '@react-native-masked-view/masked-view';
-import { useNavigation } from '@react-navigation/native';
 import { Colors, Fonts, Spacing } from '../theme';
 import { useCoachData } from '../context/CoachDataContext';
-import { getOrCreateInviteCode } from '../storage/coachStorage';
-import { getMyCouples } from '../storage/coupleStorage';
-import { guardStudent, isAwaitingVerification } from '../utils/studentLock';
+import { getOrCreateInviteCode, getStudentLink, setStudentLink } from '../storage/coachStorage';
+import { getMyCouples, setCoupleLink } from '../storage/coupleStorage';
+import { isAwaitingVerification } from '../utils/studentLock';
 import { getMyCoachCard, getCoachObserved } from '../storage/coachCardStorage';
 import { SecLabel } from './settings/SettingsUI';
 import BottomSheet from './BottomSheet';
@@ -18,22 +17,28 @@ import CoachCardModal from './CoachCardModal';
 
 // Coach ▸ Students ▸ Links (the header's link button): how students find the
 // coach — the invite code they type, and the coach card — then every student
-// and couple linked to them. Built like the student's Stats ▸ Links: a section
-// label over row cards.
+// and couple linked to them, each with Edit: what they dance, the styles this
+// coach coaches them in (changeable), and removing them. Built like the
+// student's Stats ▸ Links: a section label over row cards, each opening a sheet.
 
 const EDGE_FADE = 14;
 
 const STYLE_NAMES = { latin: 'Latin', ballroom: 'Ballroom' };
-const stylesLabel = (keys) => keys.map((k) => STYLE_NAMES[k]).filter(Boolean).join(' & ');
+const STYLE_KEYS = ['latin', 'ballroom'];
+const stylesLabel = (keys) => STYLE_KEYS.filter((k) => keys.includes(k)).map((k) => STYLE_NAMES[k]).join(' & ');
+const firstOf = (name) => (name || '').trim().split(/\s+/)[0] || '';
+// users.dance_style → the styles danced ('Latin & Ballroom', or unset, is both).
+const dancesOf = (danceStyle) => (danceStyle === 'Latin' ? ['latin'] : danceStyle === 'Ballroom' ? ['ballroom'] : STYLE_KEYS);
 
 function initialsOf(name) {
   return (name || '').split(/\s+/).filter(Boolean).map((w) => w[0]).join('').slice(0, 2).toUpperCase() || 'C';
 }
 
-// One linked student or couple: initials, what they're coached in, the name.
+// One linked student or couple: initials, what they're coached in, the name, Edit.
 function LinkRow({ initials, role, name, muted, onPress }) {
   return (
-    <TouchableOpacity style={row.card} onPress={onPress} activeOpacity={0.75} accessibilityRole="button">
+    <TouchableOpacity style={row.card} onPress={onPress} activeOpacity={0.75} accessibilityRole="button"
+      accessibilityLabel={`${name}, ${role}. Edit`}>
       <View style={[row.init, muted && row.initMuted]}>
         <Text style={row.initTxt}>{initials}</Text>
       </View>
@@ -41,15 +46,134 @@ function LinkRow({ initials, role, name, muted, onPress }) {
         <Text style={row.role} numberOfLines={1}>{role}</Text>
         <Text style={[row.name, muted && row.nameMuted]} numberOfLines={1}>{name}</Text>
       </View>
-      <Ionicons name="chevron-forward" size={16} color="rgba(10,10,10,0.3)" />
+      <View style={row.edit}><Text style={row.editT}>Edit</Text></View>
     </TouchableOpacity>
   );
 }
 
+// The link, editable: what they dance (their own setting), the styles this coach
+// coaches them in, and removing them. A style someone else coaches can't be taken.
+function LinkEditSheet({ target, onClose, onDone }) {
+  const last = useRef(target);
+  if (target) last.current = target;
+  const t = target || last.current; // keeps the sheet filled while it closes
+  const key = t ? `${t.kind}:${t.id}` : null;
+  // The styles ticked, for this link; a newly opened link starts from what's saved.
+  const [choice, setChoice] = useState({ key: null, list: [] });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  useEffect(() => { setError(''); setBusy(false); }, [key]);
+  // Closed: forget the ticks, so reopening shows what's saved now.
+  const open = !!target;
+  useEffect(() => { if (!open) setChoice({ key: null, list: [] }); }, [open]);
+
+  if (!t) return null;
+  const picked = choice.key === key ? choice.list : t.linked;
+  const setPicked = (fn) => setChoice({ key, list: fn(picked) });
+  const couple = t.kind === 'couple';
+  const shown = STYLE_KEYS.filter((k) => t.dances.includes(k) || t.linked.includes(k));
+  const changed = stylesLabel(picked) !== stylesLabel(t.linked);
+  const taken = shown.filter((k) => !picked.includes(k) && t.taken?.[k]);
+  const save = (latin, ballroom) => (couple ? setCoupleLink : setStudentLink)(t.id, { latin, ballroom });
+
+  async function onSave() {
+    if (busy || !changed || picked.length === 0) return;
+    setBusy(true); setError('');
+    try {
+      await save(picked.includes('latin'), picked.includes('ballroom'));
+      onDone();
+    } catch (e) {
+      setError(e.message || 'Could not save. Try again.');
+      setBusy(false);
+    }
+  }
+
+  function onRemove() {
+    Alert.alert(
+      `Remove ${t.first}?`,
+      couple
+        ? `You won’t be ${t.first}’s couple coach anymore. They can pick you again from their app.`
+        : `${t.first} won’t be linked to you anymore. They can link again with your invite code.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove', style: 'destructive', onPress: async () => {
+            setBusy(true); setError('');
+            try {
+              await save(false, false);
+              onDone();
+            } catch (e) {
+              setError(e.message || 'Could not remove. Try again.');
+              setBusy(false);
+            }
+          },
+        },
+      ],
+    );
+  }
+
+  return (
+    <BottomSheet visible={!!target} onClose={onClose} sheetStyle={em.sheet}>
+      <View style={em.handle} />
+      <Text style={em.title} numberOfLines={1}>{t.name}</Text>
+
+      <View style={ed.field}>
+        <Text style={ed.label}>{couple ? 'They dance' : 'Dances'}</Text>
+        <Text style={ed.value}>{stylesLabel(t.dances) || 'Not set'}</Text>
+      </View>
+
+      <View style={ed.field}>
+        <Text style={ed.label}>{couple ? 'You’re their couple coach in' : 'You coach them in'}</Text>
+        <View style={ed.pillRow}>
+          {shown.map((k) => {
+            const on = picked.includes(k);
+            const locked = !on && !!t.taken?.[k];
+            return (
+              <TouchableOpacity
+                key={k}
+                style={[ed.pill, on && ed.pillOn, locked && { opacity: 0.4 }]}
+                disabled={locked || busy}
+                onPress={() => setPicked((p) => (p.includes(k) ? p.filter((x) => x !== k) : [...p, k]))}
+                activeOpacity={0.75}
+                accessibilityRole="checkbox"
+                accessibilityState={{ checked: on, disabled: locked }}
+              >
+                {on && <Ionicons name="checkmark" size={14} color={Colors.white} />}
+                <Text style={[ed.pillT, on && { color: Colors.white }]}>{STYLE_NAMES[k]}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+        {taken.map((k) => (
+          <Text key={k} style={ed.hint}>{t.first} {couple ? 'have' : 'has'} another {STYLE_NAMES[k]} {couple ? 'couple ' : ''}coach.</Text>
+        ))}
+        {picked.length === 0 && <Text style={ed.hint}>Keep at least one style, or remove {t.first} below.</Text>}
+      </View>
+
+      {!!error && <Text style={ed.err}>{error}</Text>}
+
+      <TouchableOpacity
+        style={[em.saveBtn, (!changed || picked.length === 0 || busy) && { opacity: 0.4 }]}
+        onPress={onSave}
+        disabled={!changed || picked.length === 0 || busy}
+        activeOpacity={0.88}
+      >
+        <Text style={em.saveBtnText}>{busy ? 'Saving…' : 'Save'}</Text>
+      </TouchableOpacity>
+      <TouchableOpacity style={ed.remove} onPress={onRemove} disabled={busy} activeOpacity={0.7}>
+        <Text style={ed.removeT}>Remove {t.first}</Text>
+      </TouchableOpacity>
+      <TouchableOpacity style={em.cancelBtn} onPress={onClose} activeOpacity={0.7}>
+        <Text style={em.cancelBtnText}>Cancel</Text>
+      </TouchableOpacity>
+    </BottomSheet>
+  );
+}
+
 export default function CoachLinksView({ bottomSpace = 0 }) {
-  const navigation = useNavigation();
   const { user, students, refresh } = useCoachData();
   const [couples, setCouples] = useState(null); // null while loading
+  const [edit, setEdit] = useState(null);       // the link being edited
   const [code, setCode] = useState(null);       // null while loading, '' if it couldn't be read
   const [card, setCard] = useState(null);
   const [observed, setObserved] = useState(null);
@@ -66,6 +190,47 @@ export default function CoachLinksView({ bottomSpace = 0 }) {
     getMyCouples().then((c) => { if (alive) setCouples(c || []); }).catch(() => { if (alive) setCouples([]); });
     return () => { alive = false; clearTimeout(copiedTimer.current); };
   }, []);
+
+  function editStudent(s) {
+    const dances = dancesOf(s.danceStyle);
+    // A legacy link with no style counts as everything they dance.
+    setEdit({ kind: 'student', id: s.id, name: s.name || 'Student', first: firstOf(s.name) || 'this student',
+      dances, linked: s.coachStyles?.length ? s.coachStyles : dances, taken: null });
+    // Who holds each style's slot — a style another coach has can't be added.
+    getStudentLink(s.id).then((u) => {
+      if (!u) return;
+      setEdit((e) => (e?.kind === 'student' && e.id === s.id ? {
+        ...e,
+        dances: dancesOf(u.dance_style),
+        taken: {
+          latin: !!u.latin_coach_id && u.latin_coach_id !== user?.id,
+          ballroom: !!u.ballroom_coach_id && u.ballroom_coach_id !== user?.id,
+        },
+      } : e));
+    }).catch(() => {});
+  }
+
+  function editCouple(c) {
+    const a = firstOf(c.dancerA?.name) || 'Dancer';
+    const b = firstOf(c.dancerB?.name) || 'Dancer';
+    setEdit({
+      kind: 'couple', id: c.coupleId, name: `${c.dancerA?.name || a} & ${c.dancerB?.name || b}`, first: `${a} & ${b}`,
+      dances: [c.doesLatin && 'latin', c.doesBallroom && 'ballroom'].filter(Boolean),
+      linked: coupleStyles(c),
+      taken: {
+        latin: !!c.latinCoupleCoachId && c.latinCoupleCoachId !== user?.id,
+        ballroom: !!c.ballroomCoupleCoachId && c.ballroomCoupleCoachId !== user?.id,
+      },
+    });
+  }
+
+  async function onEdited() {
+    setEdit(null);
+    await Promise.all([
+      refresh(),
+      getMyCouples().then((c) => setCouples(c || [])).catch(() => {}),
+    ]);
+  }
 
   async function copy() {
     if (!code) return;
@@ -156,7 +321,7 @@ export default function CoachLinksView({ bottomSpace = 0 }) {
                 role={waiting ? 'Awaiting verification' : `${stylesLabel(s.coachStyles || []) || 'Coached'} · Student`}
                 name={s.name || 'Student'}
                 muted={waiting}
-                onPress={() => guardStudent(s, () => navigation.navigate('StudentDetail', { studentId: s.id, studentName: s.name }), () => refresh())}
+                onPress={() => editStudent(s)}
               />
             );
           })}
@@ -170,7 +335,7 @@ export default function CoachLinksView({ bottomSpace = 0 }) {
               initials={`${c.dancerA?.name?.[0] || '?'}${c.dancerB?.name?.[0] || '?'}`.toUpperCase()}
               role={`${stylesLabel(coupleStyles(c)) || 'Coached'} · Couple`}
               name={`${c.dancerA?.name || 'Dancer'} & ${c.dancerB?.name || 'Dancer'}`}
-              onPress={() => navigation.navigate('CoupleDetail', { coupleId: c.coupleId, coupleName: c.name })}
+              onPress={() => editCouple(c)}
             />
           ))}
         </ScrollView>
@@ -197,6 +362,8 @@ export default function CoachLinksView({ bottomSpace = 0 }) {
         </TouchableOpacity>
       </BottomSheet>
 
+      <LinkEditSheet target={edit} onClose={() => setEdit(null)} onDone={onEdited} />
+
       <CoachCardModal visible={cardOpen} onClose={() => setCardOpen(false)} name={user?.name} card={card} observed={observed} />
     </View>
   );
@@ -221,6 +388,26 @@ const row = StyleSheet.create({
   code: { letterSpacing: 2 },
   nameMuted: { color: 'rgba(10,10,10,0.45)', letterSpacing: -0.34 },
   note: { fontFamily: Fonts.jakartaRegular, fontSize: 13, lineHeight: 18, color: '#6B6656', paddingHorizontal: 4 },
+  edit: { paddingHorizontal: 13, paddingVertical: 7, borderRadius: 999, borderWidth: 1, borderColor: 'rgba(20,19,17,0.16)' },
+  editT: { fontFamily: Fonts.jakartaBold, fontSize: 13, color: '#141311' },
+});
+
+// The link sheet's fields (the settings sheets' label and pills).
+const ed = StyleSheet.create({
+  field: { marginBottom: 18 },
+  label: { fontFamily: Fonts.jakartaExtraBold, fontSize: 10, color: Colors.secondary, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 },
+  value: { fontFamily: Fonts.jakartaBold, fontSize: 15.5, color: '#141311' },
+  pillRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
+  pill: {
+    flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20,
+    borderWidth: 0.5, borderColor: Colors.statCardBorder, backgroundColor: Colors.statCardBg,
+  },
+  pillOn: { backgroundColor: Colors.black, borderColor: Colors.black },
+  pillT: { fontFamily: Fonts.jakartaMedium, fontSize: 14, color: Colors.secondary },
+  hint: { fontFamily: Fonts.jakartaRegular, fontSize: 12.5, lineHeight: 17, color: '#6B6656', marginTop: 8 },
+  err: { fontFamily: Fonts.jakartaRegular, fontSize: 13, lineHeight: 18, color: '#A3281B', textAlign: 'center', marginBottom: 12 },
+  remove: { paddingVertical: 14, alignItems: 'center', marginTop: 6 },
+  removeT: { fontFamily: Fonts.jakartaBold, fontSize: 14.5, color: '#A3281B' },
 });
 
 // Stats ▸ Settings sheets (`em`), with the code and a Copy button.

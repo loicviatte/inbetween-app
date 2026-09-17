@@ -390,6 +390,15 @@ export async function respondToCoupleCoachRequest(reqId, accept) {
   if (error) throw error;
 }
 
+// Coach side: the styles I coach a couple in. Both off removes the couple.
+export async function setCoupleLink(coupleId, { latin, ballroom }) {
+  const { data, error } = await supabase.rpc('coach_set_couple_link', {
+    p_couple: coupleId, p_latin: !!latin, p_ballroom: !!ballroom,
+  });
+  if (error) throw new Error(error.message);
+  return data;
+}
+
 // Coach side: couples I coach (latin or ballroom), shaped for the roster.
 export async function getMyCouples() {
   const coachId = await getUserId();

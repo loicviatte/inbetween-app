@@ -109,6 +109,29 @@ export async function respondToCoachRequest(requestId, accept) {
   }
 }
 
+// ─── Links ▸ Edit ─────────────────────────────────────────────────────────────
+
+// What the edit sheet needs about a linked student: the styles they dance and
+// who holds each style's coach slot.
+export async function getStudentLink(studentId) {
+  const { data } = await supabase
+    .from('users')
+    .select('dance_style, latin_coach_id, ballroom_coach_id')
+    .eq('id', studentId)
+    .maybeSingle();
+  return data || null;
+}
+
+// The styles this coach coaches a student in. Both off removes the student.
+// Server-side (coach_set_student_link): the coach can't write the student's row.
+export async function setStudentLink(studentId, { latin, ballroom }) {
+  const { data, error } = await supabase.rpc('coach_set_student_link', {
+    p_student: studentId, p_latin: !!latin, p_ballroom: !!ballroom,
+  });
+  if (error) throw new Error(error.message);
+  return data;
+}
+
 // ─── Students ─────────────────────────────────────────────────────────────────
 
 // In-flight dedup: on a cold start BOTH CoachDataContext.loadAll AND
