@@ -254,8 +254,9 @@ export default function CoachClassesScreen({ navigation }) {
     kind === 'all' ? inStyle : inStyle.filter((c) => (kind === 'group') === isGroup(c))
   ), [inStyle, kind]);
 
-  // Views and filters slide like the other tabs' toggles.
-  const [shownView, viewSlide] = useSlideSwap(view, ['list', 'cal', 'notes']);
+  // The calendar and the notes take the list's place at once, as in the
+  // student's Lessons; All / Group / Private slide like the other tabs' toggles.
+  const shownView = view;
   const [shownKind, kindSlide] = useSlideSwap(kind, KINDS.map(([k]) => k));
   const shownList = shownKind === kind ? filtered
     : (shownKind === 'all' ? inStyle : inStyle.filter((c) => (shownKind === 'group') === isGroup(c)));
@@ -340,7 +341,7 @@ export default function CoachClassesScreen({ navigation }) {
         <PullLogo ref={pull.logoRef} refreshing={pull.refreshing} />
       </Animated.View>
       <Animated.View style={{ flex: 1, transform: [{ translateY: pull.pullY }] }}>
-        <Animated.View style={[{ flex: 1 }, viewSlide]}>
+        <View style={{ flex: 1 }}>
           {/* Fixed: the filters (or the notes line) and, in the calendar, the month.
               Pulling this part down refreshes. */}
           <View style={st.fixed} {...pull.panHandlers}>
@@ -479,7 +480,7 @@ export default function CoachClassesScreen({ navigation }) {
               )}
             </ScrollView>
           </MaskedView>
-        </Animated.View>
+        </View>
       </Animated.View>
 
       <TouchableOpacity
