@@ -622,11 +622,11 @@ export default function CoachHomeScreen({ navigation, route }) {
           )}
           {isStudents && (
             <View style={st.chips}>
-              <TouchableOpacity style={[st.chip, asked === 0 && st.chipZero]} onPress={() => navigation.navigate('ActionNeeded')} activeOpacity={0.8}>
+              <TouchableOpacity style={[st.chip, asked === 0 && st.chipZero]} onPress={() => navigation.navigate('ActionNeeded', { tab: 'questions' })} activeOpacity={0.8}>
                 <Text style={[st.chipN, asked === 0 && st.chipNZero]}>{asked}</Text>
                 <Text style={st.chipL}>Asked</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[st.chip, toValidate > 0 && st.chipAlert]} onPress={() => navigation.navigate('ActionNeeded')} activeOpacity={0.8}>
+              <TouchableOpacity style={[st.chip, toValidate > 0 && st.chipAlert]} onPress={() => navigation.navigate('ActionNeeded', { tab: 'focus' })} activeOpacity={0.8}>
                 <Text style={[st.chipN, toValidate > 0 ? { color: RED } : st.chipNZero]}>{toValidate}</Text>
                 <Text style={[st.chipL, toValidate > 0 && { color: '#8E3627' }]}>To validate</Text>
                 {toValidate > 0 && <View style={st.chipDot} />}

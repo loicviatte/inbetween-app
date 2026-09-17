@@ -32,6 +32,7 @@ const EXPAND_ANIMATION = {
 };
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { Image } from 'expo-image';
 import { Fonts, Spacing } from '../../theme';
 import { useCoachData } from '../../context/CoachDataContext';
 import {
@@ -43,6 +44,7 @@ import {
   rejectPendingFocusPoint,
   getReconcileNeeded,
   applyReconcile,
+  getPendingQuestions,
 } from '../../storage/coachStorage';
 import {
   getPendingCoupleFocusPoints,
@@ -51,6 +53,7 @@ import {
   approveAllPendingCoupleFocusPoints,
 } from '../../storage/coupleStorage';
 import FocusPointEditSheet from '../../components/FocusPointEditSheet';
+import QuestionSheet, { splitFocusTag } from '../../components/coach/QuestionSheet';
 import ClassContextSheet from '../../components/coach/ClassContextSheet';
 import ApproveConfirmSheet from '../../components/coach/ApproveConfirmSheet';
 import MergeCompareCard from '../../components/coach/MergeCompareCard';
@@ -76,15 +79,23 @@ const C = {
   text: '#0E0E0E',
 };
 
+function daysAgoLabel(date) {
+  const n = Math.floor((Date.now() - new Date(date).getTime()) / 86400000);
+  return n <= 0 ? 'Today' : n === 1 ? 'Yesterday' : `${n} days ago`;
+}
+
 function initials(name) {
   if (!name) return '?';
   return name.split(' ').map(w => w[0]).filter(Boolean).join('').slice(0, 2).toUpperCase();
 }
 
+// How much of a tab's width the underline spans.
+const UNDERLINE_SHARE = 0.7;
+
 // ════════════════════════════════════════════════════════════════════════════
-export default function ActionNeededScreen({ navigation }) {
+export default function ActionNeededScreen({ navigation, route }) {
   const { students, refresh } = useCoachData();
-  const [activeTab, setActiveTab] = useState('focus');
+  const [activeTab, setActiveTab] = useState(route?.params?.tab || 'focus');
   const [expandedId, setExpandedId] = useState(null);
 
   // Focus points
@@ -99,6 +110,13 @@ export default function ActionNeededScreen({ navigation }) {
   // Merge requests
   const [mergeRequests, setMergeRequests] = useState([]);
 
+  // Questions students asked
+  const [questions, setQuestions] = useState([]);
+  const [activeQuestion, setActiveQuestion] = useState(null);
+  const [questionSheetVisible, setQuestionSheetVisible] = useState(false);
+  const [questionReply, setQuestionReply] = useState('');
+  const reopenQuestionRef = useRef(false);
+
   // Name matching
   const [nameMatches, setNameMatches] = useState([]);
   const [reconcileGroups, setReconcileGroups] = useState([]);
@@ -111,10 +129,11 @@ export default function ActionNeededScreen({ navigation }) {
   const loadData = useCallback(async () => {
     setFpLoading(true);
     try {
-      const [fps, coupleFps, notifs, { data: merges }] = await Promise.all([
+      const [fps, coupleFps, notifs, qs, { data: merges }] = await Promise.all([
         getPendingFocusPoints(null).catch(() => []),
         getPendingCoupleFocusPoints().catch(() => []),
         getNotifications().catch(() => []),
+        getPendingQuestions().catch(() => []),
         supabase
           .from('merge_requests')
           .select('id, student_id, focus_a, focus_b, status, created_at')
@@ -123,6 +142,7 @@ export default function ActionNeededScreen({ navigation }) {
       ]);
       setPendingFPs(fps || []);
       setPendingCoupleFPs(coupleFps || []);
+      setQuestions(qs || []);
       setNameMatches(
         (notifs || []).filter(n => n.type === 'name_match_confirm')
       );
@@ -177,11 +197,23 @@ export default function ActionNeededScreen({ navigation }) {
   useEffect(() => {
     if (didAutoSelectTab.current) return;
     if (fpLoading) return; // wait for the initial load to complete
-    if (nameMatches.length > 0) setActiveTab('name');
+    if (route?.params?.tab) setActiveTab(route.params.tab);
+    else if (nameMatches.length > 0) setActiveTab('name');
+    else if (questions.length > 0) setActiveTab('questions');
     else if (mergeRequests.length > 0) setActiveTab('merge');
     else setActiveTab('focus');
     didAutoSelectTab.current = true;
-  }, [fpLoading, nameMatches.length, mergeRequests.length]);
+  }, [fpLoading, nameMatches.length, mergeRequests.length, questions.length, route?.params?.tab]);
+
+  // Back from a lesson opened for context → the reply the coach was writing.
+  useEffect(() => {
+    const unsub = navigation.addListener('focus', () => {
+      if (!reopenQuestionRef.current) return;
+      reopenQuestionRef.current = false;
+      if (activeQuestion) setQuestionSheetVisible(true);
+    });
+    return unsub;
+  }, [navigation, activeQuestion]);
 
   // Actions. Group focus points are aggregated in the UI (1 card per
   // shared_group_id), so handlers must operate on all underlying rows when
@@ -403,11 +435,12 @@ export default function ActionNeededScreen({ navigation }) {
 
   const tabs = [
     { key: 'focus', label: 'Focus points', count: focusTabBadge },
+    { key: 'questions', label: 'Questions', count: questions.length },
     { key: 'merge', label: 'Merge', count: mergeRequests.length },
     { key: 'name', label: 'Names', count: nameMatches.length },
   ];
 
-  const totalCount = focusTabBadge + mergeRequests.length + nameMatches.length;
+  const totalCount = focusTabBadge + questions.length + mergeRequests.length + nameMatches.length;
 
   // Horizontal pager: sync tab selection <-> swipe gesture, drive a moving underline.
   const screenWidth = Dimensions.get('window').width;
@@ -474,14 +507,13 @@ export default function ActionNeededScreen({ navigation }) {
               // the swipe-driven slide no longer chokes when cards are
               // expanding behind the pager.
               left: 0,
+              width: `${(UNDERLINE_SHARE / tabs.length) * 100}%`,
               transform: [{
                 translateX: horizontalScrollX.interpolate({
-                  inputRange: [0, Math.max(1, screenWidth), Math.max(2, 2 * screenWidth)],
-                  outputRange: [
-                    screenWidth * 0.05,
-                    screenWidth * 0.38333,
-                    screenWidth * 0.71667,
-                  ],
+                  inputRange: tabs.map((_, i) => Math.max(i, i * screenWidth)),
+                  outputRange: tabs.map(
+                    (_, i) => screenWidth * ((i + 0.5) / tabs.length - UNDERLINE_SHARE / (2 * tabs.length)),
+                  ),
                   extrapolate: 'clamp',
                 }),
               }],
@@ -693,7 +725,61 @@ export default function ActionNeededScreen({ navigation }) {
         </>
       </ScrollView>
 
-      {/* ── Page 2: Merge Requests ── */}
+      {/* ── Page 2: Questions students asked ── */}
+      <ScrollView style={{ width: screenWidth }} contentContainerStyle={{ padding: Spacing.side, paddingBottom: 100 }}>
+        <Text style={s.tabIntro}>
+          Questions your students asked while training. Answering sends them a reply; “I'll explain in person” keeps it for your next lesson.
+        </Text>
+
+        {questions.map((q) => {
+          const { text, focusName } = splitFocusTag(q.message);
+          const st = studentMap[q.student_id];
+          return (
+            <TouchableOpacity
+              key={q.id}
+              style={qc.card}
+              activeOpacity={0.85}
+              onPress={() => {
+                if (q.id !== activeQuestion?.id) setQuestionReply('');
+                setActiveQuestion(q);
+                setQuestionSheetVisible(true);
+              }}
+              accessibilityRole="button"
+              accessibilityLabel={`Answer ${q.studentName}: ${text}`}
+            >
+              <View style={qc.head}>
+                <View style={qc.av}>
+                  {st?.photoUrl || q.studentPhotoUrl ? (
+                    <Image source={{ uri: st?.photoUrl || q.studentPhotoUrl }} style={StyleSheet.absoluteFill} />
+                  ) : (
+                    <Text style={qc.avT}>{initials(q.studentName)}</Text>
+                  )}
+                </View>
+                <Text style={qc.name} numberOfLines={1}>{q.studentName}</Text>
+                <Text style={qc.when}>{daysAgoLabel(q.created_at)}</Text>
+              </View>
+              <View style={qc.body}>
+                <Text style={qc.qm}>“</Text>
+                <Text style={qc.text}>{text || q.message}</Text>
+              </View>
+              <View style={qc.foot}>
+                {!!focusName && <Text style={qc.focus} numberOfLines={1}>{focusName}</Text>}
+                <View style={qc.answerBtn}><Text style={qc.answerT}>Answer</Text></View>
+              </View>
+            </TouchableOpacity>
+          );
+        })}
+
+        {questions.length === 0 && !fpLoading && (
+          <View style={s.emptyState}>
+            <Ionicons name="checkmark-circle" size={40} color={C.green} />
+            <Text style={s.emptyTitle}>All clear</Text>
+            <Text style={s.emptySub}>No questions waiting on you.</Text>
+          </View>
+        )}
+      </ScrollView>
+
+      {/* ── Page 3: Merge Requests ── */}
       <ScrollView style={{ width: screenWidth }} contentContainerStyle={{ padding: Spacing.side, paddingBottom: 100 }}>
         <>
             <Text style={s.tabIntro}>
@@ -749,6 +835,29 @@ export default function ActionNeededScreen({ navigation }) {
         </>
       </ScrollView>
       </Animated.ScrollView>
+
+      <QuestionSheet
+        visible={questionSheetVisible}
+        question={activeQuestion}
+        studentId={activeQuestion?.student_id}
+        focusPoints={[]}
+        reply={questionReply}
+        onReplyChange={setQuestionReply}
+        onOpenClass={(classId) => {
+          reopenQuestionRef.current = true;
+          setQuestionSheetVisible(false);
+          setTimeout(() => navigation.navigate('CoachClassDetail', { classId }), 320);
+        }}
+        onClose={() => { reopenQuestionRef.current = false; setQuestionSheetVisible(false); }}
+        onDone={() => {
+          reopenQuestionRef.current = false;
+          setQuestionSheetVisible(false);
+          setQuestions((prev) => prev.filter((x) => x.id !== activeQuestion?.id));
+          setActiveQuestion(null);
+          setQuestionReply('');
+          refresh();
+        }}
+      />
 
       <Modal visible={!!editingFp} transparent animationType="slide" onRequestClose={() => setEditingFp(null)}>
         {editingFp && (
@@ -836,6 +945,29 @@ const cpl = StyleSheet.create({
   approveText: { fontFamily: Fonts.jakartaBold, fontSize: 13.5, color: '#fff' },
 });
 
+// A question waiting on the coach.
+const qc = StyleSheet.create({
+  card: {
+    backgroundColor: '#FFFFFF', borderRadius: 16, padding: 14, marginBottom: 10, gap: 10,
+    borderWidth: 1, borderColor: 'rgba(10,10,10,0.07)',
+  },
+  head: { flexDirection: 'row', alignItems: 'center', gap: 9 },
+  av: { width: 28, height: 28, borderRadius: 14, overflow: 'hidden', backgroundColor: '#F4E3B4', alignItems: 'center', justifyContent: 'center' },
+  avT: { fontFamily: Fonts.ttBold, fontSize: 10.5, color: '#0A0A0A' },
+  name: { flex: 1, minWidth: 0, fontFamily: Fonts.ttDemiBold, fontSize: 13.5, color: '#0A0A0A' },
+  when: { fontFamily: Fonts.ttRegular, fontSize: 11, color: 'rgba(10,10,10,0.55)' },
+  body: { flexDirection: 'row', gap: 9 },
+  qm: { width: 13, fontFamily: Fonts.ttBold, fontSize: 21, lineHeight: 21, color: '#E8B530' },
+  text: { flex: 1, fontFamily: Fonts.ttDemiBold, fontSize: 14, letterSpacing: -0.2, lineHeight: 19, color: '#0A0A0A' },
+  foot: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  focus: {
+    flex: 1, minWidth: 0, fontFamily: Fonts.ttDemiBold, fontSize: 9.5, letterSpacing: 1.1,
+    textTransform: 'uppercase', color: '#8A6414',
+  },
+  answerBtn: { height: 30, paddingHorizontal: 14, borderRadius: 999, backgroundColor: '#0A0A0A', alignItems: 'center', justifyContent: 'center' },
+  answerT: { fontFamily: Fonts.ttDemiBold, fontSize: 12, color: '#FFFFFF' },
+});
+
 const s = StyleSheet.create({
   safe: { flex: 1, backgroundColor: C.bg },
 
@@ -897,7 +1029,6 @@ const s = StyleSheet.create({
   tabUnderline: {
     position: 'absolute',
     bottom: -1,
-    width: '23.333%',
     height: 2.5,
     borderRadius: 2,
     backgroundColor: C.dark,

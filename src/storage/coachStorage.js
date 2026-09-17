@@ -832,6 +832,32 @@ export async function getStudentArchivedFocusPoints(studentId) {
 
 // ─── Coach Actions ────────────────────────────────────────────────────────────
 
+// Every question still waiting on this coach, across their students — what the
+// "N asked" chip counts, and what Action needed ▸ Questions lists.
+export async function getPendingQuestions() {
+  const coachId = await getCoachId();
+  const { data: rows } = await supabase
+    .from('coach_messages')
+    .select('id, student_id, message, status, created_at')
+    .eq('coach_id', coachId)
+    .eq('status', 'pending')
+    .order('created_at', { ascending: true });
+  if (!rows || rows.length === 0) return [];
+  // A separate read rather than an embed: the embed shape goes through the
+  // users policy as a nested EXISTS and has dropped rows on us before.
+  const ids = [...new Set(rows.map((r) => r.student_id))];
+  const { data: people } = await supabase
+    .from('users')
+    .select('id, name, avatar_url')
+    .in('id', ids);
+  const byId = Object.fromEntries((people || []).map((p) => [p.id, p]));
+  return rows.map((r) => ({
+    ...r,
+    studentName: byId[r.student_id]?.name || 'Your student',
+    studentPhotoUrl: byId[r.student_id]?.avatar_url || null,
+  }));
+}
+
 export async function replyToQuestion(messageId, replyText) {
   await supabase
     .from('coach_messages')
