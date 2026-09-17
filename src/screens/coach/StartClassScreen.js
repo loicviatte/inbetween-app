@@ -2847,7 +2847,7 @@ export default function StartClassScreen({ navigation }) {
     const checks = view === 'couple-briefing'
       ? (coupleReadinessDetail?.focuses || [])
       : view === 'private-briefing' ? (studentReadiness?.focuses || []) : [];
-    const focus = checks.filter((f) => readinessVerdicts[f.focusPointId] !== 'good').length;
+    const focus = checks.filter((f) => !readinessVerdicts[f.focusPointId]).length;
     const questions = view === 'private-briefing'
       ? (openQuestions || []).filter((q) => questionVerdicts[q.id] !== 'covered').length
       : 0;
