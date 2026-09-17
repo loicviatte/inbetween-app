@@ -375,7 +375,7 @@ export default function CoachLinksView({ bottomSpace = 0 }) {
   );
 }
 
-// Stats ▸ Links row cards (ProfileScreen `row`), unchanged.
+// Stats ▸ Links row cards (StatsScreen `row`), unchanged.
 const row = StyleSheet.create({
   card: {
     flexDirection: 'row', alignItems: 'center', gap: 14, minHeight: 62, backgroundColor: '#FFFFFF',

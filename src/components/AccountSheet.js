@@ -11,7 +11,7 @@ import { supabase } from '../services/supabase/client';
 import { getAccountUser, saveAccountName } from '../storage/storage';
 import { logOutWithChecks } from '../services/logout';
 
-// Stats ▸ Settings ▸ Account — photo, name, email — lifted out of ProfileScreen
+// Stats ▸ Settings ▸ Account — photo, name, email — lifted out of StatsScreen
 // unchanged so the avatar in any tab header can open it right where you are.
 // It edits the signed-in account, never the dancer it follows: a parent edits
 // themselves, not their child.

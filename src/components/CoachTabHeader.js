@@ -255,7 +255,7 @@ const styles = StyleSheet.create({
     backgroundColor: GOLD_500, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#F2F0EB',
   },
   viewBadgeText: { fontFamily: Fonts.semiBold, fontSize: 9, lineHeight: 11, color: INK_950, includeFontPadding: false },
-  // Stats ▸ header button (ProfileScreen styles.heroActBtn), unchanged.
+  // Stats ▸ header button (StatsScreen styles.heroActBtn), unchanged.
   settingsBtn: {
     width: 36, height: 36, borderRadius: 18,
     alignItems: 'center', justifyContent: 'center',

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -16,7 +16,6 @@ import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import Svg, { Circle } from 'react-native-svg';
 import TabHeader, { useIsParentAccount } from '../components/TabHeader';
 import StyleTitle from '../components/StyleTitle';
 import AccountSheet from '../components/AccountSheet';
@@ -38,8 +37,6 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Colors, Fonts, Spacing } from '../theme';
 import {
   getUser,
-  getClassInputs,
-  getFocusPoints,
   saveUserProfile,
   getMyCoach,
   linkToCoachByCode,
@@ -47,15 +44,10 @@ import {
   linkToCoachByCodeForCategory,
   unlinkCoachForCategory,
   getMyCoachForCategory,
-  getLessonReadiness,
   getStudentProfileBundle,
-  getMyCoachQuestions,
-  getProfileActivityStats,
 } from '../storage/storage';
-import { getClassPendingValidation } from '../utils/algorithm';
 import { supabase } from '../services/supabase/client';
 import QuestionDetailSheet from '../components/QuestionDetailSheet';
-import { RADAR_LABELS } from '../components/RadarChart';
 import BottomSheet from '../components/BottomSheet';
 import { useProfile } from '../context/ProfileContext';
 import {
@@ -93,218 +85,6 @@ function withTimeout(promise, fallback, ms = FETCH_TIMEOUT) {
     Promise.resolve(promise).catch(() => fallback),
     new Promise((resolve) => setTimeout(() => resolve(fallback), ms)),
   ]);
-}
-const HOME_CACHE_KEY = '@cache_home';
-
-const RADAR_CATEGORIES = ['Stability', 'Technicality', 'Strength', 'Creativity', 'Musicality'];
-
-// ─── Readiness meter (semi-circle SVG ring) ──────────────────────────────────
-function ReadinessMeter({ percent = 0, size = 84, stroke = 6 }) {
-  const r = (size - stroke) / 2;
-  const cx = size / 2;
-  const cy = size / 2;
-  const circumference = 2 * Math.PI * r;
-  const filled = (Math.max(0, Math.min(100, percent)) / 100) * circumference;
-  const remainder = circumference - filled;
-  return (
-    <View style={[meterStyles.wrap, { width: size, height: size }]}>
-      <Svg width={size} height={size} style={{ transform: [{ rotate: '-90deg' }] }}>
-        {/* Track */}
-        <Circle
-          cx={cx}
-          cy={cy}
-          r={r}
-          stroke="rgba(255,255,255,0.10)"
-          strokeWidth={stroke}
-          fill="none"
-        />
-        {/* Fill */}
-        <Circle
-          cx={cx}
-          cy={cy}
-          r={r}
-          stroke="#E8B530"
-          strokeWidth={stroke}
-          fill="none"
-          strokeDasharray={`${filled} ${remainder}`}
-          strokeLinecap="round"
-        />
-      </Svg>
-      <View style={meterStyles.inner} />
-      <View style={meterStyles.labelWrap}>
-        <Text style={meterStyles.pct}>
-          {Math.round(percent)}<Text style={meterStyles.pctSm}>%</Text>
-        </Text>
-      </View>
-    </View>
-  );
-}
-
-// ─── Focus row inside readiness card ─────────────────────────────────────────
-const TIER_LABEL = {
-  critical: 'Critical focus',
-  important: 'Important focus',
-  supporting: 'Supporting focus',
-};
-// Mini progress dial used on each readiness focus row. Three states:
-//   complete (done >= target) → solid gold check
-//   in-progress (0 < done < target) → gold arc filling the gray track
-//   untouched (done = 0) → empty gray ring
-// Checkmark is reserved for "done" so a partial 1/2 doesn't read as
-// completed at a glance.
-function FocusCheckRing({ done, target }) {
-  const size = 24;
-  const stroke = 1.8;
-  const r = (size - stroke) / 2;
-  const c = size / 2;
-  const circ = 2 * Math.PI * r;
-  const ratio = target > 0 ? Math.min(1, Math.max(0, done / target)) : 0;
-  const complete = target > 0 && done >= target;
-  if (complete) {
-    return (
-      <View style={[ready.check, ready.checkComplete]}>
-        <Ionicons name="checkmark" size={12} color="#0D0D12" />
-      </View>
-    );
-  }
-  const filled = ratio * circ;
-  const remainder = circ - filled;
-  return (
-    <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
-      <Svg width={size} height={size} style={{ transform: [{ rotate: '-90deg' }] }}>
-        <Circle cx={c} cy={c} r={r} stroke="rgba(255,255,255,0.20)" strokeWidth={stroke} fill="none" />
-        {filled > 0 && (
-          <Circle
-            cx={c}
-            cy={c}
-            r={r}
-            stroke="#E8B530"
-            strokeWidth={stroke}
-            fill="none"
-            strokeDasharray={`${filled} ${remainder}`}
-            strokeLinecap="round"
-          />
-        )}
-      </Svg>
-    </View>
-  );
-}
-
-function FocusReadyRow({ row, isLast }) {
-  if (!row) return null;
-  const labelText = `${TIER_LABEL[row.tier] || 'Focus'} · from last private`;
-  return (
-    <View style={[ready.focusRow, !isLast && ready.focusRowBorder]}>
-      <FocusCheckRing done={row.done || 0} target={row.target || 0} />
-      <View style={ready.focusBody}>
-        <Text style={ready.focusName} numberOfLines={1}>{row.name}</Text>
-        <Text style={ready.focusMeta} numberOfLines={1}>{labelText}</Text>
-      </View>
-      <Text style={ready.focusProgress}>
-        {row.done}<Text style={ready.focusProgressOf}>/{row.target}</Text>
-      </Text>
-    </View>
-  );
-}
-
-// Question row — shown after the focus list inside the readiness card.
-// Status drives the badge + the secondary line:
-//   pending    → muted chat icon, "Awaiting coach reply"
-//   dismissed  → gold "IN NEXT CLASS" badge, "Coach will cover it"
-//   replied    → gold reply badge, "Replied" + the actual reply preview
-function QuestionReadyRow({ question, isLast, onPress }) {
-  if (!question) return null;
-  const status = question.status;
-  const isReplied = status === 'replied';
-  const isInClass = status === 'dismissed';
-  const handled = isReplied || isInClass;
-
-  const metaText = isReplied
-    ? (question.reply ? `Replied: ${question.reply}` : 'Coach replied')
-    : isInClass
-      ? 'Coach will cover it in your next class'
-      : 'Awaiting coach reply';
-
-  return (
-    <TouchableOpacity
-      style={[ready.focusRow, !isLast && ready.focusRowBorder]}
-      activeOpacity={0.65}
-      onPress={onPress}
-    >
-      <View style={[ready.check, handled && ready.checkPartial]}>
-        <Ionicons
-          name={isReplied ? 'chatbubble-ellipses' : isInClass ? 'time-outline' : 'chatbubble-outline'}
-          size={11}
-          color={handled ? '#F6D27A' : 'rgba(255,255,255,0.40)'}
-        />
-      </View>
-      <View style={ready.focusBody}>
-        <Text style={ready.focusName} numberOfLines={1}>{question.message}</Text>
-        <Text style={ready.focusMeta} numberOfLines={2}>{metaText}</Text>
-      </View>
-      {isInClass && (
-        <View style={ready.inClassBadge}>
-          <Text style={ready.inClassBadgeText}>IN CLASS</Text>
-        </View>
-      )}
-      {isReplied && (
-        <View style={ready.repliedBadge}>
-          <Text style={ready.repliedBadgeText}>REPLIED</Text>
-        </View>
-      )}
-    </TouchableOpacity>
-  );
-}
-
-// ─── Sub-tab segmented control (Coaches · Statistics · Settings) ──────────────
-const PROFILE_TABS = [
-  { key: 'links', label: 'Links' },
-  { key: 'stats', label: 'Statistics' },
-  { key: 'settings', label: 'Settings' },
-];
-function SubTabs({ active, onChange }) {
-  const [barW, setBarW] = useState(0);
-  const slide = useRef(new Animated.Value(0)).current;
-  const idx = Math.max(0, PROFILE_TABS.findIndex((t) => t.key === active));
-  useEffect(() => {
-    Animated.spring(slide, { toValue: idx, useNativeDriver: true, friction: 9, tension: 90 }).start();
-  }, [idx, slide]);
-  const n = PROFILE_TABS.length;
-  const thumbW = barW > 0 ? (barW - 8) / n : 0;
-  return (
-    <View style={tab.bar} onLayout={(e) => setBarW(e.nativeEvent.layout.width)}>
-      {barW > 0 && (
-        <Animated.View
-          pointerEvents="none"
-          style={[
-            tab.thumb,
-            {
-              width: thumbW,
-              transform: [{
-                translateX: slide.interpolate({
-                  inputRange: PROFILE_TABS.map((_, i) => i),
-                  outputRange: PROFILE_TABS.map((_, i) => i * thumbW),
-                }),
-              }],
-            },
-          ]}
-        />
-      )}
-      {PROFILE_TABS.map((t) => {
-        const on = active === t.key;
-        return (
-          <TouchableOpacity
-            key={t.key}
-            style={tab.btn}
-            onPress={() => onChange(t.key)}
-            activeOpacity={0.8}
-          >
-            <Text style={[tab.btnTxt, on && tab.btnTxtOn]}>{t.label}</Text>
-          </TouchableOpacity>
-        );
-      })}
-    </View>
-  );
 }
 
 // ─── Section label with rule line (Coaches / Statistics tabs) ─────────────────
@@ -981,8 +761,8 @@ function PartnerModal({
   );
 }
 
-export default function ProfileScreen({ navigation, route }) {
-  const { avatarUri, setAvatarUri, setInitials } = useProfile();
+export default function StatsScreen({ navigation, route }) {
+  const { setAvatarUri, setInitials } = useProfile();
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const [isLoading, setIsLoading] = useState(true);
   const hasLoadedRef = useRef(false);
@@ -1036,26 +816,17 @@ export default function ProfileScreen({ navigation, route }) {
     });
     return unsub;
   }, [navigation, route?.name]);
-  const [stats, setStats] = useState({ totalClasses: 0, totalSessions: 0, activeFocusAreas: 0 });
-  const [activityStats, setActivityStats] = useState({ bestStreakDays: 0, monthMinutes: 0 });
-  const [radarScores, setRadarScores] = useState([0, 0, 0, 0, 0]);
-  const [readiness, setReadiness] = useState(null);
   // Latest class awaiting admin validation — its focus points are RLS-hidden
   // until approved, so the readiness card must say so instead of implying the
   // student never logged a class.
-  const [pendingValidation, setPendingValidation] = useState(null);
-  const [coupleReadinessP, setCoupleReadinessP] = useState(null);
-  const [readinessMode, setReadinessMode] = useState('solo'); // 'solo' | 'couple'
-  const [coachQuestions, setCoachQuestions] = useState([]);
   const [viewingQuestion, setViewingQuestion] = useState(null);
-  const [questionsExpanded, setQuestionsExpanded] = useState(false);
   const [profileModal, setProfileModal] = useState(null); // 'account' | 'style' | 'studio' | null
   const [accountOpen, setAccountOpen] = useState(false);
   const [editStudio, setEditStudio] = useState(null);
   const [editStyle, setEditStyle] = useState('');
   const [saving, setSaving] = useState(false);
-  const [photoUri, _setPhotoUri] = useState(null);
-  function setPhotoUri(uri) { _setPhotoUri(uri); setAvatarUri(uri); }
+  // The avatar lives in the profile context; this screen only pushes to it.
+  const setPhotoUri = (uri) => setAvatarUri(uri);
   const [myCoach, setMyCoach] = useState(null);
   const [coachCode, setCoachCode] = useState('');
   const [coachLinking, setCoachLinking] = useState(false);
@@ -1103,30 +874,21 @@ export default function ProfileScreen({ navigation, route }) {
     // toggle (a 2-style dancer's Profile otherwise anchored on the most-recent
     // private of any style). null = single-style / unset.
     const trainCat = await AsyncStorage.getItem('train_category_filter').catch(() => null);
-    const [bundle, { data: { session } }, savedPhoto, pendingCls] = await Promise.all([
+    const [bundle, { data: { session } }, savedPhoto] = await Promise.all([
       withTimeout(getStudentProfileBundle(null, trainCat), null),
       supabase.auth.getSession(),                          // local — no network hang
       AsyncStorage.getItem(AVATAR_KEY).catch(() => null),  // local
-      getClassPendingValidation().catch(() => null),
     ]);
-    setPendingValidation(pendingCls);
     const ok = !!bundle;
     const b = bundle || {};
     const userData = b.user ?? null;
-    const activeFocusPoints = b.focusPoints ?? [];      // [{ category }] — radar + count
     const coachData = b.coachDefault ?? null;
     const latinCoachData = b.coachLatin ?? null;
     const ballroomCoachData = b.coachBallroom ?? null;
-    const readinessValue = b.readiness ?? null;
-    const coachQs = b.coachQuestions ?? [];
     const coupleData = ok ? (b.couple ?? null) : undefined;
     const incomingReq = ok ? (b.incomingRequest ?? null) : undefined;
     const outgoingReq = ok ? (b.outgoingRequest ?? null) : undefined;
     const myCode = b.inviteCode ?? '';
-    const activity = b.activityStats ?? { bestStreakDays: 0, monthMinutes: 0 };
-    const coupleReadinessValue = b.coupleReadiness ?? null;
-    const totalSessions = b.totalSessions ?? 0;
-    const totalClasses = b.classInputsCount ?? 0;
 
     // Trainer-only: count pending reviews
     const trainerEmail = session?.user?.email;
@@ -1144,19 +906,6 @@ export default function ProfileScreen({ navigation, route }) {
       setPendingReviews(0);
     }
 
-    // Radar — fewer active focuses per category = stronger area
-    const catCounts = { Stability: 0, Technicality: 0, Strength: 0, Creativity: 0, Musicality: 0 };
-    for (const fp of activeFocusPoints ?? []) {
-      if (fp.category && catCounts[fp.category] !== undefined) catCounts[fp.category]++;
-    }
-    const maxCat = Math.max(...Object.values(catCounts), 1);
-    const scores = RADAR_CATEGORIES.map((cat) => 1 - catCounts[cat] / maxCat);
-
-    const s = {
-      totalClasses,
-      totalSessions,
-      activeFocusAreas: activeFocusPoints?.length ?? 0,
-    };
     // A cold/slow backend can return null on the very first load (before any
     // cache exists) → the hero would show "Your Name". Retry getUser once
     // before settling for the placeholder.
@@ -1165,17 +914,6 @@ export default function ProfileScreen({ navigation, route }) {
       resolvedUser = await withTimeout(getUser(), null);
     }
     if (resolvedUser) setUser(resolvedUser); // don't blank a cached user on a failed fetch
-    // Bundle failed/timed out → ok=false. Keep the stats / readiness / coach
-    // questions already on screen rather than zeroing them into the empty
-    // "log your next class" state. (user / couple / requests below already use
-    // their own keep-on-failure sentinels.)
-    if (ok) {
-      setStats(s);
-      setActivityStats(activity || { bestStreakDays: 0, monthMinutes: 0 });
-      setRadarScores(scores);
-      setReadiness(readinessValue);
-      setCoachQuestions(coachQs || []);
-    }
     if (resolvedUser?.name) {
       const ini = resolvedUser.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
       setInitials(ini);
@@ -1203,12 +941,6 @@ export default function ProfileScreen({ navigation, route }) {
     // The bundle returns the raw invite_code; if it's never been generated,
     // lazily create it (the one write side-effect we kept out of the RPC).
     if (!myCode) getMyPartnerCode().then((c) => c && setMyPartnerCode(c)).catch(() => {});
-    if (coupleData?.coupleId) {
-      setCoupleReadinessP(coupleReadinessValue); // from the bundle — no extra round-trip
-    } else if (coupleData === null) {
-      setCoupleReadinessP(null);
-      setReadinessMode('solo');
-    }
     // Persist a stale-while-revalidate snapshot. Partnership is preserved across
     // a failed couple fetch so it shows instantly and never regresses to
     // "Add partner" on a transient blip.
@@ -1221,16 +953,10 @@ export default function ProfileScreen({ navigation, route }) {
       try { prevCache = JSON.parse((await AsyncStorage.getItem(PROFILE_CACHE_KEY)) || '{}') || {}; } catch {}
       AsyncStorage.setItem(PROFILE_CACHE_KEY, JSON.stringify({
         user: resolvedUser ?? prevCache.user ?? null,
-        stats: s,
-        activityStats: activity,
-        radarScores: scores,
         myCoach: coachData ?? prevCache.myCoach ?? null,
-        readiness: readinessValue,
         couple: coupleData !== undefined ? coupleData : (prevCache.couple ?? null),
-        // Couple % + avatar cached too, so a cold reopen paints them instantly
-        // instead of waiting on the (cold-start-slow) bundle. Preserve across a
-        // failed bundle, same as the partnership.
-        coupleReadiness: coupleData !== undefined ? coupleReadinessValue : (prevCache.coupleReadiness ?? null),
+        // The avatar is cached too, so a cold reopen paints it instantly
+        // instead of waiting on the (cold-start-slow) bundle.
         avatar: avatarToShow ?? prevCache.avatar ?? null,
       })).catch(() => {});
     }
@@ -1251,12 +977,7 @@ export default function ProfileScreen({ navigation, route }) {
           if (raw) {
             const c = JSON.parse(raw);
             setUser(c.user);
-            setStats(c.stats || { totalClasses: 0, totalSessions: 0, activeFocusAreas: 0 });
-            setActivityStats(c.activityStats || { bestStreakDays: 0, monthMinutes: 0 });
-            setRadarScores(c.radarScores || [0, 0, 0, 0, 0]);
             setMyCoach(c.myCoach ?? null);
-            setReadiness(c.readiness || null);
-            setCoupleReadinessP(c.coupleReadiness ?? null); // couple % instantly from cache
             if (c.avatar) setPhotoUri(c.avatar);            // photo instantly — don't wait on load()
             if (c.couple !== undefined) setCouple(c.couple); // show partnership instantly from cache
             setIsLoading(false);
@@ -1638,60 +1359,13 @@ export default function ProfileScreen({ navigation, route }) {
     return () => { supabase.removeChannel(channel); };
   }, [user?.id, refetchPartner]);
 
-  // Strongest radar area — for the strengths-card footer + the larger vertex
-  const strongestIdx = radarScores.reduce(
-    (best, s, i, arr) => (s > arr[best] ? i : best),
-    0
-  );
-  const strongestLabel = RADAR_LABELS[strongestIdx];
-
   const isDual = user?.dance_style === 'Latin & Ballroom';
 
   const paired = !!couple;
-  const activeReadiness = (paired && readinessMode === 'couple') ? coupleReadinessP : readiness;
 
-  const readinessTitle = (() => {
-    if (!activeReadiness) {
-      return pendingValidation
-        ? 'Your latest class is still being reviewed.'
-        : 'Log your last private to start.';
-    }
-    if (activeReadiness.percent >= 100) return 'Ready for your next private.';
-    if (activeReadiness.percent >= 50) return 'Almost ready for your next private.';
-    return 'Train your focus points to get ready.';
-  })();
 
-  const readinessSubtitle = (() => {
-    if (!activeReadiness) return 'After a class log, your focus targets show up here.';
-    if (activeReadiness.minutesRemaining === 0) {
-      return `All focus points trained — keep the streak going.`;
-    }
-    return `Train your focus points from the last lesson — ~${activeReadiness.minutesRemaining} min to go.`;
-  })();
 
-  // Questions visible in the readiness card = open questions the student
-  // raised AFTER the last class. Replied ones (text answer OR "covered in
-  // class") are closed — they belong in the class log, not in the upcoming
-  // checklist. Anything older than the anchor class is considered handled
-  // by that class and drops off too.
-  const visibleQuestions = useMemo(() => {
-    if (readinessMode === 'couple') return []; // questions belong to solo coaching only
-    const lastDate = readiness?.lastClassDate ? new Date(readiness.lastClassDate) : null;
-    return (coachQuestions || []).filter(q => {
-      if (q.status === 'replied') return false;
-      if (!lastDate) return true;
-      return new Date(q.created_at) > lastDate;
-    });
-  }, [coachQuestions, readiness, readinessMode]);
 
-  // Statistics mini-card — best all-time streak + minutes trained this month.
-  const streakLabel = `${activityStats.bestStreakDays} ${activityStats.bestStreakDays === 1 ? 'day' : 'days'}`;
-  const monthLabel = (() => {
-    const m = activityStats.monthMinutes || 0;
-    if (m < 60) return `${m} min`;
-    const h = m / 60;
-    return `${Number.isInteger(h) ? h : h.toFixed(1)} h`;
-  })();
 
   // Partnership rectangle rows — dance types + leader/follower, plus pending state
   const myFirst = user?.name ? user.name.split(' ')[0] : 'You';
@@ -2395,45 +2069,6 @@ const styles = StyleSheet.create({
   },
 });
 
-// ─── Sub-tab segmented control ────────────────────────────────────────────────
-const tab = StyleSheet.create({
-  bar: {
-    flexDirection: 'row',
-    backgroundColor: 'rgba(255,255,255,0.45)',
-    borderWidth: 1,
-    borderColor: 'rgba(10,10,10,0.09)',
-    borderRadius: 999,
-    padding: 4,
-  },
-  btn: {
-    flex: 1,
-    borderRadius: 999,
-    paddingVertical: 9,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  thumb: {
-    position: 'absolute',
-    top: 4,
-    bottom: 4,
-    left: 4,
-    borderRadius: 999,
-    backgroundColor: '#0A0A0A',
-    shadowColor: '#0A0A0A',
-    shadowOpacity: 0.25,
-    shadowOffset: { width: 0, height: 2 },
-    shadowRadius: 6,
-    elevation: 2,
-  },
-  btnTxt: {
-    fontFamily: Fonts.semiBold,
-    fontSize: 11.5,
-    color: 'rgba(10,10,10,0.45)',
-    letterSpacing: 0.1,
-  },
-  btnTxtOn: { color: '#fff' },
-});
-
 // ─── Coach / Partner rows + section labels (Coaches tab) ──────────────────────
 const row = StyleSheet.create({
   secLabel: {
@@ -2642,122 +2277,6 @@ const set = StyleSheet.create({
     marginRight: 6,
   },
 });
-
-const meterStyles = StyleSheet.create({
-  wrap: {
-    position: 'relative',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  inner: {
-    position: 'absolute',
-    top: 6,
-    left: 6,
-    right: 6,
-    bottom: 6,
-    borderRadius: 999,
-    backgroundColor: '#0F0C0A',
-  },
-  labelWrap: {
-    position: 'absolute',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  pct: {
-    fontFamily: Fonts.semiBold,
-    fontSize: 22,
-    color: '#fff',
-    letterSpacing: -0.6,
-  },
-  pctSm: {
-    fontFamily: Fonts.semiBold,
-    fontSize: 13,
-    color: 'rgba(255,255,255,0.55)',
-  },
-});
-
-const ready = StyleSheet.create({
-  focusRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingVertical: 12,
-  },
-  focusRowBorder: {
-    borderBottomWidth: 0.5,
-    borderBottomColor: 'rgba(255,255,255,0.08)',
-  },
-  check: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    borderWidth: 1.5,
-    borderColor: 'rgba(255,255,255,0.20)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  checkPartial: {
-    borderColor: '#E8B530',
-    backgroundColor: 'rgba(232,181,48,0.18)',
-  },
-  checkComplete: {
-    borderColor: '#E8B530',
-    backgroundColor: '#E8B530',
-  },
-  focusBody: { flex: 1, minWidth: 0 },
-  focusName: {
-    fontFamily: Fonts.semiBold,
-    fontSize: 13.5,
-    color: '#fff',
-    letterSpacing: -0.05,
-    lineHeight: 16,
-  },
-  focusMeta: {
-    fontFamily: Fonts.regular,
-    fontSize: 10.5,
-    color: 'rgba(255,255,255,0.55)',
-    marginTop: 3,
-  },
-  focusProgress: {
-    fontFamily: Fonts.semiBold,
-    fontSize: 13,
-    color: '#F6D27A',
-    letterSpacing: -0.2,
-  },
-  focusProgressOf: {
-    fontFamily: Fonts.semiBold,
-    color: 'rgba(246,210,122,0.5)',
-  },
-  inClassBadge: {
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-    borderRadius: 999,
-    backgroundColor: 'rgba(240,194,74,0.16)',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(240,194,74,0.40)',
-  },
-  inClassBadgeText: {
-    fontFamily: Fonts.semiBold,
-    fontSize: 8.5,
-    color: '#F6D27A',
-    letterSpacing: 0.8,
-  },
-  repliedBadge: {
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-    borderRadius: 999,
-    backgroundColor: 'rgba(76,175,80,0.18)',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(76,175,80,0.40)',
-  },
-  repliedBadgeText: {
-    fontFamily: Fonts.semiBold,
-    fontSize: 8.5,
-    color: '#8BD98F',
-    letterSpacing: 0.8,
-  },
-});
-
 
 const em = StyleSheet.create({
   sheet: {

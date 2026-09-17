@@ -8,7 +8,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { LinearGradient } from 'expo-linear-gradient';
 import HomeScreen from '../screens/HomeScreen';
 import LogScreen from '../screens/LogScreen';
-import ProfileScreen from '../screens/ProfileScreen';
+import StatsScreen from '../screens/StatsScreen';
 import CustomTabBar from '../components/CustomTabBar';
 import { ProfileProvider } from '../context/ProfileContext';
 import { useAgeLock } from '../components/AgeCheckGate';
@@ -48,7 +48,7 @@ function MainTabs() {
         }}
       >
         {/* Routes keep their names (deep links, navigate calls); the tabs read Stats and Lessons. */}
-        <Tab.Screen name="PROFILE" component={ProfileScreen} options={{ tabBarLabel: 'STATS' }} />
+        <Tab.Screen name="PROFILE" component={StatsScreen} options={{ tabBarLabel: 'STATS' }} />
         <Tab.Screen name="TRAIN" component={HomeScreen} />
         <Tab.Screen name="LOG" component={LogScreen} options={{ tabBarLabel: 'LESSONS' }} />
       </Tab.Navigator>
