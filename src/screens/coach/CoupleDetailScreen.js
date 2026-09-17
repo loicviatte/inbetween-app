@@ -1,138 +1,80 @@
+// ─── Coach ▸ Couple ─────────────────────────────────────────────────────────
+// The student card's page, for two: how ready the couple is for their next
+// lesson (the number, a notched gauge, sessions since and minutes left), the
+// focus points they carry, and every session since that lesson.
+
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import Ionicons from '@expo/vector-icons/Ionicons';
-import Svg, { Circle } from 'react-native-svg';
-import { Fonts } from '../../theme';
+import { Fonts, Spacing } from '../../theme';
 import { supabase } from '../../services/supabase/client';
 import { getCoupleDetail, getCoupleFocusPoints, getCoupleActivity } from '../../storage/coupleStorage';
+import { Pulse, Bone, FadeIn } from '../../components/GroupSwitchSkeleton';
+import {
+  L, TopBar, PairAvatars, SectionHead, Card, TierChip, TimelineRow, Empty, dayLabel,
+} from '../../components/coach/LessonUI';
 
-// Palette mirrors StudentDetailScreen so the couple page looks identical, plus
-// the couple blue used for the hero.
-const C = {
-  bg: '#FFFFFF', surface: '#F5F5F5', surfaceAlt: '#FAFAFA', dark: '#0E0E0E',
-  orange: '#E8A838', green: '#4AAF52', red: '#D44545', text: '#0E0E0E',
-  sub: '#8A8A8A', muted: '#B0B0B0', white: '#FFFFFF', cardBorder: 'rgba(0,0,0,0.05)',
-  blue: '#2E4670', blueDark: '#16243C',
-};
+const INK = L.INK;
+const INK_62 = L.INK_62;
+const LINE = L.LINE;
+const PAGE = L.PAGE;
+const GOLD = L.GOLD;
 
-const TABS = [
-  { key: 'information', label: 'Information' },
-  { key: 'activity', label: 'Activity' },
-  { key: 'actions', label: 'Actions' },
-];
-
-const TIER_LABEL = {
-  critical: 'Critical focus',
-  important: 'Important focus',
-  supporting: 'Supporting focus',
-};
-
-function relativeDateShort(date) {
-  if (!date) return '';
-  const d = new Date(date);
-  const days = Math.floor((Date.now() - d.getTime()) / 86400000);
-  if (days === 0) return 'Today';
-  if (days === 1) return 'Yesterday';
-  if (days < 7) return d.toLocaleDateString('en-US', { weekday: 'short' }) + ' ' + d.getDate();
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-}
-
-function Card({ style, children }) {
-  return <View style={[styles.card, style]}>{children}</View>;
-}
-
-// Pair avatar — light circle with the dancer's initials (shows on the blue hero).
-function Avatar({ name, size = 50 }) {
-  const ini = (name || '?').split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase();
+function Gauge({ percent }) {
+  const p = Math.max(0, Math.min(100, percent || 0));
   return (
-    <View style={[styles.avatarWrap, { width: size, height: size, borderRadius: size / 2 }]}>
-      <Text style={styles.avatarTxt}>{ini}</Text>
+    <View style={st.gauge}>
+      <View style={[st.gaugeFill, { width: `${p}%` }]} />
+      {Array.from({ length: 9 }).map((_, i) => (
+        <View key={i} style={[st.gaugeNotch, { left: `${(i + 1) * 10}%` }]} />
+      ))}
     </View>
   );
 }
 
-// Gold readiness ring (identical to the student-detail one).
-function ReadinessRing({ percent = 0, size = 72, stroke = 5 }) {
-  const r = (size - stroke) / 2, cx = size / 2, cy = size / 2;
-  const circ = 2 * Math.PI * r;
-  const filled = (Math.max(0, Math.min(100, percent)) / 100) * circ;
+// A focus the couple carries: its tier, and how far they've got with it.
+function FocusRow({ f, first }) {
+  const done = f.done || 0;
+  const target = f.target || 0;
+  const complete = target > 0 && done >= target;
   return (
-    <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
-      <Svg width={size} height={size} style={{ transform: [{ rotate: '-90deg' }], position: 'absolute' }}>
-        <Circle cx={cx} cy={cy} r={r} stroke="rgba(255,255,255,0.10)" strokeWidth={stroke} fill="none" />
-        <Circle cx={cx} cy={cy} r={r} stroke="#E8B530" strokeWidth={stroke} fill="none"
-          strokeDasharray={`${filled} ${circ - filled}`} strokeLinecap="round" />
-      </Svg>
-      <Text style={styles.readyPct}>{Math.round(percent)}<Text style={styles.readyPctSm}>%</Text></Text>
-    </View>
-  );
-}
-
-// Mini progress ring — fills to done/target in gold (e.g. 1/3 → a third filled).
-function MiniProgress({ done = 0, target = 0, size = 24, stroke = 2.5 }) {
-  const r = (size - stroke) / 2, cx = size / 2, cy = size / 2;
-  const circ = 2 * Math.PI * r;
-  const pct = target > 0 ? Math.max(0, Math.min(1, done / target)) : 0;
-  return (
-    <Svg width={size} height={size}>
-      <Circle cx={cx} cy={cy} r={r} stroke="rgba(255,255,255,0.18)" strokeWidth={stroke} fill="none" />
-      {pct > 0 && (
-        <Circle cx={cx} cy={cy} r={r} stroke="#E8B530" strokeWidth={stroke} fill="none"
-          strokeDasharray={circ} strokeDashoffset={circ * (1 - pct)} strokeLinecap="round"
-          transform={`rotate(-90 ${cx} ${cy})`} />
-      )}
-    </Svg>
-  );
-}
-
-function FocusReadyRow({ row, isLast }) {
-  if (!row) return null;
-  const labelText = `${TIER_LABEL[row.tier] || 'Focus'} · from last lesson`;
-  return (
-    <View style={[styles.readyFocusRow, !isLast && styles.readyFocusRowBorder]}>
-      <MiniProgress done={row.done ?? 0} target={row.target ?? 0} />
-      <View style={{ flex: 1, minWidth: 0 }}>
-        <Text style={styles.readyFocusName} numberOfLines={1}>{row.name}</Text>
-        <Text style={styles.readyFocusMeta} numberOfLines={1}>{labelText}</Text>
-      </View>
-      <Text style={styles.readyFocusProgress}>
-        {row.done ?? 0}<Text style={styles.readyFocusProgressOf}>/{row.target ?? 0}</Text>
-      </Text>
-    </View>
-  );
-}
-
-function timelineCfg(type) {
-  switch (type) {
-    case 'training': return { bg: 'rgba(232,168,56,0.08)', border: 'rgba(232,168,56,0.3)', icon: 'flame', color: C.orange };
-    case 'class': return { bg: 'rgba(14,14,14,0.04)', border: 'rgba(14,14,14,0.12)', icon: 'book-outline', color: C.dark };
-    default: return { bg: C.surfaceAlt, border: C.cardBorder, icon: 'ellipse', color: C.sub };
-  }
-}
-
-function TimelineRow({ item }) {
-  const cfg = timelineCfg(item.type);
-  return (
-    <View style={styles.tlRow}>
-      <View style={[styles.tlCircle, { backgroundColor: cfg.bg, borderColor: cfg.border }]}>
-        <Ionicons name={cfg.icon} size={13} color={cfg.color} />
-      </View>
-      <Card style={styles.tlCard}>
-        <View style={styles.tlHeader}>
-          <Text style={styles.tlDate}>{relativeDateShort(item.date)}</Text>
-          {item.completed && (
-            <View style={styles.tlDoneRow}>
-              <Ionicons name="checkmark" size={11} color={C.green} />
-              <Text style={styles.tlDoneText}>Done</Text>
-            </View>
-          )}
+    <View style={[st.fp, !first && st.fpLine]}>
+      <View style={[st.fpDot, complete && { backgroundColor: '#7FB77E' }]} />
+      <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
+        <Text style={st.fpName} numberOfLines={2}>{f.name}</Text>
+        <View style={st.fpMetaRow}>
+          {!!f.tier && <TierChip tier={f.tier} />}
+          {!!f.meta && <Text style={st.fpMeta} numberOfLines={1}>{f.meta}</Text>}
         </View>
-        <Text style={styles.tlTitle}>{item.title}</Text>
-        {!!item.detail && <Text style={styles.tlDetail}>{item.detail}</Text>}
-        {!!item.notes && <View style={styles.tlNotes}><Text style={styles.tlNotesText}>{item.notes}</Text></View>}
-      </Card>
+      </View>
+      {!!f.progress && <Text style={st.fpProgress}>{f.progress}</Text>}
     </View>
+  );
+}
+
+function CoupleSkeleton({ name, onBack }) {
+  return (
+    <SafeAreaView style={st.safe} edges={['top']}>
+      <TopBar onBack={onBack} title={name || 'Couple'} />
+      <View style={st.scroll}>
+        <Pulse style={{ paddingTop: 16 }}><Bone w={190} h={28} r={6} /></Pulse>
+        <Pulse style={[st.rd, { gap: 17 }]}>
+          <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 15 }}>
+            <Bone w={96} h={46} r={10} />
+            <Bone w={110} h={24} r={4} />
+          </View>
+          <Bone w="100%" h={11} r={4} />
+          <View style={{ flexDirection: 'row', gap: 40 }}>
+            <Bone w={70} h={30} r={5} />
+            <Bone w={70} h={30} r={5} />
+          </View>
+        </Pulse>
+        <Pulse style={{ gap: 9, paddingTop: 20 }}>
+          <Bone w={90} h={9} r={4} />
+          <Bone w="100%" h={150} r={17} />
+        </Pulse>
+      </View>
+    </SafeAreaView>
   );
 }
 
@@ -142,7 +84,6 @@ export default function CoupleDetailScreen({ route, navigation }) {
   const [fps, setFps] = useState([]);
   const [activity, setActivity] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('information');
 
   const reload = useCallback(async () => {
     const [d, f, a] = await Promise.all([
@@ -155,8 +96,9 @@ export default function CoupleDetailScreen({ route, navigation }) {
 
   useEffect(() => { reload(); }, [reload]);
 
+  // The partner's phone writes to these tables too — the page follows along.
   useEffect(() => {
-    if (!coupleId) return;
+    if (!coupleId) return undefined;
     const ch = supabase
       .channel(`couple-detail-${coupleId}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'couple_focus_points', filter: `couple_id=eq.${coupleId}` }, () => reload())
@@ -165,303 +107,152 @@ export default function CoupleDetailScreen({ route, navigation }) {
     return () => { supabase.removeChannel(ch); };
   }, [coupleId, reload]);
 
-  const readiness = detail?.readiness || null;
-  const readyPct = readiness?.percent ?? 0;
-  const lastClassDate = readiness?.lastClassDate || null;
-  const leadName = detail?.dancerA?.isLeader
-    ? (detail?.dancerA?.name || '').split(' ')[0]
-    : (detail?.dancerB?.name || '').split(' ')[0];
-  const stylesStr = [detail?.doesLatin && 'Latin', detail?.doesBallroom && 'Ballroom'].filter(Boolean).join(' · ') || '—';
+  if (loading) return <CoupleSkeleton name={coupleName} onBack={() => navigation.goBack()} />;
 
-  // ── Active focus counts: prefer readiness "done" (since last lesson) ──
+  const readiness = detail?.readiness || null;
+  const hasReadiness = !!readiness;
+  const pct = readiness?.percent ?? 0;
+  const lastClassDate = readiness?.lastClassDate || null;
+  const leader = detail?.dancerA?.isLeader ? detail?.dancerA : detail?.dancerB;
+  const leadName = (leader?.name || '').split(' ')[0];
+  const styleLabel = [detail?.doesLatin && 'Latin', detail?.doesBallroom && 'Ballroom'].filter(Boolean).join(' · ');
+
+  // Sessions since the lesson that set the current focus points (as readiness counts them).
+  const sessions = (activity || []).filter(
+    (x) => !lastClassDate || new Date(x.completedAt) >= new Date(lastClassDate),
+  );
+  const minutes = sessions.reduce((sum, x) => sum + (x.durationMinutes || 0), 0);
+
+  // The carryover first (it has tiers and targets); otherwise what they're on.
   const doneById = {};
   (readiness?.focuses || []).forEach((f) => { doneById[f.focusPointId] = f.done ?? 0; });
-
-  // ── Activity: couple sessions → timeline items (newest first already) ──
-  const timelineEvents = (activity || []).map((x) => ({
-    id: x.id,
-    type: 'training',
-    date: x.completedAt,
-    title: x.focusName || 'Couple session',
-    detail: `${x.durationMinutes || 0} min${x.feeling || x.rating ? ` · ${x.feeling || x.rating}` : ''}`,
-    completed: true,
-  }));
-  const sinceList = lastClassDate
-    ? (activity || []).filter((x) => new Date(x.completedAt) >= new Date(lastClassDate))
-    : (activity || []);
-  const sessionsSince = sinceList.length;
-  const totalMinSince = sinceList.reduce((sum, x) => sum + (x.durationMinutes || 0), 0);
-
-  // ── Last couple class recap (built from readiness) ──
-  const lastCoupleClass = (readiness && lastClassDate) ? {
-    date: lastClassDate,
-    title: 'Couple lesson',
-    focusPoints: (readiness.focuses || []).map((f) => ({ id: f.focusPointId, name: f.name, trainedCount: f.done ?? 0 })),
-  } : null;
+  const focusRows = hasReadiness && (readiness.focuses || []).length > 0
+    ? readiness.focuses.map((f) => ({
+        id: f.focusPointId, name: f.name, tier: f.tier, done: f.done, target: f.target,
+        progress: `${f.done ?? 0}/${f.target ?? 0}`, meta: 'from the last lesson',
+      }))
+    : (fps || []).slice(0, 6).map((f) => ({
+        id: f.id, name: f.name, tier: f.tier, done: doneById[f.id] ?? f.practice_count ?? 0, target: 0,
+        progress: `${doneById[f.id] ?? f.practice_count ?? 0}×`, meta: f.subtitle || null,
+      }));
 
   return (
-    <SafeAreaView style={styles.safe} edges={['top']}>
-      <View style={styles.navHeader}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn} activeOpacity={0.7}>
-          <Ionicons name="chevron-back" size={24} color={C.text} />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle} numberOfLines={1}>{coupleName || detail?.name || 'Couple'}</Text>
-        <View style={{ width: 40 }} />
-      </View>
+    <SafeAreaView style={st.safe} edges={['top']}>
+      <TopBar
+        onBack={() => navigation.goBack()}
+        title={detail?.name || coupleName || 'Couple'}
+        sub={[styleLabel || null, leadName ? `${leadName} leads` : null].filter(Boolean).join(' · ') || null}
+        right={<PairAvatars a={detail?.dancerA} b={detail?.dancerB} size={36} ring={PAGE} />}
+      />
 
-      {loading ? (
-        <View style={styles.center}><ActivityIndicator color={C.blue} /></View>
-      ) : (
-        <>
-          {/* ── Blue hero: pair avatars + name + couple readiness % ── */}
-          <View style={styles.heroCard}>
-            <View style={styles.heroRow}>
-              <View style={styles.pairWrap}>
-                <Avatar name={detail?.dancerA?.name} />
-                <View style={{ marginLeft: -14 }}><Avatar name={detail?.dancerB?.name} /></View>
+      <ScrollView contentContainerStyle={st.scroll} showsVerticalScrollIndicator={false}>
+        <FadeIn>
+          <Text style={st.name} numberOfLines={2}>{detail?.name || coupleName || 'Couple'}</Text>
+
+          {/* ── Readiness ── */}
+          <View style={st.rd}>
+            <View style={st.l1}>
+              <View style={st.big}>
+                <Text style={st.bigN}>{hasReadiness ? pct : '—'}</Text>
+                {hasReadiness && <Text style={st.bigPct}>%</Text>}
               </View>
-              <View style={{ flex: 1, minWidth: 0, marginLeft: 14 }}>
-                <Text style={styles.heroName} numberOfLines={1}>{detail?.name}</Text>
-                <Text style={styles.heroSub} numberOfLines={1}>{stylesStr}  ·  {leadName} leads</Text>
-              </View>
+              <Text style={st.lb}>
+                {hasReadiness ? 'Ready for\n' : 'No couple lesson\n'}
+                <Text style={st.lbB}>{hasReadiness ? 'next lesson' : 'logged yet'}</Text>
+              </Text>
             </View>
-            <View style={styles.heroReadyRow}>
-              <Text style={styles.heroPct}>{readyPct}%</Text>
-              <Text style={styles.heroReadyLbl}>couple readiness for next lesson</Text>
+            <Gauge percent={pct} />
+            <View style={st.fig}>
+              <View style={st.figCell}>
+                <Text style={st.figN}>{sessions.length}×</Text>
+                <Text style={st.figL}>{lastClassDate ? 'Since last lesson' : 'Logged together'}</Text>
+              </View>
+              <View style={[st.figCell, st.figCellLine]}>
+                <Text style={st.figN}>{hasReadiness ? readiness.minutesRemaining : '—'}</Text>
+                <Text style={st.figL}>Minutes left</Text>
+              </View>
             </View>
           </View>
 
-          {/* ── Sub-tabs ── */}
-          <View style={styles.tabBar}>
-            {TABS.map((t) => {
-              const on = activeTab === t.key;
-              return (
-                <TouchableOpacity key={t.key} style={styles.tabBtn} activeOpacity={0.7} onPress={() => setActiveTab(t.key)}>
-                  <Text style={[styles.tabLabel, on && styles.tabLabelOn]}>{t.label}</Text>
-                  <View style={[styles.tabUnderline, on && styles.tabUnderlineOn]} />
-                </TouchableOpacity>
-              );
-            })}
-          </View>
+          <SectionHead
+            title="Focus points"
+            right={hasReadiness && (readiness.focuses || []).length > 0 ? 'from the last lesson' : (fps.length ? 'active' : null)}
+          />
+          {focusRows.length === 0 ? (
+            <Card><Empty>No couple focus points yet. They appear once a couple lesson is processed.</Empty></Card>
+          ) : (
+            <Card>
+              {focusRows.map((f, i) => <FocusRow key={f.id} f={f} first={i === 0} />)}
+            </Card>
+          )}
 
-          <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 40 }} showsVerticalScrollIndicator={false}>
-            <View style={styles.tabContent}>
-
-              {activeTab === 'information' && (
-                <>
-                  {/* Readiness card — dark brown, identical to the student's */}
-                  <Card style={styles.readyCardOverride}>
-                    <Text style={styles.readyEyebrow}>Couple's readiness for next lesson</Text>
-                    <View style={styles.readyHeaderRow}>
-                      <ReadinessRing percent={readyPct} />
-                      <View style={{ flex: 1, minWidth: 0, marginLeft: 14 }}>
-                        <Text style={styles.readyTitle}>
-                          {!readiness ? 'No couple lesson logged yet.'
-                            : readyPct >= 100 ? 'Ready for next lesson.'
-                            : readyPct >= 50 ? 'Almost ready.' : 'Building up.'}
-                        </Text>
-                        <Text style={styles.readySubtitle}>
-                          {!readiness ? 'Focus points will appear here once a couple lesson is processed.'
-                            : readiness.minutesRemaining === 0 ? `All ${readiness.focuses.length} focus points trained.`
-                            : `${readiness.focuses.length} focus point${readiness.focuses.length > 1 ? 's' : ''} · ~${readiness.minutesRemaining} min to go`}
-                        </Text>
-                      </View>
-                    </View>
-                    {(readiness?.focuses?.length || 0) > 0 && (
-                      <>
-                        <View style={styles.readyDivider} />
-                        {readiness.focuses.map((f, i, arr) => (
-                          <FocusReadyRow key={f.focusPointId} row={f} isLast={i === arr.length - 1} />
-                        ))}
-                      </>
-                    )}
-                  </Card>
-
-                  {/* Active focus */}
-                  {fps.length > 0 && (
-                    <View style={{ marginTop: 16 }}>
-                      <Text style={styles.sectionLabel}>ACTIVE FOCUS</Text>
-                      {fps.slice(0, 6).map((f) => {
-                        const wc = doneById[f.id] ?? f.practice_count ?? 0;
-                        return (
-                          <View key={f.id} style={styles.focusRow}>
-                            <View style={styles.focusDot} />
-                            <View style={{ flex: 1 }}>
-                              <Text style={styles.focusName}>{f.name}</Text>
-                              {!!f.subtitle && <Text style={styles.focusSub} numberOfLines={1}>{f.subtitle}</Text>}
-                            </View>
-                            <View style={[styles.focusCount, wc === 0 && styles.focusCountStuck]}>
-                              <Text style={[styles.focusCountText, wc === 0 && styles.focusCountTextStuck]}>{wc}×</Text>
-                            </View>
-                          </View>
-                        );
-                      })}
-                    </View>
-                  )}
-                </>
+          <SectionHead
+            title="Activity"
+            right={sessions.length > 0 ? `${sessions.length} session${sessions.length === 1 ? '' : 's'}${minutes ? ` · ${minutes} min` : ''}` : null}
+          />
+          {sessions.length === 0 && !lastClassDate ? (
+            <Empty>No couple sessions logged yet.</Empty>
+          ) : (
+            <View>
+              {sessions.slice(0, 8).map((x, i) => (
+                <TimelineRow
+                  key={x.id}
+                  first={i === 0}
+                  last={!lastClassDate && i === Math.min(sessions.length, 8) - 1}
+                  label={dayLabel(x.completedAt)}
+                  title={x.focusName || 'Couple session'}
+                  detail={[x.durationMinutes ? `${x.durationMinutes} min` : null, x.feeling || x.rating || null]
+                    .filter(Boolean).join(' · ') || null}
+                />
+              ))}
+              {!!lastClassDate && (
+                <TimelineRow
+                  lesson
+                  first={sessions.length === 0}
+                  label={`${dayLabel(lastClassDate)} · last lesson together`}
+                  title="Couple lesson"
+                  detail={(readiness.focuses || []).length
+                    ? `${readiness.focuses.length} focus point${readiness.focuses.length === 1 ? '' : 's'} set`
+                    : null}
+                />
               )}
-
-              {activeTab === 'activity' && (
-                <>
-                  <View style={styles.activityHeader}>
-                    <Text style={styles.weekTitle}>
-                      {sessionsSince} session{sessionsSince !== 1 ? 's' : ''}
-                      {totalMinSince > 0 ? ` · ${totalMinSince} min` : ''}
-                    </Text>
-                    <Text style={styles.weekSub}>
-                      Since last couple lesson{lastClassDate ? ` · ${relativeDateShort(lastClassDate)}` : ''}
-                    </Text>
-                  </View>
-
-                  <View style={styles.tlContainer}>
-                    <View style={styles.tlSpine} />
-                    {timelineEvents.length === 0 ? (
-                      <Text style={styles.emptyTl}>No couple sessions yet.</Text>
-                    ) : (
-                      timelineEvents.map((item) => <TimelineRow key={item.id} item={item} />)
-                    )}
-                  </View>
-
-                  {/* Last class recap */}
-                  {lastCoupleClass && (
-                    <View style={styles.classRecap}>
-                      <View style={styles.classRecapHeader}>
-                        <View style={styles.classRecapBadge}>
-                          <Text style={styles.classRecapBadgeText}>LAST COUPLE LESSON</Text>
-                        </View>
-                        <Text style={styles.classRecapDate}>{relativeDateShort(lastCoupleClass.date)}</Text>
-                      </View>
-                      <Text style={styles.classRecapTitle}>{lastCoupleClass.title}</Text>
-                      {lastCoupleClass.focusPoints.length > 0 && (
-                        <View style={styles.classRecapFPs}>
-                          <Text style={styles.classRecapFPLabel}>Focus points</Text>
-                          {lastCoupleClass.focusPoints.map((fp, i) => (
-                            <View key={fp.id || i} style={styles.classRecapFPRow}>
-                              <View style={[styles.classRecapFPDot, { backgroundColor: fp.trainedCount > 0 ? C.green : C.red }]} />
-                              <Text style={styles.classRecapFPName} numberOfLines={1}>{fp.name}</Text>
-                              <View style={[styles.classRecapFPCount, { backgroundColor: fp.trainedCount > 0 ? 'rgba(74,175,82,0.08)' : 'rgba(212,69,69,0.08)' }]}>
-                                <Text style={[styles.classRecapFPCountText, { color: fp.trainedCount > 0 ? C.green : C.red }]}>{fp.trainedCount}x</Text>
-                              </View>
-                            </View>
-                          ))}
-                        </View>
-                      )}
-                    </View>
-                  )}
-                </>
-              )}
-
-              {activeTab === 'actions' && (
-                <View style={styles.actionsEmpty}>
-                  <View style={styles.checkCircle}><Ionicons name="checkmark" size={26} color={C.green} /></View>
-                  <Text style={styles.actionsTitle}>All clear</Text>
-                  <Text style={styles.actionsMsg}>No couple actions need your attention right now.</Text>
-                </View>
-              )}
-
             </View>
-          </ScrollView>
-        </>
-      )}
+          )}
+        </FadeIn>
+      </ScrollView>
     </SafeAreaView>
   );
 }
 
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: C.bg },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  navHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, paddingVertical: 8 },
-  backBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
-  headerTitle: { flex: 1, textAlign: 'center', fontFamily: Fonts.jakartaBold, fontSize: 17, color: C.text },
+const st = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: PAGE },
+  scroll: { paddingHorizontal: Spacing.side, paddingBottom: 40 },
+  name: { fontFamily: Fonts.ttBold, fontSize: 28, letterSpacing: -1.1, lineHeight: 32, color: INK, paddingTop: 16 },
 
-  // Blue hero
-  heroCard: { backgroundColor: C.blue, borderRadius: 20, marginHorizontal: 24, marginTop: 8, padding: 18, shadowColor: C.blueDark, shadowOpacity: 0.3, shadowOffset: { width: 0, height: 10 }, shadowRadius: 20, elevation: 6 },
-  heroRow: { flexDirection: 'row', alignItems: 'center' },
-  pairWrap: { flexDirection: 'row', alignItems: 'center' },
-  heroName: { fontFamily: Fonts.jakartaExtraBold, fontSize: 21, color: '#fff', letterSpacing: -0.5 },
-  heroSub: { fontFamily: Fonts.jakartaRegular, fontSize: 12.5, color: 'rgba(255,255,255,0.6)', marginTop: 4 },
-  heroReadyRow: { flexDirection: 'row', alignItems: 'baseline', marginTop: 16, gap: 8 },
-  heroPct: { fontFamily: Fonts.jakartaExtraBold, fontSize: 30, color: '#fff', letterSpacing: -1 },
-  heroReadyLbl: { fontFamily: Fonts.jakartaRegular, fontSize: 12, color: 'rgba(255,255,255,0.55)', flex: 1 },
+  rd: { gap: 17, paddingTop: 22, paddingBottom: 19, borderBottomWidth: 1, borderBottomColor: LINE },
+  l1: { flexDirection: 'row', alignItems: 'flex-end', gap: 15 },
+  big: { flexDirection: 'row', alignItems: 'flex-start' },
+  bigN: { fontFamily: Fonts.ttExtraBold, fontSize: 58, letterSpacing: -3.5, lineHeight: 50, color: INK, fontVariant: ['tabular-nums'] },
+  bigPct: { fontFamily: Fonts.ttBold, fontSize: 20, lineHeight: 22, color: 'rgba(10,10,10,0.55)', paddingLeft: 3, marginTop: 1 },
+  lb: {
+    flex: 1, paddingBottom: 2, fontFamily: Fonts.ttDemiBold, fontSize: 10.5, letterSpacing: 1.5, lineHeight: 16,
+    textTransform: 'uppercase', color: INK_62,
+  },
+  lbB: { color: INK },
+  gauge: { height: 11, borderRadius: 4, overflow: 'hidden', backgroundColor: 'rgba(10,10,10,0.09)' },
+  gaugeFill: { position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: GOLD, borderRadius: 4 },
+  gaugeNotch: { position: 'absolute', top: 0, bottom: 0, width: 4, marginLeft: -2, backgroundColor: PAGE },
+  fig: { flexDirection: 'row', alignItems: 'stretch' },
+  figCell: { flex: 1 },
+  figCellLine: { paddingLeft: 18, borderLeftWidth: 1, borderLeftColor: LINE },
+  figN: { fontFamily: Fonts.ttBold, fontSize: 22, letterSpacing: -0.9, lineHeight: 24, color: INK, fontVariant: ['tabular-nums'] },
+  figL: { fontFamily: Fonts.ttDemiBold, fontSize: 9, letterSpacing: 1.2, textTransform: 'uppercase', color: INK_62, marginTop: 6 },
 
-  avatarWrap: { backgroundColor: '#DCE4F0', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: C.blue },
-  avatarTxt: { fontFamily: Fonts.jakartaExtraBold, fontSize: 16, color: C.blue },
-
-  // Tabs
-  tabBar: { flexDirection: 'row', marginTop: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.cardBorder },
-  tabBtn: { flex: 1, alignItems: 'center', paddingVertical: 11 },
-  tabLabel: { fontFamily: Fonts.jakartaMedium, fontSize: 14, color: C.muted },
-  tabLabelOn: { fontFamily: Fonts.jakartaBold, color: C.text },
-  tabUnderline: { height: 2, width: 28, borderRadius: 1, marginTop: 8, backgroundColor: 'transparent' },
-  tabUnderlineOn: { backgroundColor: C.blue },
-
-  tabContent: { paddingHorizontal: 24, paddingTop: 20 },
-
-  card: { backgroundColor: C.white, borderRadius: 16, padding: 18, borderWidth: 1, borderColor: C.cardBorder, shadowColor: '#000', shadowOpacity: 0.04, shadowOffset: { width: 0, height: 4 }, shadowRadius: 12, elevation: 1 },
-
-  // Readiness card (dark brown — identical to student)
-  readyCardOverride: { backgroundColor: '#1F1810', borderWidth: 1, borderColor: 'rgba(240,194,74,0.28)', borderRadius: 20, paddingBottom: 6, overflow: 'hidden', shadowColor: '#0A0A0A', shadowOpacity: 0.5, shadowOffset: { width: 0, height: 14 }, shadowRadius: 22, elevation: 8 },
-  readyEyebrow: { fontFamily: Fonts.jakartaBold, fontSize: 13, color: '#fff', letterSpacing: -0.1, marginBottom: 14 },
-  readyHeaderRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 14 },
-  readyPct: { fontFamily: Fonts.jakartaExtraBold, fontSize: 22, color: '#fff', letterSpacing: -0.6 },
-  readyPctSm: { fontFamily: Fonts.jakartaSemiBold, fontSize: 13, color: 'rgba(255,255,255,0.55)' },
-  readyTitle: { fontFamily: Fonts.jakartaExtraBold, fontSize: 14.5, color: '#fff', letterSpacing: -0.2, lineHeight: 19 },
-  readySubtitle: { fontFamily: Fonts.jakartaRegular, fontSize: 11.5, color: 'rgba(255,255,255,0.55)', marginTop: 5, lineHeight: 16 },
-  readyDivider: { height: 0.5, backgroundColor: 'rgba(255,255,255,0.10)', marginHorizontal: -18 },
-  readyFocusRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12 },
-  readyFocusRowBorder: { borderBottomWidth: 0.5, borderBottomColor: 'rgba(255,255,255,0.08)' },
-  readyFocusName: { fontFamily: Fonts.jakartaExtraBold, fontSize: 13.5, color: '#fff', letterSpacing: -0.05, lineHeight: 16 },
-  readyFocusMeta: { fontFamily: Fonts.jakartaRegular, fontSize: 10.5, color: 'rgba(255,255,255,0.55)', marginTop: 3 },
-  readyFocusProgress: { fontFamily: Fonts.jakartaExtraBold, fontSize: 13, color: '#F6D27A', letterSpacing: -0.2 },
-  readyFocusProgressOf: { fontFamily: Fonts.jakartaSemiBold, fontSize: 11, color: 'rgba(246,210,122,0.5)' },
-
-  sectionLabel: { fontFamily: Fonts.jakartaExtraBold, fontSize: 10, color: C.muted, letterSpacing: 1, marginBottom: 10, marginTop: 4 },
-  focusRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: C.white, borderRadius: 14, paddingVertical: 12, paddingHorizontal: 14, borderWidth: 1, borderColor: C.cardBorder, marginBottom: 8, gap: 12 },
-  focusDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: C.orange },
-  focusName: { fontFamily: Fonts.jakartaBold, fontSize: 14, color: C.text },
-  focusSub: { fontFamily: Fonts.jakartaRegular, fontSize: 12, color: C.sub, marginTop: 2 },
-  focusCount: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8, backgroundColor: 'rgba(74,175,82,0.1)' },
-  focusCountStuck: { backgroundColor: 'rgba(212,69,69,0.1)' },
-  focusCountText: { fontFamily: Fonts.jakartaExtraBold, fontSize: 12, color: C.green },
-  focusCountTextStuck: { color: C.red },
-
-  // Activity
-  activityHeader: { marginBottom: 18 },
-  weekTitle: { fontFamily: Fonts.jakartaExtraBold, fontSize: 24, color: C.text, letterSpacing: -0.8 },
-  weekSub: { fontFamily: Fonts.jakartaRegular, fontSize: 13, color: C.sub, marginTop: 2 },
-  tlContainer: { position: 'relative' },
-  tlSpine: { position: 'absolute', left: 13, top: 6, bottom: 6, width: 1.5, backgroundColor: C.surface, borderRadius: 1 },
-  tlRow: { flexDirection: 'row', gap: 12, marginBottom: 10 },
-  tlCircle: { width: 28, height: 28, borderRadius: 14, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },
-  tlCard: { flex: 1, padding: 12 },
-  tlHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  tlDate: { fontFamily: Fonts.jakartaBold, fontSize: 10, color: C.muted, letterSpacing: 0.8, textTransform: 'uppercase' },
-  tlDoneRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  tlDoneText: { fontFamily: Fonts.jakartaBold, fontSize: 10, color: C.green },
-  tlTitle: { fontFamily: Fonts.jakartaBold, fontSize: 14, color: C.text, marginTop: 4, letterSpacing: -0.2 },
-  tlDetail: { fontFamily: Fonts.jakartaRegular, fontSize: 12, color: C.sub, marginTop: 3, lineHeight: 17 },
-  tlNotes: { marginTop: 10, padding: 10, backgroundColor: C.surfaceAlt, borderRadius: 10, borderLeftWidth: 2, borderLeftColor: C.orange },
-  tlNotesText: { fontFamily: Fonts.jakartaRegular, fontSize: 12, color: C.sub, fontStyle: 'italic', lineHeight: 17 },
-  emptyTl: { marginLeft: 50, fontFamily: Fonts.jakartaRegular, fontSize: 13, color: C.sub, paddingVertical: 20 },
-
-  // Last class recap
-  classRecap: { backgroundColor: C.surface, borderRadius: 16, padding: 16, marginTop: 20, borderWidth: StyleSheet.hairlineWidth, borderColor: C.cardBorder },
-  classRecapHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
-  classRecapBadge: { backgroundColor: 'rgba(232,168,56,0.12)', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
-  classRecapBadgeText: { fontFamily: Fonts.jakartaExtraBold, fontSize: 9, letterSpacing: 0.8, color: C.orange },
-  classRecapDate: { fontFamily: Fonts.jakartaMedium, fontSize: 10, color: C.sub },
-  classRecapTitle: { fontFamily: Fonts.jakartaExtraBold, fontSize: 15, color: C.dark, letterSpacing: -0.2, marginBottom: 6 },
-  classRecapFPs: { gap: 6 },
-  classRecapFPLabel: { fontFamily: Fonts.jakartaExtraBold, fontSize: 10, color: C.muted, letterSpacing: 0.5, textTransform: 'uppercase', marginBottom: 2 },
-  classRecapFPRow: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: C.white, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10 },
-  classRecapFPDot: { width: 7, height: 7, borderRadius: 4 },
-  classRecapFPName: { fontFamily: Fonts.jakartaSemiBold, fontSize: 13, color: C.dark, flex: 1 },
-  classRecapFPCount: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 },
-  classRecapFPCountText: { fontFamily: Fonts.jakartaExtraBold, fontSize: 11 },
-
-  // Actions (empty)
-  actionsEmpty: { alignItems: 'center', paddingTop: 40, paddingHorizontal: 30 },
-  checkCircle: { width: 56, height: 56, borderRadius: 28, backgroundColor: 'rgba(74,175,82,0.12)', alignItems: 'center', justifyContent: 'center', marginBottom: 14 },
-  actionsTitle: { fontFamily: Fonts.jakartaExtraBold, fontSize: 18, color: C.text },
-  actionsMsg: { fontFamily: Fonts.jakartaRegular, fontSize: 13.5, color: C.sub, textAlign: 'center', marginTop: 6, lineHeight: 19 },
+  fp: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, paddingHorizontal: 15 },
+  fpLine: { borderTopWidth: 1, borderTopColor: 'rgba(10,10,10,0.07)' },
+  fpDot: { width: 7, height: 7, borderRadius: 3.5, backgroundColor: GOLD },
+  fpName: { fontFamily: Fonts.ttDemiBold, fontSize: 14, letterSpacing: -0.25, lineHeight: 18, color: INK },
+  fpMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  fpMeta: { flexShrink: 1, fontFamily: Fonts.ttRegular, fontSize: 10.5, color: INK_62 },
+  fpProgress: { fontFamily: Fonts.ttBold, fontSize: 13.5, color: L.GOLD_INK, fontVariant: ['tabular-nums'] },
 });
