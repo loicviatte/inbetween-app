@@ -7,7 +7,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, Pressable, StyleSheet, ActivityIndicator,
-  Animated, Dimensions, ScrollView, LayoutAnimation, Easing, Platform, UIManager,
+  Animated, Dimensions, ScrollView, LayoutAnimation, Easing, Platform, UIManager, Keyboard,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -60,7 +60,28 @@ export default function QuestionSheet({
   const [lessonOpen, setLessonOpen] = useState(false);
 
   const { text: questionText, focusName } = splitFocusTag(question?.message);
-  const sheetH = full ? SCREEN_H : Math.round(SCREEN_H * 0.66);
+
+  // The sheet has a fixed height, so a keyboard sliding in would push it past
+  // the top of the screen and crop the question. It shrinks to what's left
+  // instead, and the reply stays where it is.
+  const [kb, setKb] = useState(0);
+  useEffect(() => {
+    const show = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillChangeFrame' : 'keyboardDidShow',
+      (e) => setKb(e?.endCoordinates?.height || 0),
+    );
+    const hide = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+      () => setKb(0),
+    );
+    return () => { show.remove(); hide.remove(); };
+  }, []);
+
+  const topGap = full ? 0 : 8;
+  const sheetH = Math.max(
+    260,
+    Math.min(full ? SCREEN_H : Math.round(SCREEN_H * 0.66), SCREEN_H - kb - topGap),
+  );
 
   useEffect(() => {
     if (!visible || !question) { setCtx(null); return undefined; }
@@ -240,7 +261,7 @@ export default function QuestionSheet({
         )}
       </ScrollView>
 
-      <View style={[qs.rep, { paddingBottom: insets.bottom + 10 }]}>
+      <View style={[qs.rep, { paddingBottom: (kb > 0 ? 8 : insets.bottom) + 10 }]}>
         <View style={qs.fld}>
           <TextInput
             style={qs.input}
