@@ -279,6 +279,10 @@ export default function CustomTabBar({ state, descriptors, navigation, overlay =
                 key={labelFontReady ? 'syne' : 'fallback'}
                 style={[styles.tabText, { color: isFocused ? '#FFFFFF' : '#0D0D12' }]}
                 numberOfLines={1}
+                // Syne ExtraBold is wide: a long label ("DASHBOARD" in a third
+                // of a phone) shrinks to fit rather than being cut.
+                adjustsFontSizeToFit
+                minimumFontScale={0.7}
               >
                 {typeof descriptors?.[route.key]?.options?.tabBarLabel === 'string'
                   ? descriptors[route.key].options.tabBarLabel
@@ -347,8 +351,10 @@ const styles = StyleSheet.create({
   },
   tab: {
     flex: 1,
+    minWidth: 0,
     alignItems: 'center',
     justifyContent: 'center',
+    paddingHorizontal: 8,
     borderRadius: 30,
     zIndex: 1,
   },
