@@ -96,6 +96,14 @@ const COACH_ACTION_TYPES = new Set([
   'name_match_confirm',
 ]);
 
+// Onboarding answers that couldn't be saved at sign-up (email confirmation held
+// the session back) are applied at the first sign-in. Loaded only when there
+// are some: this file is the cold-start path.
+function finishOnboarding(s) {
+  if (!s?.user?.user_metadata?.pending_onboarding) return;
+  require('./src/services/pendingOnboarding').applyPendingOnboarding(s).catch(() => {});
+}
+
 function handleNotificationTap(data) {
   if (!navigationRef.isReady()) return;
   const type = data?.type;
@@ -283,6 +291,7 @@ export default function App() {
       setUserEmail(s?.user?.email ?? null);
       maybeRegisterPush(s?.user?.id ?? null);
       loadRoleFor(s);
+      finishOnboarding(s);
       // Refresh the token in the background so the session's user_metadata
       // (esp. `role`) reflects any change made AFTER the user last signed in —
       // e.g. a student later promoted to coach. Otherwise they keep running on
@@ -298,6 +307,7 @@ export default function App() {
       setUserEmail(s?.user?.email ?? null);
       maybeRegisterPush(s?.user?.id ?? null);
       loadRoleFor(s);
+      finishOnboarding(s);
     });
 
     return () => subscription.unsubscribe();

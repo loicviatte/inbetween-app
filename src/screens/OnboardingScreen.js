@@ -32,6 +32,7 @@ import { filterStudios, hasExactMatch } from '../utils/studioMatch';
 import { setOnboardingHold } from '../utils/onboardingHold';
 import { recallToFocusPoints, saveOnboardingFocusPoints } from '../services/ai/onboardingRecall';
 import { createChildAccount } from '../services/childAccount';
+import { holdPendingOnboarding } from '../services/pendingOnboarding';
 import { clearSubjectCache, invalidateCache } from '../storage/storage';
 import { DEFAULT_COUNTRY, toE164, splitE164 } from '../utils/phone';
 import PhoneField from '../components/PhoneField';
@@ -999,9 +1000,46 @@ export default function OnboardingScreen({ navigation, route }) {
       metadata.lessons_per_month = a.lessons;
       metadata.solo_practice_frequency = a.soloLabel;
     }
+    // Everything below that needs a signed-in account, as data: done right here
+    // when sign-up returns a session; kept in the account's metadata and applied
+    // at first sign-in (services/pendingOnboarding) when email confirmation
+    // holds the session back.
+    const childProfile = isParent ? {
+      childName: a.childName.trim(),
+      parentFirstName: a.name.trim().split(/\s+/)[0],
+      consent: { checks: a.checks, termsVersion: a.signupCopy?.termsVersion },
+      phoneToken: a.phoneToken,
+      danceStyle: a.style,
+      level: a.level,
+      ageCategory: a.age,
+      studioId: a.studioId || null,
+      coachId: a.coachId || null,
+      lessonsPerMonth: a.lessons,
+      soloFrequency: a.soloLabel,
+      weeklyGoalMinutes: weeklyTarget(a),
+      focusPoints: a.focus,
+    } : null;
+    const coachCats = a.style === 'Latin & Ballroom' ? ['latin', 'ballroom'] : [a.style === 'Ballroom' ? 'ballroom' : 'latin'];
+    metadata.pending_onboarding = {
+      v: 1,
+      role: dbRole,
+      style: a.style,
+      studioId: a.studioId && !a.createStudio ? a.studioId : null,
+      createStudio: isCoach && a.createStudio && query.trim() ? query.trim() : null,
+      card: isCoach && COACH_CARD_ONBOARDING ? {
+        name: a.name, words: a.words, alloc: a.alloc, style: a.style, who: a.who,
+        correct: a.correct, signature: a.signature, leave: a.leave, cred: a.cred,
+      } : null,
+      child: childProfile,
+      student: !isCoach && !isParent ? {
+        lessons: a.lessons, soloLabel: a.soloLabel, weeklyGoal: weeklyTarget(a),
+        coachId: a.coachId || null, cats: coachCats, focus: a.focus,
+      } : null,
+    };
     // A parent whose account exists but whose child couldn't be created: try
     // again is only the child, not a second sign-up with the same email.
     let userId;
+    holdPendingOnboarding(true);
     const { data: { session: made } } = await supabase.auth.getSession();
     if (isParent && childRetryRef.current && made?.user?.id) {
       userId = made.user.id;
@@ -1009,10 +1047,13 @@ export default function OnboardingScreen({ navigation, route }) {
       const { data, error: signUpErr } = await supabase.auth.signUp({
         email: a.email.trim(), password: a.password, options: { data: metadata },
       });
-      if (signUpErr) { setBusy(false); setOnboardingHold(false); setError(signUpErr.message); return; }
+      if (signUpErr) { holdPendingOnboarding(false); setBusy(false); setOnboardingHold(false); setError(signUpErr.message); return; }
       userId = data?.user?.id;
-      if (!data?.session) { setBusy(false); setOnboardingHold(false); go('confirm'); return; }
+      if (!data?.session) { holdPendingOnboarding(false); setBusy(false); setOnboardingHold(false); go('confirm'); return; }
+      // Signed in straight away: this screen does the rest, so nothing is left pending.
+      await supabase.auth.updateUser({ data: { pending_onboarding: null } }).catch(() => {});
     }
+    holdPendingOnboarding(false);
 
     let studioId = a.studioId;
     if (isCoach && a.createStudio && query.trim()) {
@@ -1043,21 +1084,7 @@ export default function OnboardingScreen({ navigation, route }) {
         // Everything the parent answered describes their child, so it is the
         // child's profile that gets it — created server-side, since a student
         // row needs an auth account and only the service role can make one.
-        const { error: childErr } = await createChildAccount({
-          childName: a.childName.trim(),
-          parentFirstName: a.name.trim().split(/\s+/)[0],
-          consent: { checks: a.checks, termsVersion: a.signupCopy?.termsVersion },
-          phoneToken: a.phoneToken,
-          danceStyle: a.style,
-          level: a.level,
-          ageCategory: a.age,
-          studioId: a.studioId || null,
-          coachId: a.coachId || null,
-          lessonsPerMonth: a.lessons,
-          soloFrequency: a.soloLabel,
-          weeklyGoalMinutes: weeklyTarget(a),
-          focusPoints: a.focus,
-        });
+        const { error: childErr } = await createChildAccount(childProfile);
         if (childErr) {
           // Stay here (keep the hold): letting go would open the app on a
           // parent account with no child. The button tries the child again.
@@ -1080,9 +1107,8 @@ export default function OnboardingScreen({ navigation, route }) {
         // Picking a coach here is asking them to coach you: the same pending
         // request as linking by code, which notifies the coach to accept.
         if (a.coachId) {
-          const cats = a.style === 'Latin & Ballroom' ? ['latin', 'ballroom'] : [a.style === 'Ballroom' ? 'ballroom' : 'latin'];
           const { error: reqErr } = await supabase.from('coach_requests').insert(
-            cats.map((category) => ({ student_id: userId, coach_id: a.coachId, status: 'pending', category })),
+            coachCats.map((category) => ({ student_id: userId, coach_id: a.coachId, status: 'pending', category })),
           );
           if (reqErr) console.warn('[onboarding] coach request not sent:', reqErr.message);
         }
