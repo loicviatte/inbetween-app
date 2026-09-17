@@ -112,13 +112,13 @@ const s = StyleSheet.create({
     marginBottom: 10,
   },
   eyebrow: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 10,
     color: GOLD,
     letterSpacing: 1.2,
   },
   message: {
-    fontFamily: Fonts.jakartaSemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 16,
     color: '#FFFFFF',
     letterSpacing: -0.2,
@@ -131,14 +131,14 @@ const s = StyleSheet.create({
     marginBottom: 14,
   },
   reply: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13.5,
     color: 'rgba(255,255,255,0.85)',
     lineHeight: 20,
     marginTop: 8,
   },
   pending: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 13,
     color: 'rgba(255,255,255,0.60)',
     fontStyle: 'italic',
@@ -157,7 +157,7 @@ const s = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.14)',
   },
   closeBtnText: {
-    fontFamily: Fonts.jakartaSemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 13,
     color: 'rgba(255,255,255,0.85)',
     letterSpacing: 0.1,
@@ -171,7 +171,7 @@ const s = StyleSheet.create({
     borderColor: 'rgba(240,194,74,0.40)',
   },
   inClassBadgeText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 8.5,
     color: GOLD,
     letterSpacing: 0.8,
@@ -185,7 +185,7 @@ const s = StyleSheet.create({
     borderColor: 'rgba(76,175,80,0.40)',
   },
   repliedBadgeText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 8.5,
     color: '#8BD98F',
     letterSpacing: 0.8,

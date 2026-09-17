@@ -128,7 +128,7 @@ function TrendChart({ trend }) {
           {[top, top / 2, 0].map((v) => (
             <React.Fragment key={v}>
               <Line x1="0" y1={y(v)} x2={plotW} y2={y(v)} stroke={C.line} strokeWidth={1} />
-              <SvgText x={plotW + 8} y={y(v) + 4} fill={C.mut} fontSize={11} fontFamily={Fonts.ttRegular}>
+              <SvgText x={plotW + 8} y={y(v) + 4} fill={C.mut} fontSize={11} fontFamily={Fonts.regular}>
                 {`${Math.round(v)} min`}
               </SvgText>
             </React.Fragment>
@@ -151,7 +151,7 @@ function TrendChart({ trend }) {
           {ticks.map((t) => (
             <SvgText
               key={t.i} x={x(t.i)} y={H + 14}
-              fill={C.mut} fontSize={11} fontFamily={Fonts.ttRegular}
+              fill={C.mut} fontSize={11} fontFamily={Fonts.regular}
               textAnchor={t.i === 0 ? 'start' : 'middle'}
             >
               {t.label}
@@ -495,59 +495,59 @@ const s = StyleSheet.create({
   card: { backgroundColor: C.card, borderRadius: 22, padding: 18, marginBottom: 12 },
   chead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 16 },
   cheadTight: { marginBottom: 6 },
-  h2: { fontFamily: Fonts.ttExtraBold, fontSize: 11.5, letterSpacing: 1.5, textTransform: 'uppercase', color: C.mut, flex: 1 },
-  side: { fontFamily: Fonts.ttRegular, fontSize: 13, color: C.mut },
+  h2: { fontFamily: Fonts.extraBold, fontSize: 11.5, letterSpacing: 1.5, textTransform: 'uppercase', color: C.mut, flex: 1 },
+  side: { fontFamily: Fonts.regular, fontSize: 13, color: C.mut },
 
-  selWeek: { fontFamily: Fonts.ttDemiBold, fontSize: 17, letterSpacing: -0.34, color: C.ink },
-  selStat: { fontFamily: Fonts.ttRegular, fontSize: 13, color: C.mut, marginTop: 3, marginBottom: 14 },
+  selWeek: { fontFamily: Fonts.semiBold, fontSize: 17, letterSpacing: -0.34, color: C.ink },
+  selStat: { fontFamily: Fonts.regular, fontSize: 13, color: C.mut, marginTop: 3, marginBottom: 14 },
   ghostWrap: { paddingTop: 2 },
   ghost: { flexDirection: 'row', alignItems: 'flex-end', height: 70, gap: 6 },
   ghostBar: { flex: 1, height: '100%', borderWidth: 1, borderStyle: 'dashed', borderColor: C.line, borderRadius: 3 },
-  ghostTxt: { fontFamily: Fonts.ttRegular, fontSize: 13, color: C.mut, marginTop: 12 },
+  ghostTxt: { fontFamily: Fonts.regular, fontSize: 13, color: C.mut, marginTop: 12 },
 
   sect: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingTop: 10, paddingBottom: 12 },
-  sectTxt: { fontFamily: Fonts.ttDemiBold, fontSize: 18, letterSpacing: -0.36, color: C.ink },
+  sectTxt: { fontFamily: Fonts.semiBold, fontSize: 18, letterSpacing: -0.36, color: C.ink },
   sectRule: { flex: 1, height: 1, backgroundColor: C.line },
 
   ready: { backgroundColor: C.dark, padding: 0, overflow: 'hidden' },
   readyEmpty: { padding: 20, gap: 8 },
   fhead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, paddingHorizontal: 20, paddingTop: 20, paddingBottom: 4 },
-  flab: { flex: 1, fontFamily: Fonts.ttExtraBold, fontSize: 11.5, letterSpacing: 1.6, textTransform: 'uppercase', color: C.gold },
+  flab: { flex: 1, fontFamily: Fonts.extraBold, fontSize: 11.5, letterSpacing: 1.6, textTransform: 'uppercase', color: C.gold },
   frow: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingHorizontal: 20, paddingVertical: 16 },
   frowSep: { borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.09)' },
   frowLast: { paddingBottom: 20 },     // matches the head's 20 now the footer is gone
   fText: { flex: 1, minWidth: 0 },
-  fName: { fontFamily: Fonts.ttDemiBold, fontSize: 16.5, letterSpacing: -0.33, color: '#FFFFFF' },
-  fMeta: { fontFamily: Fonts.ttRegular, fontSize: 12.5, color: C.onDark, marginTop: 3 },
-  fCount: { fontFamily: Fonts.ttExtraBold, fontSize: 17, color: C.gold },
+  fName: { fontFamily: Fonts.semiBold, fontSize: 16.5, letterSpacing: -0.33, color: '#FFFFFF' },
+  fMeta: { fontFamily: Fonts.regular, fontSize: 12.5, color: C.onDark, marginTop: 3 },
+  fCount: { fontFamily: Fonts.extraBold, fontSize: 17, color: C.gold },
   fCountTodo: { color: C.onDark },
-  rfootTxt: { flex: 1, fontFamily: Fonts.ttRegular, fontSize: 13.5, lineHeight: 19, color: C.onDark },
+  rfootTxt: { flex: 1, fontFamily: Fonts.regular, fontSize: 13.5, lineHeight: 19, color: C.onDark },
 
   duo: { flexDirection: 'row', gap: 12 },
   duoCard: { flex: 1, padding: 16 },
   tval: { flexDirection: 'row', alignItems: 'baseline', gap: 6, marginTop: 2 },
-  tnum: { fontFamily: Fonts.ttExtraBold, fontSize: 34, letterSpacing: -1, color: C.ink },
-  tk: { fontFamily: Fonts.ttRegular, fontSize: 13.5, color: C.mut },
+  tnum: { fontFamily: Fonts.extraBold, fontSize: 34, letterSpacing: -1, color: C.ink },
+  tk: { fontFamily: Fonts.regular, fontSize: 13.5, color: C.mut },
   tmeter: { marginTop: 14, height: 6 },
-  tfoot: { fontFamily: Fonts.ttRegular, fontSize: 12, lineHeight: 17, color: C.mut, marginTop: 12 },
+  tfoot: { fontFamily: Fonts.regular, fontSize: 12, lineHeight: 17, color: C.mut, marginTop: 12 },
   sq: { flexDirection: 'row', gap: 3, marginTop: 14 },
   sqCell: { flex: 1, height: 22, borderRadius: 3, borderWidth: 1, borderColor: C.cellOffEdge },
   sqOn: { backgroundColor: C.gold, borderColor: C.goldEdge },
 
   drow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 5 },
-  dn: { width: 74, fontFamily: Fonts.ttMedium, fontSize: 13, color: C.ink },
+  dn: { width: 74, fontFamily: Fonts.medium, fontSize: 13, color: C.ink },
   dt: { flex: 1, height: 9, borderRadius: 3, backgroundColor: C.tile, overflow: 'hidden' },
   dtFill: { height: '100%', borderRadius: 3, backgroundColor: C.bar, borderWidth: 1, borderColor: C.barEdge },
   dtTop: { backgroundColor: C.gold, borderColor: C.goldEdge },
-  dv: { width: 26, textAlign: 'right', fontFamily: Fonts.ttDemiBold, fontSize: 12.5, color: C.ink },
+  dv: { width: 26, textAlign: 'right', fontFamily: Fonts.semiBold, fontSize: 12.5, color: C.ink },
   dMuted: { color: C.mut },
-  read: { fontFamily: Fonts.ttRegular, fontSize: 14, lineHeight: 21, color: C.ink2, marginTop: 16 },
-  readB: { fontFamily: Fonts.ttDemiBold, color: C.ink },
+  read: { fontFamily: Fonts.regular, fontSize: 14, lineHeight: 21, color: C.ink2, marginTop: 16 },
+  readB: { fontFamily: Fonts.semiBold, color: C.ink },
 
   lrow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 14, paddingVertical: 15 },
   lrowSep: { borderTopWidth: 1, borderTopColor: C.line },
-  ll: { fontFamily: Fonts.ttRegular, fontSize: 14.5, color: C.mut },
+  ll: { fontFamily: Fonts.regular, fontSize: 14.5, color: C.mut },
   lr: { flex: 1, alignItems: 'flex-end' },
-  lv: { fontFamily: Fonts.ttDemiBold, fontSize: 15.5, color: C.ink, textAlign: 'right' },
-  ls: { fontFamily: Fonts.ttRegular, fontSize: 12.5, color: C.mut, marginTop: 2 },
+  lv: { fontFamily: Fonts.semiBold, fontSize: 15.5, color: C.ink, textAlign: 'right' },
+  ls: { fontFamily: Fonts.regular, fontSize: 12.5, color: C.mut, marginTop: 2 },
 });

@@ -208,7 +208,7 @@ const seg = StyleSheet.create({
   cellGreyedYes: { backgroundColor: 'rgba(76,175,80,0.16)' },
   cellGreyedNo: { backgroundColor: 'rgba(232,69,69,0.10)' },
   cellText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 11,
     color: FG_2,
     letterSpacing: 0.5,
@@ -322,7 +322,7 @@ const rowS = StyleSheet.create({
     justifyContent: 'center',
   },
   avText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 14,
   },
   body: {
@@ -331,28 +331,28 @@ const rowS = StyleSheet.create({
     gap: 2,
   },
   name: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 17,
     color: INK_950,
     letterSpacing: -0.3,
   },
   meta: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 12.5,
     color: FG_2,
     lineHeight: 17,
   },
   metaMismatch: {
     color: WARN_TEXT,
-    fontFamily: Fonts.jakartaSemiBold,
+    fontFamily: Fonts.semiBold,
   },
   metaSaidYes: {
     color: '#2F6B33',
-    fontFamily: Fonts.jakartaSemiBold,
+    fontFamily: Fonts.semiBold,
   },
   metaSaidNo: {
     color: '#9F2F2F',
-    fontFamily: Fonts.jakartaSemiBold,
+    fontFamily: Fonts.semiBold,
   },
 });
 
@@ -1022,7 +1022,7 @@ function SummaryTab({ cls, isProcessing }) {
               : 'This class is taking much longer than usual to process. Write to us and we’ll look at it.'}
           </Text>
           <TouchableOpacity onPress={() => Linking.openURL(mail).catch(() => {})} activeOpacity={0.7} style={{ marginTop: 10 }}>
-            <Text style={[s.placeholder, { color: '#8A6414', fontFamily: Fonts.jakartaBold }]}>Contact us</Text>
+            <Text style={[s.placeholder, { color: '#8A6414', fontFamily: Fonts.semiBold }]}>Contact us</Text>
           </TouchableOpacity>
         </View>
       );
@@ -1243,14 +1243,14 @@ const s = StyleSheet.create({
     marginBottom: 6,
   },
   heroDate: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 11,
     color: 'rgba(255,255,255,0.55)',
     letterSpacing: 0.2,
   },
   heroTeacher: {
     flexShrink: 1,
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 11,
     color: '#F6D27A',
     letterSpacing: 0.2,
@@ -1262,7 +1262,7 @@ const s = StyleSheet.create({
     marginBottom: 10,
   },
   heroTitle: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 24,
     color: '#FFFFFF',
     letterSpacing: -0.6,
@@ -1285,14 +1285,14 @@ const s = StyleSheet.create({
     borderRightColor: 'rgba(255,255,255,0.10)',
   },
   heroStatN: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 18,
     color: '#FFFFFF',
     letterSpacing: -0.36,
     lineHeight: 20,
   },
   heroStatL: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 8.5,
     color: 'rgba(255,255,255,0.55)',
     letterSpacing: 0.8,
@@ -1322,7 +1322,7 @@ const s = StyleSheet.create({
     backgroundColor: '#FF6B6B',
   },
   pillText: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 8.5,
     color: 'rgba(255,255,255,0.72)',
     letterSpacing: 0.3,
@@ -1347,17 +1347,17 @@ const s = StyleSheet.create({
     gap: 0,
   },
   tabText: {
-    fontFamily: Fonts.jakartaSemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 15,
     color: FG_3,
     letterSpacing: -0.2,
   },
   tabTextActive: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     color: INK_950,
   },
   tabBadge: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 11,
     color: '#C8732B',
     letterSpacing: 0.2,
@@ -1381,7 +1381,7 @@ const s = StyleSheet.create({
     marginBottom: 24,
   },
   sectionEyebrow: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 11,
     color: FG_2,
     letterSpacing: 0.8,
@@ -1389,13 +1389,13 @@ const s = StyleSheet.create({
     marginBottom: 10,
   },
   summaryText: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 15,
     color: INK_950,
     lineHeight: 24,
   },
   placeholder: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     color: FG_2,
     fontStyle: 'italic',
@@ -1420,7 +1420,7 @@ const s = StyleSheet.create({
     flexShrink: 0,
   },
   practiceText: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 14,
     color: INK_950,
     flex: 1,
@@ -1442,7 +1442,7 @@ const s = StyleSheet.create({
     borderRadius: 4,
   },
   focusText: {
-    fontFamily: Fonts.jakartaSemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 14,
     color: INK_950,
     flex: 1,
@@ -1452,7 +1452,7 @@ const s = StyleSheet.create({
   attHint: {
     marginTop: 14,
     paddingHorizontal: 4,
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     color: FG_2,
     lineHeight: 19,
@@ -1469,7 +1469,7 @@ const s = StyleSheet.create({
     marginTop: 14,
   },
   smallAddBtnText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 11,
     color: INK_950,
     letterSpacing: 0.4,
@@ -1491,7 +1491,7 @@ const s = StyleSheet.create({
     backgroundColor: INK_950,
   },
   bigAddBtnText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 13,
     color: '#fff',
     letterSpacing: 0.6,
@@ -1512,7 +1512,7 @@ const s = StyleSheet.create({
     marginBottom: 12,
   },
   linkNoteBtnText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 12,
     color: INK_950,
     letterSpacing: 0.4,
@@ -1531,20 +1531,20 @@ const s = StyleSheet.create({
     gap: 8,
   },
   noteTitle: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 14,
     color: INK_950,
     letterSpacing: -0.2,
   },
   notePreview: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 12.5,
     color: FG_2,
     lineHeight: 18,
     marginTop: 2,
   },
   noteDate: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 10,
     color: FG_3,
     marginTop: 4,
@@ -1556,7 +1556,7 @@ const s = StyleSheet.create({
     justifyContent: 'center',
   },
   errorText: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 15,
     color: FG_2,
   },
@@ -1592,13 +1592,13 @@ const s = StyleSheet.create({
     minWidth: 0,
   },
   saveBarCount: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 13,
     color: '#fff',
     letterSpacing: -0.2,
   },
   saveBarHint: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 11,
     color: 'rgba(255,255,255,0.6)',
     marginTop: 1,
@@ -1608,7 +1608,7 @@ const s = StyleSheet.create({
     paddingVertical: 8,
   },
   saveBarDiscardText: {
-    fontFamily: Fonts.jakartaSemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 12,
     color: 'rgba(255,255,255,0.7)',
     letterSpacing: 0.2,
@@ -1623,7 +1623,7 @@ const s = StyleSheet.create({
     justifyContent: 'center',
   },
   saveBarSaveText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 12,
     color: INK_950,
     letterSpacing: 0.4,
@@ -1663,7 +1663,7 @@ const picker = StyleSheet.create({
     borderBottomWidth: 0.5,
     borderBottomColor: LINE,
   },
-  title: { fontFamily: Fonts.jakartaExtraBold, fontSize: 16, color: INK_950 },
+  title: { fontFamily: Fonts.semiBold, fontSize: 16, color: INK_950 },
   searchWrap: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1678,7 +1678,7 @@ const picker = StyleSheet.create({
   },
   searchInput: {
     flex: 1,
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 14,
     color: INK_950,
     padding: 0,
@@ -1697,23 +1697,23 @@ const picker = StyleSheet.create({
   },
   itemAvatarFallback: { alignItems: 'center', justifyContent: 'center' },
   itemAvatarText: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 14,
     color: INK_950,
   },
   itemName: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 15,
     color: INK_950,
   },
   itemSub: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 12,
     color: FG_2,
     marginTop: 1,
   },
   empty: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     color: FG_2,
     textAlign: 'center',
@@ -1731,7 +1731,7 @@ const picker = StyleSheet.create({
     borderRadius: 14,
   },
   createNewText: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 13,
     color: Colors.orange,
   },
@@ -1744,19 +1744,19 @@ const picker = StyleSheet.create({
     gap: 8,
   },
   noteTitle: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 14,
     color: INK_950,
   },
   noteContent: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 12,
     color: FG_2,
     marginTop: 3,
     lineHeight: 17,
   },
   noteDate: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 10,
     color: FG_3,
     marginTop: 4,

@@ -67,7 +67,7 @@ const styles = StyleSheet.create({
   input: {
     flex: 1,
     paddingVertical: 13,
-    fontFamily: Fonts.travelsRegular,
+    fontFamily: Fonts.regular,
     fontSize: 15,
     color: Onboard.ink,
   },

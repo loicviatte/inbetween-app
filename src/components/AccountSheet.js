@@ -217,7 +217,7 @@ const em = StyleSheet.create({
     marginBottom: 24,
   },
   title: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 17,
     color: Colors.black,
     marginBottom: 24,
@@ -232,7 +232,7 @@ const em = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   avatarPhoto: { width: 72, height: 72, borderRadius: 36 },
-  avatarInitials: { fontFamily: Fonts.jakartaExtraBold, fontSize: 24, color: Colors.orange },
+  avatarInitials: { fontFamily: Fonts.semiBold, fontSize: 24, color: Colors.orange },
   editBadge: {
     position: 'absolute', bottom: 0, right: 0,
     width: 22, height: 22, borderRadius: 11,
@@ -243,7 +243,7 @@ const em = StyleSheet.create({
 
   field: { marginBottom: 18 },
   fieldLabel: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 10,
     color: Colors.secondary,
     textTransform: 'uppercase',
@@ -257,7 +257,7 @@ const em = StyleSheet.create({
     borderRadius: 12,
     paddingHorizontal: 14,
     paddingVertical: 13,
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 15,
     color: Colors.black,
   },
@@ -269,7 +269,7 @@ const em = StyleSheet.create({
     alignItems: 'center',
     marginTop: 4,
   },
-  saveBtnText: { fontFamily: Fonts.jakartaBold, fontSize: 15, color: Colors.white },
+  saveBtnText: { fontFamily: Fonts.semiBold, fontSize: 15, color: Colors.white },
 
   shortcuts: {
     flexDirection: 'row', alignItems: 'center', marginTop: 14,
@@ -277,6 +277,6 @@ const em = StyleSheet.create({
   },
   shortcut: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingVertical: 14 },
   shortcutSep: { width: 0.5, alignSelf: 'stretch', marginVertical: 10, backgroundColor: Colors.statCardBorder },
-  shortcutText: { fontFamily: Fonts.jakartaBold, fontSize: 14.5, color: Colors.black },
+  shortcutText: { fontFamily: Fonts.semiBold, fontSize: 14.5, color: Colors.black },
   logoutText: { color: '#A3281B' },
 });

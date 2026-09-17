@@ -206,14 +206,14 @@ const s = StyleSheet.create({
     marginBottom: 18,
   },
   category: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 10,
     letterSpacing: 1.2,
     textTransform: 'uppercase',
     marginBottom: 10,
   },
   title: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 20,
     color: Colors.black,
     letterSpacing: -0.3,
@@ -221,13 +221,13 @@ const s = StyleSheet.create({
     marginBottom: 8,
   },
   date: {
-    fontFamily: Fonts.jakartaSemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 13,
     color: Colors.orange,
     marginBottom: 4,
   },
   body: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 14.5,
     color: '#5C6370',
     lineHeight: 21,
@@ -242,12 +242,12 @@ const s = StyleSheet.create({
     marginBottom: 18,
   },
   priorText: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13.5,
     color: Colors.secondary,
   },
   priorBold: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     color: Colors.black,
   },
   buttons: {
@@ -265,24 +265,24 @@ const s = StyleSheet.create({
     gap: 6,
   },
   currentTag: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     opacity: 0.8,
   },
   btnPrimary: { backgroundColor: Colors.black },
-  btnPrimaryText: { fontFamily: Fonts.jakartaBold, fontSize: 15, color: Colors.white },
+  btnPrimaryText: { fontFamily: Fonts.semiBold, fontSize: 15, color: Colors.white },
   btnSecondary: {
     backgroundColor: Colors.statCardBg,
     borderWidth: 0.5,
     borderColor: Colors.statCardBorder,
   },
-  btnSecondaryText: { fontFamily: Fonts.jakartaBold, fontSize: 15, color: Colors.secondary },
+  btnSecondaryText: { fontFamily: Fonts.semiBold, fontSize: 15, color: Colors.secondary },
   cancelBtn: {
     alignItems: 'center',
     paddingVertical: 12,
     marginTop: 4,
   },
   cancelText: {
-    fontFamily: Fonts.jakartaSemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 13,
     color: Colors.secondary,
   },
@@ -294,7 +294,7 @@ const s = StyleSheet.create({
     marginTop: 12,
   },
   closeText: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 15,
     color: Colors.white,
   },

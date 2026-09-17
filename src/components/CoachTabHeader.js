@@ -231,7 +231,7 @@ const styles = StyleSheet.create({
     borderColor: INK_50,
   },
   notifBadgeText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 9,
     color: INK_950,
     lineHeight: 11,
@@ -254,7 +254,7 @@ const styles = StyleSheet.create({
     position: 'absolute', top: -4, right: -4, minWidth: 15, height: 15, paddingHorizontal: 3, borderRadius: 999,
     backgroundColor: GOLD_500, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#F2F0EB',
   },
-  viewBadgeText: { fontFamily: Fonts.jakartaExtraBold, fontSize: 9, lineHeight: 11, color: INK_950, includeFontPadding: false },
+  viewBadgeText: { fontFamily: Fonts.semiBold, fontSize: 9, lineHeight: 11, color: INK_950, includeFontPadding: false },
   // Stats ▸ header button (ProfileScreen styles.heroActBtn), unchanged.
   settingsBtn: {
     width: 36, height: 36, borderRadius: 18,
@@ -293,7 +293,7 @@ const styles = StyleSheet.create({
     borderRadius: 18,
   },
   avatarText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 14,
     color: INK_950,
     lineHeight: 18,

@@ -218,14 +218,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   h1: {
-    fontFamily: Fonts.ttDemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 27,
     lineHeight: 30,
     letterSpacing: -0.8,
     color: Onboard.ink,
   },
   sub: {
-    fontFamily: Fonts.travelsRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13.5,
     lineHeight: 19,
     color: Onboard.ink2,
@@ -234,7 +234,7 @@ const styles = StyleSheet.create({
   fields: { marginTop: 18 },
   fieldGroup: { marginBottom: 12 },
   fieldLabel: {
-    fontFamily: Fonts.travelsMedium,
+    fontFamily: Fonts.medium,
     fontSize: 10.5,
     letterSpacing: 1,
     textTransform: 'uppercase',
@@ -249,7 +249,7 @@ const styles = StyleSheet.create({
     borderRadius: 13,
     paddingHorizontal: 14,
     paddingVertical: 13,
-    fontFamily: Fonts.travelsRegular,
+    fontFamily: Fonts.regular,
     fontSize: 15,
     color: Onboard.ink,
   },
@@ -261,18 +261,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: 2,
   },
   forgotText: {
-    fontFamily: Fonts.travelsMedium,
+    fontFamily: Fonts.medium,
     fontSize: 12.5,
     color: Onboard.goldInk,
   },
   error: {
-    fontFamily: Fonts.travelsRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     color: Onboard.error,
     marginBottom: 12,
   },
   info: {
-    fontFamily: Fonts.travelsMedium,
+    fontFamily: Fonts.medium,
     fontSize: 13,
     color: Onboard.success,
     marginBottom: 12,
@@ -284,7 +284,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   primaryBtnText: {
-    fontFamily: Fonts.ttDemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 15,
     color: '#FFFFFF',
   },
@@ -293,12 +293,12 @@ const styles = StyleSheet.create({
     marginTop: 14,
   },
   linkText: {
-    fontFamily: Fonts.travelsRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     color: Onboard.ink2,
   },
   linkBold: {
-    fontFamily: Fonts.ttDemiBold,
+    fontFamily: Fonts.semiBold,
     color: Onboard.goldInk,
   },
 });

@@ -359,7 +359,7 @@ const styles = StyleSheet.create({
     zIndex: 1,
   },
   tabText: {
-    fontFamily: Fonts.monument,
+    fontFamily: Fonts.extraBold,
     fontSize: 13,
     letterSpacing: 0.4,
   },

@@ -254,7 +254,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 3,
   },
   notifBadgeText: {
-    fontFamily: Fonts.ttBold,
+    fontFamily: Fonts.bold,
     fontSize: 9.5,
     color: '#0A0A0A',
   },
@@ -285,7 +285,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(232,181,48,0.18)',
   },
   parentText: {
-    fontFamily: Fonts.travelsMedium,
+    fontFamily: Fonts.medium,
     fontSize: 11,
     letterSpacing: 0.1,
     color: PARENT_INK,
@@ -306,7 +306,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   avatarText: {
-    fontFamily: Fonts.ttBold,
+    fontFamily: Fonts.bold,
     fontSize: 12.5,
     color: '#0A0A0A',
   },
@@ -324,7 +324,7 @@ const styles = StyleSheet.create({
     borderRadius: 999,
   },
   editLabel: {
-    fontFamily: Fonts.jakartaSemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 12,
     color: 'rgba(10,10,10,0.72)',
     letterSpacing: 0.4,

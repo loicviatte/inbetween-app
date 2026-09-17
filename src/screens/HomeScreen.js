@@ -1462,15 +1462,15 @@ const s = StyleSheet.create({
 const wk = StyleSheet.create({
   wrap: { paddingTop: 24, paddingHorizontal: SIDE },
   top: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 },
-  title: { fontFamily: Fonts.ttDemiBold, fontSize: 10, letterSpacing: 1.6, textTransform: 'uppercase', color: INK },
+  title: { fontFamily: Fonts.semiBold, fontSize: 10, letterSpacing: 1.6, textTransform: 'uppercase', color: INK },
   metaRow: { flexDirection: 'row', alignItems: 'center', gap: 4, flexShrink: 1 },
-  meta: { fontFamily: Fonts.ttRegular, fontSize: 11.5, color: INK_2, flexShrink: 1 },
+  meta: { fontFamily: Fonts.regular, fontSize: 11.5, color: INK_2, flexShrink: 1 },
   days: { flexDirection: 'row', marginTop: 9, marginHorizontal: -2.5 },
   day: { flex: 1, paddingHorizontal: 2.5 },
   seg: { height: 3, borderRadius: 2, backgroundColor: LINE },
   segNow: { backgroundColor: INK_3 },
-  letter: { fontFamily: Fonts.ttRegular, fontSize: 9, letterSpacing: 0.9, color: INK_2, textAlign: 'center', paddingTop: 5 },
-  letterNow: { fontFamily: Fonts.ttBold, color: GOLD_INK },
+  letter: { fontFamily: Fonts.regular, fontSize: 9, letterSpacing: 0.9, color: INK_2, textAlign: 'center', paddingTop: 5 },
+  letterNow: { fontFamily: Fonts.bold, color: GOLD_INK },
 });
 
 // ─── Readiness head ───────────────────────────────────────────────────────────
@@ -1478,21 +1478,21 @@ const rd = StyleSheet.create({
   head: { flexDirection: 'row', alignItems: 'center', gap: 18, paddingTop: 16, paddingHorizontal: SIDE },
   dial: { width: DIAL_SIZE, height: DIAL_SIZE },
   center: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
-  pct: { fontFamily: Fonts.ttBold, fontSize: 40, letterSpacing: -1.8, color: INK, fontVariant: ['tabular-nums'], lineHeight: 45 },
-  pctUnit: { fontFamily: Fonts.ttMedium, fontSize: 17, letterSpacing: 0, color: INK_2 },
-  ready: { fontFamily: Fonts.ttDemiBold, fontSize: 9.5, letterSpacing: 1.52, textTransform: 'uppercase', color: INK_2, marginTop: 2 },
+  pct: { fontFamily: Fonts.bold, fontSize: 40, letterSpacing: -1.8, color: INK, fontVariant: ['tabular-nums'], lineHeight: 45 },
+  pctUnit: { fontFamily: Fonts.medium, fontSize: 17, letterSpacing: 0, color: INK_2 },
+  ready: { fontFamily: Fonts.semiBold, fontSize: 9.5, letterSpacing: 1.52, textTransform: 'uppercase', color: INK_2, marginTop: 2 },
   copy: { flex: 1, minWidth: 0, gap: 6 },
-  lead: { fontFamily: Fonts.ttDemiBold, fontSize: 15.5, letterSpacing: -0.28, lineHeight: 20, color: INK },
-  sub: { fontFamily: Fonts.ttRegular, fontSize: 12.5, lineHeight: 18, color: INK_2 },
+  lead: { fontFamily: Fonts.semiBold, fontSize: 15.5, letterSpacing: -0.28, lineHeight: 20, color: INK },
+  sub: { fontFamily: Fonts.regular, fontSize: 12.5, lineHeight: 18, color: INK_2 },
   cta: { alignSelf: 'flex-start', paddingVertical: 4 },
-  ctaTxt: { fontFamily: Fonts.ttDemiBold, fontSize: 12.5, color: GOLD_INK },
+  ctaTxt: { fontFamily: Fonts.semiBold, fontSize: 12.5, color: GOLD_INK },
 });
 
 // ─── Focus points header + track ──────────────────────────────────────────────
 const fp = StyleSheet.create({
   head: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, paddingTop: 16, paddingHorizontal: SIDE, paddingBottom: 9 },
-  label: { fontFamily: Fonts.ttDemiBold, fontSize: 10, letterSpacing: 1.6, textTransform: 'uppercase', color: INK_2 },
-  link: { fontFamily: Fonts.ttDemiBold, fontSize: 12.5, color: GOLD_INK },
+  label: { fontFamily: Fonts.semiBold, fontSize: 10, letterSpacing: 1.6, textTransform: 'uppercase', color: INK_2 },
+  link: { fontFamily: Fonts.semiBold, fontSize: 12.5, color: GOLD_INK },
   // A ScrollView grows by default; the cards keep their own height instead of
   // filling the free space of the page.
   carousel: { flexGrow: 0 },
@@ -1504,31 +1504,31 @@ const fc = StyleSheet.create({
   card: { minHeight: 292, borderRadius: 20, paddingVertical: 16, paddingHorizontal: 18 },
   body: { gap: 10 },
   top: { flexDirection: 'row', alignItems: 'center', gap: 9, minHeight: 27 },
-  tag: { fontFamily: Fonts.ttDemiBold, fontSize: 9.5, letterSpacing: 1.33, textTransform: 'uppercase', color: GOLD },
+  tag: { fontFamily: Fonts.semiBold, fontSize: 9.5, letterSpacing: 1.33, textTransform: 'uppercase', color: GOLD },
   ix: { paddingLeft: 9, borderLeftWidth: 1, borderLeftColor: 'rgba(255,255,255,0.24)' },
-  ixTxt: { fontFamily: Fonts.ttRegular, fontSize: 11, letterSpacing: 0.11, color: 'rgba(255,255,255,0.7)' },
-  ixNum: { fontFamily: Fonts.ttDemiBold, color: '#FFFFFF' },
+  ixTxt: { fontFamily: Fonts.regular, fontSize: 11, letterSpacing: 0.11, color: 'rgba(255,255,255,0.7)' },
+  ixNum: { fontFamily: Fonts.semiBold, color: '#FFFFFF' },
   who: { marginLeft: 'auto', flexDirection: 'row', alignItems: 'center' },
   // 23pt disc + a 2pt ring in the card colour, so the pair reads as cut out.
   av: { width: 27, height: 27, borderRadius: 13.5, borderWidth: 2, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.2)', overflow: 'hidden' },
   avPartner: { marginLeft: -10 },
-  avTxt: { fontFamily: Fonts.ttDemiBold, fontSize: 9.5, color: '#FFFFFF' },
-  title: { fontFamily: Fonts.ttBold, fontSize: 28, letterSpacing: -1.06, lineHeight: 30, color: '#FFFFFF' },
-  desc: { fontFamily: Fonts.ttRegular, fontSize: 13.5, lineHeight: 19, color: 'rgba(255,255,255,0.72)' },
+  avTxt: { fontFamily: Fonts.semiBold, fontSize: 9.5, color: '#FFFFFF' },
+  title: { fontFamily: Fonts.bold, fontSize: 28, letterSpacing: -1.06, lineHeight: 30, color: '#FFFFFF' },
+  desc: { fontFamily: Fonts.regular, fontSize: 13.5, lineHeight: 19, color: 'rgba(255,255,255,0.72)' },
   foot: { marginTop: 'auto', paddingTop: 14, gap: 12 },
   steps: { flexDirection: 'row', alignItems: 'center', gap: 9 },
   ticks: { flex: 1, flexDirection: 'row', gap: 4 },
   tick: { flex: 1, height: 4, borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.22)' },
   tickOn: { backgroundColor: GOLD },
-  stepsTxt: { fontFamily: Fonts.ttRegular, fontSize: 11.5, color: 'rgba(255,255,255,0.75)', fontVariant: ['tabular-nums'] },
+  stepsTxt: { fontFamily: Fonts.regular, fontSize: 11.5, color: 'rgba(255,255,255,0.75)', fontVariant: ['tabular-nums'] },
   go: { height: 46, borderRadius: 999, backgroundColor: GOLD, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9 },
   goAgain: { backgroundColor: 'transparent', borderWidth: 1, borderColor: 'rgba(255,255,255,0.3)' },
-  goTxt: { fontFamily: Fonts.ttDemiBold, fontSize: 15, letterSpacing: -0.15, color: INK },
+  goTxt: { fontFamily: Fonts.semiBold, fontSize: 15, letterSpacing: -0.15, color: INK },
   live: { height: 46, borderRadius: 999, paddingHorizontal: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: 'rgba(255,255,255,0.1)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.18)' },
   liveLeft: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1 },
   liveDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: GOLD },
-  liveTxt: { fontFamily: Fonts.ttDemiBold, fontSize: 14.5, color: '#FFFFFF', flexShrink: 1 },
-  liveTimer: { fontFamily: Fonts.ttDemiBold, fontSize: 14, color: 'rgba(255,255,255,0.7)', fontVariant: ['tabular-nums'] },
+  liveTxt: { fontFamily: Fonts.semiBold, fontSize: 14.5, color: '#FFFFFF', flexShrink: 1 },
+  liveTimer: { fontFamily: Fonts.semiBold, fontSize: 14, color: 'rgba(255,255,255,0.7)', fontVariant: ['tabular-nums'] },
 });
 
 // ─── Carousel dots ────────────────────────────────────────────────────────────
@@ -1536,7 +1536,7 @@ const dt = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingTop: 12 },
   dot: { width: 7, height: 7, borderRadius: 3.5, backgroundColor: 'rgba(10,10,10,0.2)' },
   dotOn: { width: 20, backgroundColor: GOLD },
-  label: { fontFamily: Fonts.ttRegular, fontSize: 10.5, letterSpacing: 0.63, color: INK_2, marginLeft: 7 },
+  label: { fontFamily: Fonts.regular, fontSize: 10.5, letterSpacing: 0.63, color: INK_2, marginLeft: 7 },
 });
 
 // ─── Last lesson summary ──────────────────────────────────────────────────────
@@ -1544,6 +1544,6 @@ const ls = StyleSheet.create({
   card: { flexDirection: 'row', alignItems: 'center', gap: 13, paddingVertical: 13, paddingHorizontal: 15, borderRadius: 15, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: 'rgba(10,10,10,0.09)' },
   icon: { width: 34, height: 34, borderRadius: 10, backgroundColor: '#FCEFC9', alignItems: 'center', justifyContent: 'center' },
   text: { flex: 1, minWidth: 0, gap: 2 },
-  title: { fontFamily: Fonts.ttDemiBold, fontSize: 15, letterSpacing: -0.22, color: INK },
-  meta: { fontFamily: Fonts.ttRegular, fontSize: 11.5, color: INK_2 },
+  title: { fontFamily: Fonts.semiBold, fontSize: 15, letterSpacing: -0.22, color: INK },
+  meta: { fontFamily: Fonts.regular, fontSize: 11.5, color: INK_2 },
 });

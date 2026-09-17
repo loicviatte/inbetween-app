@@ -547,8 +547,8 @@ export default function ActionNeededScreen({ navigation, route }) {
                     >
                       <Ionicons name="alert-circle" size={20} color={C.orange} />
                       <View style={{ flex: 1 }}>
-                        <Text style={{ fontFamily: Fonts.jakartaExtraBold, fontSize: 15, color: C.text }} numberOfLines={1}>{st?.name || 'Student'}</Text>
-                        <Text style={{ fontFamily: Fonts.travelsRegular, fontSize: 12.5, color: C.gray, marginTop: 2 }}>{g.category ? `${g.category === 'latin' ? 'Latin' : 'Ballroom'} · ` : ''}{total} focus points · keep 3</Text>
+                        <Text style={{ fontFamily: Fonts.semiBold, fontSize: 15, color: C.text }} numberOfLines={1}>{st?.name || 'Student'}</Text>
+                        <Text style={{ fontFamily: Fonts.regular, fontSize: 12.5, color: C.gray, marginTop: 2 }}>{g.category ? `${g.category === 'latin' ? 'Latin' : 'Ballroom'} · ` : ''}{total} focus points · keep 3</Text>
                       </View>
                       <Ionicons name="chevron-forward" size={18} color={C.gray} />
                     </TouchableOpacity>
@@ -856,15 +856,15 @@ const cpl = StyleSheet.create({
     backgroundColor: 'rgba(46,70,112,0.10)',
     paddingHorizontal: 9, paddingVertical: 4, borderRadius: 999, flexShrink: 1,
   },
-  couplePillText: { fontFamily: Fonts.jakartaBold, fontSize: 11, color: '#2E4670' },
-  tier: { fontFamily: Fonts.jakartaSemiBold, fontSize: 10.5, color: 'rgba(10,10,10,0.4)', textTransform: 'uppercase', letterSpacing: 0.4 },
-  name: { fontFamily: Fonts.jakartaExtraBold, fontSize: 16, color: '#0A0A0A', letterSpacing: -0.3 },
-  sub: { fontFamily: Fonts.jakartaRegular, fontSize: 12.5, color: 'rgba(10,10,10,0.55)', marginTop: 3, lineHeight: 17 },
+  couplePillText: { fontFamily: Fonts.semiBold, fontSize: 11, color: '#2E4670' },
+  tier: { fontFamily: Fonts.semiBold, fontSize: 10.5, color: 'rgba(10,10,10,0.4)', textTransform: 'uppercase', letterSpacing: 0.4 },
+  name: { fontFamily: Fonts.semiBold, fontSize: 16, color: '#0A0A0A', letterSpacing: -0.3 },
+  sub: { fontFamily: Fonts.regular, fontSize: 12.5, color: 'rgba(10,10,10,0.55)', marginTop: 3, lineHeight: 17 },
   actions: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 12 },
   declineBtn: { flex: 1, paddingVertical: 11, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(10,10,10,0.14)', alignItems: 'center' },
-  declineText: { fontFamily: Fonts.jakartaBold, fontSize: 13.5, color: 'rgba(10,10,10,0.6)' },
+  declineText: { fontFamily: Fonts.semiBold, fontSize: 13.5, color: 'rgba(10,10,10,0.6)' },
   approveBtn: { flex: 1, flexDirection: 'row', gap: 6, paddingVertical: 11, borderRadius: 12, backgroundColor: '#2E4670', alignItems: 'center', justifyContent: 'center' },
-  approveText: { fontFamily: Fonts.jakartaBold, fontSize: 13.5, color: '#fff' },
+  approveText: { fontFamily: Fonts.semiBold, fontSize: 13.5, color: '#fff' },
 });
 
 // A question waiting on the coach.
@@ -875,19 +875,19 @@ const qc = StyleSheet.create({
   },
   head: { flexDirection: 'row', alignItems: 'center', gap: 9 },
   av: { width: 28, height: 28, borderRadius: 14, overflow: 'hidden', backgroundColor: '#F4E3B4', alignItems: 'center', justifyContent: 'center' },
-  avT: { fontFamily: Fonts.ttBold, fontSize: 10.5, color: '#0A0A0A' },
-  name: { flex: 1, minWidth: 0, fontFamily: Fonts.ttDemiBold, fontSize: 13.5, color: '#0A0A0A' },
-  when: { fontFamily: Fonts.ttRegular, fontSize: 11, color: 'rgba(10,10,10,0.55)' },
+  avT: { fontFamily: Fonts.bold, fontSize: 10.5, color: '#0A0A0A' },
+  name: { flex: 1, minWidth: 0, fontFamily: Fonts.semiBold, fontSize: 13.5, color: '#0A0A0A' },
+  when: { fontFamily: Fonts.regular, fontSize: 11, color: 'rgba(10,10,10,0.55)' },
   body: { flexDirection: 'row', gap: 9 },
-  qm: { width: 13, fontFamily: Fonts.ttBold, fontSize: 21, lineHeight: 21, color: '#E8B530' },
-  text: { flex: 1, fontFamily: Fonts.ttDemiBold, fontSize: 14, letterSpacing: -0.2, lineHeight: 19, color: '#0A0A0A' },
+  qm: { width: 13, fontFamily: Fonts.bold, fontSize: 21, lineHeight: 21, color: '#E8B530' },
+  text: { flex: 1, fontFamily: Fonts.semiBold, fontSize: 14, letterSpacing: -0.2, lineHeight: 19, color: '#0A0A0A' },
   foot: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   focus: {
-    flex: 1, minWidth: 0, fontFamily: Fonts.ttDemiBold, fontSize: 9.5, letterSpacing: 1.1,
+    flex: 1, minWidth: 0, fontFamily: Fonts.semiBold, fontSize: 9.5, letterSpacing: 1.1,
     textTransform: 'uppercase', color: '#8A6414',
   },
   answerBtn: { height: 30, paddingHorizontal: 14, borderRadius: 999, backgroundColor: '#0A0A0A', alignItems: 'center', justifyContent: 'center' },
-  answerT: { fontFamily: Fonts.ttDemiBold, fontSize: 12, color: '#FFFFFF' },
+  answerT: { fontFamily: Fonts.semiBold, fontSize: 12, color: '#FFFFFF' },
 });
 
 const s = StyleSheet.create({
@@ -910,7 +910,7 @@ const s = StyleSheet.create({
   },
   headerTitle: {
     flex: 1,
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 22,
     color: C.text,
     letterSpacing: -0.3,
@@ -925,7 +925,7 @@ const s = StyleSheet.create({
     paddingHorizontal: 6,
   },
   totalBadgeText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 11,
     color: '#fff',
   },
@@ -956,12 +956,12 @@ const s = StyleSheet.create({
     backgroundColor: C.dark,
   },
   tabText: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 13,
     color: C.gray,
   },
   tabTextActive: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     color: C.text,
   },
   tabBadge: {
@@ -974,7 +974,7 @@ const s = StyleSheet.create({
     backgroundColor: C.dark,
   },
   tabBadgeText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 10,
     color: C.gray,
   },
@@ -992,7 +992,7 @@ const s = StyleSheet.create({
     marginBottom: 14,
   },
   bulkLabel: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 11,
     color: C.gray,
     textTransform: 'uppercase',
@@ -1005,12 +1005,12 @@ const s = StyleSheet.create({
     paddingVertical: 6,
   },
   bulkBtnText: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 11,
     color: '#fff',
   },
   sectionHeader: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 11,
     color: C.gray,
     textTransform: 'uppercase',
@@ -1033,7 +1033,7 @@ const s = StyleSheet.create({
 
   // Tab intro
   tabIntro: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 14,
     color: C.gray,
     lineHeight: 22,
@@ -1051,12 +1051,12 @@ const s = StyleSheet.create({
     gap: 8,
   },
   emptyTitle: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 17,
     color: C.text,
   },
   emptySub: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 13,
     color: C.gray,
   },

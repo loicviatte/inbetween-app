@@ -38,6 +38,6 @@ export default function ModeTabs({ mode, onChange, disabled, style }) {
 const md = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'flex-end', gap: 24, borderBottomWidth: 1, borderBottomColor: 'rgba(10,10,10,0.12)' },
   tab: { paddingBottom: 9, marginBottom: -1, borderBottomWidth: 2, borderBottomColor: 'transparent' },
-  label: { fontFamily: Fonts.ttDemiBold, fontSize: 17, letterSpacing: -0.34, color: 'rgba(10,10,10,0.65)' },
+  label: { fontFamily: Fonts.semiBold, fontSize: 17, letterSpacing: -0.34, color: 'rgba(10,10,10,0.65)' },
   labelOn: { color: '#0A0A0A' },
 });

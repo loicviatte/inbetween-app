@@ -39,16 +39,16 @@ export function LogoutButton({ onPress }) {
 
 const st = StyleSheet.create({
   secLabel: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 4, marginTop: 24, marginBottom: 10 },
-  secLabelText: { fontFamily: Fonts.jakartaExtraBold, fontSize: 11.5, color: '#7F5A0B', letterSpacing: 1.6, textTransform: 'uppercase' },
+  secLabelText: { fontFamily: Fonts.semiBold, fontSize: 11.5, color: '#7F5A0B', letterSpacing: 1.6, textTransform: 'uppercase' },
   secLabelRule: { flex: 1, height: 1, backgroundColor: 'rgba(20,19,17,0.10)' },
   card: { backgroundColor: '#FFFFFF', borderRadius: 22, paddingHorizontal: 18 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 58, paddingVertical: 15 },
   rowBorder: { borderBottomWidth: 1, borderBottomColor: 'rgba(20,19,17,0.10)' },
-  label: { flexShrink: 0, fontFamily: Fonts.jakartaExtraBold, fontSize: 15.5, color: '#141311', letterSpacing: -0.16 },
-  value: { flex: 1, textAlign: 'right', fontFamily: Fonts.jakartaRegular, fontSize: 13.5, lineHeight: 18, color: '#6B6656', marginRight: 6 },
+  label: { flexShrink: 0, fontFamily: Fonts.semiBold, fontSize: 15.5, color: '#141311', letterSpacing: -0.16 },
+  value: { flex: 1, textAlign: 'right', fontFamily: Fonts.regular, fontSize: 13.5, lineHeight: 18, color: '#6B6656', marginRight: 6 },
   logoutBtn: {
     alignSelf: 'stretch', alignItems: 'center', justifyContent: 'center', marginTop: 22, minHeight: 44,
     paddingHorizontal: 18, backgroundColor: 'transparent', borderWidth: 1, borderColor: 'rgba(163,40,27,0.42)', borderRadius: 12,
   },
-  logoutText: { fontFamily: Fonts.jakartaSemiBold, fontSize: 14.5, color: '#A3281B', letterSpacing: 0 },
+  logoutText: { fontFamily: Fonts.semiBold, fontSize: 14.5, color: '#A3281B', letterSpacing: 0 },
 });

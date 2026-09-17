@@ -122,7 +122,7 @@ const st = StyleSheet.create({
   },
   main: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 9, paddingLeft: 10 },
   icon: { width: 30, height: 30, borderRadius: 9, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center' },
-  title: { flex: 1, minWidth: 0, fontFamily: Fonts.ttBold, fontSize: 14, color: '#141311' },
+  title: { flex: 1, minWidth: 0, fontFamily: Fonts.bold, fontSize: 14, color: '#141311' },
   close: { width: 40, alignSelf: 'stretch', alignItems: 'center', justifyContent: 'center' },
   headerIcon: {
     width: 36, height: 36, borderRadius: 11, marginRight: 9,

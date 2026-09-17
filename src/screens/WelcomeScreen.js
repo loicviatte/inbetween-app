@@ -106,14 +106,14 @@ const styles = StyleSheet.create({
     height: 132,
   },
   wordmark: {
-    fontFamily: Fonts.ttDemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 36,
     letterSpacing: -1.4,
     color: Onboard.ink,
     marginTop: 6,
   },
   tagline: {
-    fontFamily: Fonts.travelsRegular,
+    fontFamily: Fonts.regular,
     fontSize: 15,
     color: Onboard.ink2,
     textAlign: 'center',
@@ -139,7 +139,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   valueText: {
-    fontFamily: Fonts.travelsMedium,
+    fontFamily: Fonts.medium,
     fontSize: 14,
     color: Onboard.ink2,
   },
@@ -150,7 +150,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   primaryBtnText: {
-    fontFamily: Fonts.ttDemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 15,
     color: '#FFFFFF',
   },
@@ -159,12 +159,12 @@ const styles = StyleSheet.create({
     marginTop: 16,
   },
   linkText: {
-    fontFamily: Fonts.travelsRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     color: Onboard.ink2,
   },
   linkBold: {
-    fontFamily: Fonts.ttDemiBold,
+    fontFamily: Fonts.semiBold,
     color: Onboard.goldInk,
   },
 });

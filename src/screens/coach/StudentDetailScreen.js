@@ -857,19 +857,19 @@ const st = StyleSheet.create({
   },
   me: { width: 36, height: 36, borderRadius: 18, overflow: 'hidden', backgroundColor: '#F4F2EC' },
   meFill: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
-  meT: { fontFamily: Fonts.ttBold, fontSize: 12.5, color: INK },
+  meT: { fontFamily: Fonts.bold, fontSize: 12.5, color: INK },
 
   scroll: { paddingHorizontal: Spacing.side, paddingBottom: 40 },
-  name: { fontFamily: Fonts.ttBold, fontSize: 28, letterSpacing: -1.1, lineHeight: 32, color: INK, paddingTop: 16 },
+  name: { fontFamily: Fonts.bold, fontSize: 28, letterSpacing: -1.1, lineHeight: 32, color: INK, paddingTop: 16 },
 
   // Readiness: the figure, the gauge, two numbers
   rd: { gap: 17, paddingTop: 22, paddingBottom: 19, borderBottomWidth: 1, borderBottomColor: LINE },
   l1: { flexDirection: 'row', alignItems: 'flex-end', gap: 15 },
   big: { flexDirection: 'row', alignItems: 'flex-start' },
-  bigN: { fontFamily: Fonts.ttExtraBold, fontSize: 58, letterSpacing: -3.5, lineHeight: 50, color: INK, fontVariant: ['tabular-nums'] },
-  bigPct: { fontFamily: Fonts.ttBold, fontSize: 20, lineHeight: 22, color: 'rgba(10,10,10,0.55)', paddingLeft: 3, marginTop: 1 },
+  bigN: { fontFamily: Fonts.extraBold, fontSize: 58, letterSpacing: -3.5, lineHeight: 50, color: INK, fontVariant: ['tabular-nums'] },
+  bigPct: { fontFamily: Fonts.bold, fontSize: 20, lineHeight: 22, color: 'rgba(10,10,10,0.55)', paddingLeft: 3, marginTop: 1 },
   lb: {
-    flex: 1, paddingBottom: 2, fontFamily: Fonts.ttDemiBold, fontSize: 10.5, letterSpacing: 1.5, lineHeight: 16,
+    flex: 1, paddingBottom: 2, fontFamily: Fonts.semiBold, fontSize: 10.5, letterSpacing: 1.5, lineHeight: 16,
     textTransform: 'uppercase', color: INK_62,
   },
   lbB: { color: INK },
@@ -879,8 +879,8 @@ const st = StyleSheet.create({
   fig: { flexDirection: 'row', alignItems: 'stretch' },
   figCell: { flex: 1 },
   figCellLine: { paddingLeft: 14, borderLeftWidth: 1, borderLeftColor: 'rgba(10,10,10,0.14)' },
-  figN: { fontFamily: Fonts.ttBold, fontSize: 19, letterSpacing: -0.85, lineHeight: 20, color: INK, fontVariant: ['tabular-nums'] },
-  figL: { fontFamily: Fonts.ttDemiBold, fontSize: 9, letterSpacing: 1, textTransform: 'uppercase', color: INK_62, marginTop: 6 },
+  figN: { fontFamily: Fonts.bold, fontSize: 19, letterSpacing: -0.85, lineHeight: 20, color: INK, fontVariant: ['tabular-nums'] },
+  figL: { fontFamily: Fonts.semiBold, fontSize: 9, letterSpacing: 1, textTransform: 'uppercase', color: INK_62, marginTop: 6 },
 
   // Action cards
   act: {
@@ -889,10 +889,10 @@ const st = StyleSheet.create({
   },
   actHead: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 13, paddingHorizontal: 14 },
   actBadge: { width: 30, height: 30, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
-  actBadgeT: { fontFamily: Fonts.ttBold, fontSize: 14, color: INK },
+  actBadgeT: { fontFamily: Fonts.bold, fontSize: 14, color: INK },
   actBody: { flex: 1, minWidth: 0, gap: 2 },
-  actTitle: { fontFamily: Fonts.ttDemiBold, fontSize: 13.5, letterSpacing: -0.25, color: INK },
-  actSub: { fontFamily: Fonts.ttRegular, fontSize: 10.5, color: INK_62 },
+  actTitle: { fontFamily: Fonts.semiBold, fontSize: 13.5, letterSpacing: -0.25, color: INK },
+  actSub: { fontFamily: Fonts.regular, fontSize: 10.5, color: INK_62 },
   actChev: { width: 24, height: 24, borderRadius: 12, backgroundColor: '#F4F2EC', alignItems: 'center', justifyContent: 'center' },
   actInner: { borderTopWidth: 1, borderTopColor: 'rgba(10,10,10,0.07)', padding: 10, gap: 8 },
 
@@ -900,18 +900,18 @@ const st = StyleSheet.create({
     flexDirection: 'row', alignItems: 'flex-start', gap: 11, paddingVertical: 12, paddingLeft: 15, paddingRight: 14,
     borderTopWidth: 1, borderTopColor: 'rgba(10,10,10,0.07)',
   },
-  qMark: { width: 17, fontFamily: Fonts.ttBold, fontSize: 24, lineHeight: 24, color: GOLD },
+  qMark: { width: 17, fontFamily: Fonts.bold, fontSize: 24, lineHeight: 24, color: GOLD },
   qBody: { flex: 1, minWidth: 0, gap: 3 },
-  qText: { fontFamily: Fonts.ttDemiBold, fontSize: 13, letterSpacing: -0.2, lineHeight: 18, color: INK },
-  qMeta: { fontFamily: Fonts.ttRegular, fontSize: 10.5, color: INK_62 },
+  qText: { fontFamily: Fonts.semiBold, fontSize: 13, letterSpacing: -0.2, lineHeight: 18, color: INK },
+  qMeta: { fontFamily: Fonts.regular, fontSize: 10.5, color: INK_62 },
   qBtn: { height: 28, paddingHorizontal: 12, borderRadius: 999, borderWidth: 1, borderColor: 'rgba(10,10,10,0.16)', alignItems: 'center', justifyContent: 'center' },
-  qBtnT: { fontFamily: Fonts.ttDemiBold, fontSize: 11, color: 'rgba(10,10,10,0.68)' },
+  qBtnT: { fontFamily: Fonts.semiBold, fontSize: 11, color: 'rgba(10,10,10,0.68)' },
 
   // Section heads
   sh: { flexDirection: 'row', alignItems: 'baseline', gap: 10, paddingTop: 20, paddingBottom: 9 },
-  shT: { fontFamily: Fonts.ttDemiBold, fontSize: 9.5, letterSpacing: 1.6, textTransform: 'uppercase', color: INK_62 },
-  shR: { flex: 1, textAlign: 'right', fontFamily: Fonts.ttRegular, fontSize: 11, color: INK_62 },
-  empty: { fontFamily: Fonts.ttRegular, fontSize: 13, lineHeight: 19, color: INK_62 },
+  shT: { fontFamily: Fonts.semiBold, fontSize: 9.5, letterSpacing: 1.6, textTransform: 'uppercase', color: INK_62 },
+  shR: { flex: 1, textAlign: 'right', fontFamily: Fonts.regular, fontSize: 11, color: INK_62 },
+  empty: { fontFamily: Fonts.regular, fontSize: 13, lineHeight: 19, color: INK_62 },
 
   // Focus points
   card: { backgroundColor: '#FFFFFF', borderRadius: 17, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(10,10,10,0.06)' },
@@ -921,10 +921,10 @@ const st = StyleSheet.create({
   tickOn: { borderColor: GOLD },
   tickDone: { backgroundColor: GOLD },
   fpBody: { flex: 1, minWidth: 0, gap: 2 },
-  fpName: { fontFamily: Fonts.ttDemiBold, fontSize: 14, letterSpacing: -0.25, lineHeight: 18, color: INK },
-  fpMeta: { fontFamily: Fonts.ttRegular, fontSize: 10.5, color: INK_62 },
-  fpCritical: { fontFamily: Fonts.ttDemiBold, color: RED },
-  fpProgress: { fontFamily: Fonts.ttBold, fontSize: 13, letterSpacing: -0.26, color: GOLD_INK, fontVariant: ['tabular-nums'] },
+  fpName: { fontFamily: Fonts.semiBold, fontSize: 14, letterSpacing: -0.25, lineHeight: 18, color: INK },
+  fpMeta: { fontFamily: Fonts.regular, fontSize: 10.5, color: INK_62 },
+  fpCritical: { fontFamily: Fonts.semiBold, color: RED },
+  fpProgress: { fontFamily: Fonts.bold, fontSize: 13, letterSpacing: -0.26, color: GOLD_INK, fontVariant: ['tabular-nums'] },
 
   // Practice timeline
   tlRow: { flexDirection: 'row', gap: 13 },
@@ -935,10 +935,10 @@ const st = StyleSheet.create({
   tlHalo: { width: 17, height: 17, borderRadius: 8.5, backgroundColor: 'rgba(10,10,10,0.1)', alignItems: 'center', justifyContent: 'center', marginVertical: 2 },
   tlDotLesson: { width: 11, height: 11, borderRadius: 5.5, backgroundColor: INK },
   tlBody: { flex: 1, minWidth: 0, gap: 3, paddingTop: 2, paddingBottom: 16 },
-  tlLabel: { fontFamily: Fonts.ttDemiBold, fontSize: 9.5, letterSpacing: 1.2, textTransform: 'uppercase', color: INK_62 },
-  tlTitle: { fontFamily: Fonts.ttDemiBold, fontSize: 14, letterSpacing: -0.25, lineHeight: 18, color: INK },
-  tlTitleLesson: { fontFamily: Fonts.ttBold, fontSize: 15, letterSpacing: -0.4, lineHeight: 19, color: INK },
-  tlDetail: { fontFamily: Fonts.ttRegular, fontSize: 11, color: INK_62 },
+  tlLabel: { fontFamily: Fonts.semiBold, fontSize: 9.5, letterSpacing: 1.2, textTransform: 'uppercase', color: INK_62 },
+  tlTitle: { fontFamily: Fonts.semiBold, fontSize: 14, letterSpacing: -0.25, lineHeight: 18, color: INK },
+  tlTitleLesson: { fontFamily: Fonts.bold, fontSize: 15, letterSpacing: -0.4, lineHeight: 19, color: INK },
+  tlDetail: { fontFamily: Fonts.regular, fontSize: 11, color: INK_62 },
 });
 
 // Question sheet styles

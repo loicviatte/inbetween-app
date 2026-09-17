@@ -420,7 +420,7 @@ const c = StyleSheet.create({
     borderRadius: 4,
   },
   tierLabel: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 10,
     color: GOLD,
     letterSpacing: 1.2,
@@ -432,14 +432,14 @@ const c = StyleSheet.create({
     gap: 4,
   },
   progressText: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 10.5,
     color: 'rgba(255,255,255,0.72)',
     letterSpacing: 0.3,
   },
 
   name: {
-    fontFamily: Fonts.ttBold,
+    fontFamily: Fonts.bold,
     fontSize: 18,
     color: '#FFFFFF',
     letterSpacing: -0.4,
@@ -448,7 +448,7 @@ const c = StyleSheet.create({
   },
 
   subtitle: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     color: 'rgba(255,255,255,0.78)',
     lineHeight: 19,
@@ -470,13 +470,13 @@ const c = StyleSheet.create({
     marginBottom: 4,
   },
   classMeta: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 10.5,
     color: GOLD,
     letterSpacing: 0.3,
   },
   classSummary: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 11.5,
     color: 'rgba(255,255,255,0.65)',
     lineHeight: 16,
@@ -493,7 +493,7 @@ const c = StyleSheet.create({
     gap: 6,
   },
   practiceText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 13,
     letterSpacing: 0.2,
   },
@@ -518,7 +518,7 @@ const s = StyleSheet.create({
     justifyContent: 'center',
   },
   title: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 16,
     color: Colors.black,
     letterSpacing: -0.3,
@@ -539,7 +539,7 @@ const s = StyleSheet.create({
     alignItems: 'center',
   },
   tabText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 13,
     color: Colors.secondary,
     letterSpacing: 0.2,
@@ -550,13 +550,13 @@ const s = StyleSheet.create({
 
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8, paddingHorizontal: 40 },
   emptyTitle: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 16,
     color: Colors.black,
     textAlign: 'center',
   },
   emptyBody: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     color: Colors.secondary,
     textAlign: 'center',
@@ -567,7 +567,7 @@ const s = StyleSheet.create({
     paddingBottom: 40,
   },
   countLabel: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 11,
     color: Colors.secondary,
     textTransform: 'uppercase',
@@ -592,7 +592,7 @@ const s = StyleSheet.create({
     backgroundColor: Colors.black,
   },
   filterPillText: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 12,
     color: Colors.secondary,
     letterSpacing: 0.2,

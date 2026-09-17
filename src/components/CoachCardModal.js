@@ -45,7 +45,7 @@ const cc = StyleSheet.create({
   backdrop: { flex: 1, backgroundColor: 'rgba(10,10,10,0.72)' },
   sheet: { flex: 1, paddingHorizontal: 20, paddingTop: 8, paddingBottom: 28 },
   head: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14 },
-  headT: { fontFamily: Fonts.ttExtraBold, fontSize: 18, letterSpacing: -0.4, color: '#FFFFFF' },
-  note: { fontFamily: Fonts.ttRegular, fontSize: 12.5, lineHeight: 18, color: 'rgba(255,255,255,0.62)',
+  headT: { fontFamily: Fonts.extraBold, fontSize: 18, letterSpacing: -0.4, color: '#FFFFFF' },
+  note: { fontFamily: Fonts.regular, fontSize: 12.5, lineHeight: 18, color: 'rgba(255,255,255,0.62)',
     textAlign: 'center', marginTop: 16 },
 });

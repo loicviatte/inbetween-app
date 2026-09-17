@@ -285,7 +285,7 @@ const s = StyleSheet.create({
   },
   title: {
     flex: 1,
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 18,
     color: WHITE,
     letterSpacing: -0.3,
@@ -296,7 +296,7 @@ const s = StyleSheet.create({
     justifyContent: 'center',
   },
   empty: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 13,
     color: MUTED,
     textAlign: 'center',
@@ -325,7 +325,7 @@ const s = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.25)',
   },
   tabPillText: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 12,
     color: MUTED,
     letterSpacing: 0.1,
@@ -347,7 +347,7 @@ const s = StyleSheet.create({
     backgroundColor: ORANGE,
   },
   tabPillBadgeText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 10,
     color: MUTED,
     letterSpacing: 0.2,
@@ -362,7 +362,7 @@ const s = StyleSheet.create({
     paddingBottom: 40,
   },
   studentMetaTop: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 10,
     color: MUTED,
     letterSpacing: 1.2,
@@ -382,14 +382,14 @@ const s = StyleSheet.create({
     marginBottom: 8,
   },
   fpRank: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 11,
     color: MUTED,
     width: 20,
     letterSpacing: 0.4,
   },
   fpName: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 13.5,
     color: WHITE,
     letterSpacing: -0.1,
@@ -407,7 +407,7 @@ const s = StyleSheet.create({
     borderRadius: 3,
   },
   fpMetaText: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 10,
     color: MUTED,
     letterSpacing: 0.3,
@@ -417,7 +417,7 @@ const s = StyleSheet.create({
     color: 'rgba(255,255,255,0.3)',
   },
   fpScore: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 15,
     color: WHITE,
     letterSpacing: -0.3,

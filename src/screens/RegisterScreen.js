@@ -851,20 +851,20 @@ const styles = StyleSheet.create({
   skipBtn: { width: 30, alignItems: 'flex-end' },
   topBarSpacer: { width: 30 },
   skipText: {
-    fontFamily: Fonts.travelsMedium,
+    fontFamily: Fonts.medium,
     fontSize: 12.5,
     color: Onboard.ink3,
   },
 
   h1: {
-    fontFamily: Fonts.ttDemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 27,
     lineHeight: 30,
     letterSpacing: -0.8,
     color: Onboard.ink,
   },
   sub: {
-    fontFamily: Fonts.travelsRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13.5,
     lineHeight: 19,
     color: Onboard.ink2,
@@ -874,7 +874,7 @@ const styles = StyleSheet.create({
   fields: { marginTop: 18 },
   fieldGroup: { marginBottom: 12 },
   fieldLabel: {
-    fontFamily: Fonts.travelsMedium,
+    fontFamily: Fonts.medium,
     fontSize: 10.5,
     letterSpacing: 1,
     textTransform: 'uppercase',
@@ -889,7 +889,7 @@ const styles = StyleSheet.create({
     borderRadius: 13,
     paddingHorizontal: 14,
     paddingVertical: 13,
-    fontFamily: Fonts.travelsRegular,
+    fontFamily: Fonts.regular,
     fontSize: 15,
     color: Onboard.ink,
   },
@@ -909,7 +909,7 @@ const styles = StyleSheet.create({
     backgroundColor: Onboard.line,
   },
   pwLabel: {
-    fontFamily: Fonts.travelsMedium,
+    fontFamily: Fonts.medium,
     fontSize: 11,
   },
 
@@ -944,13 +944,13 @@ const styles = StyleSheet.create({
   optIconSel: { backgroundColor: Onboard.gold },
   optBody: { flex: 1 },
   optTitle: {
-    fontFamily: Fonts.ttDemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 15.5,
     letterSpacing: -0.2,
     color: Onboard.ink,
   },
   optDesc: {
-    fontFamily: Fonts.travelsRegular,
+    fontFamily: Fonts.regular,
     fontSize: 11.5,
     color: Onboard.ink3,
     marginTop: 1,
@@ -983,13 +983,13 @@ const styles = StyleSheet.create({
   },
   searchInput: {
     flex: 1,
-    fontFamily: Fonts.travelsRegular,
+    fontFamily: Fonts.regular,
     fontSize: 14,
     color: Onboard.ink,
     paddingVertical: 12,
   },
   emptyText: {
-    fontFamily: Fonts.travelsRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     color: Onboard.ink3,
     paddingVertical: 12,
@@ -1009,7 +1009,7 @@ const styles = StyleSheet.create({
   createRowActive: { backgroundColor: Onboard.goldTint },
   createRowText: {
     flex: 1,
-    fontFamily: Fonts.ttDemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 14,
     color: Onboard.ink,
   },
@@ -1037,7 +1037,7 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   stepperNum: {
-    fontFamily: Fonts.ttBold,
+    fontFamily: Fonts.bold,
     fontSize: 64,
     letterSpacing: -2,
     color: Onboard.ink,
@@ -1045,7 +1045,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   stepperUnit: {
-    fontFamily: Fonts.travelsMedium,
+    fontFamily: Fonts.medium,
     fontSize: 13,
     letterSpacing: 0.4,
     color: Onboard.ink3,
@@ -1065,7 +1065,7 @@ const styles = StyleSheet.create({
   },
   hintText: {
     flex: 1,
-    fontFamily: Fonts.travelsMedium,
+    fontFamily: Fonts.medium,
     fontSize: 12,
     color: Onboard.ink2,
   },
@@ -1091,7 +1091,7 @@ const styles = StyleSheet.create({
     elevation: 8,
   },
   finalTitle: {
-    fontFamily: Fonts.ttDemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 27,
     lineHeight: 30,
     letterSpacing: -0.8,
@@ -1100,7 +1100,7 @@ const styles = StyleSheet.create({
     marginTop: 20,
   },
   finalSub: {
-    fontFamily: Fonts.travelsRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13.5,
     lineHeight: 19,
     color: Onboard.ink2,
@@ -1124,7 +1124,7 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
   },
   recapChipText: {
-    fontFamily: Fonts.travelsMedium,
+    fontFamily: Fonts.medium,
     fontSize: 11,
     color: Onboard.ink2,
   },
@@ -1135,7 +1135,7 @@ const styles = StyleSheet.create({
     marginTop: 14,
   },
   confirmHintText: {
-    fontFamily: Fonts.travelsRegular,
+    fontFamily: Fonts.regular,
     fontSize: 12,
     color: Onboard.ink3,
   },
@@ -1144,19 +1144,19 @@ const styles = StyleSheet.create({
     marginTop: 14,
   },
   resendText: {
-    fontFamily: Fonts.travelsMedium,
+    fontFamily: Fonts.medium,
     fontSize: 13,
     color: Onboard.goldInk,
   },
 
   error: {
-    fontFamily: Fonts.travelsRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     color: Onboard.error,
     marginBottom: 12,
   },
   info: {
-    fontFamily: Fonts.travelsMedium,
+    fontFamily: Fonts.medium,
     fontSize: 13,
     color: Onboard.success,
     marginBottom: 12,
@@ -1169,7 +1169,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   primaryBtnText: {
-    fontFamily: Fonts.ttDemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 15,
     color: '#FFFFFF',
   },
@@ -1178,7 +1178,7 @@ const styles = StyleSheet.create({
     marginTop: 12,
   },
   legal: {
-    fontFamily: Fonts.travelsRegular,
+    fontFamily: Fonts.regular,
     fontSize: 11.5,
     lineHeight: 16,
     color: Onboard.ink3,
@@ -1196,7 +1196,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
   },
   legalLink: {
-    fontFamily: Fonts.travelsMedium,
+    fontFamily: Fonts.medium,
     fontSize: 11.5,
     color: Onboard.ink2,
     textDecorationLine: 'underline',
@@ -1206,12 +1206,12 @@ const styles = StyleSheet.create({
     marginTop: 14,
   },
   linkText: {
-    fontFamily: Fonts.travelsRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     color: Onboard.ink2,
   },
   linkBold: {
-    fontFamily: Fonts.ttDemiBold,
+    fontFamily: Fonts.semiBold,
     color: Onboard.goldInk,
   },
 });

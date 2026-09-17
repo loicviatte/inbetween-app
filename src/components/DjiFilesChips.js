@@ -69,7 +69,7 @@ const c = StyleSheet.create({
   },
   browseTab: { flex: 1, alignItems: 'center', gap: 3, paddingVertical: 6, borderRadius: 11 },
   browseTabActive: { backgroundColor: '#E4E6EB' },
-  browseTabLabel: { fontFamily: Fonts.jakartaBold, fontSize: 9.5, color: '#1D1D1F', letterSpacing: 0.1 },
+  browseTabLabel: { fontFamily: Fonts.semiBold, fontSize: 9.5, color: '#1D1D1F', letterSpacing: 0.1 },
   browseTabLabelActive: { color: IOS_BLUE },
   noNameChip: {
     flexDirection: 'row',
@@ -84,5 +84,5 @@ const c = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E6E6EA',
   },
-  noNameLabel: { flex: 1, fontFamily: Fonts.jakartaExtraBold, fontSize: 13.5, color: '#1C1C1E', letterSpacing: 0.4 },
+  noNameLabel: { flex: 1, fontFamily: Fonts.semiBold, fontSize: 13.5, color: '#1C1C1E', letterSpacing: 0.4 },
 });

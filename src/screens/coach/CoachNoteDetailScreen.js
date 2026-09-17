@@ -598,12 +598,12 @@ const styles = StyleSheet.create({
   },
   backBtn: { flexDirection: 'row', alignItems: 'center', gap: 2 },
   backLabel: {
-    fontFamily: Fonts.ttDemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 16,
     color: '#0A0A0A',
   },
   deleteText: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 15,
     color: '#FF3B30',
   },
@@ -611,7 +611,7 @@ const styles = StyleSheet.create({
   scrollContent: { paddingBottom: 40 },
 
   dateStamp: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 12,
     color: Colors.secondary,
     textAlign: 'center',
@@ -634,18 +634,18 @@ const styles = StyleSheet.create({
   },
   linkedAvatarFallback: { alignItems: 'center', justifyContent: 'center' },
   linkedAvatarText: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 10,
     color: Colors.black,
   },
   linkedText: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     color: Colors.secondary,
     flex: 1,
   },
   linkedName: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     color: Colors.orange,
   },
   linkedClassAvatar: {
@@ -654,12 +654,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   linkedClassName: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     color: '#2F6B33',
   },
 
   titleInput: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 28,
     color: Colors.black,
     paddingHorizontal: Spacing.side,
@@ -697,13 +697,13 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   videoChipLabel: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 13,
     color: Colors.black,
     flexShrink: 1,
   },
   videoChipDuration: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 11,
     color: Colors.secondary,
   },
@@ -716,7 +716,7 @@ const styles = StyleSheet.create({
   },
 
   contentInput: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 16,
     color: Colors.black,
     lineHeight: 27,
@@ -766,7 +766,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(13,13,18,0.08)',
   },
   bottomActionText: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 14,
     color: Colors.secondary,
   },
@@ -816,7 +816,7 @@ const picker = StyleSheet.create({
     borderBottomWidth: 0.5,
     borderBottomColor: 'rgba(13,13,18,0.08)',
   },
-  title: { fontFamily: Fonts.jakartaExtraBold, fontSize: 16, color: Colors.black },
+  title: { fontFamily: Fonts.semiBold, fontSize: 16, color: Colors.black },
   searchWrap: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -830,7 +830,7 @@ const picker = StyleSheet.create({
   },
   searchInput: {
     flex: 1,
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 14,
     color: Colors.black,
     padding: 0,
@@ -843,7 +843,7 @@ const picker = StyleSheet.create({
     backgroundColor: 'rgba(255,59,48,0.08)',
     borderRadius: 10,
   },
-  unlinkText: { fontFamily: Fonts.jakartaBold, fontSize: 13, color: '#FF3B30' },
+  unlinkText: { fontFamily: Fonts.semiBold, fontSize: 13, color: '#FF3B30' },
   item: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -859,23 +859,23 @@ const picker = StyleSheet.create({
   },
   itemAvatarFallback: { alignItems: 'center', justifyContent: 'center' },
   itemAvatarText: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 14,
     color: Colors.black,
   },
   itemName: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 15,
     color: Colors.black,
   },
   itemSub: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 12,
     color: Colors.secondary,
     marginTop: 1,
   },
   empty: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     color: Colors.secondary,
     textAlign: 'center',

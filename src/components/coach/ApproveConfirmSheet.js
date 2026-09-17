@@ -103,7 +103,7 @@ const s = StyleSheet.create({
     marginBottom: 16,
   },
   title: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 20,
     color: '#FFFFFF',
     letterSpacing: -0.5,
@@ -111,7 +111,7 @@ const s = StyleSheet.create({
     marginBottom: 8,
   },
   body: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13.5,
     color: 'rgba(255,255,255,0.78)',
     lineHeight: 20,
@@ -119,7 +119,7 @@ const s = StyleSheet.create({
     marginBottom: 22,
   },
   bodyName: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     color: GOLD,
   },
   primaryBtn: {
@@ -133,7 +133,7 @@ const s = StyleSheet.create({
     marginBottom: 4,
   },
   primaryBtnText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 14,
     color: '#0A0A0A',
     letterSpacing: 0.2,
@@ -144,7 +144,7 @@ const s = StyleSheet.create({
     paddingVertical: 14,
   },
   secondaryBtnText: {
-    fontFamily: Fonts.jakartaSemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 13.5,
     color: 'rgba(255,255,255,0.65)',
     letterSpacing: 0.1,

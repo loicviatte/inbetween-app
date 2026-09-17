@@ -108,7 +108,7 @@ const es = StyleSheet.create({
     marginBottom: 20,
   },
   title: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 17,
     color: Colors.black,
     textAlign: 'center',
@@ -117,7 +117,7 @@ const es = StyleSheet.create({
   },
   field: { marginBottom: 16 },
   label: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 10,
     color: Colors.secondary,
     textTransform: 'uppercase',
@@ -131,7 +131,7 @@ const es = StyleSheet.create({
     borderRadius: 12,
     paddingHorizontal: 14,
     paddingVertical: 12,
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 14,
     color: Colors.black,
   },
@@ -145,7 +145,7 @@ const es = StyleSheet.create({
     backgroundColor: Colors.statCardBg,
   },
   pillActive: { backgroundColor: Colors.black, borderColor: Colors.black },
-  pillText: { fontFamily: Fonts.jakartaMedium, fontSize: 13, color: Colors.secondary },
+  pillText: { fontFamily: Fonts.medium, fontSize: 13, color: Colors.secondary },
   pillTextActive: { color: Colors.white },
   saveBtn: {
     backgroundColor: Colors.black,
@@ -154,7 +154,7 @@ const es = StyleSheet.create({
     alignItems: 'center',
     marginTop: 8,
   },
-  saveBtnText: { fontFamily: Fonts.jakartaBold, fontSize: 15, color: Colors.white },
+  saveBtnText: { fontFamily: Fonts.semiBold, fontSize: 15, color: Colors.white },
   cancelBtn: { paddingVertical: 14, alignItems: 'center' },
-  cancelText: { fontFamily: Fonts.jakartaRegular, fontSize: 14, color: Colors.secondary },
+  cancelText: { fontFamily: Fonts.regular, fontSize: 14, color: Colors.secondary },
 });

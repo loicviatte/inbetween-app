@@ -637,7 +637,7 @@ function GoldNumber({ value, gradientId, variant = 'gold' }) {
           x="50%"
           y="178"
           fontSize="200"
-          fontFamily={Fonts.ttExtraBold}
+          fontFamily={Fonts.extraBold}
           fontWeight="800"
           fill={`url(#${gradientId})`}
           textAnchor="middle"
@@ -2381,10 +2381,10 @@ const styles = StyleSheet.create({
   },
   backBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   backArrow: { fontSize: 18, color: Colors.activeFocus },
-  backLabel: { fontFamily: Fonts.jakartaMedium, fontSize: 15, color: Colors.activeFocus },
+  backLabel: { fontFamily: Fonts.medium, fontSize: 15, color: Colors.activeFocus },
   slotBadge: {},
   slotBadgeText: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 10,
     color: '#ACADB9',
     textTransform: 'uppercase',
@@ -2400,13 +2400,13 @@ const styles = StyleSheet.create({
     paddingVertical: 18,
   },
   sessionLabel: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 12,
     color: 'rgba(255,255,255,0.45)',
     marginBottom: 6,
   },
   focusName: {
-    fontFamily: Fonts.ttBold,
+    fontFamily: Fonts.bold,
     fontSize: 24,
     color: Colors.white,
     lineHeight: 30,
@@ -2416,7 +2416,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   focusSubtitle: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     color: '#FFFFFF',
     lineHeight: 19,
@@ -2428,14 +2428,14 @@ const styles = StyleSheet.create({
     paddingRight: 16,
   },
   readMoreText: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 12,
     color: 'rgba(255, 157, 0, 0.7)',
     letterSpacing: 0.3,
   },
   focusContext: {
     marginTop: 10,
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     color: 'rgba(255,255,255,0.75)',
     lineHeight: 20,
@@ -2465,13 +2465,13 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(17,12,17,0.12)',
   },
   drillPillText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 9,
     color: Colors.black,
     letterSpacing: 1.5,
   },
   drillText: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 14,
     color: Colors.black,
     lineHeight: 22,
@@ -2489,7 +2489,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.06)',
   },
   drillChipText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 11.5,
     color: Colors.black,
     letterSpacing: 0.2,
@@ -2509,14 +2509,14 @@ const styles = StyleSheet.create({
     paddingVertical: 24,
   },
   overrunTitle: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 20,
     color: '#0E0E0E',
     letterSpacing: -0.3,
     marginBottom: 10,
   },
   overrunBody: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 13,
     color: '#666',
     lineHeight: 19,
@@ -2530,7 +2530,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   overrunPrimaryText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 14,
     color: '#0E0E0E',
     letterSpacing: 0.3,
@@ -2540,7 +2540,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   overrunSecondaryText: {
-    fontFamily: Fonts.jakartaSemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 13,
     color: '#999',
   },
@@ -2552,13 +2552,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.side,
   },
   timerText: {
-    fontFamily: Fonts.monument,
+    fontFamily: Fonts.extraBold,
     fontSize: 64,
     color: Colors.black,
     letterSpacing: 2,
   },
   overTimeText: {
-    fontFamily: Fonts.monument,
+    fontFamily: Fonts.extraBold,
     fontSize: 22,
     color: Colors.orange,
     letterSpacing: 1,
@@ -2576,7 +2576,7 @@ const styles = StyleSheet.create({
 
   doneWrap: { alignItems: 'center', gap: 8 },
   doneCheck: { fontSize: 48 },
-  doneTitle: { fontFamily: Fonts.jakartaExtraBold, fontSize: 20, color: Colors.black },
+  doneTitle: { fontFamily: Fonts.semiBold, fontSize: 20, color: Colors.black },
 
   metroPill: {
     backgroundColor: '#1A1A1A',
@@ -2613,7 +2613,7 @@ const styles = StyleSheet.create({
     paddingVertical: 17,
     alignItems: 'center',
   },
-  startBtnText: { fontFamily: Fonts.ttExtraBold, fontSize: 15, color: '#000', letterSpacing: 1 },
+  startBtnText: { fontFamily: Fonts.extraBold, fontSize: 15, color: '#000', letterSpacing: 1 },
 
   pauseBtn: {
     borderRadius: 14,
@@ -2636,7 +2636,7 @@ const styles = StyleSheet.create({
     borderRadius: 2,
     backgroundColor: Colors.secondary,
   },
-  pauseBtnText: { fontFamily: Fonts.jakartaMedium, fontSize: 14, color: Colors.secondary },
+  pauseBtnText: { fontFamily: Fonts.medium, fontSize: 14, color: Colors.secondary },
 
   pausedRow: {
     flexDirection: 'row',
@@ -2652,7 +2652,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 8,
   },
-  resumeBtnText: { fontFamily: Fonts.jakartaBold, fontSize: 14, color: '#000' },
+  resumeBtnText: { fontFamily: Fonts.semiBold, fontSize: 14, color: '#000' },
 
   stopBtn: {
     flex: 1,
@@ -2666,11 +2666,11 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(17,12,17,0.15)',
     overflow: 'hidden',
   },
-  stopBtnText: { fontFamily: Fonts.jakartaMedium, fontSize: 14, color: Colors.secondary },
+  stopBtnText: { fontFamily: Fonts.medium, fontSize: 14, color: Colors.secondary },
 
   validateBtn: { backgroundColor: Colors.black, borderRadius: 14, paddingVertical: 17, alignItems: 'center', overflow: 'hidden' },
   validateBtnFill: { position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: Colors.orange, borderRadius: 14 },
-  validateBtnText: { fontFamily: Fonts.jakartaExtraBold, fontSize: 15, color: Colors.white, letterSpacing: 1 },
+  validateBtnText: { fontFamily: Fonts.semiBold, fontSize: 15, color: Colors.white, letterSpacing: 1 },
 
   stopConfirmOverlay: {
     flex: 1,
@@ -2686,13 +2686,13 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   stopConfirmTitle: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 17,
     color: Colors.black,
     marginBottom: 8,
   },
   stopConfirmBody: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 14,
     color: 'rgba(17,12,17,0.55)',
     lineHeight: 20,
@@ -2709,7 +2709,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.orange,
   },
   stopConfirmCancelText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 14,
     color: Colors.black,
   },
@@ -2721,7 +2721,7 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(17,12,17,0.15)',
   },
   stopConfirmConfirmText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 14,
     color: Colors.secondary,
   },
@@ -2742,7 +2742,7 @@ const styles = StyleSheet.create({
   aiToggleIcon: {
     fontSize: 12,
     color: 'rgba(255,255,255,0.55)',
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
   },
   aiCardMessages: {
     flex: 1,
@@ -2754,7 +2754,7 @@ const styles = StyleSheet.create({
     paddingBottom: 4,
   },
   aiCardEmptyText: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     color: 'rgba(255,255,255,0.3)',
     lineHeight: 20,
@@ -2774,7 +2774,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.06)',
   },
   suggestionText: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 13,
     color: 'rgba(255,255,255,0.85)',
     lineHeight: 18,
@@ -2793,7 +2793,7 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
   },
   aiCardBubbleText: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     lineHeight: 20,
   },
@@ -2821,7 +2821,7 @@ const styles = StyleSheet.create({
     borderRadius: 9,
   },
   askCoachBtnText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 11.5,
     color: '#fff',
     letterSpacing: 0.2,
@@ -2831,7 +2831,7 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   askCoachDismissText: {
-    fontFamily: Fonts.jakartaSemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 11.5,
     color: 'rgba(255,255,255,0.45)',
   },
@@ -2843,7 +2843,7 @@ const styles = StyleSheet.create({
     paddingLeft: 4,
   },
   askCoachStatusText: {
-    fontFamily: Fonts.jakartaSemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 11,
     color: 'rgba(255,255,255,0.55)',
   },
@@ -2863,7 +2863,7 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     paddingHorizontal: 14,
     paddingVertical: 0,
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     color: '#FFFFFF',
     textAlignVertical: 'center',
@@ -2895,7 +2895,7 @@ const dp = StyleSheet.create({
     gap: 80,
   },
   labelSmall: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 11,
     color: Colors.secondary,
     letterSpacing: 1.8,
@@ -2903,7 +2903,7 @@ const dp = StyleSheet.create({
     marginBottom: 2,
   },
   labelBig: {
-    fontFamily: Fonts.monument,
+    fontFamily: Fonts.extraBold,
     fontSize: 26,
     color: Colors.black,
     letterSpacing: -0.5,
@@ -2939,14 +2939,14 @@ const dp = StyleSheet.create({
     gap: 4,
   },
   num: {
-    fontFamily: Fonts.monument,
+    fontFamily: Fonts.extraBold,
     fontSize: 32,
     color: Colors.black,
     letterSpacing: 1,
     lineHeight: 40,
   },
   unit: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 12,
     color: Colors.secondary,
     marginTop: 8,
@@ -2959,7 +2959,7 @@ const dp = StyleSheet.create({
 const ln = StyleSheet.create({
   wrap: { marginTop: 12, gap: 2 },
   heading: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 10,
     color: 'rgba(255,255,255,0.35)',
     letterSpacing: 0.5,
@@ -2967,7 +2967,7 @@ const ln = StyleSheet.create({
     marginBottom: 6,
   },
   coachNoteText: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     color: 'rgba(255,255,255,0.85)',
     lineHeight: 20,
@@ -3006,7 +3006,7 @@ const modal = StyleSheet.create({
     marginBottom: 20,
   },
   date: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 13,
     color: Colors.secondary,
     letterSpacing: 0.3,
@@ -3020,7 +3020,7 @@ const modal = StyleSheet.create({
 
   section: { marginBottom: 24 },
   sectionLabel: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 11,
     color: Colors.secondary,
     textTransform: 'uppercase',
@@ -3036,7 +3036,7 @@ const modal = StyleSheet.create({
     borderColor: Colors.statCardBorder,
   },
   cardInputLabel: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 11,
     color: Colors.black,
     textTransform: 'uppercase',
@@ -3044,14 +3044,14 @@ const modal = StyleSheet.create({
     marginBottom: 6,
   },
   cardText: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 15,
     color: Colors.black,
     lineHeight: 23,
   },
 
   urgencyRow: { flexDirection: 'row', alignItems: 'center', marginTop: 12, gap: 10 },
-  urgencyLabel: { fontFamily: Fonts.jakartaMedium, fontSize: 11, color: Colors.secondary },
+  urgencyLabel: { fontFamily: Fonts.medium, fontSize: 11, color: Colors.secondary },
   urgencyDots: { flexDirection: 'row', gap: 5 },
   urgencyDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: 'rgba(17,12,17,0.12)' },
 
@@ -3072,7 +3072,7 @@ const modal = StyleSheet.create({
     borderColor: Colors.statCardBorder,
   },
   focusChipText: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 14,
     color: Colors.black,
     flex: 1,
@@ -3108,13 +3108,13 @@ const m = StyleSheet.create({
     justifyContent: 'center',
   },
   danceText: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 13,
     color: 'rgba(255,255,255,0.4)',
     letterSpacing: 0.3,
   },
   bpmText: {
-    fontFamily: Fonts.monument,
+    fontFamily: Fonts.extraBold,
     fontSize: 18,
     color: 'rgba(255,255,255,0.4)',
     letterSpacing: 0.5,
@@ -3171,13 +3171,13 @@ const sl = StyleSheet.create({
   slider: { width: '100%', height: 40 },
   row: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 4 },
   label: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 11,
     color: 'rgba(17,12,17,0.3)',
   },
   labelOn: {
     color: Colors.orange,
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
   },
 });
 
@@ -3241,7 +3241,7 @@ const fm = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.18)',
   },
   eyebrowFocus: {
-    fontFamily: Fonts.ttExtraBold,
+    fontFamily: Fonts.extraBold,
     fontSize: 17,
     color: '#FFFFFF',
     letterSpacing: 3.4,
@@ -3249,14 +3249,14 @@ const fm = StyleSheet.create({
     flexShrink: 1,
   },
   eyebrowSessions: {
-    fontFamily: Fonts.ttExtraBold,
+    fontFamily: Fonts.extraBold,
     fontSize: 13,
     color: '#E8B530',
     letterSpacing: 4,
     textAlign: 'center',
   },
   questionText: {
-    fontFamily: Fonts.ttExtraBold,
+    fontFamily: Fonts.extraBold,
     fontSize: 22,
     color: '#FFFFFF',
     textAlign: 'center',
@@ -3335,7 +3335,7 @@ const fm = StyleSheet.create({
     borderColor: 'transparent',
   },
   pillText: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 10,
     color: 'rgba(255,255,255,0.62)',
     letterSpacing: 0,
@@ -3349,7 +3349,7 @@ const fm = StyleSheet.create({
     borderRadius: 14,
     paddingHorizontal: 14,
     paddingVertical: 12,
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     color: '#FFFFFF',
     backgroundColor: 'rgba(255,255,255,0.04)',
@@ -3369,7 +3369,7 @@ const fm = StyleSheet.create({
     elevation: 6,
   },
   ctaText: {
-    fontFamily: Fonts.ttExtraBold,
+    fontFamily: Fonts.extraBold,
     fontSize: 15,
     color: '#0A0A0A',
     letterSpacing: 0.4,
@@ -3409,7 +3409,7 @@ const shortS = StyleSheet.create({
     marginBottom: 16,
   },
   title: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 20,
     color: '#FFFFFF',
     letterSpacing: -0.5,
@@ -3417,7 +3417,7 @@ const shortS = StyleSheet.create({
     marginBottom: 8,
   },
   body: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13.5,
     color: 'rgba(255,255,255,0.78)',
     lineHeight: 20,
@@ -3425,7 +3425,7 @@ const shortS = StyleSheet.create({
     marginBottom: 22,
   },
   bodyAccent: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     color: '#F6D27A',
   },
   primaryBtn: {
@@ -3439,7 +3439,7 @@ const shortS = StyleSheet.create({
     marginBottom: 4,
   },
   primaryBtnText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 14,
     color: '#0A0A0A',
     letterSpacing: 0.2,
@@ -3450,7 +3450,7 @@ const shortS = StyleSheet.create({
     paddingVertical: 14,
   },
   secondaryBtnText: {
-    fontFamily: Fonts.jakartaSemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 13.5,
     color: 'rgba(255,255,255,0.65)',
     letterSpacing: 0.1,

@@ -195,7 +195,7 @@ const s = StyleSheet.create({
   },
   fieldText: {
     flex: 1,
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 15,
     color: Colors.black,
     marginRight: 8,
@@ -219,7 +219,7 @@ const s = StyleSheet.create({
     marginBottom: 20,
   },
   sheetTitle: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 18,
     color: Colors.black,
     marginBottom: 16,
@@ -240,7 +240,7 @@ const s = StyleSheet.create({
   searchIcon: { marginRight: 8 },
   searchInput: {
     flex: 1,
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 15,
     color: Colors.black,
     paddingVertical: 8,
@@ -268,15 +268,15 @@ const s = StyleSheet.create({
   },
   rowText: {
     flex: 1,
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 15,
     color: Colors.black,
     marginRight: 8,
   },
-  rowTextSelected: { fontFamily: Fonts.jakartaExtraBold },
+  rowTextSelected: { fontFamily: Fonts.semiBold },
 
   empty: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     color: Colors.secondary,
     textAlign: 'center',
@@ -297,14 +297,14 @@ const s = StyleSheet.create({
   },
   createRowText: {
     flex: 1,
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 14,
     color: Colors.black,
   },
 
   error: {
     color: '#E84040',
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 12,
     marginTop: 10,
     textAlign: 'center',
@@ -316,7 +316,7 @@ const s = StyleSheet.create({
     marginTop: 8,
   },
   closeText: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 14,
     color: Colors.secondary,
   },

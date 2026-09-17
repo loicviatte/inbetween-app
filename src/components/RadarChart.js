@@ -123,7 +123,7 @@ export default function RadarChart({ scores = [0.6, 0.75, 0.55, 0.65, 0.8], stro
               textAnchor="middle"
               fontSize={9.5}
               fontWeight="600"
-              fontFamily={Fonts.jakartaSemiBold}
+              fontFamily={Fonts.semiBold}
               fill="rgba(10,10,10,0.55)"
               letterSpacing={1.4}
             >

@@ -77,5 +77,5 @@ const st = StyleSheet.create({
   },
   fill: { position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: RED, overflow: 'hidden', justifyContent: 'center' },
   row: { alignItems: 'center', justifyContent: 'center', paddingVertical: 15, paddingHorizontal: 18 },
-  t: { fontFamily: Fonts.jakartaBold, fontSize: 15, color: RED },
+  t: { fontFamily: Fonts.semiBold, fontSize: 15, color: RED },
 });

@@ -126,13 +126,13 @@ const s = StyleSheet.create({
   ring: { width: 20, height: 20, alignItems: 'center', justifyContent: 'center' },
   ringPct: {
     position: 'absolute',
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 7.5,
     color: '#fff',
     includeFontPadding: false,
   },
   lbl: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 10,
     letterSpacing: 1.4,
     color: '#fff',

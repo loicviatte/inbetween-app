@@ -148,9 +148,9 @@ const styles = StyleSheet.create({
   content: { flexGrow: 1, paddingHorizontal: Spacing.side + 2, paddingTop: 8, paddingBottom: 18 },
   topBar: { flexDirection: 'row', alignItems: 'center', marginBottom: 20, minHeight: 30 },
   backBtn: { width: 30, height: 30, borderRadius: 15, backgroundColor: Onboard.faint, alignItems: 'center', justifyContent: 'center' },
-  h1: { fontFamily: Fonts.ttDemiBold, fontSize: 27, lineHeight: 30, letterSpacing: -0.8, color: Onboard.ink },
-  sub: { fontFamily: Fonts.travelsRegular, fontSize: 13.5, lineHeight: 19, color: Onboard.ink2, marginTop: 10 },
-  subStrong: { fontFamily: Fonts.ttDemiBold, color: Onboard.ink },
+  h1: { fontFamily: Fonts.semiBold, fontSize: 27, lineHeight: 30, letterSpacing: -0.8, color: Onboard.ink },
+  sub: { fontFamily: Fonts.regular, fontSize: 13.5, lineHeight: 19, color: Onboard.ink2, marginTop: 10 },
+  subStrong: { fontFamily: Fonts.semiBold, color: Onboard.ink },
 
   boxes: { flexDirection: 'row', justifyContent: 'center', gap: 8, marginTop: 34 },
   box: {
@@ -161,15 +161,15 @@ const styles = StyleSheet.create({
   boxFilled: { borderColor: 'rgba(10,10,10,0.22)' },
   boxOn: { borderColor: Onboard.gold, borderWidth: 2 },
   boxErr: { borderColor: '#A3281B' },
-  boxT: { fontFamily: Fonts.ttBold, fontSize: 24, color: Onboard.ink },
+  boxT: { fontFamily: Fonts.bold, fontSize: 24, color: Onboard.ink },
   overlayInput: { ...StyleSheet.absoluteFillObject, color: 'transparent', backgroundColor: 'transparent', fontSize: 1 },
   paste: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, alignSelf: 'center', marginTop: 16, paddingVertical: 6, paddingHorizontal: 10 },
-  pasteT: { fontFamily: Fonts.ttDemiBold, fontSize: 14, color: Onboard.goldInk },
+  pasteT: { fontFamily: Fonts.semiBold, fontSize: 14, color: Onboard.goldInk },
 
-  error: { fontFamily: Fonts.travelsMedium, fontSize: 13, lineHeight: 18, color: '#A3281B', textAlign: 'center', marginTop: 14 },
+  error: { fontFamily: Fonts.medium, fontSize: 13, lineHeight: 18, color: '#A3281B', textAlign: 'center', marginTop: 14 },
   spacer: { flex: 1, minHeight: 24 },
   primaryBtn: { backgroundColor: Onboard.ink, borderRadius: 14, paddingVertical: 15, alignItems: 'center' },
   primaryOff: { opacity: 0.35 },
-  primaryBtnText: { fontFamily: Fonts.ttDemiBold, fontSize: 15, color: '#FFFFFF' },
-  foot: { fontFamily: Fonts.travelsRegular, fontSize: 13, color: Onboard.ink2, textAlign: 'center', marginTop: 14 },
+  primaryBtnText: { fontFamily: Fonts.semiBold, fontSize: 15, color: '#FFFFFF' },
+  foot: { fontFamily: Fonts.regular, fontSize: 13, color: Onboard.ink2, textAlign: 'center', marginTop: 14 },
 });

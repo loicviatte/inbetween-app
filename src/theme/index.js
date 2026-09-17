@@ -22,32 +22,16 @@ export const Colors = {
   card: '#F5F5F5',
 };
 
-// Font family names — the whole app is set in Syne, the typeface of
-// useinbetween.com (values are the TTFs' PostScript names, so they resolve the
-// same whether the font is embedded natively or registered at runtime). Syne
-// has no Light cut, so the light aliases fall back to Regular. The legacy alias
-// map is kept so the ~225 existing references compile unchanged.
+// The whole app is set in Syne, the typeface of useinbetween.com. Five weights,
+// named after what they are — the values are the TTFs' PostScript names, so they
+// resolve the same whether the font is embedded natively or registered at
+// runtime. Syne has no Light cut: `regular` is the lightest there is.
 export const Fonts = {
-  // Canonical aliases (use these for new code)
-  ttLight: 'Syne-Regular',
-  ttRegular: 'Syne-Regular',
-  ttMedium: 'Syne-Medium',
-  ttDemiBold: 'Syne-SemiBold',
-  ttBold: 'Syne-Bold',
-  ttExtraBold: 'Syne-ExtraBold',
-  travelsLight: 'Syne-Regular',
-  travelsRegular: 'Syne-Regular',
-  travelsMedium: 'Syne-Medium',
-  // Legacy aliases — kept at the weight each one had before the switch
-  monument: 'Syne-ExtraBold',     // logo only — keep heaviest
-  jakartaLight: 'Syne-Regular',
-  jakartaRegular: 'Syne-Regular', // body
-  jakartaMedium: 'Syne-Medium',
-  jakartaSemiBold: 'Syne-SemiBold',
-  jakartaBold: 'Syne-SemiBold',   // titles use SemiBold per design
-  jakartaExtraBold: 'Syne-SemiBold',
-  montserratMedium: 'Syne-Medium',
-  montserratSemiBold: 'Syne-SemiBold',
+  regular: 'Syne-Regular',
+  medium: 'Syne-Medium',
+  semiBold: 'Syne-SemiBold',
+  bold: 'Syne-Bold',
+  extraBold: 'Syne-ExtraBold',
 };
 
 // Legacy Typography shim — used by LogScreen and LogModal

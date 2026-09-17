@@ -102,21 +102,21 @@ const s = StyleSheet.create({
     marginBottom: 14,
   },
   title: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 19,
     color: C.text,
     letterSpacing: -0.3,
     marginBottom: 6,
   },
   subtitle: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13.5,
     color: '#5C6370',
     lineHeight: 20,
     marginBottom: 20,
   },
   label: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 10,
     color: C.gray,
     letterSpacing: 1.2,
@@ -124,7 +124,7 @@ const s = StyleSheet.create({
     marginBottom: 8,
   },
   input: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 14,
     color: C.text,
     lineHeight: 20,
@@ -135,7 +135,7 @@ const s = StyleSheet.create({
     marginBottom: 6,
   },
   hint: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 11,
     color: '#B5B5B5',
     marginBottom: 22,
@@ -154,7 +154,7 @@ const s = StyleSheet.create({
     borderColor: C.lightGray,
   },
   cancelText: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 13,
     color: C.text,
     letterSpacing: 0.2,
@@ -168,7 +168,7 @@ const s = StyleSheet.create({
     backgroundColor: C.red,
   },
   confirmText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 13,
     color: '#fff',
     letterSpacing: 0.2,

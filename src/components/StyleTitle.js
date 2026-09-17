@@ -82,9 +82,9 @@ const st = StyleSheet.create({
   wrap: { flex: 1, minWidth: 0 },
   btn: { alignSelf: 'flex-start' },
   row: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  title: { fontFamily: Fonts.ttDemiBold, fontSize: 17, letterSpacing: -0.34, color: INK, flexShrink: 1 },
+  title: { fontFamily: Fonts.semiBold, fontSize: 17, letterSpacing: -0.34, color: INK, flexShrink: 1 },
   chev: { marginTop: 1 },
-  sub: { fontFamily: Fonts.ttRegular, fontSize: 11.5, color: INK_2, marginTop: 1 },
+  sub: { fontFamily: Fonts.regular, fontSize: 11.5, color: INK_2, marginTop: 1 },
 
   backdrop: { flex: 1, backgroundColor: 'transparent' },
   sheet: {
@@ -101,6 +101,6 @@ const st = StyleSheet.create({
   },
   option: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 15, minWidth: 220 },
   optionDivider: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: 'rgba(255,255,255,0.15)' },
-  optionLabel: { fontFamily: Fonts.ttDemiBold, fontSize: 15, color: '#FFFFFF', flex: 1 },
+  optionLabel: { fontFamily: Fonts.semiBold, fontSize: 15, color: '#FFFFFF', flex: 1 },
   check: { marginLeft: 12 },
 });

@@ -85,13 +85,13 @@ const s = StyleSheet.create({
   },
   metaLabel: {
     flex: 1,
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 10,
     color: GOLD,
     letterSpacing: 1.2,
   },
   title: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 24,
     color: '#FFFFFF',
     letterSpacing: -0.6,
@@ -99,7 +99,7 @@ const s = StyleSheet.create({
     marginTop: 4,
   },
   subtitle: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 12,
     color: 'rgba(255,255,255,0.6)',
     marginTop: 6,
@@ -112,14 +112,14 @@ const s = StyleSheet.create({
     paddingBottom: 8,
   },
   summaryLabel: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 10,
     color: 'rgba(255,255,255,0.55)',
     letterSpacing: 1.2,
     marginBottom: 10,
   },
   summaryText: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 14,
     color: 'rgba(255,255,255,0.88)',
     lineHeight: 21,

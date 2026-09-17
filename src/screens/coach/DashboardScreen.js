@@ -192,7 +192,7 @@ function StudentSquare({ s, readiness, onPress }) {
         </View>
         <View style={{ flex: 1, minWidth: 0 }}>
           <Text style={st.sqName} numberOfLines={1}>{s.name}</Text>
-          <Text style={[st.sqSub, reviewing && { color: '#8A6414', fontFamily: Fonts.ttBold }]} numberOfLines={1}>{standing(s)}</Text>
+          <Text style={[st.sqSub, reviewing && { color: '#8A6414', fontFamily: Fonts.bold }]} numberOfLines={1}>{standing(s)}</Text>
         </View>
       </View>
       <View style={st.sqPctRow}>
@@ -562,17 +562,17 @@ const st = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: Spacing.side, marginBottom: 6,
     paddingVertical: 9, paddingHorizontal: 12, backgroundColor: '#000000', borderRadius: 12,
   },
-  nudgeT: { flex: 1, fontFamily: Fonts.ttMedium, fontSize: 12, color: 'rgba(255,255,255,0.8)' },
-  nudgeA: { fontFamily: Fonts.ttBold, color: GOLD },
+  nudgeT: { flex: 1, fontFamily: Fonts.medium, fontSize: 12, color: 'rgba(255,255,255,0.8)' },
+  nudgeA: { fontFamily: Fonts.bold, color: GOLD },
 
   att: { marginHorizontal: Spacing.side, gap: 16, paddingTop: 12, paddingBottom: 18, borderBottomWidth: 1, borderBottomColor: LINE },
   big: { flexDirection: 'row', alignItems: 'flex-end', gap: 6 },
   bigNum: { flexDirection: 'row', alignItems: 'flex-end', gap: 6 },
-  bigN: { fontFamily: Fonts.ttExtraBold, fontSize: 56, letterSpacing: -3, lineHeight: 52, color: INK, fontVariant: ['tabular-nums'] },
-  bigPct: { fontFamily: Fonts.ttBold, fontSize: 32, lineHeight: 34, color: 'rgba(10,10,10,0.4)', paddingBottom: 2 },
+  bigN: { fontFamily: Fonts.extraBold, fontSize: 56, letterSpacing: -3, lineHeight: 52, color: INK, fontVariant: ['tabular-nums'] },
+  bigPct: { fontFamily: Fonts.bold, fontSize: 32, lineHeight: 34, color: 'rgba(10,10,10,0.4)', paddingBottom: 2 },
   bigSide: { flex: 1, marginLeft: 8, paddingBottom: 6 },
-  bigLabel: { fontFamily: Fonts.ttDemiBold, fontSize: 10, letterSpacing: 1.6, textTransform: 'uppercase', color: INK, paddingBottom: 3 },
-  bigSub: { fontFamily: Fonts.ttRegular, fontSize: 12, lineHeight: 16, color: INK_62 },
+  bigLabel: { fontFamily: Fonts.semiBold, fontSize: 10, letterSpacing: 1.6, textTransform: 'uppercase', color: INK, paddingBottom: 3 },
+  bigSub: { fontFamily: Fonts.regular, fontSize: 12, lineHeight: 16, color: INK_62 },
 
   chart: { height: CHART_H },
   bars: { ...StyleSheet.absoluteFillObject, flexDirection: 'row', alignItems: 'flex-end', gap: 7 },
@@ -582,10 +582,10 @@ const st = StyleSheet.create({
   avgLine: { position: 'absolute', left: 0, right: 0, borderTopWidth: 1, borderTopColor: 'rgba(10,10,10,0.16)' },
   avgLabel: {
     position: 'absolute', left: 0, top: -7, paddingRight: 6, backgroundColor: PAGE,
-    fontFamily: Fonts.ttDemiBold, fontSize: 8.5, letterSpacing: 1.2, color: 'rgba(10,10,10,0.6)',
+    fontFamily: Fonts.semiBold, fontSize: 8.5, letterSpacing: 1.2, color: 'rgba(10,10,10,0.6)',
   },
   axis: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 9 },
-  axisT: { fontFamily: Fonts.ttDemiBold, fontSize: 9.5, letterSpacing: 0.95, textTransform: 'uppercase', color: INK_62 },
+  axisT: { fontFamily: Fonts.semiBold, fontSize: 9.5, letterSpacing: 0.95, textTransform: 'uppercase', color: INK_62 },
 
   chips: { flexDirection: 'row', gap: 9 },
   chip: {
@@ -593,23 +593,23 @@ const st = StyleSheet.create({
     borderWidth: 1, borderColor: 'rgba(10,10,10,0.06)',
   },
   chipRed: { backgroundColor: '#FCF1EE', borderColor: 'rgba(168,65,47,0.28)' },
-  chipN: { fontFamily: Fonts.ttBold, fontSize: 20, letterSpacing: -1, lineHeight: 21, color: INK },
-  chipL: { fontFamily: Fonts.ttDemiBold, fontSize: 9, letterSpacing: 1.1, textTransform: 'uppercase', color: 'rgba(10,10,10,0.58)' },
+  chipN: { fontFamily: Fonts.bold, fontSize: 20, letterSpacing: -1, lineHeight: 21, color: INK },
+  chipL: { fontFamily: Fonts.semiBold, fontSize: 9, letterSpacing: 1.1, textTransform: 'uppercase', color: 'rgba(10,10,10,0.58)' },
 
   start: {
     height: 58, borderRadius: 999, backgroundColor: GOLD, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 11,
   },
-  startT: { fontFamily: Fonts.ttBold, fontSize: 19, letterSpacing: -0.4, color: INK },
+  startT: { fontFamily: Fonts.bold, fontSize: 19, letterSpacing: -0.4, color: INK },
   startLive: { backgroundColor: INK },
   startBones: { backgroundColor: 'rgba(10,10,10,0.06)' },
   liveDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#D06A5A' },
-  liveTimer: { fontFamily: Fonts.ttBold, fontSize: 15, color: GOLD, fontVariant: ['tabular-nums'] },
+  liveTimer: { fontFamily: Fonts.bold, fontSize: 15, color: GOLD, fontVariant: ['tabular-nums'] },
 
   sort: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: Spacing.side, paddingTop: 16 },
-  sortCount: { flex: 1, fontFamily: Fonts.ttDemiBold, fontSize: 9.5, letterSpacing: 1.5, textTransform: 'uppercase', color: 'rgba(10,10,10,0.6)' },
+  sortCount: { flex: 1, fontFamily: Fonts.semiBold, fontSize: 9.5, letterSpacing: 1.5, textTransform: 'uppercase', color: 'rgba(10,10,10,0.6)' },
   sortBtn: { borderRadius: 999, paddingVertical: 4, paddingHorizontal: 10, borderWidth: 1, borderColor: 'rgba(10,10,10,0.14)' },
   sortBtnOn: { backgroundColor: INK, borderColor: INK },
-  sortBtnT: { fontFamily: Fonts.ttDemiBold, fontSize: 10.5, color: 'rgba(10,10,10,0.6)' },
+  sortBtnT: { fontFamily: Fonts.semiBold, fontSize: 10.5, color: 'rgba(10,10,10,0.6)' },
 
   gridWrap: { flex: 1 },
   // paddingTop keeps the first row clear of the fade at rest (same gap under the sort row as before).
@@ -625,22 +625,22 @@ const st = StyleSheet.create({
   sqAv: { width: 29, height: 29, borderRadius: 14.5, overflow: 'hidden', backgroundColor: '#F4F2EC', alignItems: 'center', justifyContent: 'center' },
   sqAvImg: { width: 29, height: 29 },
   sqAvFill: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
-  sqAvT: { fontFamily: Fonts.ttBold, fontSize: 11, color: 'rgba(10,10,10,0.6)' },
-  sqName: { fontFamily: Fonts.ttDemiBold, fontSize: 13.5, letterSpacing: -0.2, color: INK },
-  sqSub: { fontFamily: Fonts.ttRegular, fontSize: 10.5, color: 'rgba(10,10,10,0.6)', marginTop: 2 },
+  sqAvT: { fontFamily: Fonts.bold, fontSize: 11, color: 'rgba(10,10,10,0.6)' },
+  sqName: { fontFamily: Fonts.semiBold, fontSize: 13.5, letterSpacing: -0.2, color: INK },
+  sqSub: { fontFamily: Fonts.regular, fontSize: 10.5, color: 'rgba(10,10,10,0.6)', marginTop: 2 },
   sqPctRow: { flexDirection: 'row', alignItems: 'baseline', gap: 4 },
-  sqPct: { fontFamily: Fonts.ttBold, fontSize: 25, letterSpacing: -1.1, lineHeight: 26, color: INK },
-  sqPctSign: { fontFamily: Fonts.ttDemiBold, fontSize: 13, color: 'rgba(10,10,10,0.42)' },
-  sqPctLabel: { marginLeft: 'auto', fontFamily: Fonts.ttDemiBold, fontSize: 9.5, letterSpacing: 0.95, textTransform: 'uppercase', color: 'rgba(10,10,10,0.6)' },
+  sqPct: { fontFamily: Fonts.bold, fontSize: 25, letterSpacing: -1.1, lineHeight: 26, color: INK },
+  sqPctSign: { fontFamily: Fonts.semiBold, fontSize: 13, color: 'rgba(10,10,10,0.42)' },
+  sqPctLabel: { marginLeft: 'auto', fontFamily: Fonts.semiBold, fontSize: 9.5, letterSpacing: 0.95, textTransform: 'uppercase', color: 'rgba(10,10,10,0.6)' },
   sqBar: { height: 2, borderRadius: 2, backgroundColor: 'rgba(10,10,10,0.1)', overflow: 'hidden' },
   sqBarFill: { height: '100%', borderRadius: 2, backgroundColor: GOLD },
   sqFoot: { flexDirection: 'row', alignItems: 'center', borderTopWidth: 1, borderTopColor: 'rgba(10,10,10,0.07)', paddingTop: 8 },
-  sqFootL: { fontFamily: Fonts.ttDemiBold, fontSize: 9.5, letterSpacing: 0.95, textTransform: 'uppercase', color: 'rgba(10,10,10,0.6)' },
-  sqFootV: { marginLeft: 'auto', fontFamily: Fonts.ttDemiBold, fontSize: 10.5, color: INK },
+  sqFootL: { fontFamily: Fonts.semiBold, fontSize: 9.5, letterSpacing: 0.95, textTransform: 'uppercase', color: 'rgba(10,10,10,0.6)' },
+  sqFootV: { marginLeft: 'auto', fontFamily: Fonts.semiBold, fontSize: 10.5, color: INK },
 
   moreWrap: { position: 'absolute', left: 0, right: 0, bottom: 0, height: 46, justifyContent: 'flex-end' },
   moreHint: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingBottom: 4 },
-  moreT: { fontFamily: Fonts.ttDemiBold, fontSize: 9.5, letterSpacing: 1.5, textTransform: 'uppercase', color: INK_62 },
+  moreT: { fontFamily: Fonts.semiBold, fontSize: 9.5, letterSpacing: 1.5, textTransform: 'uppercase', color: INK_62 },
 
-  empty: { width: '100%', paddingTop: 24, textAlign: 'center', fontFamily: Fonts.ttRegular, fontSize: 13, lineHeight: 19, color: 'rgba(10,10,10,0.6)' },
+  empty: { width: '100%', paddingTop: 24, textAlign: 'center', fontFamily: Fonts.regular, fontSize: 13, lineHeight: 19, color: 'rgba(10,10,10,0.6)' },
 });

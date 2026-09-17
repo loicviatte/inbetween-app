@@ -93,14 +93,14 @@ export default function PhoneField({ label, country, onCountry, value, onChange 
 }
 
 const st = StyleSheet.create({
-  lbl: { marginBottom: 9, fontFamily: Fonts.travelsMedium, fontSize: 10, letterSpacing: 1.4, textTransform: 'uppercase', color: T.ink2 },
+  lbl: { marginBottom: 9, fontFamily: Fonts.medium, fontSize: 10, letterSpacing: 1.4, textTransform: 'uppercase', color: T.ink2 },
   fieldIn: { borderWidth: 1, borderColor: T.line3, borderRadius: 10, backgroundColor: T.card, height: 50, paddingHorizontal: 14, justifyContent: 'center' },
   fieldOn: { borderColor: T.gold },
-  input: { fontFamily: Fonts.travelsRegular, fontSize: 15, color: T.ink, padding: 0 },
+  input: { fontFamily: Fonts.regular, fontSize: 15, color: T.ink, padding: 0 },
   phoneIn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-start', paddingLeft: 0 },
   dial: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'stretch', paddingLeft: 14, paddingRight: 10 },
   dialFlag: { fontSize: 17 },
-  dialT: { fontFamily: Fonts.travelsMedium, fontSize: 15, color: T.ink },
+  dialT: { fontFamily: Fonts.medium, fontSize: 15, color: T.ink },
   dialSep: { width: 1, height: 22, backgroundColor: T.line3, marginRight: 12 },
   phoneInput: { flex: 1, alignSelf: 'stretch' },
   dialBackdrop: { flex: 1 },
@@ -112,6 +112,6 @@ const st = StyleSheet.create({
   dialOpt: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingVertical: 12 },
   dialOptLine: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: T.line2 },
   dialOptOn: { backgroundColor: 'rgba(232,181,48,0.14)' },
-  dialOptName: { flex: 1, fontFamily: Fonts.travelsRegular, fontSize: 14.5, color: T.ink },
-  dialOptCode: { fontFamily: Fonts.travelsMedium, fontSize: 14, color: T.ink2 },
+  dialOptName: { flex: 1, fontFamily: Fonts.regular, fontSize: 14.5, color: T.ink },
+  dialOptCode: { fontFamily: Fonts.medium, fontSize: 14, color: T.ink2 },
 });

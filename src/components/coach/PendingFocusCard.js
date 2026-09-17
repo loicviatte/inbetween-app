@@ -150,14 +150,14 @@ const s = StyleSheet.create({
     alignItems: 'flex-end',
   },
   metaCategory: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 10,
     letterSpacing: 1.2,
     color: GOLD,
     textTransform: 'uppercase',
   },
   metaTime: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 11,
     color: GOLD,
     letterSpacing: 0.2,
@@ -166,7 +166,7 @@ const s = StyleSheet.create({
     color: '#FF8C8C',
   },
   studentName: {
-    fontFamily: Fonts.jakartaSemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 15,
     color: 'rgba(255,255,255,0.92)',
     letterSpacing: -0.2,
@@ -177,21 +177,21 @@ const s = StyleSheet.create({
 
   // ── Title / subtitle / body ──
   fpName: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 22,
     lineHeight: 26,
     letterSpacing: -0.55,
     color: '#FFFFFF',
   },
   fpSubtitle: {
-    fontFamily: Fonts.jakartaSemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 11.5,
     color: GOLD,
     lineHeight: 16,
     marginTop: 6,
   },
   fpDetail: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     color: 'rgba(255,255,255,0.78)',
     lineHeight: 19,
@@ -207,7 +207,7 @@ const s = StyleSheet.create({
   },
   quoteBlock: { marginBottom: 16 },
   quoteLabel: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 9.5,
     color: 'rgba(255,255,255,0.55)',
     letterSpacing: 1.2,
@@ -224,7 +224,7 @@ const s = StyleSheet.create({
   quoteBarGold: { backgroundColor: GOLD },
   quoteText: {
     flex: 1,
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13.5,
     color: 'rgba(255,255,255,0.85)',
     lineHeight: 20,
@@ -246,7 +246,7 @@ const s = StyleSheet.create({
     paddingVertical: 12,
   },
   approveBtnText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 13,
     color: '#0A0A0A',
     letterSpacing: 0.2,
@@ -256,13 +256,13 @@ const s = StyleSheet.create({
     paddingHorizontal: 4,
   },
   editBtnText: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 13,
     color: '#FFFFFF',
     letterSpacing: 0.1,
   },
   rejectBtnText: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 13,
     color: '#FF8C8C',
     letterSpacing: 0.1,
@@ -280,7 +280,7 @@ const s = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.14)',
   },
   contextBtnText: {
-    fontFamily: Fonts.jakartaSemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 12.5,
     color: 'rgba(255,255,255,0.85)',
     letterSpacing: 0.1,
