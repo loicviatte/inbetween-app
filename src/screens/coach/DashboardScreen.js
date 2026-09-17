@@ -28,6 +28,8 @@ import * as DjiFiles from 'local-recording-files';
 import * as Notifications from 'expo-notifications';
 import { registerPushToken } from '../../services/notifications';
 import { useDjiSync } from '../../context/DjiSyncContext';
+import PullLogo from '../../components/PullLogo';
+import usePullDown, { PULL_REST } from '../../components/usePullDown';
 
 // ─── Coach ▸ Home (docs/design/coach-dashboard.html) ────────────────────────
 // Group readiness in one big number, ten weeks of group practice, what's
@@ -331,10 +333,21 @@ export default function DashboardScreen({ navigation }) {
   const openStudent = (s) =>
     guardStudent(s, () => navigation.navigate('StudentDetail', { studentId: s.id, studentName: s.name }), () => refresh());
 
+  // Pulling the top of the page down (anything above the sort) reloads it.
+  const pull = usePullDown(async () => {
+    lastSigRef.current = null;   // readiness is re-read even if the roster is the same
+    await refresh();
+  });
+
   if (loading) return <DashboardSkeleton />;
 
   return (
     <View style={st.page}>
+      <Animated.View pointerEvents="none" style={[st.pullLogo, { opacity: pull.logoOpacity }]}>
+        <PullLogo ref={pull.logoRef} refreshing={pull.refreshing} />
+      </Animated.View>
+      <Animated.View style={{ flex: 1, transform: [{ translateY: pull.pullY }] }}>
+      <View {...pull.panHandlers}>
       {showNotifNudge && (
         <TouchableOpacity style={st.nudge} onPress={onNotifNudgePress} activeOpacity={0.85}>
           <Ionicons name="notifications-off-outline" size={15} color="#F6D27A" />
@@ -415,6 +428,8 @@ export default function DashboardScreen({ navigation }) {
         )}
       </View>
 
+      </View>
+
       {/* ── Sort ── */}
       <View style={st.sort}>
         <Text style={st.sortCount}>{students.length} student{students.length === 1 ? '' : 's'}</Text>
@@ -454,12 +469,14 @@ export default function DashboardScreen({ navigation }) {
           </View>
         )}
       </View>
+      </Animated.View>
     </View>
   );
 }
 
 const st = StyleSheet.create({
   page: { flex: 1, backgroundColor: PAGE },
+  pullLogo: { position: 'absolute', top: (PULL_REST - 27) / 2, left: 0, right: 0, alignItems: 'center' },
 
   nudge: {
     flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: Spacing.side, marginBottom: 6,
@@ -503,10 +520,9 @@ const st = StyleSheet.create({
 
   start: {
     height: 58, borderRadius: 999, backgroundColor: GOLD, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 11,
-    shadowColor: GOLD, shadowOpacity: 0.9, shadowOffset: { width: 0, height: 10 }, shadowRadius: 12, elevation: 4,
   },
   startT: { fontFamily: Fonts.ttBold, fontSize: 19, letterSpacing: -0.4, color: INK },
-  startLive: { backgroundColor: INK, shadowOpacity: 0 },
+  startLive: { backgroundColor: INK },
   liveDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#D06A5A' },
   liveTimer: { fontFamily: Fonts.ttBold, fontSize: 15, color: GOLD, fontVariant: ['tabular-nums'] },
 

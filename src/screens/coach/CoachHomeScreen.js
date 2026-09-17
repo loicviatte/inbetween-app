@@ -9,12 +9,11 @@ import {
   Pressable,
   Alert,
   Animated,
-  PanResponder,
   Easing,
   Dimensions,
 } from 'react-native';
-import * as Haptics from 'expo-haptics';
 import PullLogo from '../../components/PullLogo';
+import usePullDown, { PULL_REST } from '../../components/usePullDown';
 import { supabase } from '../../services/supabase/client';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -47,11 +46,6 @@ const RED = '#A8412F';
 const GREEN = '#7FB77E';
 // Rows dissolve as they slide under the toggle and behind the floating tab bar.
 const EDGE_FADE = 14;
-// Pulling the fixed top down refreshes, as on Train: how far (after damping)
-// it must come, and where it rests while the roster reloads.
-const PULL_TRIGGER = 64;
-const PULL_REST = 52;
-const pullDamp = (dy) => Math.min(Math.max(0, dy) * 0.5, 120);
 
 function initialsOf(name) {
   const w = (name || '').trim().split(/\s+/).filter(Boolean);
@@ -449,59 +443,10 @@ export default function CoachHomeScreen({ navigation, route }) {
   useEffect(() => { loadCouples(); }, []);
 
   // ── Pull to refresh, from the fixed top ──
-  const [refreshing, setRefreshing] = useState(false);
-  const pullY = useRef(new Animated.Value(0)).current;
-  const pullLogoRef = useRef(null);
-  async function reloadAll() {
-    setRefreshing(true);
+  const pull = usePullDown(async () => {
     lastReadinessSigRef.current = null;   // readiness is re-read even if the roster is the same
-    try {
-      await Promise.all([refresh(), loadCouples()]);
-    } finally {
-      if (aliveRef.current) setRefreshing(false);
-    }
-  }
-  const pullRef = useRef({ busy: false, armed: false, reload: null });
-  pullRef.current.reload = reloadAll;
-  const pullResponder = useRef(PanResponder.create({
-    // Capture: a pull that starts on a title or a chip is still a pull.
-    onMoveShouldSetPanResponderCapture: (_, g) => !pullRef.current.busy && g.dy > 10 && g.dy > Math.abs(g.dx) * 1.5,
-    onPanResponderMove: (_, g) => {
-      const y = pullDamp(g.dy);
-      pullY.setValue(y);
-      const p = pullRef.current;
-      pullLogoRef.current?.setProgress(y / PULL_TRIGGER);
-      if (!p.armed && y >= PULL_TRIGGER) {
-        p.armed = true;
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
-      } else if (p.armed && y < PULL_TRIGGER) {
-        p.armed = false;
-      }
-    },
-    onPanResponderRelease: (_, g) => {
-      const p = pullRef.current;
-      p.armed = false;
-      if (pullDamp(g.dy) < PULL_TRIGGER) {
-        Animated.spring(pullY, { toValue: 0, useNativeDriver: true, bounciness: 0, speed: 18 })
-          .start(() => pullLogoRef.current?.setProgress(0));
-        return;
-      }
-      p.busy = true;
-      Animated.spring(pullY, { toValue: PULL_REST, useNativeDriver: true, bounciness: 0, speed: 18 }).start();
-      Promise.resolve(p.reload?.()).finally(() => {
-        Animated.timing(pullY, { toValue: 0, duration: 220, useNativeDriver: true }).start(() => {
-          p.busy = false;
-          pullLogoRef.current?.setProgress(0);
-        });
-      });
-    },
-    onPanResponderTerminate: () => {
-      pullRef.current.armed = false;
-      Animated.spring(pullY, { toValue: 0, useNativeDriver: true, bounciness: 0, speed: 18 })
-        .start(() => pullLogoRef.current?.setProgress(0));
-    },
-    onPanResponderTerminationRequest: () => false,
-  })).current;
+    await Promise.all([refresh(), loadCouples()]);
+  });
 
   async function handleAcceptCoupleCoach(reqId) {
     await respondToCoupleCoachRequest(reqId, true);
@@ -579,14 +524,14 @@ export default function CoachHomeScreen({ navigation, route }) {
       {/* The InBetween mark, drawn by the pull, turning while the roster reloads. */}
       <Animated.View
         pointerEvents="none"
-        style={[st.pullLogo, { opacity: pullY.interpolate({ inputRange: [0, 6], outputRange: [0, 1], extrapolate: 'clamp' }) }]}
+        style={[st.pullLogo, { opacity: pull.logoOpacity }]}
       >
-        <PullLogo ref={pullLogoRef} refreshing={refreshing} />
+        <PullLogo ref={pull.logoRef} refreshing={pull.refreshing} />
       </Animated.View>
-      <Animated.View style={{ flex: 1, transform: [{ translateY: pullY }] }}>
+      <Animated.View style={{ flex: 1, transform: [{ translateY: pull.pullY }] }}>
       {/* Fixed: titles, summary and the Readiness | Last private lesson toggle.
           Only the roster below it scrolls; pulling this part down refreshes. */}
-      <View style={st.fixed} {...pullResponder.panHandlers}>
+      <View style={st.fixed} {...pull.panHandlers}>
         {/* Students / Couples, and search */}
         <View style={st.titleRow}>
           <TouchableOpacity onPress={() => setView('students')} activeOpacity={0.7}>
