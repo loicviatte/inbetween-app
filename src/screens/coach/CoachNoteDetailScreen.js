@@ -380,7 +380,7 @@ export default function CoachNoteDetailScreen({ route, navigation }) {
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn} activeOpacity={0.7}>
-          <Ionicons name="chevron-back" size={22} color={Colors.activeFocus} />
+          <Ionicons name="chevron-back" size={20} color="#0A0A0A" />
           <Text style={styles.backLabel} numberOfLines={1}>Notes</Text>
         </TouchableOpacity>
         <TouchableOpacity onPress={handleDelete} activeOpacity={0.7}>
@@ -586,7 +586,7 @@ export default function CoachNoteDetailScreen({ route, navigation }) {
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: Colors.background },
+  safe: { flex: 1, backgroundColor: '#F2F0EB' },
 
   header: {
     flexDirection: 'row',
@@ -598,9 +598,9 @@ const styles = StyleSheet.create({
   },
   backBtn: { flexDirection: 'row', alignItems: 'center', gap: 2 },
   backLabel: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 17,
-    color: Colors.activeFocus,
+    fontFamily: Fonts.ttDemiBold,
+    fontSize: 16,
+    color: '#0A0A0A',
   },
   deleteText: {
     fontFamily: Fonts.jakartaMedium,

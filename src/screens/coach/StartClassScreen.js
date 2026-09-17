@@ -21,12 +21,11 @@ import {
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Notifications from 'expo-notifications';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Colors, Fonts, Spacing } from '../../theme';
+import { Fonts, Spacing } from '../../theme';
 import { useCoachData } from '../../context/CoachDataContext';
 import { isAwaitingVerification, guardStudent } from '../../utils/studentLock';
 import { useDjiSync } from '../../context/DjiSyncContext';
-import { getStudentFocusPoints, getStudentQuestions, getStudentOpenQuestions, getStudentRecentActivity, getStartClassRoster, markQuestionCovered, linkCoveredQuestionsToClass, getCoachStudentDetailBundle } from '../../storage/coachStorage';
-import { getLessonReadiness } from '../../storage/storage';
+import { getStudentFocusPoints, getStudentQuestions, getStartClassRoster, markQuestionCovered, linkCoveredQuestionsToClass, getCoachStudentDetailBundle } from '../../storage/coachStorage';
 import { getMyCouples, getCoupleReadiness, getCoupleFocusPoints, getCoupleActivity } from '../../storage/coupleStorage';
 import QuestionSheet from '../../components/coach/QuestionSheet';
 import MicCueSheet from '../../components/MicCueSheet';
@@ -780,11 +779,11 @@ export default function StartClassScreen({ navigation }) {
       if (interruptAlertShownRef.current) return;
       interruptAlertShownRef.current = true;
       Alert.alert(
-        'Enregistrement interrompu',
-        "L'enregistrement audio a été coupé (probablement parce que l'application a été fermée ou suspendue trop longtemps). Veux-tu arrêter le cours et utiliser ce qui a été capturé ?",
+        'Recording interrupted',
+        'The audio stopped — the app was probably closed or suspended for too long. End the lesson and keep what was captured?',
         [
-          { text: 'Continuer le cours', style: 'cancel' },
-          { text: 'Arrêter le cours', style: 'destructive', onPress: () => stopClass() },
+          { text: 'Keep the lesson going', style: 'cancel' },
+          { text: 'End the lesson', style: 'destructive', onPress: () => stopClass() },
         ],
       );
     };

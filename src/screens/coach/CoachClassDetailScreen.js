@@ -32,7 +32,7 @@ import {
 
 // ─── Palette ────────────────────────────────────────────────────────────────
 const INK_950 = '#0A0A0A';
-const INK_50 = '#F7F6F3';
+const INK_50 = '#F2F0EB';
 const PAPER = '#FFFFFF';
 const FG_2 = 'rgba(10,10,10,0.55)';
 const FG_3 = 'rgba(10,10,10,0.30)';
@@ -1199,9 +1199,9 @@ const s = StyleSheet.create({
     paddingBottom: 14,
   },
   iconBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
+    width: 36,
+    height: 36,
+    borderRadius: 11,
     backgroundColor: '#FFFFFF',
     alignItems: 'center',
     justifyContent: 'center',

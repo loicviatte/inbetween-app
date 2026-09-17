@@ -14,7 +14,7 @@ const C = {
   dark: '#141414',
   text: '#0E0E0E',
   gray: '#999',
-  red: '#D44545',
+  red: '#A8412F',
   lightGray: '#E5E5E5',
 };
 

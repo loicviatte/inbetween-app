@@ -128,7 +128,7 @@ export default function PendingFocusCard({
 
 const s = StyleSheet.create({
   card: {
-    borderRadius: 18,
+    borderRadius: 16,
     paddingHorizontal: 18,
     paddingTop: 14,
     paddingBottom: 16,
