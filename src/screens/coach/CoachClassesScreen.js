@@ -223,7 +223,7 @@ function ListBones() {
 
 export default function CoachClassesScreen({ navigation }) {
   const { notes, students, refresh } = useCoachData();
-  const { view, style, setLogged } = useClassesView();
+  const { view, style } = useClassesView();
   const tabBarSpace = useTabBarSpace();
   const { width } = useWindowDimensions();
 
@@ -237,7 +237,6 @@ export default function CoachClassesScreen({ navigation }) {
     setLoaded(true);
   }, []);
   useFocusEffect(useCallback(() => { load(); }, [load]));
-  useEffect(() => { if (loaded) setLogged(classes.length); }, [loaded, classes.length, setLogged]);
 
   const pull = usePullDown(() => Promise.all([load(), refresh()]));
 

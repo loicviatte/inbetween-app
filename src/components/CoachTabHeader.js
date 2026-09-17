@@ -30,12 +30,10 @@ const CLASS_STYLES = [
 // mode 'classes': the Class tab's "Classes ▾", then its calendar and notes buttons.
 export default function CoachTabHeader({ mode = null }) {
   const navigation = useNavigation();
-  const { user, unreadCount, styleFilter, setStyleFilter, canSwitchStyle, students, notes } = useCoachData();
+  const { user, unreadCount, styleFilter, setStyleFilter, canSwitchStyle, notes } = useCoachData();
   const classes = useClassesView();
   const initial = user?.name ? user.name[0].toUpperCase() : 'C';
   const classesLabel = classes.style === 'latin' ? 'Latin group' : classes.style === 'ballroom' ? 'Ballroom group' : 'Classes';
-  const classesSub = classes.logged == null ? null
-    : `${classes.logged} logged · ${students.length} student${students.length === 1 ? '' : 's'}`;
   const toggleView = (v) => classes.setView(classes.view === v ? 'list' : v);
 
   return (
@@ -71,7 +69,6 @@ export default function CoachTabHeader({ mode = null }) {
           category={classes.style}
           canSwitch={canSwitchStyle}
           options={CLASS_STYLES}
-          sub={classesSub}
           onSelect={classes.setStyle}
         />
       )}
