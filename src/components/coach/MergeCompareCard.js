@@ -1,44 +1,51 @@
+// Two focus points that may be the same one, side by side (docs/design/action-needed.html):
+// what the student already carries, what the last lesson just added, and what
+// each has cost them in practice — so "Merge" or "Keep both" is answered from
+// the page. `Context` opens the fuller reading in a sheet the screen owns.
+
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
-import HeroCardGradient from '../HeroCardGradient';
-import Ionicons from '@expo/vector-icons/Ionicons';
 import { Fonts } from '../../theme';
+import { L, Avatar, dateLabel } from './LessonUI';
 
-const GOLD = '#F6D27A';
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const NAVY = '#22314D';
 
-function formatDate(iso) {
-  if (!iso) return '';
-  const d = new Date(iso);
-  return `${MONTHS[d.getMonth()]} ${d.getDate()}`;
+function whereFrom(fp) {
+  if (!fp) return '';
+  const kind = fp.group_fp ? 'Group' : 'Private';
+  const style = Array.isArray(fp.dance) ? fp.dance[0] : fp.dance;
+  const head = fp.group_fp && style ? `${style} group` : kind;
+  return [head, fp.created_at ? dateLabel(fp.created_at) : null].filter(Boolean).join(' · ');
 }
 
-function FocusSide({ label, dateLabel, fp }) {
-  if (!fp) return null;
+// "practised 3× · 17 min", or that it never was.
+function practiceLine(fp) {
+  const times = fp?.practiceCount ?? 0;
+  const minutes = fp?.practiceMinutes ?? 0;
+  if (!times) return { text: 'never practised', ratio: 0 };
+  return {
+    text: `practised ${times}× ${minutes ? `· ${minutes} min` : ''}`.trim(),
+    ratio: Math.min(1, times / 3),
+  };
+}
+
+function Mini({ fp, isNew, solo }) {
+  const { text, ratio } = practiceLine(fp);
   return (
-    <View style={s.side}>
-      <View style={s.sideHeader}>
-        <Text style={s.sideLabel}>{label}</Text>
-        {!!dateLabel && <Text style={s.sideDate}>{dateLabel.toUpperCase()}</Text>}
+    <View style={[s.mc, solo && s.mcSolo]}>
+      {isNew && <Text style={s.nw}>New</Text>}
+      <Text style={s.tag} numberOfLines={1}>{whereFrom(fp)}</Text>
+      <Text style={s.mcName} numberOfLines={2}>{fp?.name || '—'}</Text>
+      {!!fp?.subtitle && <Text style={s.mcP} numberOfLines={2}>{fp.subtitle}</Text>}
+      <View style={s.tk}>
+        <View style={s.track}><View style={[s.trackFill, { width: `${ratio * 100}%` }]} /></View>
+        <Text style={s.tkT}>{text}</Text>
       </View>
-      <Text style={s.sideName}>{fp.name}</Text>
-      {!!fp.subtitle && <Text style={s.sideSubtitle}>{fp.subtitle}</Text>}
-      {!!fp.context && (
-        <Text style={s.sideContext} numberOfLines={4}>
-          {fp.context}
-        </Text>
-      )}
-      {!!fp.drill && (
-        <View style={s.drillBlock}>
-          <Text style={s.drillLabel}>DRILL</Text>
-          <Text style={s.drillText} numberOfLines={3}>{fp.drill}</Text>
-        </View>
-      )}
     </View>
   );
 }
 
-export default function MergeCompareCard({ mr, studentName, onMerge, onKeepBoth }) {
+export default function MergeCompareCard({ mr, studentName, onMerge, onKeepBoth, onShowContext }) {
   const a = mr.focusA;
   const b = mr.focusB;
   const olderFirst = a && b && new Date(a.created_at) <= new Date(b.created_at);
@@ -47,45 +54,33 @@ export default function MergeCompareCard({ mr, studentName, onMerge, onKeepBoth 
 
   return (
     <View style={s.card}>
-      <HeroCardGradient />
-
-      {/* Top meta */}
-      <View style={s.topRow}>
-        <Text style={s.topLabel}>POSSIBLE DUPLICATE</Text>
-        {!!studentName && <Text style={s.topStudent}>{studentName}</Text>}
+      <View style={s.hd}>
+        <Avatar name={studentName} size={26} />
+        <Text style={s.hdName} numberOfLines={1}>{studentName || 'Your student'}</Text>
+        <Text style={s.hdEm}>Same idea?</Text>
       </View>
 
-      {/* Existing side */}
-      <FocusSide
-        label="EXISTING"
-        dateLabel={formatDate(existing?.created_at)}
-        fp={existing}
-      />
-
-      {/* VS divider */}
-      <View style={s.vsRow}>
-        <View style={s.vsLine} />
-        <View style={s.vsChip}>
-          <Text style={s.vsChipText}>VS</Text>
+      <View style={s.mini}>
+        <Mini fp={existing} solo={!existing?.group_fp} />
+        <View style={s.eq}>
+          <View style={s.eqDot}><Text style={s.eqDotT}>≈</Text></View>
+          <Text style={s.eqT} numberOfLines={1}>Two names for one idea?</Text>
+          {!!onShowContext && (
+            <TouchableOpacity style={s.ctxb} activeOpacity={0.8} onPress={() => onShowContext(mr, { existing, incoming })}
+              accessibilityRole="button">
+              <Text style={s.ctxbT}>Context</Text>
+            </TouchableOpacity>
+          )}
         </View>
-        <View style={s.vsLine} />
+        <Mini fp={incoming} isNew solo={!incoming?.group_fp} />
       </View>
 
-      {/* Incoming side */}
-      <FocusSide
-        label="NEW FROM THIS CLASS"
-        dateLabel={formatDate(incoming?.created_at)}
-        fp={incoming}
-      />
-
-      {/* Actions */}
-      <View style={s.actions}>
-        <TouchableOpacity style={s.mergeBtn} onPress={onMerge} activeOpacity={0.85}>
-          <Ionicons name="git-merge-outline" size={15} color="#0A0A0A" />
-          <Text style={s.mergeBtnText}>Merge into existing</Text>
+      <View style={s.act}>
+        <TouchableOpacity style={s.ok} activeOpacity={0.88} onPress={() => onMerge(mr)} accessibilityRole="button">
+          <Text style={s.okT}>Merge</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={s.keepBtn} onPress={onKeepBoth} activeOpacity={0.7}>
-          <Text style={s.keepBtnText}>Keep both</Text>
+        <TouchableOpacity style={s.keep} activeOpacity={0.8} onPress={() => onKeepBoth(mr)} accessibilityRole="button">
+          <Text style={s.keepT}>Keep both</Text>
         </TouchableOpacity>
       </View>
     </View>
@@ -94,154 +89,41 @@ export default function MergeCompareCard({ mr, studentName, onMerge, onKeepBoth 
 
 const s = StyleSheet.create({
   card: {
-    borderRadius: 16,
-    paddingHorizontal: 18,
-    paddingTop: 14,
-    paddingBottom: 16,
-    marginBottom: 14,
-    borderWidth: 1,
-    borderColor: 'rgba(240,194,74,0.28)',
-    overflow: 'hidden',
+    backgroundColor: '#FFFFFF', borderRadius: 19, borderWidth: 1, borderColor: 'rgba(10,10,10,0.07)',
+    overflow: 'hidden', marginBottom: 10,
   },
+  hd: { flexDirection: 'row', alignItems: 'center', gap: 9, paddingHorizontal: 16, paddingTop: 13 },
+  hdName: { flex: 1, minWidth: 0, fontFamily: Fonts.semiBold, fontSize: 13, letterSpacing: -0.2, color: L.INK },
+  hdEm: { fontFamily: Fonts.semiBold, fontSize: 10, letterSpacing: 0.9, textTransform: 'uppercase', color: L.INK_62 },
 
-  // ── Top meta ──
-  topRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 16,
+  mini: { padding: 16, paddingBottom: 13, gap: 8 },
+  mc: { backgroundColor: NAVY, borderRadius: 14, paddingVertical: 11, paddingHorizontal: 13, gap: 5 },
+  mcSolo: { backgroundColor: L.INK },
+  nw: {
+    position: 'absolute', top: 11, right: 13, fontFamily: Fonts.semiBold, fontSize: 8.5, letterSpacing: 1.2,
+    textTransform: 'uppercase', color: '#F6A192',
   },
-  topLabel: {
-    fontFamily: Fonts.semiBold,
-    fontSize: 10,
-    letterSpacing: 1.2,
-    color: GOLD,
-  },
-  topStudent: {
-    fontFamily: Fonts.semiBold,
-    fontSize: 13,
-    color: 'rgba(255,255,255,0.85)',
-    letterSpacing: -0.1,
-  },
+  tag: { fontFamily: Fonts.semiBold, fontSize: 8.5, letterSpacing: 1.2, textTransform: 'uppercase', color: L.GOLD },
+  mcName: { fontFamily: Fonts.bold, fontSize: 16, letterSpacing: -0.56, lineHeight: 18, color: '#FFFFFF' },
+  mcP: { fontFamily: Fonts.regular, fontSize: 11.5, lineHeight: 15.5, color: 'rgba(255,255,255,0.7)' },
+  tk: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 2 },
+  track: { width: 42, height: 3, borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.22)', overflow: 'hidden' },
+  trackFill: { height: 3, borderRadius: 2, backgroundColor: L.GOLD },
+  tkT: { flex: 1, minWidth: 0, fontFamily: Fonts.regular, fontSize: 10.5, color: 'rgba(255,255,255,0.7)' },
 
-  // ── Sides ──
-  side: {
-    paddingVertical: 4,
-  },
-  sideHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-  },
-  sideLabel: {
-    fontFamily: Fonts.semiBold,
-    fontSize: 9.5,
-    color: 'rgba(255,255,255,0.55)',
-    letterSpacing: 1.2,
-  },
-  sideDate: {
-    fontFamily: Fonts.semiBold,
-    fontSize: 9.5,
-    color: 'rgba(255,255,255,0.45)',
-    letterSpacing: 0.6,
-  },
-  sideName: {
-    fontFamily: Fonts.semiBold,
-    fontSize: 20,
-    color: '#FFFFFF',
-    letterSpacing: -0.5,
-    lineHeight: 24,
-  },
-  sideSubtitle: {
-    fontFamily: Fonts.semiBold,
-    fontSize: 12,
-    color: GOLD,
-    lineHeight: 17,
-    marginTop: 4,
-  },
-  sideContext: {
-    fontFamily: Fonts.regular,
-    fontSize: 12.5,
-    color: 'rgba(255,255,255,0.72)',
-    lineHeight: 18,
-    marginTop: 8,
-  },
-  drillBlock: {
-    marginTop: 10,
-  },
-  drillLabel: {
-    fontFamily: Fonts.semiBold,
-    fontSize: 8.5,
-    color: GOLD,
-    letterSpacing: 1,
-    marginBottom: 3,
-  },
-  drillText: {
-    fontFamily: Fonts.regular,
-    fontSize: 12,
-    color: 'rgba(255,255,255,0.78)',
-    lineHeight: 17,
-  },
+  eq: { flexDirection: 'row', alignItems: 'center', gap: 9 },
+  eqDot: { width: 22, height: 22, borderRadius: 11, backgroundColor: L.INK, alignItems: 'center', justifyContent: 'center' },
+  eqDotT: { fontFamily: Fonts.bold, fontSize: 11, color: '#FFFFFF' },
+  eqT: { flexShrink: 1, fontFamily: Fonts.semiBold, fontSize: 11, color: L.INK_62 },
+  ctxb: { marginLeft: 'auto', paddingHorizontal: 11, paddingVertical: 6, borderRadius: 999, borderWidth: 1, borderColor: 'rgba(10,10,10,0.14)' },
+  ctxbT: { fontFamily: Fonts.semiBold, fontSize: 11.5, color: 'rgba(10,10,10,0.68)' },
 
-  // ── VS divider ──
-  vsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginVertical: 18,
-    gap: 10,
+  act: {
+    flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 14,
+    borderTopWidth: 1, borderTopColor: 'rgba(10,10,10,0.07)',
   },
-  vsLine: {
-    flex: 1,
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: 'rgba(240,194,74,0.30)',
-  },
-  vsChip: {
-    paddingHorizontal: 10,
-    paddingVertical: 3,
-    borderRadius: 999,
-    backgroundColor: 'rgba(240,194,74,0.14)',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(240,194,74,0.45)',
-  },
-  vsChipText: {
-    fontFamily: Fonts.semiBold,
-    fontSize: 10,
-    color: GOLD,
-    letterSpacing: 1.5,
-  },
-
-  // ── Actions ──
-  actions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    marginTop: 20,
-  },
-  mergeBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 7,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    paddingVertical: 12,
-  },
-  mergeBtnText: {
-    fontFamily: Fonts.semiBold,
-    fontSize: 13,
-    color: '#0A0A0A',
-    letterSpacing: 0.1,
-  },
-  keepBtn: {
-    paddingVertical: 12,
-    paddingHorizontal: 8,
-  },
-  keepBtnText: {
-    fontFamily: Fonts.semiBold,
-    fontSize: 13,
-    color: 'rgba(255,255,255,0.65)',
-    letterSpacing: 0.1,
-  },
+  ok: { flex: 1, height: 42, borderRadius: 999, backgroundColor: L.INK, alignItems: 'center', justifyContent: 'center' },
+  okT: { fontFamily: Fonts.semiBold, fontSize: 14, color: '#FFFFFF' },
+  keep: { height: 42, paddingHorizontal: 17, borderRadius: 999, borderWidth: 1, borderColor: 'rgba(10,10,10,0.14)', alignItems: 'center', justifyContent: 'center' },
+  keepT: { fontFamily: Fonts.semiBold, fontSize: 13.5, color: 'rgba(10,10,10,0.68)' },
 });

@@ -32,9 +32,9 @@ export function initialsOf(name) {
 
 // Dates come from one place for the whole app (see utils/dates), and are
 // re-exported here so the coach kit stays a single import.
-import { daysAgo, dayLabel } from '../../utils/dates';
+import { daysAgo, dayLabel, dateLabel } from '../../utils/dates';
 
-export { daysAgo, dayLabel };
+export { daysAgo, dayLabel, dateLabel };
 // "since Mon 8 Sep", "since yesterday", "today"; no date → "in the last 7 days".
 export function sincePhrase(date) {
   if (!date) return 'in the last 7 days';
