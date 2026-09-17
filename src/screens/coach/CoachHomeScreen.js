@@ -10,6 +10,8 @@ import {
   Alert,
   Animated,
   PanResponder,
+  Easing,
+  Dimensions,
 } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import PullLogo from '../../components/PullLogo';
@@ -281,6 +283,43 @@ export default function CoachHomeScreen({ navigation, route }) {
   }, [students]);
 
   const [tab, setTab] = useState('readiness'); // 'readiness' | 'last'
+  // Readiness ↔ Last private lesson slides like Train's Solo ↔ Couple: the
+  // underline answers the tap at once, the roster slides out towards the side
+  // being left, swaps (shownTab lags tab by the exit) and slides in from the
+  // other edge.
+  const [shownTab, setShownTab] = useState(tab);
+  const tabSlideX = useRef(new Animated.Value(0)).current;
+  const tabSlideO = useRef(new Animated.Value(1)).current;
+  const tabTargetRef = useRef(tab);
+  tabTargetRef.current = tab;
+  useEffect(() => {
+    if (shownTab === tab) {
+      // Tapped back before the swap: bring the roster that never left back in.
+      Animated.parallel([
+        Animated.timing(tabSlideX, { toValue: 0, duration: 200, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+        Animated.timing(tabSlideO, { toValue: 1, duration: 160, useNativeDriver: true }),
+      ]).start();
+      return;
+    }
+    // Last private lesson sits to the right: going there pushes the roster left.
+    const dir = tab === 'last' ? -1 : 1;
+    const shift = Dimensions.get('window').width * 0.45;
+    tabSlideX.stopAnimation();
+    tabSlideO.stopAnimation();
+    Animated.parallel([
+      Animated.timing(tabSlideX, { toValue: dir * shift, duration: 150, easing: Easing.in(Easing.quad), useNativeDriver: true }),
+      Animated.timing(tabSlideO, { toValue: 0, duration: 150, useNativeDriver: true }),
+    ]).start(({ finished }) => {
+      if (!finished) return;
+      setShownTab(tabTargetRef.current);
+      tabSlideX.setValue(-dir * shift);
+      Animated.parallel([
+        Animated.timing(tabSlideX, { toValue: 0, duration: 280, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+        Animated.timing(tabSlideO, { toValue: 1, duration: 220, useNativeDriver: true }),
+      ]).start();
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
   const [view, setView] = useState('students'); // 'students' | 'couples'
   const [couples, setCouples] = useState([]);
   const [coupleReqs, setCoupleReqs] = useState([]);
@@ -626,6 +665,7 @@ export default function CoachHomeScreen({ navigation, route }) {
         }
       >
       <ScrollView style={{ flex: 1 }} contentContainerStyle={[st.scroll, { paddingBottom: tabBarSpace + 40 }]} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+      <Animated.View style={{ opacity: tabSlideO, transform: [{ translateX: tabSlideX }] }}>
         {/* Requests waiting on the coach */}
         {isStudents && requests.length > 0 && (
           <>
@@ -657,7 +697,7 @@ export default function CoachHomeScreen({ navigation, route }) {
             <Text style={st.empty}>
               {searchQuery.trim() ? `Nobody matches “${searchQuery.trim()}”.` : 'No students yet. Share your invite code from your profile to add them.'}
             </Text>
-          ) : tab === 'readiness' ? (
+          ) : shownTab === 'readiness' ? (
             <>
               {attention.length > 0 && (
                 <>
@@ -682,9 +722,9 @@ export default function CoachHomeScreen({ navigation, route }) {
           <Text style={st.empty}>No couples yet. When a couple picks you as their couple coach, they’ll appear here.</Text>
         ) : (
           <>
-            <GroupHead label={tab === 'last' ? 'Longest since a private lesson' : 'Couples'} count={couples.length} tone="ok" />
+            <GroupHead label={shownTab === 'last' ? 'Longest since a private lesson' : 'Couples'} count={couples.length} tone="ok" />
             <View style={st.rows}>
-              {(tab === 'last' ? couplesByLastPrivate : couples).map((c) => (
+              {(shownTab === 'last' ? couplesByLastPrivate : couples).map((c) => (
                 <Row
                   key={c.coupleId}
                   person={{ id: c.coupleId, name: c.name }}
@@ -699,6 +739,7 @@ export default function CoachHomeScreen({ navigation, route }) {
             </View>
           </>
         )}
+      </Animated.View>
       </ScrollView>
       </MaskedView>
       </Animated.View>
