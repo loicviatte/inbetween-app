@@ -94,9 +94,19 @@ export default function QuestionSheet({
   // Short context (one focus point, one lesson) shouldn't leave a field of
   // empty paper between it and the reply: the sheet takes the height it needs,
   // up to two thirds of the screen, and the handle still pulls it to full.
+  //
+  // Only once it has finished opening, though: resizing the sheet while it is
+  // still sliding up fights the entrance animation, and the sheet can end up
+  // parked off-screen behind its own backdrop.
   const [contentH, setContentH] = useState(0);
+  const [settled, setSettled] = useState(false);
+  useEffect(() => {
+    if (!visible) { setSettled(false); setContentH(0); return undefined; }
+    const id = setTimeout(() => setSettled(true), 380);
+    return () => clearTimeout(id);
+  }, [visible]);
   const footH = (inPerson ? 54 : 46 + 12 + 38) + (kb > 0 ? 8 : insets.bottom) + 10;
-  const wanted = contentH > 0 ? contentH + footH + 20 : Math.round(SCREEN_H * 0.66);
+  const wanted = settled && contentH > 0 ? contentH + footH + 20 : Math.round(SCREEN_H * 0.66);
   const sheetH = Math.max(
     280,
     Math.min(
@@ -189,7 +199,7 @@ export default function QuestionSheet({
         contentContainerStyle={{ paddingBottom: 12 }}
         showsVerticalScrollIndicator={false}
         onContentSizeChange={(w, h) => {
-          if (Math.abs(h - contentH) < 2) return;
+          if (!settled || Math.abs(h - contentH) < 2) return;
           LayoutAnimation.configureNext({ duration: 220, update: { type: LayoutAnimation.Types.easeInEaseOut } });
           setContentH(h);
         }}
