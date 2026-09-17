@@ -225,6 +225,9 @@ export default function NotificationSettingsScreen({ navigation, route }) {
   const paused = prefs.paused_until && new Date(prefs.paused_until) > new Date();
   const coachFirst = firstName(coachName);
   const who = coachFirst || 'Your coach';
+  // A coach's own notifications (student requests, sync reminders, reviews)
+  // aren't switchable one by one: only how they reach the phone is.
+  const isCoach = !!route?.params?.coach;
 
   return (
     <View style={{ flex: 1, backgroundColor: PAGE }}>
@@ -243,10 +246,13 @@ export default function NotificationSettingsScreen({ navigation, route }) {
           <Text style={st.title} numberOfLines={1}>Notification settings</Text>
         </View>
         <Text style={st.lead}>
-          {who} and your partner can always reach you with a request — everything else is yours to switch off.
+          {isCoach
+            ? 'Choose how notifications reach this phone. Your students can always reach you with a request.'
+            : `${who} and your partner can always reach you with a request — everything else is yours to switch off.`}
         </Text>
 
         <ScrollView contentContainerStyle={st.scroll} showsVerticalScrollIndicator={false}>
+          {!isCoach && (<>
           <Section title="From your coach" side={coachName} />
           <View style={st.card}>
             <SwitchRow first title="New focus points"
@@ -273,6 +279,7 @@ export default function NotificationSettingsScreen({ navigation, route }) {
             <SwitchRow title="Possible duplicates" sub="When two of your focus points may be the same"
               value={prefs.focus_reviews} onChange={(v) => setPref('focus_reviews', v)} />
           </View>
+          </>)}
 
           <Section title="Delivery" />
           <View style={st.card}>

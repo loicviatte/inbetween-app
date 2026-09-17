@@ -54,6 +54,17 @@ export default function CoachTabHeader() {
           there's nothing to sync. */}
       <DjiSyncPill />
 
+      {/* Settings, beside the avatar — the same page a student has. */}
+      <TouchableOpacity
+        onPress={() => navigation.navigate('CoachSettings')}
+        style={[styles.notifBtn, styles.settingsBtn]}
+        activeOpacity={0.7}
+        accessibilityRole="button"
+        accessibilityLabel="Settings"
+      >
+        <Ionicons name="options-outline" size={18} color={INK_950} />
+      </TouchableOpacity>
+
       {/* Avatar with white inner ring + gold halo via shadow. The
           borderWidth on the wrap acts as the white ring, the shadow
           blooms the gold halo around the outside. */}
@@ -134,6 +145,7 @@ const styles = StyleSheet.create({
   // The gold halo is approximated as a soft shadow of GOLD_500 with
   // opacity 0.45 — it blooms around the outside since RN can't stack
   // multiple borders.
+  settingsBtn: { marginRight: 10 },
   avatarWrap: {
     width: 40,
     height: 40,

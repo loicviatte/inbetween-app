@@ -7,6 +7,7 @@ import { clearPushToken } from './notifications';
 import { pairedChildInfo, forgetPairedChild } from './childPairing';
 import { clearUserCaches } from '../storage/userCaches';
 import { getActiveSession, clearActiveSession, clearChatMessages } from '../storage/activeSession';
+import { getActiveCoachClass, clearActiveCoachClass } from '../storage/activeCoachClass';
 
 // resetProfile clears the in-memory avatar and initials (ProfileContext) so the
 // next account never flashes this one's photo.
@@ -60,4 +61,26 @@ async function performLogout(resetProfile) {
   const { data: { session } } = await supabase.auth.getSession();
   clearPushToken(session?.user?.id);
   await supabase.auth.signOut({ scope: 'local' });
+}
+
+// A coach: a class still recording or a DJI import still uploading would be
+// discarded, so that's asked first (same as the coach profile's log out).
+export function logOutCoachWithChecks({ djiUploading = false } = {}) {
+  const activeClass = getActiveCoachClass();
+  const go = async () => {
+    clearActiveCoachClass();
+    await clearUserCaches();
+    const { data: { session } } = await supabase.auth.getSession();
+    clearPushToken(session?.user?.id);
+    await supabase.auth.signOut({ scope: 'local' });
+  };
+  if (activeClass || djiUploading) {
+    const what = activeClass ? 'a class is still recording' : 'a DJI import is still uploading';
+    Alert.alert('In progress', `You have ${what}. Logging out will discard it. Continue?`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Discard & log out', style: 'destructive', onPress: () => { go(); } },
+    ]);
+    return;
+  }
+  go();
 }

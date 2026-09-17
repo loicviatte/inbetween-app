@@ -184,6 +184,16 @@ export default function CoachAppNavigator({ navigationRef }) {
           options={{ animation: 'slide_from_right' }}
         />
         <CoachStack.Screen
+          name="CoachSettings"
+          getComponent={() => require('../screens/coach/CoachSettingsScreen').default}
+          options={{ animation: 'slide_from_right' }}
+        />
+        <CoachStack.Screen
+          name="NotificationSettings"
+          getComponent={() => require('../screens/NotificationSettingsScreen').default}
+          options={{ animation: 'slide_from_right' }}
+        />
+        <CoachStack.Screen
           name="CoachNoteDetail"
           getComponent={() => require('../screens/coach/CoachNoteDetailScreen').default}
           options={{ animation: 'slide_from_right' }}
