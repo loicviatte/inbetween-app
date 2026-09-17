@@ -440,24 +440,36 @@ export default function DashboardScreen({ navigation }) {
         {switching ? <ChartBones /> : <PracticeChart weeks={groupWeeks} />}
 
         <View style={st.chips}>
-          {[
-            { n: toValidate, label: 'To validate', red: toValidate > 0 },
-            { n: questions, label: 'Questions' },
-            { n: duplicates, label: 'Duplicates' },
-          ].map((c) => (
-            <TouchableOpacity key={c.label} style={[st.chip, c.red && st.chipRed]} onPress={() => navigation.navigate('ActionNeeded')} activeOpacity={0.8}>
-              <Text style={[st.chipN, c.red && { color: RED }, !c.n && { color: 'rgba(10,10,10,0.34)' }]}>{c.n}</Text>
-              <Text style={[st.chipL, c.red && { color: '#8E3627' }]}>{c.label}</Text>
-            </TouchableOpacity>
-          ))}
+          {switching
+            ? [0, 1, 2].map((i) => (
+                <Pulse key={i} style={st.chip}>
+                  <Bone w={26} h={19} r={5} />
+                  <Bone w="72%" h={8} r={4} />
+                </Pulse>
+              ))
+            : [
+                { n: toValidate, label: 'To validate', red: toValidate > 0, tab: 'focus' },
+                { n: questions, label: 'Questions', tab: 'questions' },
+                { n: duplicates, label: 'Duplicates', tab: 'merge' },
+              ].map((c) => (
+                <TouchableOpacity key={c.label} style={[st.chip, c.red && st.chipRed]}
+                  onPress={() => navigation.navigate('ActionNeeded', { tab: c.tab })} activeOpacity={0.8}>
+                  <Text style={[st.chipN, c.red && { color: RED }, !c.n && { color: 'rgba(10,10,10,0.34)' }]}>{c.n}</Text>
+                  <Text style={[st.chipL, c.red && { color: '#8E3627' }]}>{c.label}</Text>
+                </TouchableOpacity>
+              ))}
         </View>
 
+        {/* A running class isn't tied to the style being shown: its pill stays
+            put while the rest swaps. */}
         {activeClass ? (
           <TouchableOpacity style={[st.start, st.startLive]} onPress={() => navigation.navigate('StartClass')} activeOpacity={0.88}>
             <View style={st.liveDot} />
             <Text style={[st.startT, { color: '#FFFFFF' }]}>Class in progress</Text>
             <Text style={st.liveTimer}>{chronoLabel}</Text>
           </TouchableOpacity>
+        ) : switching ? (
+          <Pulse style={[st.start, st.startBones]}><Bone w={128} h={17} r={6} /></Pulse>
         ) : (
           <TouchableOpacity
             style={st.start}
@@ -589,6 +601,7 @@ const st = StyleSheet.create({
   },
   startT: { fontFamily: Fonts.ttBold, fontSize: 19, letterSpacing: -0.4, color: INK },
   startLive: { backgroundColor: INK },
+  startBones: { backgroundColor: 'rgba(10,10,10,0.06)' },
   liveDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#D06A5A' },
   liveTimer: { fontFamily: Fonts.ttBold, fontSize: 15, color: GOLD, fontVariant: ['tabular-nums'] },
 
