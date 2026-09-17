@@ -12,6 +12,8 @@ import {
 import { supabase } from '../../services/supabase/client';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
+import MaskedView from '@react-native-masked-view/masked-view';
+import { useTabBarSpace } from '../../components/CustomTabBar';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import Svg, { Circle } from 'react-native-svg';
 import { Fonts, Spacing } from '../../theme';
@@ -37,6 +39,8 @@ const GOLD = '#E8B530';
 const GOLD_INK = '#8A6414';
 const RED = '#A8412F';
 const GREEN = '#7FB77E';
+// Rows dissolve as they slide under the toggle and behind the floating tab bar.
+const EDGE_FADE = 14;
 
 function initialsOf(name) {
   const w = (name || '').trim().split(/\s+/).filter(Boolean);
@@ -234,6 +238,7 @@ function RequestRow({ name, sub, onAccept, onReject, icon }) {
 
 export default function CoachHomeScreen({ navigation, route }) {
   const { students, requests, initialLoading: loading, refresh, updateRequests } = useCoachData();
+  const tabBarSpace = useTabBarSpace();
 
   // Lesson readiness % per student — the ring and the number on each row.
   // null: no private lesson yet, so nothing to be ready for.
@@ -535,7 +540,21 @@ export default function CoachHomeScreen({ navigation, route }) {
         </View>
       </View>
 
-      <ScrollView style={{ flex: 1 }} contentContainerStyle={st.scroll} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+      <MaskedView
+        style={{ flex: 1 }}
+        maskElement={
+          <View style={{ flex: 1 }}>
+            <LinearGradient colors={['transparent', '#000']} style={{ height: EDGE_FADE }} />
+            <View style={{ flex: 1, backgroundColor: '#000' }} />
+            <LinearGradient
+              colors={['#000', 'rgba(0,0,0,0.5)', 'transparent']}
+              locations={[0, 0.55, 1]}
+              style={{ height: tabBarSpace + 34 }}
+            />
+          </View>
+        }
+      >
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={[st.scroll, { paddingBottom: tabBarSpace + 40 }]} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
         {/* Requests waiting on the coach */}
         {isStudents && requests.length > 0 && (
           <>
@@ -610,6 +629,7 @@ export default function CoachHomeScreen({ navigation, route }) {
           </>
         )}
       </ScrollView>
+      </MaskedView>
     </View>
   );
 }

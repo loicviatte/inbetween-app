@@ -46,7 +46,9 @@ function CoachMainTabs() {
       <View style={{ flex: 1 }}>
         <Tab.Navigator
           initialRouteName="DASHBOARD"
-          tabBar={(props) => <CustomTabBar {...props} />}
+          // Students floats the bar over its roster (frosted, like the student
+          // app); the other tabs keep it in its own row — Home's CTA sits above it.
+          tabBar={(props) => <CustomTabBar {...props} overlay={activeRoute === 'STUDENTS'} />}
           screenListeners={{
             state: (e) => {
               const r = e.data?.state?.routes?.[e.data.state.index];
