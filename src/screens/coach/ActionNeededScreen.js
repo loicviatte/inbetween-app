@@ -115,7 +115,6 @@ export default function ActionNeededScreen({ navigation, route }) {
   const [activeQuestion, setActiveQuestion] = useState(null);
   const [questionSheetVisible, setQuestionSheetVisible] = useState(false);
   const [questionReply, setQuestionReply] = useState('');
-  const reopenQuestionRef = useRef(false);
 
   // Name matching
   const [nameMatches, setNameMatches] = useState([]);
@@ -204,16 +203,6 @@ export default function ActionNeededScreen({ navigation, route }) {
     else setActiveTab('focus');
     didAutoSelectTab.current = true;
   }, [fpLoading, nameMatches.length, mergeRequests.length, questions.length, route?.params?.tab]);
-
-  // Back from a lesson opened for context → the reply the coach was writing.
-  useEffect(() => {
-    const unsub = navigation.addListener('focus', () => {
-      if (!reopenQuestionRef.current) return;
-      reopenQuestionRef.current = false;
-      if (activeQuestion) setQuestionSheetVisible(true);
-    });
-    return unsub;
-  }, [navigation, activeQuestion]);
 
   // Actions. Group focus points are aggregated in the UI (1 card per
   // shared_group_id), so handlers must operate on all underlying rows when
@@ -840,17 +829,12 @@ export default function ActionNeededScreen({ navigation, route }) {
         visible={questionSheetVisible}
         question={activeQuestion}
         studentId={activeQuestion?.student_id}
+        studentName={activeQuestion?.studentName}
         focusPoints={[]}
         reply={questionReply}
         onReplyChange={setQuestionReply}
-        onOpenClass={(classId) => {
-          reopenQuestionRef.current = true;
-          setQuestionSheetVisible(false);
-          setTimeout(() => navigation.navigate('CoachClassDetail', { classId }), 320);
-        }}
-        onClose={() => { reopenQuestionRef.current = false; setQuestionSheetVisible(false); }}
+        onClose={() => setQuestionSheetVisible(false)}
         onDone={() => {
-          reopenQuestionRef.current = false;
           setQuestionSheetVisible(false);
           setQuestions((prev) => prev.filter((x) => x.id !== activeQuestion?.id));
           setActiveQuestion(null);

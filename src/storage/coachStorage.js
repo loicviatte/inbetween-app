@@ -832,6 +832,78 @@ export async function getStudentArchivedFocusPoints(studentId) {
 
 // ─── Coach Actions ────────────────────────────────────────────────────────────
 
+// Everything behind a question a student asked while training: the focus point
+// it came from, how far they've got with it, the lesson it was set in, and what
+// they've done about it since. Questions carry no foreign key — the focus is
+// named in the message ("… [Focus: Staccato footwork]"), so it's matched by name.
+export async function getQuestionContext(studentId, focusName) {
+  if (!studentId || !focusName) return null;
+  const { data: found } = await supabase
+    .from('focus_points')
+    .select('id, name, subtitle, drill, tier, status, train_target, created_at, class_input_id, source_class_input_id')
+    .eq('user_id', studentId)
+    .eq('is_deleted', false)
+    .ilike('name', focusName)
+    .order('created_at', { ascending: false })
+    .limit(1);
+  const focus = found?.[0] || null;
+  if (!focus) return { focus: null, lesson: null, lessonFocuses: [], history: [], done: 0, target: 0 };
+
+  const classId = focus.class_input_id || focus.source_class_input_id || null;
+  const [{ data: logs }, { data: cls }] = await Promise.all([
+    supabase
+      .from('practice_logs')
+      .select('id, started_at, completed_at, duration_minutes')
+      .eq('student_id', studentId)
+      .eq('focus_point_id', focus.id)
+      .not('completed_at', 'is', null)
+      .order('completed_at', { ascending: false })
+      .limit(12),
+    classId
+      ? supabase
+          .from('class_inputs')
+          .select('id, title, dance, lesson_type, class_summary, ai_primary_focus, created_at')
+          .eq('id', classId)
+          .maybeSingle()
+      : Promise.resolve({ data: null }),
+  ]);
+
+  let lesson = cls || null;
+  let lessonFocuses = [];
+  if (lesson) {
+    const [{ data: recs }, { data: fps }] = await Promise.all([
+      supabase.from('class_recordings').select(RECORDING_COLUMNS).eq('class_input_id', lesson.id),
+      supabase
+        .from('focus_points')
+        .select('id, name, tier')
+        .eq('class_input_id', lesson.id)
+        .eq('user_id', studentId)
+        .eq('is_other', false)
+        .eq('is_deleted', false),
+    ]);
+    const min = minutesByClassInput(recs)[lesson.id];
+    lesson = { ...lesson, durationMin: min != null ? Math.max(1, Math.round(min)) : null };
+    lessonFocuses = fps || [];
+  }
+
+  // Same count as the readiness gauge: sessions finished since the lesson that
+  // set the focus point.
+  const since = lesson?.created_at || focus.created_at;
+  const target = focus.train_target || (focus.tier === 'critical' ? 3 : 2);
+  const done = Math.min(
+    target,
+    (logs || []).filter((l) => !since || l.completed_at >= since).length,
+  );
+
+  const history = (logs || []).map((l) => ({
+    id: l.id,
+    date: l.completed_at || l.started_at,
+    minutes: l.duration_minutes || null,
+  }));
+
+  return { focus, lesson, lessonFocuses, history, done, target };
+}
+
 // Every question still waiting on this coach, across their students — what the
 // "N asked" chip counts, and what Action needed ▸ Questions lists.
 export async function getPendingQuestions() {
