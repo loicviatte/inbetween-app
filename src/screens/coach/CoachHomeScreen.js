@@ -245,6 +245,46 @@ function RequestRow({ name, sub, onAccept, onReject, icon }) {
   );
 }
 
+// A toggle that slides like Train's Solo ↔ Couple: the control answers the
+// tap at once, the content slides out towards the side being left, swaps
+// (`shown` lags `value` by the exit) and slides in from the other edge. A tap
+// back mid-slide brings the content that never left back in.
+function useSlideSwap(value, rightValue) {
+  const [shown, setShown] = useState(value);
+  const x = useRef(new Animated.Value(0)).current;
+  const o = useRef(new Animated.Value(1)).current;
+  const target = useRef(value);
+  target.current = value;
+  useEffect(() => {
+    if (shown === value) {
+      Animated.parallel([
+        Animated.timing(x, { toValue: 0, duration: 200, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+        Animated.timing(o, { toValue: 1, duration: 160, useNativeDriver: true }),
+      ]).start();
+      return;
+    }
+    // The right-hand option pushes the content left.
+    const dir = value === rightValue ? -1 : 1;
+    const shift = Dimensions.get('window').width * 0.45;
+    x.stopAnimation();
+    o.stopAnimation();
+    Animated.parallel([
+      Animated.timing(x, { toValue: dir * shift, duration: 150, easing: Easing.in(Easing.quad), useNativeDriver: true }),
+      Animated.timing(o, { toValue: 0, duration: 150, useNativeDriver: true }),
+    ]).start(({ finished }) => {
+      if (!finished) return;
+      setShown(target.current);
+      x.setValue(-dir * shift);
+      Animated.parallel([
+        Animated.timing(x, { toValue: 0, duration: 280, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+        Animated.timing(o, { toValue: 1, duration: 220, useNativeDriver: true }),
+      ]).start();
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
+  return [shown, { opacity: o, transform: [{ translateX: x }] }];
+}
+
 // ── Screen ───────────────────────────────────────────────────────────────────
 
 export default function CoachHomeScreen({ navigation, route }) {
@@ -283,44 +323,11 @@ export default function CoachHomeScreen({ navigation, route }) {
   }, [students]);
 
   const [tab, setTab] = useState('readiness'); // 'readiness' | 'last'
-  // Readiness ↔ Last private lesson slides like Train's Solo ↔ Couple: the
-  // underline answers the tap at once, the roster slides out towards the side
-  // being left, swaps (shownTab lags tab by the exit) and slides in from the
-  // other edge.
-  const [shownTab, setShownTab] = useState(tab);
-  const tabSlideX = useRef(new Animated.Value(0)).current;
-  const tabSlideO = useRef(new Animated.Value(1)).current;
-  const tabTargetRef = useRef(tab);
-  tabTargetRef.current = tab;
-  useEffect(() => {
-    if (shownTab === tab) {
-      // Tapped back before the swap: bring the roster that never left back in.
-      Animated.parallel([
-        Animated.timing(tabSlideX, { toValue: 0, duration: 200, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-        Animated.timing(tabSlideO, { toValue: 1, duration: 160, useNativeDriver: true }),
-      ]).start();
-      return;
-    }
-    // Last private lesson sits to the right: going there pushes the roster left.
-    const dir = tab === 'last' ? -1 : 1;
-    const shift = Dimensions.get('window').width * 0.45;
-    tabSlideX.stopAnimation();
-    tabSlideO.stopAnimation();
-    Animated.parallel([
-      Animated.timing(tabSlideX, { toValue: dir * shift, duration: 150, easing: Easing.in(Easing.quad), useNativeDriver: true }),
-      Animated.timing(tabSlideO, { toValue: 0, duration: 150, useNativeDriver: true }),
-    ]).start(({ finished }) => {
-      if (!finished) return;
-      setShownTab(tabTargetRef.current);
-      tabSlideX.setValue(-dir * shift);
-      Animated.parallel([
-        Animated.timing(tabSlideX, { toValue: 0, duration: 280, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-        Animated.timing(tabSlideO, { toValue: 1, duration: 220, useNativeDriver: true }),
-      ]).start();
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab]);
+  // Readiness ↔ Last private lesson, like Train's Solo ↔ Couple.
+  const [shownTab, tabSlideStyle] = useSlideSwap(tab, 'last');
   const [view, setView] = useState('students'); // 'students' | 'couples'
+  // Students ↔ Couples: the summary and the roster slide the same way.
+  const [shownView, viewSlideStyle] = useSlideSwap(view, 'couples');
   const [couples, setCouples] = useState([]);
   const [coupleReqs, setCoupleReqs] = useState([]);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -560,7 +567,9 @@ export default function CoachHomeScreen({ navigation, route }) {
     );
   }
 
-  const isStudents = view === 'students';
+  // The titles answer the tap at once; what they show follows the slide.
+  const isStudents = shownView === 'students';
+  const studentsOn = view === 'students';
   const total = isStudents ? students.length : couples.length;
   const ready = isStudents ? onTrack.length : couples.filter((c) => (c.readiness ?? 0) >= 50).length;
   const behind = total - ready;
@@ -581,13 +590,13 @@ export default function CoachHomeScreen({ navigation, route }) {
         {/* Students / Couples, and search */}
         <View style={st.titleRow}>
           <TouchableOpacity onPress={() => setView('students')} activeOpacity={0.7}>
-            <Text style={[st.title, !isStudents && st.titleOff]}>Students</Text>
+            <Text style={[st.title, !studentsOn && st.titleOff]}>Students</Text>
           </TouchableOpacity>
           <TouchableOpacity onPress={() => setView('couples')} activeOpacity={0.7}>
-            <Text style={[st.title, isStudents && st.titleOff]}>Couples</Text>
+            <Text style={[st.title, studentsOn && st.titleOff]}>Couples</Text>
           </TouchableOpacity>
           <View style={{ flex: 1 }} />
-          {isStudents && (
+          {studentsOn && (
             <TouchableOpacity
               style={[st.iconBtn, searchOpen && st.iconBtnOn]}
               onPress={() => { setSearchOpen((v) => !v); if (searchOpen) setSearchQuery(''); }}
@@ -599,7 +608,7 @@ export default function CoachHomeScreen({ navigation, route }) {
           )}
         </View>
 
-        {searchOpen && isStudents && (
+        {searchOpen && studentsOn && (
           <View style={st.search}>
             <Ionicons name="search" size={15} color={INK_62} />
             <TextInput style={st.searchInput} value={searchQuery} onChangeText={setSearchQuery}
@@ -608,7 +617,7 @@ export default function CoachHomeScreen({ navigation, route }) {
         )}
 
         {/* Roster summary */}
-        <View style={st.sum}>
+        <Animated.View style={[st.sum, viewSlideStyle]}>
           <View style={st.sumTop}>
             <Text style={st.sumCount}>{total}</Text>
             <Text style={st.sumLabel}>{isStudents ? 'Students' : 'Couples'}</Text>
@@ -638,7 +647,7 @@ export default function CoachHomeScreen({ navigation, route }) {
               </TouchableOpacity>
             </View>
           )}
-        </View>
+        </Animated.View>
 
         {/* Readiness | Last private lesson */}
         <View style={st.tabs}>
@@ -665,7 +674,8 @@ export default function CoachHomeScreen({ navigation, route }) {
         }
       >
       <ScrollView style={{ flex: 1 }} contentContainerStyle={[st.scroll, { paddingBottom: tabBarSpace + 40 }]} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-      <Animated.View style={{ opacity: tabSlideO, transform: [{ translateX: tabSlideX }] }}>
+      <Animated.View style={viewSlideStyle}>
+      <Animated.View style={tabSlideStyle}>
         {/* Requests waiting on the coach */}
         {isStudents && requests.length > 0 && (
           <>
@@ -739,6 +749,7 @@ export default function CoachHomeScreen({ navigation, route }) {
             </View>
           </>
         )}
+      </Animated.View>
       </Animated.View>
       </ScrollView>
       </MaskedView>
