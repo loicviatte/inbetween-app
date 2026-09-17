@@ -4,7 +4,7 @@
 // Single source of truth for the "import DJI mic files → class_recordings"
 // flow. Used by two surfaces:
 //
-//   1. LocalUploadScreen (manual button): user-initiated, surfaces a
+//   1. The mic-sync flow (coach-initiated): surfaces a
 //      confirmation Alert + per-file feedback.
 //   2. DashboardScreen (auto-detect): silently kicks off as soon as the
 //      app detects new files in the bookmarked DJI folder, with status
@@ -283,7 +283,7 @@ export function countMicSessions(
  * 60s threshold is conservative: real coaching sessions are >30min,
  * almost never under a few min. A coach who genuinely needs a sub-60s
  * recording can still attach it via the manual picker in
- * LocalUploadScreen, which bypasses this filter.
+ * the coach-initiated flow, which bypasses this filter.
  */
 const MIN_VALID_DURATION_SEC = 60;
 

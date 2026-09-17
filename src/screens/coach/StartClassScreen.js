@@ -385,7 +385,7 @@ export default function StartClassScreen({ navigation }) {
   //   - The class_recordings row is marked local_recording_mode = true and
   //     starts with admin_review_status = 'pending'.
   //   - After the class, the coach plugs the mic via USB-C and uploads
-  //     the WAV file through a separate flow (LocalUpload section, below).
+  //     the WAV file when they next sync the mic.
   //   - Phone audio session stays untouched → Spotify on a BT speaker
   //     plays uninterrupted throughout the class.
   // Gated by email — only viatteloic@gmail.com for the beta. See

@@ -160,24 +160,9 @@ export default function CoachAppNavigator({ navigationRef }) {
           options={{ animation: 'slide_from_bottom' }}
         />
         <CoachStack.Screen
-          name="LocalUpload"
-          getComponent={() => require('../screens/coach/LocalUploadScreen').default}
-          options={{ animation: 'slide_from_right' }}
-        />
-        <CoachStack.Screen
           name="ActionNeeded"
           getComponent={() => require('../screens/coach/ActionNeededScreen').default}
           options={{ animation: 'slide_from_right' }}
-        />
-        <CoachStack.Screen
-          name="FocusValidation"
-          getComponent={() => require('../screens/coach/FocusValidationScreen').default}
-          options={{ animation: 'slide_from_right' }}
-        />
-        <CoachStack.Screen
-          name="NameMatchConfirm"
-          getComponent={() => require('../screens/coach/NameMatchConfirmScreen').default}
-          options={{ animation: 'slide_from_bottom', presentation: 'modal' }}
         />
         <CoachStack.Screen
           name="CoachSettings"
