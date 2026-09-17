@@ -27,6 +27,7 @@ import { setStudentAge } from '../../services/ageCheck';
 import { guardStudent } from '../../utils/studentLock';
 import { getMyCouples, getPendingCoupleCoachRequests, respondToCoupleCoachRequest, getCoupleReadiness } from '../../storage/coupleStorage';
 import { CoachHomeScreenSkeleton } from '../../components/Skeleton';
+import { useGroupSwitch, Pulse, Bone, FadeIn } from '../../components/GroupSwitchSkeleton';
 import { useCoachData } from '../../context/CoachDataContext';
 import { getStudentsReadiness } from '../../storage/storage';
 
@@ -206,6 +207,37 @@ function Row({ person, readiness, weeks, status, metrics, quiet, alert, gold, re
   );
 }
 
+// The roster while a group switch loads: a section head and rows, as bones.
+function RosterBones() {
+  return (
+    <View>
+      <Pulse style={st.groupHead}>
+        <Bone w={96} h={9} r={4} />
+        <View style={st.groupRule} />
+        <Bone w={14} h={10} r={4} />
+      </Pulse>
+      <View style={st.rows}>
+        {[0, 1, 2, 3, 4].map((i) => (
+          <View key={i} style={st.row}>
+            <Pulse style={st.boneRow}>
+              <Bone w={44} h={44} r={22} />
+              <View style={[st.body, { gap: 7 }]}>
+                <Bone w={i % 2 ? '48%' : '62%'} h={12} r={4} />
+                <Bone w="38%" h={9} r={4} />
+                <Bone w="70%" h={8} r={4} />
+              </View>
+              <View style={st.right}>
+                <Bone w={40} h={16} r={4} />
+                <Bone w="100%" h={12} r={3} />
+              </View>
+            </Pulse>
+          </View>
+        ))}
+      </View>
+    </View>
+  );
+}
+
 function GroupHead({ label, count, tone }) {
   return (
     <View style={st.groupHead}>
@@ -293,33 +325,37 @@ export default function CoachHomeScreen({ navigation, route }) {
   // Lesson readiness % per student — the ring and the number on each row.
   // null: no private lesson yet, so nothing to be ready for.
   const [readinessByStudent, setReadinessByStudent] = useState({});
+  const [readinessFor, setReadinessFor] = useState(null); // the roster + group it was read for
   const lastReadinessSigRef = useRef(null);
+  const readinessSig = `${styleCategory}:${students.map((s) => s.id).sort().join('|')}`;
   useEffect(() => {
+    const signature = readinessSig;
     if (!students || students.length === 0) {
       setReadinessByStudent({});
+      setReadinessFor(signature);
       lastReadinessSigRef.current = null; // an empty group, then back: read it again
       return;
     }
-    const signature = `${styleCategory}:${students.map((s) => s.id).sort().join('|')}`;
     if (signature === lastReadinessSigRef.current) return;
     lastReadinessSigRef.current = signature;
 
-    let alive = true;
+    // A newer read (another group, a refresh) supersedes this one.
+    const current = () => aliveRef.current && lastReadinessSigRef.current === signature;
     (async () => {
       try {
         const map = await getStudentsReadiness(students.map((s) => s.id), styleCategory);
-        if (!alive) return;
+        if (!current()) return;
         const byStudent = {};
         for (const s of students) {
           const r = map[s.id];
           byStudent[s.id] = r ? (r.percent ?? 0) : null;
         }
         setReadinessByStudent(byStudent);
+        setReadinessFor(signature);
       } catch {
-        if (alive) setReadinessByStudent({});
+        if (current()) { setReadinessByStudent({}); setReadinessFor(signature); }
       }
     })();
-    return () => { alive = false; };
   }, [students, styleCategory]);
 
   const [tab, setTab] = useState('readiness'); // 'readiness' | 'last'
@@ -337,6 +373,7 @@ export default function CoachHomeScreen({ navigation, route }) {
       ? (ballroom ? c.ballroomCoupleCoachId : c.latinCoupleCoachId) === user.id
       : (ballroom ? c.doesBallroom : c.doesLatin)));
   }, [allCouples, canSwitchStyle, styleFilter, user?.id]);
+  const [couplesFor, setCouplesFor] = useState(undefined); // the style couple readiness was read for
   const [coupleReqs, setCoupleReqs] = useState([]);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -458,7 +495,10 @@ export default function CoachHomeScreen({ navigation, route }) {
         : null;
       return { ...c, lastPrivateDays: days, lastClassDate: r?.lastClassDate ?? null, readiness: r?.percent ?? null };
     }));
-    if (aliveRef.current && seq === couplesLoadRef.current) setCouples(enriched);
+    if (aliveRef.current && seq === couplesLoadRef.current) {
+      setCouples(enriched);
+      setCouplesFor(category);
+    }
   }
   useEffect(() => { loadCouples(); }, [styleCategory]);
 
@@ -477,6 +517,12 @@ export default function CoachHomeScreen({ navigation, route }) {
     await respondToCoupleCoachRequest(reqId, false);
     setCoupleReqs((prev) => prev.filter((r) => r.id !== reqId));
   }
+
+  // Latin group ↔ Ballroom group: bones until what's on screen is read for the new group.
+  const switching = useGroupSwitch(
+    styleFilter,
+    readinessFor === readinessSig && (view === 'students' || couplesFor === styleCategory),
+  );
 
   const filteredStudents = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -584,10 +630,20 @@ export default function CoachHomeScreen({ navigation, route }) {
         {/* Roster summary */}
         <Animated.View style={[st.sum, viewSlideStyle]}>
           <View style={st.sumTop}>
-            <Text style={st.sumCount}>{total}</Text>
+            {switching
+              ? <Pulse><Bone w={40} h={30} r={7} style={{ marginTop: 2 }} /></Pulse>
+              : <Text style={st.sumCount}>{total}</Text>}
             <Text style={st.sumLabel}>{isStudents ? 'Students' : 'Couples'}</Text>
           </View>
-          {total > 0 && (
+          {switching ? (
+            <Pulse style={{ gap: 11 }}>
+              <Bone w="100%" h={9} r={3} />
+              <View style={st.legend}>
+                <Bone w={62} h={9} r={4} style={{ marginVertical: 2 }} />
+                <Bone w={62} h={9} r={4} style={{ marginLeft: 'auto', marginVertical: 2 }} />
+              </View>
+            </Pulse>
+          ) : total > 0 && (
             <>
               <View style={st.bar}>
                 {ready > 0 && <View style={[st.barSeg, { flex: ready, backgroundColor: GREEN }]} />}
@@ -667,6 +723,10 @@ export default function CoachHomeScreen({ navigation, route }) {
           </>
         )}
 
+        {switching ? (
+          <RosterBones />
+        ) : (
+        <FadeIn>
         {isStudents ? (
           filteredStudents.length === 0 ? (
             <Text style={st.empty}>
@@ -718,6 +778,8 @@ export default function CoachHomeScreen({ navigation, route }) {
               ))}
             </View>
           </>
+        )}
+        </FadeIn>
         )}
       </Animated.View>
       </Animated.View>
@@ -780,6 +842,7 @@ const st = StyleSheet.create({
   groupRule: { flex: 1, height: 1, backgroundColor: LINE },
   groupCount: { fontFamily: Fonts.ttBold, fontSize: 12, color: INK },
   rows: { gap: 8 },
+  boneRow: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12, marginRight: 25 },
 
   row: {
     flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, paddingHorizontal: 13,

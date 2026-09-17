@@ -22,6 +22,7 @@ export function CoachDataProvider({ children }) {
   const [studentActionCounts, setStudentActionCounts] = useState({});
   const [initialLoading, setInitialLoading] = useState(true);
   const [styleChoice, setStyleChoice] = useState(null); // 'latin' | 'ballroom' | null (not picked yet)
+  const [styleReadFor, setStyleReadFor] = useState(null); // the storage key the pick was read from
   const loaded = useRef(false);
 
   // Short-lived per-key cache so navigating away and back to a screen
@@ -210,9 +211,13 @@ export function CoachDataProvider({ children }) {
     let alive = true;
     AsyncStorage.getItem(styleKey)
       .then((v) => { if (alive && (v === 'latin' || v === 'ballroom')) setStyleChoice(v); })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => { if (alive) setStyleReadFor(styleKey); });
     return () => { alive = false; };
   }, [styleKey]);
+  // Screens wait for the remembered group, so a Ballroom pick doesn't open on
+  // Latin and switch a beat later.
+  const styleLoading = !!styleKey && styleReadFor !== styleKey;
 
   const setStyleFilter = useCallback((cat) => {
     setStyleChoice(cat);
@@ -249,7 +254,7 @@ export function CoachDataProvider({ children }) {
         unreadCount,
         actionCounts,
         studentActionCounts,
-        initialLoading,
+        initialLoading: initialLoading || styleLoading,
         refresh,
         updateStudents,
         updateRequests,

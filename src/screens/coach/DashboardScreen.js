@@ -30,6 +30,7 @@ import { registerPushToken } from '../../services/notifications';
 import { useDjiSync } from '../../context/DjiSyncContext';
 import PullLogo from '../../components/PullLogo';
 import usePullDown, { PULL_REST } from '../../components/usePullDown';
+import { useGroupSwitch, Pulse, Bone, FadeIn } from '../../components/GroupSwitchSkeleton';
 
 // ─── Coach ▸ Home (docs/design/coach-dashboard.html) ────────────────────────
 // Group readiness in one big number, ten weeks of group practice, what's
@@ -113,6 +114,49 @@ function PracticeChart({ weeks }) {
         <Text style={st.axisT}>Group practice</Text>
         <Text style={st.axisT}>This week</Text>
       </View>
+    </View>
+  );
+}
+
+// The chart while a group switch loads: the same frame, bars as bones.
+const BONE_BARS = [0.34, 0.5, 0.42, 0.62, 0.46, 0.7, 0.52, 0.64, 0.5, 0.8];
+function ChartBones() {
+  return (
+    <View>
+      <Pulse style={st.chart}>
+        <View style={st.bars}>
+          {BONE_BARS.map((f, i) => (
+            <View key={i} style={[st.barCol, st.boneFill, { height: Math.round(f * CHART_H) }]} />
+          ))}
+        </View>
+      </Pulse>
+      <View style={st.axis}>
+        <Text style={st.axisT}>10 weeks ago</Text>
+        <Text style={st.axisT}>Group practice</Text>
+        <Text style={st.axisT}>This week</Text>
+      </View>
+    </View>
+  );
+}
+
+function SquareBones() {
+  return (
+    <View style={st.square}>
+      <Pulse style={{ gap: 9 }}>
+        <View style={st.sqHead}>
+          <Bone w={29} h={29} r={14.5} />
+          <View style={{ flex: 1, gap: 6 }}>
+            <Bone w="70%" h={11} r={4} />
+            <Bone w="45%" h={8} r={4} />
+          </View>
+        </View>
+        <Bone w={54} h={26} r={6} />
+        <Bone w="100%" h={2} r={2} />
+        <View style={[st.sqFoot, { justifyContent: 'space-between' }]}>
+          <Bone w={52} h={8} r={4} />
+          <Bone w={40} h={8} r={4} />
+        </View>
+      </Pulse>
     </View>
   );
 }
@@ -274,27 +318,34 @@ export default function DashboardScreen({ navigation }) {
   // One batch for the roster. null = no private lesson yet (nothing to be
   // ready for); the group number averages the students who have one.
   const [readinessByStudent, setReadinessByStudent] = useState({});
+  const [readinessFor, setReadinessFor] = useState(null); // the roster + group it was read for
   const lastSigRef = useRef(null);
+  const mountedRef = useRef(true);
+  useEffect(() => () => { mountedRef.current = false; }, []);
+  const readinessSig = `${styleCategory}:${students.map((s) => s.id).sort().join('|')}`;
   useEffect(() => {
+    const signature = readinessSig;
     if (!students || students.length === 0) {
       setReadinessByStudent({});
+      setReadinessFor(signature);
       lastSigRef.current = null; // an empty group, then back: read it again
       return;
     }
-    const signature = `${styleCategory}:${students.map((s) => s.id).sort().join('|')}`;
     if (signature === lastSigRef.current) return;
     lastSigRef.current = signature;
-    let alive = true;
+    // A newer read (another group, a refresh) supersedes this one.
+    const current = () => mountedRef.current && lastSigRef.current === signature;
     getStudentsReadiness(students.map((s) => s.id), styleCategory)
       .then((map) => {
-        if (!alive) return;
+        if (!current()) return;
         const byStudent = {};
         for (const s of students) byStudent[s.id] = map[s.id] ? (map[s.id].percent ?? 0) : null;
         setReadinessByStudent(byStudent);
+        setReadinessFor(signature);
       })
-      .catch(() => { if (alive) setReadinessByStudent({}); });
-    return () => { alive = false; };
+      .catch(() => { if (current()) { setReadinessByStudent({}); setReadinessFor(signature); } });
   }, [students, styleCategory]);
+  const switching = useGroupSwitch(styleFilter, readinessFor === readinessSig);
 
   const withLesson = students.filter((s) => readinessByStudent[s.id] != null);
   const groupReadiness = withLesson.length
@@ -363,18 +414,28 @@ export default function DashboardScreen({ navigation }) {
       {/* ── Group readiness, practice, what's waiting, Start class ── */}
       <View style={st.att}>
         <View style={st.big}>
-          <Text style={st.bigN}>{groupReadiness}</Text>
-          <Text style={st.bigPct}>%</Text>
+          {switching ? (
+            <Pulse><Bone w={96} h={52} r={12} /></Pulse>
+          ) : (
+            <FadeIn style={st.bigNum}>
+              <Text style={st.bigN}>{groupReadiness}</Text>
+              <Text style={st.bigPct}>%</Text>
+            </FadeIn>
+          )}
           <View style={st.bigSide}>
             <Text style={st.bigLabel}>Group readiness</Text>
-            <Text style={st.bigSub}>
-              {students.length === 0 ? 'No students yet'
-                : `across ${students.length} student${students.length === 1 ? '' : 's'}`}
-            </Text>
+            {switching ? (
+              <Pulse><Bone w={112} h={10} r={4} style={{ marginVertical: 3 }} /></Pulse>
+            ) : (
+              <Text style={st.bigSub}>
+                {students.length === 0 ? 'No students yet'
+                  : `across ${students.length} student${students.length === 1 ? '' : 's'}`}
+              </Text>
+            )}
           </View>
         </View>
 
-        <PracticeChart weeks={groupWeeks} />
+        {switching ? <ChartBones /> : <PracticeChart weeks={groupWeeks} />}
 
         <View style={st.chips}>
           {[
@@ -436,17 +497,23 @@ export default function DashboardScreen({ navigation }) {
           onContentSizeChange={(_, h) => { gridMetrics.current.content = h; updateMore(); }}
           onScroll={(e) => { gridMetrics.current.y = e.nativeEvent.contentOffset.y; updateMore(); }}
         >
-          {sorted.length === 0 ? (
+          {switching ? (
+            [0, 1, 2, 3].map((i) => <View key={i} style={st.cell}><SquareBones /></View>)
+          ) : sorted.length === 0 ? (
             <Text style={st.empty}>
               {allStudents.length > 0
                 ? `No ${styleFilter === 'ballroom' ? 'Ballroom' : 'Latin'} students yet.`
                 : 'No students yet. Share your invite code from your profile to add them.'}
             </Text>
-          ) : sorted.map((s) => (
-            <View key={s.id} style={st.cell}>
-              <StudentSquare s={s} readiness={readinessByStudent[s.id] ?? null} onPress={() => openStudent(s)} />
-            </View>
-          ))}
+          ) : (
+            <FadeIn style={st.gridFade}>
+              {sorted.map((s) => (
+                <View key={s.id} style={st.cell}>
+                  <StudentSquare s={s} readiness={readinessByStudent[s.id] ?? null} onPress={() => openStudent(s)} />
+                </View>
+              ))}
+            </FadeIn>
+          )}
         </ScrollView>
         {more && (
           <View pointerEvents="none" style={st.moreWrap}>
@@ -476,6 +543,7 @@ const st = StyleSheet.create({
 
   att: { marginHorizontal: Spacing.side, gap: 16, paddingTop: 12, paddingBottom: 18, borderBottomWidth: 1, borderBottomColor: LINE },
   big: { flexDirection: 'row', alignItems: 'flex-end', gap: 6 },
+  bigNum: { flexDirection: 'row', alignItems: 'flex-end', gap: 6 },
   bigN: { fontFamily: Fonts.ttExtraBold, fontSize: 56, letterSpacing: -3, lineHeight: 52, color: INK, fontVariant: ['tabular-nums'] },
   bigPct: { fontFamily: Fonts.ttBold, fontSize: 32, lineHeight: 34, color: 'rgba(10,10,10,0.4)', paddingBottom: 2 },
   bigSide: { flex: 1, marginLeft: 8, paddingBottom: 6 },
@@ -486,6 +554,7 @@ const st = StyleSheet.create({
   bars: { ...StyleSheet.absoluteFillObject, flexDirection: 'row', alignItems: 'flex-end', gap: 7 },
   barCol: { flex: 1, backgroundColor: INK, borderRadius: 3 },
   barNow: { backgroundColor: GOLD },
+  boneFill: { backgroundColor: 'rgba(10,10,10,0.08)' },
   avgLine: { position: 'absolute', left: 0, right: 0, borderTopWidth: 1, borderTopColor: 'rgba(10,10,10,0.16)' },
   avgLabel: {
     position: 'absolute', left: 0, top: -7, paddingRight: 6, backgroundColor: PAGE,
@@ -520,6 +589,7 @@ const st = StyleSheet.create({
   gridWrap: { flex: 1 },
   grid: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: Spacing.side - 4.5, paddingBottom: 16 },
   cell: { width: '50%', padding: 4.5 },
+  gridFade: { width: '100%', flexDirection: 'row', flexWrap: 'wrap' },
   square: {
     minHeight: 130, gap: 9, backgroundColor: '#FFFFFF', borderRadius: 17, paddingTop: 12, paddingHorizontal: 13, paddingBottom: 11,
     borderWidth: 1, borderColor: 'rgba(10,10,10,0.07)',
