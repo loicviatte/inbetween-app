@@ -23,6 +23,7 @@ import { hydrateAllFromCold } from '../storage/hydrate';
 import { pokeUploadWorker } from '../services/uploadWorker';
 import { CoachDataProvider } from '../context/CoachDataContext';
 import { DjiSyncProvider } from '../context/DjiSyncContext';
+import { ClassesViewProvider } from '../context/CoachClassesView';
 import MicSyncFlowModal from '../components/MicSyncFlowModal';
 import SyncReminderModal from '../components/SyncReminderModal';
 import CoachTabHeader from '../components/CoachTabHeader';
@@ -36,19 +37,20 @@ const CoachStack = createNativeStackNavigator();
 
 function CoachMainTabs() {
   const [activeRoute, setActiveRoute] = useState('DASHBOARD');
-  // The header sits on each tab's page colour (Students: the warm paper of its redesign).
-  const headerBg = activeRoute === 'DASHBOARD' || activeRoute === 'STUDENTS' ? '#F2F0EB' : '#FFFFFF';
+  // The header sits on the tabs' warm paper.
+  const headerBg = '#F2F0EB';
   return (
+    <ClassesViewProvider>
     <View style={{ flex: 1, backgroundColor: headerBg }}>
       <SafeAreaView style={{ backgroundColor: headerBg }} edges={['top']}>
-        <CoachTabHeader showStyle={activeRoute === 'DASHBOARD' || activeRoute === 'STUDENTS'} />
+        <CoachTabHeader mode={activeRoute === 'CLASS' ? 'classes' : 'group'} />
       </SafeAreaView>
       <View style={{ flex: 1 }}>
         <Tab.Navigator
           initialRouteName="DASHBOARD"
-          // Students floats the bar over its roster (frosted, like the student
-          // app); the other tabs keep it in its own row — Home's CTA sits above it.
-          tabBar={(props) => <CustomTabBar {...props} overlay={activeRoute === 'STUDENTS'} />}
+          // Students and Class float the bar over their lists (frosted, like the
+          // student app); Home keeps it in its own row — its CTA sits above it.
+          tabBar={(props) => <CustomTabBar {...props} overlay={activeRoute !== 'DASHBOARD'} />}
           screenListeners={{
             state: (e) => {
               const r = e.data?.state?.routes?.[e.data.state.index];
@@ -66,6 +68,7 @@ function CoachMainTabs() {
         </Tab.Navigator>
       </View>
     </View>
+    </ClassesViewProvider>
   );
 }
 

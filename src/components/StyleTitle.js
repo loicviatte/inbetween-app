@@ -14,7 +14,8 @@ const STYLES = [
   { key: 'ballroom', label: 'Ballroom' },
 ];
 
-export default function StyleTitle({ label, category, canSwitch, disabled, sub, onSelect }) {
+// options: the menu's choices, Latin and Ballroom unless a screen offers others.
+export default function StyleTitle({ label, category, canSwitch, disabled, sub, onSelect, options = STYLES }) {
   const btnRef = useRef(null);
   const [menu, setMenu] = useState(null); // { x, y } in window coordinates, or null
 
@@ -46,7 +47,7 @@ export default function StyleTitle({ label, category, canSwitch, disabled, sub, 
           {title}
         </TouchableOpacity>
       ) : title}
-      {sub ? <Text style={st.sub} numberOfLines={1}>{sub}</Text> : null}
+      {sub ? <Text style={st.sub} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>{sub}</Text> : null}
 
       <Modal
         visible={!!menu}
@@ -57,7 +58,7 @@ export default function StyleTitle({ label, category, canSwitch, disabled, sub, 
       >
         <Pressable style={st.backdrop} onPress={() => setMenu(null)}>
           <View style={[st.sheet, { top: menu?.y ?? 0, left: menu?.x ?? 0 }]}>
-            {STYLES.map((opt, i) => (
+            {options.map((opt, i) => (
               <TouchableOpacity
                 key={opt.key}
                 style={[st.option, i > 0 && st.optionDivider]}

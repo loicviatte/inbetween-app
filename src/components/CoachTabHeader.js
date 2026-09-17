@@ -9,6 +9,7 @@ import { useCoachData } from '../context/CoachDataContext';
 import DjiSetupBanner from './DjiSetupBanner';
 import DjiSyncPill from './DjiSyncPill';
 import StyleTitle from './StyleTitle';
+import { useClassesView } from '../context/CoachClassesView';
 
 // May 2026 design refresh — gold/ink scale aligned with DashboardScreen.
 const GOLD_500 = '#E8B530';
@@ -18,12 +19,24 @@ const INK_50 = '#F7F6F3';
 const INK_950 = '#0A0A0A';
 const LINE = 'rgba(10,10,10,0.09)';
 
-// showStyle: Home and Students put "Latin group ▾" after the bell — the group
-// their numbers are for (a menu when the coach teaches both).
-export default function CoachTabHeader({ showStyle = false }) {
+const CLASS_STYLES = [
+  { key: 'all', label: 'All classes' },
+  { key: 'latin', label: 'Latin group' },
+  { key: 'ballroom', label: 'Ballroom group' },
+];
+
+// mode 'group': Home and Students put "Latin group ▾" after the bell — the
+// group their numbers are for (a menu when the coach teaches both).
+// mode 'classes': the Class tab's "Classes ▾", then its calendar and notes buttons.
+export default function CoachTabHeader({ mode = null }) {
   const navigation = useNavigation();
-  const { user, unreadCount, styleFilter, setStyleFilter, canSwitchStyle } = useCoachData();
+  const { user, unreadCount, styleFilter, setStyleFilter, canSwitchStyle, students, notes } = useCoachData();
+  const classes = useClassesView();
   const initial = user?.name ? user.name[0].toUpperCase() : 'C';
+  const classesLabel = classes.style === 'latin' ? 'Latin group' : classes.style === 'ballroom' ? 'Ballroom group' : 'Classes';
+  const classesSub = classes.logged == null ? null
+    : `${classes.logged} logged · ${students.length} student${students.length === 1 ? '' : 's'}`;
+  const toggleView = (v) => classes.setView(classes.view === v ? 'list' : v);
 
   return (
     <View style={styles.header}>
@@ -44,12 +57,22 @@ export default function CoachTabHeader({ showStyle = false }) {
         </TouchableOpacity>
       </View>
 
-      {showStyle && (
+      {mode === 'group' && (
         <StyleTitle
           label={styleFilter === 'ballroom' ? 'Ballroom group' : 'Latin group'}
           category={styleFilter}
           canSwitch={canSwitchStyle}
           onSelect={setStyleFilter}
+        />
+      )}
+      {mode === 'classes' && (
+        <StyleTitle
+          label={classesLabel}
+          category={classes.style}
+          canSwitch={canSwitchStyle}
+          options={CLASS_STYLES}
+          sub={classesSub}
+          onSelect={classes.setStyle}
         />
       )}
 
@@ -68,6 +91,35 @@ export default function CoachTabHeader({ showStyle = false }) {
 
       {/* Right: settings (the student's Stats button, exactly) beside the avatar. */}
       <View style={styles.rightGroup}>
+        {mode === 'classes' && (
+          <>
+            <TouchableOpacity
+              onPress={() => toggleView('cal')}
+              style={[styles.viewBtn, classes.view === 'cal' && styles.viewBtnOn]}
+              activeOpacity={0.7}
+              accessibilityRole="button"
+              accessibilityLabel="Calendar view"
+              accessibilityState={{ selected: classes.view === 'cal' }}
+            >
+              <Ionicons name="calendar-clear-outline" size={17} color={classes.view === 'cal' ? '#FFFFFF' : INK_950} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => toggleView('notes')}
+              style={[styles.viewBtn, classes.view === 'notes' && styles.viewBtnOn]}
+              activeOpacity={0.7}
+              accessibilityRole="button"
+              accessibilityLabel={`Notes, ${notes.length} saved`}
+              accessibilityState={{ selected: classes.view === 'notes' }}
+            >
+              <Ionicons name="document-text-outline" size={17} color={classes.view === 'notes' ? '#FFFFFF' : INK_950} />
+              {notes.length > 0 && (
+                <View style={styles.viewBadge}>
+                  <Text style={styles.viewBadgeText}>{notes.length > 99 ? '99+' : notes.length}</Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          </>
+        )}
         <TouchableOpacity
           onPress={() => navigation.navigate('CoachSettings')}
           style={styles.settingsBtn}
@@ -160,7 +212,19 @@ const styles = StyleSheet.create({
   // The gold halo is approximated as a soft shadow of GOLD_500 with
   // opacity 0.45 — it blooms around the outside since RN can't stack
   // multiple borders.
-  rightGroup: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  rightGroup: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  // Class tab: calendar and notes (docs/design/coach-classes.html .ib).
+  viewBtn: {
+    width: 36, height: 36, borderRadius: 11, backgroundColor: '#FFFFFF',
+    alignItems: 'center', justifyContent: 'center',
+    shadowColor: INK_950, shadowOpacity: 0.07, shadowOffset: { width: 0, height: 1 }, shadowRadius: 2, elevation: 1,
+  },
+  viewBtnOn: { backgroundColor: INK_950, shadowOpacity: 0, elevation: 0 },
+  viewBadge: {
+    position: 'absolute', top: -4, right: -4, minWidth: 15, height: 15, paddingHorizontal: 3, borderRadius: 999,
+    backgroundColor: GOLD_500, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#F2F0EB',
+  },
+  viewBadgeText: { fontFamily: Fonts.jakartaExtraBold, fontSize: 9, lineHeight: 11, color: INK_950, includeFontPadding: false },
   // Stats ▸ header button (ProfileScreen styles.heroActBtn), unchanged.
   settingsBtn: {
     width: 36, height: 36, borderRadius: 18,

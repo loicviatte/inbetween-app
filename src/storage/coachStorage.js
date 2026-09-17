@@ -1665,16 +1665,61 @@ export async function getMyClasses() {
   const coachId = await getCoachId();
   const { data } = await supabase
     .from('class_inputs')
-    .select('id, created_at, title, dance, lesson_type, status, class_summary, ai_primary_focus, ai_secondary_focus, student_id')
+    .select('id, created_at, title, dance, lesson_type, status, class_summary, ai_primary_focus, ai_secondary_focus, student_id, student_ids, couple_id')
     .eq('user_id', coachId)
     .eq('is_deleted', false)
     .order('created_at', { ascending: false });
 
   if (!data || data.length === 0) return [];
+  const ids = data.map((c) => c.id);
+  const coupleIds = [...new Set(data.map((c) => c.couple_id).filter(Boolean))];
 
-  // For private lessons resolve the student name (best effort — RLS lets the
-  // coach read their own students).
-  const studentIds = [...new Set(data.map(c => c.student_id).filter(Boolean))];
+  // Who was in each class (private: the student; group: the recorded
+  // students; couple: both dancers) and how long it ran, when it was recorded.
+  // Ids go in batches so a long history doesn't overflow the request URL.
+  const inBatches = async (table, columns) => {
+    const out = [];
+    for (let i = 0; i < ids.length; i += 150) {
+      const { data: rows } = await supabase.from(table).select(columns).in('class_input_id', ids.slice(i, i + 150));
+      out.push(...(rows || []));
+    }
+    return { data: out };
+  };
+  const [{ data: cisRows }, { data: recRows }, { data: coupleRows }] = await Promise.all([
+    inBatches('class_input_students', 'class_input_id, student_id'),
+    inBatches('class_recordings', 'class_input_id, started_at, ended_at, mic_file_duration_sec'),
+    coupleIds.length
+      ? supabase.from('couples').select('id, user_a_id, user_b_id').in('id', coupleIds)
+      : Promise.resolve({ data: [] }),
+  ]);
+
+  const studentsByClass = {};
+  const add = (classId, sid) => {
+    if (!sid) return;
+    const list = (studentsByClass[classId] ||= []);
+    if (!list.includes(sid)) list.push(sid);
+  };
+  const coupleById = Object.fromEntries((coupleRows || []).map((c) => [c.id, c]));
+  for (const c of data) {
+    add(c.id, c.student_id);
+    for (const sid of Array.isArray(c.student_ids) ? c.student_ids : []) add(c.id, sid);
+    const cp = c.couple_id && coupleById[c.couple_id];
+    if (cp) { add(c.id, cp.user_a_id); add(c.id, cp.user_b_id); }
+  }
+  for (const r of cisRows || []) add(r.class_input_id, r.student_id);
+
+  const minutesByClass = {};
+  for (const r of recRows || []) {
+    let min = null;
+    if (r.mic_file_duration_sec > 0) min = r.mic_file_duration_sec / 60;
+    else if (r.started_at && r.ended_at) {
+      const ms = new Date(r.ended_at) - new Date(r.started_at);
+      if (ms > 0) min = ms / 60000;
+    }
+    if (min != null) minutesByClass[r.class_input_id] = (minutesByClass[r.class_input_id] || 0) + min;
+  }
+
+  const studentIds = [...new Set(Object.values(studentsByClass).flat())];
   let studentMap = {};
   if (studentIds.length > 0) {
     const { data: users } = await supabase
@@ -1686,10 +1731,16 @@ export async function getMyClasses() {
     });
   }
 
-  return data.map(c => ({
-    ...c,
-    student: c.student_id ? studentMap[c.student_id] || null : null,
-  }));
+  return data.map(c => {
+    const students = (studentsByClass[c.id] || []).map((id) => studentMap[id] || { id, name: 'Student', photoUrl: null });
+    const min = minutesByClass[c.id];
+    return {
+      ...c,
+      student: c.student_id ? studentMap[c.student_id] || null : null,
+      students,
+      durationMin: min != null ? Math.max(1, Math.round(min)) : null,
+    };
+  });
 }
 
 // Detailed view of a coach's class: summary, the recorded students with
