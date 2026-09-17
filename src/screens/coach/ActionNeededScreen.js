@@ -57,7 +57,6 @@ import QuestionSheet, { splitFocusTag } from '../../components/coach/QuestionShe
 import ClassContextSheet from '../../components/coach/ClassContextSheet';
 import ApproveConfirmSheet from '../../components/coach/ApproveConfirmSheet';
 import MergeCompareCard from '../../components/coach/MergeCompareCard';
-import NameMatchCard from '../../components/coach/NameMatchCard';
 import PendingFocusCard from '../../components/coach/PendingFocusCard';
 import RejectFocusSheet from '../../components/coach/RejectFocusSheet';
 import ReconcileFocusSheet from '../../components/coach/ReconcileFocusSheet';
@@ -116,8 +115,6 @@ export default function ActionNeededScreen({ navigation, route }) {
   const [questionSheetVisible, setQuestionSheetVisible] = useState(false);
   const [questionReply, setQuestionReply] = useState('');
 
-  // Name matching
-  const [nameMatches, setNameMatches] = useState([]);
   const [reconcileGroups, setReconcileGroups] = useState([]);
   const [reconciling, setReconciling] = useState(null);
   const [coachName, setCoachName] = useState('your coach');
@@ -142,9 +139,6 @@ export default function ActionNeededScreen({ navigation, route }) {
       setPendingFPs(fps || []);
       setPendingCoupleFPs(coupleFps || []);
       setQuestions(qs || []);
-      setNameMatches(
-        (notifs || []).filter(n => n.type === 'name_match_confirm')
-      );
 
       // Enrich merge requests with focus point names
       const mrList = merges || [];
@@ -197,12 +191,11 @@ export default function ActionNeededScreen({ navigation, route }) {
     if (didAutoSelectTab.current) return;
     if (fpLoading) return; // wait for the initial load to complete
     if (route?.params?.tab) setActiveTab(route.params.tab);
-    else if (nameMatches.length > 0) setActiveTab('name');
     else if (questions.length > 0) setActiveTab('questions');
     else if (mergeRequests.length > 0) setActiveTab('merge');
     else setActiveTab('focus');
     didAutoSelectTab.current = true;
-  }, [fpLoading, nameMatches.length, mergeRequests.length, questions.length, route?.params?.tab]);
+  }, [fpLoading, mergeRequests.length, questions.length, route?.params?.tab]);
 
   // Actions. Group focus points are aggregated in the UI (1 card per
   // shared_group_id), so handlers must operate on all underlying rows when
@@ -320,35 +313,6 @@ export default function ActionNeededScreen({ navigation, route }) {
     );
   };
 
-  const handleConfirmName = async (notif) => {
-    try {
-      const { student_id, focus_point_ids } = notif.data || {};
-      if (focus_point_ids?.length > 0) {
-        await supabase
-          .from('focus_points')
-          .update({ status: 'pending_coach' })
-          .in('id', focus_point_ids);
-      }
-      await deleteNotification(notif.id);
-      setNameMatches(prev => prev.filter(n => n.id !== notif.id));
-      loadData();
-    } catch {}
-  };
-
-  const handleRejectName = async (notif) => {
-    try {
-      const { focus_point_ids } = notif.data || {};
-      if (focus_point_ids?.length > 0) {
-        await supabase
-          .from('focus_points')
-          .update({ user_id: null, status: 'active' })
-          .in('id', focus_point_ids);
-      }
-      await deleteNotification(notif.id);
-      setNameMatches(prev => prev.filter(n => n.id !== notif.id));
-    } catch {}
-  };
-
   const handleMerge = async (mr) => {
     try {
       // Keep focus_a, delete focus_b, mark merged. Carry focus_b's
@@ -426,10 +390,9 @@ export default function ActionNeededScreen({ navigation, route }) {
     { key: 'focus', label: 'Focus points', count: focusTabBadge },
     { key: 'questions', label: 'Questions', count: questions.length },
     { key: 'merge', label: 'Merge', count: mergeRequests.length },
-    { key: 'name', label: 'Names', count: nameMatches.length },
   ];
 
-  const totalCount = focusTabBadge + questions.length + mergeRequests.length + nameMatches.length;
+  const totalCount = focusTabBadge + questions.length + mergeRequests.length;
 
   // Horizontal pager: sync tab selection <-> swipe gesture, drive a moving underline.
   const screenWidth = Dimensions.get('window').width;
@@ -798,31 +761,6 @@ export default function ActionNeededScreen({ navigation, route }) {
         </>
       </ScrollView>
 
-      {/* ── Page 3: Name Matching ── */}
-      <ScrollView style={{ width: screenWidth }} contentContainerStyle={{ padding: Spacing.side, paddingBottom: 100 }}>
-        <>
-            <Text style={s.tabIntro}>
-              While transcribing your class audio, our AI picked up names it couldn't confidently match to your roster. Confirm each one so the focus points from that lesson land on the right student.
-            </Text>
-
-            {nameMatches.map(notif => (
-              <NameMatchCard
-                key={notif.id}
-                notif={notif}
-                onConfirm={() => handleConfirmName(notif)}
-                onReject={() => handleRejectName(notif)}
-              />
-            ))}
-
-            {nameMatches.length === 0 && (
-              <View style={s.emptyState}>
-                <Ionicons name="checkmark-circle" size={40} color={C.green} />
-                <Text style={s.emptyTitle}>All matched</Text>
-                <Text style={s.emptySub}>No name matches to review.</Text>
-              </View>
-            )}
-        </>
-      </ScrollView>
       </Animated.ScrollView>
 
       <QuestionSheet

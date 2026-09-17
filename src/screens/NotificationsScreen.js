@@ -8,7 +8,7 @@ import { Fonts } from '../theme';
 import { getNotifications, markAllNotificationsRead, deleteNotification } from '../storage/notificationsStorage';
 import { supabase } from '../services/supabase/client';
 import { readCachedRole } from '../services/auth/role';
-import { locallyRespondedAttendance, locallyResolvedNameMatches } from '../storage/attendanceState';
+import { locallyRespondedAttendance } from '../storage/attendanceState';
 import { respondToAttendance } from '../storage/storage';
 import { GenericListSkeleton } from '../components/Skeleton';
 import NotificationDetailSheet from '../components/NotificationDetailSheet';
@@ -34,16 +34,15 @@ const TILE = '#F4F2EC';
 const SIDE = 20;
 
 const ATTENDANCE_TYPES = new Set(['attendance_check', 'group_class_attendance']);
-const ACTIONABLE_TYPES = new Set(['attendance_check', 'group_class_attendance', 'merge_request_student', 'name_match_confirm']);
+const ACTIONABLE_TYPES = new Set(['attendance_check', 'group_class_attendance', 'merge_request_student']);
 // Coach-facing "action needed" notification types: tapping any of these
 // routes straight to the ActionNeeded screen (where the coach can validate
-// focus points, resolve merge requests, or confirm name matches).
+// focus points or resolve merge requests).
 const COACH_ACTION_TYPES = new Set([
   'focus_points_added',
   'focus_point_added',
   'focus_reconcile_needed',
   'merge_request',
-  'name_match_confirm',
 ]);
 // Read-only notif types — tapping opens an info popup instead of navigating.
 const POPUP_READONLY_TYPES = new Set([
@@ -70,7 +69,6 @@ const TYPE_META = {
   attendance_check:        { group: 'class', icon: 'time-outline', cta: 'Confirm attendance' },
   group_class_attendance:  { group: 'class', icon: 'time-outline', cta: 'Confirm attendance' },
   sync_reminder:           { group: 'class', icon: 'cloud-upload-outline', cta: 'Import audio' },
-  name_match_confirm:      { group: 'class', icon: 'id-card-outline', cta: 'Confirm' },
   couple_request_received: { group: 'other', icon: 'people-outline' },
   couple_request_accepted: { group: 'other', icon: 'people-outline' },
   couple_paired:           { group: 'other', icon: 'heart-outline' },
@@ -444,11 +442,10 @@ export default function NotificationsScreen({ navigation }) {
   function renderRow(notif, index) {
     const meta = TYPE_META[notif.type] || DEFAULT_META;
     const alreadyResponded =
-      (ATTENDANCE_TYPES.has(notif.type) && (
+      ATTENDANCE_TYPES.has(notif.type) && (
         respondedAttendances.has(notif.data?.class_input_id) ||
         locallyRespondedAttendance.has(notif.data?.class_input_id)
-      )) ||
-      (notif.type === 'name_match_confirm' && locallyResolvedNameMatches.has(notif.id));
+      );
     const isActionable = ACTIONABLE_TYPES.has(notif.type) && !alreadyResponded;
     // Coach-action notifs stay "unread" until the coach actually resolves the
     // action; once the linked class has no more pending_coach FPs, they fade.

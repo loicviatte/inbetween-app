@@ -37,7 +37,6 @@ import PendingFocusCard from '../../components/coach/PendingFocusCard';
 import RejectFocusSheet from '../../components/coach/RejectFocusSheet';
 import ReconcileFocusSheet from '../../components/coach/ReconcileFocusSheet';
 import MergeCompareCard from '../../components/coach/MergeCompareCard';
-import NameMatchCard from '../../components/coach/NameMatchCard';
 import { getNotifications, deleteNotification } from '../../storage/notificationsStorage';
 import { getUser, getLessonReadiness } from '../../storage/storage';
 import { categoryFromStyle } from '../../utils/danceCategory';
@@ -264,7 +263,6 @@ export default function StudentDetailScreen({ route, navigation }) {
   const [reconcileGroup, setReconcileGroup] = useState(null);
   const [showReconcile, setShowReconcile] = useState(false);
   const [mergeRequests, setMergeRequests] = useState([]);
-  const [nameMatches, setNameMatches] = useState([]);
   const [lastClassDate, setLastClassDate] = useState(null);
   const [readiness, setReadiness] = useState(null);
   // The style readiness is read for. A one-style coach is fixed to theirs; a
@@ -370,7 +368,6 @@ export default function StudentDetailScreen({ route, navigation }) {
           setIsDualCoach(cat == null);
           setLastClassDate(rdScoped?.lastClassDate ?? b.lastClassDate ?? null);
           setReadiness(rdScoped ?? null);
-          setNameMatches((notifs || []).filter((n) => n.type === 'name_match_confirm' && n.data?.student_id === studentId));
           // Merge requests carry both focus points in full for the side-by-side card.
           const mrList = merges || [];
           if (mrList.length > 0) {
@@ -709,44 +706,6 @@ export default function StudentDetailScreen({ route, navigation }) {
             </ActionCard>
           )}
 
-          {nameMatches.length > 0 && (
-            <ActionCard
-              count={nameMatches.length}
-              title={nameMatches.length === 1 ? 'Name to confirm' : 'Names to confirm'}
-              sub={`Is this ${first} in the recording?`}
-              open={open === 'names'}
-              onToggle={() => toggle('names')}
-            >
-              <View style={st.actInner}>
-                {nameMatches.map((notif) => (
-                  <NameMatchCard
-                    key={`name_${notif.id}`}
-                    notif={notif}
-                    onConfirm={async () => {
-                      const { focus_point_ids } = notif.data || {};
-                      if (focus_point_ids?.length > 0) {
-                        await supabase.from('focus_points').update({ status: 'pending_coach' }).in('id', focus_point_ids);
-                      }
-                      await deleteNotification(notif.id);
-                      animateNext();
-                      setNameMatches((prev) => prev.filter((n) => n.id !== notif.id));
-                      refreshCoachData();
-                    }}
-                    onReject={async () => {
-                      const { focus_point_ids } = notif.data || {};
-                      if (focus_point_ids?.length > 0) {
-                        await supabase.from('focus_points').update({ user_id: null, status: 'active' }).in('id', focus_point_ids);
-                      }
-                      await deleteNotification(notif.id);
-                      animateNext();
-                      setNameMatches((prev) => prev.filter((n) => n.id !== notif.id));
-                      refreshCoachData();
-                    }}
-                  />
-                ))}
-              </View>
-            </ActionCard>
-          )}
 
           {/* ── Focus points ── */}
           <View style={st.sh}>

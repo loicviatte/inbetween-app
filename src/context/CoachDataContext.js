@@ -64,12 +64,7 @@ export function CoachDataProvider({ children }) {
   }, []);
 
   const computeUnread = useCallback((notifs) => {
-    return (notifs || []).filter(
-      (n) =>
-        !n.read ||
-        n.type === 'merge_request_student' ||
-        n.type === 'name_match_confirm'
-    ).length;
+    return (notifs || []).filter((n) => !n.read || n.type === 'merge_request_student').length;
   }, []);
 
   const loadAll = useCallback(async () => {
@@ -116,28 +111,21 @@ export function CoachDataProvider({ children }) {
 
       const focusCount = (fps || []).length + (coupleFps || []).length;
       const mergeCount = mergesRes?.count || 0;
-      const nameNotifs = (notifs || []).filter((x) => x.type === 'name_match_confirm');
-      const nameCount = nameNotifs.length;
       const reconcileCount = (reconcileGroups || []).length;
       setActionCounts({
         focus: focusCount,
         merge: mergeCount,
-        name: nameCount,
         reconcile: reconcileCount,
-        total: focusCount + mergeCount + nameCount + reconcileCount,
+        total: focusCount + mergeCount + reconcileCount,
       });
 
-      // Per-student action count (focus validation + merge + name match)
+      // Per-student action count (focus validation + merge)
       const perStudent = {};
       for (const fp of fps || []) {
         if (fp.user_id) perStudent[fp.user_id] = (perStudent[fp.user_id] || 0) + 1;
       }
       for (const mr of mergesRes?.data || []) {
         if (mr.student_id) perStudent[mr.student_id] = (perStudent[mr.student_id] || 0) + 1;
-      }
-      for (const notif of nameNotifs) {
-        const sid = notif.data?.student_id;
-        if (sid) perStudent[sid] = (perStudent[sid] || 0) + 1;
       }
       setStudentActionCounts(perStudent);
     }).catch(() => {});

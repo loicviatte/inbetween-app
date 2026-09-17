@@ -120,15 +120,7 @@ async function processResponse(
     return
   }
 
-  // 2. Load student name for matching
-  const { data: studentRow } = await supabase
-    .from('users')
-    .select('name')
-    .eq('id', studentId)
-    .single()
-  const studentName: string = (studentRow?.name ?? '').toLowerCase().trim()
-
-  // 3. Load student's recently completed FPs (last 3 weeks) to avoid duplicates
+  // 2. Load student's recently completed FPs (last 3 weeks) to avoid duplicates
   const threeWeeksAgo = new Date(Date.now() - 21 * 24 * 60 * 60 * 1000).toISOString()
   const { data: recentlyCompleted } = await supabase
     .from('focus_points')
@@ -138,12 +130,13 @@ async function processResponse(
     .gte('updated_at', threeWeeksAgo)
   const completedNames = new Set((recentlyCompleted ?? []).map((fp: any) => fp.normalized_name))
 
-  // 4. Load all unassigned FPs for this class (both shared and individual)
+  // 3. Load the class's unassigned shared focus points
   const { data: classFPs, error: fpErr } = await supabase
     .from('focus_points')
     .select('*')
     .eq('source_class_input_id', classInputId)
     .is('user_id', null)
+    .eq('is_shared', true)
     .eq('is_deleted', false)
   if (fpErr) {
     console.error('[attendance-response] Failed to load class FPs:', fpErr.message)
@@ -153,7 +146,9 @@ async function processResponse(
   const now = new Date()
   const deadline = new Date(now.getTime() + 18 * 60 * 60 * 1000).toISOString()
 
-  // 5. Handle shared FPs — duplicate for student (filter recently completed)
+  // 4. Every focus point of a group lesson belongs to everyone who was there:
+  //     copy each one onto this student. (Focus points addressed to one dancer
+  //     by name are no longer a thing — a group lesson sets group focuses.)
   const sharedFPs = (classFPs ?? []).filter((fp: any) => fp.is_shared === true)
   const sharedToInsert = sharedFPs.filter((fp: any) => !completedNames.has(fp.normalized_name))
 
@@ -189,81 +184,4 @@ async function processResponse(
     else console.log(`[attendance-response] ✓ Assigned ${sharedRows.length} shared FPs to student ${studentId}`)
   }
 
-  // 6. Handle individual FPs — match extracted_name against student name and assign
-  const individualFPs = (classFPs ?? []).filter((fp: any) => fp.is_shared === false && fp.extracted_name)
-
-  // Split into exact and fuzzy matches
-  const exactMatches: any[] = []
-  const fuzzyMatches: any[] = []
-
-  for (const fp of individualFPs) {
-    const extracted = (fp.extracted_name ?? '').toLowerCase().trim()
-    if (extracted === studentName) {
-      exactMatches.push(fp)
-    } else if (studentName.includes(extracted) || extracted.includes(studentName)) {
-      fuzzyMatches.push(fp)
-    }
-  }
-
-  // Assign exact matches directly (pending_coach)
-  if (exactMatches.length > 0) {
-    const exactIds = exactMatches.map((fp: any) => fp.id)
-    const { error } = await supabase
-      .from('focus_points')
-      .update({
-        user_id: studentId,
-        status: 'pending_coach',
-        coach_review_deadline: deadline,
-        matched_at: now.toISOString(),
-        last_mentioned_at: now.toISOString(),
-      })
-      .in('id', exactIds)
-    if (error) console.error('[attendance-response] Failed to assign exact FPs:', error.message)
-    else console.log(`[attendance-response] ✓ Assigned ${exactIds.length} exact-match FPs to student ${studentId}`)
-  }
-
-  // Handle fuzzy matches — assign but require coach confirmation
-  if (fuzzyMatches.length > 0) {
-    const fuzzyIds = fuzzyMatches.map((fp: any) => fp.id)
-    const { error } = await supabase
-      .from('focus_points')
-      .update({
-        user_id: studentId,
-        status: 'pending_name_confirm',
-        coach_review_deadline: deadline,
-        matched_at: now.toISOString(),
-        last_mentioned_at: now.toISOString(),
-      })
-      .in('id', fuzzyIds)
-    if (error) console.error('[attendance-response] Failed to assign fuzzy FPs:', error.message)
-    else {
-      console.log(`[attendance-response] ✓ Assigned ${fuzzyIds.length} fuzzy-match FPs to student ${studentId} (pending name confirmation)`)
-
-      // Notify coach to confirm name match
-      const { data: classInput } = await supabase
-        .from('class_inputs')
-        .select('user_id')
-        .eq('id', classInputId)
-        .single()
-
-      if (classInput?.user_id) {
-        await supabase.from('notifications').insert({
-          user_id: classInput.user_id,
-          type: 'name_match_confirm',
-          title: 'Confirm student name match',
-          body: `"${fuzzyMatches[0].extracted_name}" confirmed attendance. Is this ${studentName}? Confirm to assign their ${fuzzyIds.length} focus point${fuzzyIds.length > 1 ? 's' : ''}.`,
-          data: {
-            student_id: studentId,
-            extracted_name: fuzzyMatches[0].extracted_name,
-            student_name: studentName,
-            class_input_id: classInputId,
-            focus_point_ids: fuzzyIds,
-          },
-        })
-        console.log(`[attendance-response] Notified coach to confirm name match for "${fuzzyMatches[0].extracted_name}" → ${studentName}`)
-      }
-    }
-  } else if (exactMatches.length === 0 && studentName) {
-    console.log(`[attendance-response] No individual FPs matched for student "${studentName}" in class ${classInputId}`)
-  }
 }

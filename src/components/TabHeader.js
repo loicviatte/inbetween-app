@@ -98,7 +98,6 @@ export default function TabHeader({ navigation, onProfilePress, editMode = false
                  !locallyRespondedAttendance.has(n.data?.class_input_id);
         }
         if (n.type === 'merge_request_student') return true;
-        if (n.type === 'name_match_confirm') return true;
         return !n.read;
       }).length;
       setUnreadCount(count);

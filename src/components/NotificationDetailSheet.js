@@ -23,7 +23,6 @@ const TYPE_LABELS = {
   focus_point_rejected:   { label: 'Declined', color: '#FF3B30' },
   merge_request:          { label: 'Merge',    color: '#5788E6' },
   merge_request_student:  { label: 'Merge',    color: '#5788E6' },
-  name_match_confirm:     { label: 'Name match', color: '#FF9500' },
   sync_reminder:          { label: 'Sync',      color: Colors.orange },
 };
 
