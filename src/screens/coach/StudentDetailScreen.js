@@ -490,6 +490,9 @@ export default function StudentDetailScreen({ route, navigation }) {
   const [activeQuestion, setActiveQuestion] = useState(null);
   const [questionSheetVisible, setQuestionSheetVisible] = useState(false);
   const [questionReply, setQuestionReply] = useState(''); // kept while the coach goes looking for context
+  // Set while the coach is off reading the focus point or the lesson: coming
+  // back drops them straight into the reply they were writing.
+  const reopenQuestionRef = useRef(false);
   const [editingFocus, setEditingFocus] = useState(null);
   const [lessonMinutes, setLessonMinutes] = useState(null);
   const [lessonCount, setLessonCount] = useState(null); // every lesson logged for them
@@ -727,9 +730,28 @@ export default function StudentDetailScreen({ route, navigation }) {
     }));
   }, [readiness, focusPoints]);
 
+  useEffect(() => {
+    const unsub = navigation.addListener('focus', () => {
+      if (!reopenQuestionRef.current) return;
+      reopenQuestionRef.current = false;
+      if (activeQuestion) setQuestionSheetVisible(true);
+    });
+    return unsub;
+  }, [navigation, activeQuestion]);
+
   const openFocus = (row) => {
+    reopenQuestionRef.current = false;
     const fp = focusPoints.find((f) => f.id === row.id);
     setEditingFocus(fp || { id: row.id, name: row.name, tier: row.tier });
+  };
+
+  // Closing the focus point sheet hands the coach back to their reply if that's
+  // where they came from.
+  const closeFocusSheet = () => {
+    setEditingFocus(null);
+    if (!reopenQuestionRef.current) return;
+    reopenQuestionRef.current = false;
+    if (activeQuestion) setTimeout(() => setQuestionSheetVisible(true), 320);
   };
 
   const oldestQuestion = questions.length ? questions[questions.length - 1] : null;
@@ -1026,15 +1048,18 @@ export default function StudentDetailScreen({ route, navigation }) {
         studentId={studentId}
         // Two sheets can't be on screen at once: let this one dismiss first.
         onOpenFocus={(fp) => {
+          reopenQuestionRef.current = true;
           setQuestionSheetVisible(false);
           setTimeout(() => setEditingFocus(fp), 320);
         }}
         onOpenClass={(classId) => {
+          reopenQuestionRef.current = true;
           setQuestionSheetVisible(false);
           setTimeout(() => navigation.navigate('CoachClassDetail', { classId }), 320);
         }}
-        onClose={() => setQuestionSheetVisible(false)}
+        onClose={() => { reopenQuestionRef.current = false; setQuestionSheetVisible(false); }}
         onDone={() => {
+          reopenQuestionRef.current = false;
           setQuestionSheetVisible(false);
           setActiveQuestion(null);
           setQuestionReply('');
@@ -1055,9 +1080,9 @@ export default function StudentDetailScreen({ route, navigation }) {
               if (updates?.name) {
                 setReadiness((r) => (r ? { ...r, focuses: r.focuses.map((f) => (f.focusPointId === fpId ? { ...f, name: updates.name } : f)) } : r));
               }
-              setEditingFocus(null);
+              closeFocusSheet();
             }}
-            onClose={() => setEditingFocus(null)}
+            onClose={closeFocusSheet}
           />
         )}
       </Modal>
