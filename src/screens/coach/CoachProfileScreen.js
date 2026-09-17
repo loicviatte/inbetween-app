@@ -25,7 +25,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Fonts, Spacing } from '../../theme';
 import { getUser, saveUserProfile } from '../../storage/storage';
 import { getMyCoachCard, getCoachObserved } from '../../storage/coachCardStorage';
-import CoachCard from '../../components/CoachCard';
+import CoachCardModal from '../../components/CoachCardModal';
 import {
   getOrCreateInviteCode,
   getMyStudents,
@@ -708,36 +708,7 @@ export default function CoachProfileScreen({ navigation }) {
           </BottomSheet>
 
           {/* ── The coach card, exactly as a student reads it ── */}
-          <Modal visible={cardOpen} animationType="slide" transparent onRequestClose={() => setCardOpen(false)}>
-            <View style={cc.backdrop}>
-              <SafeAreaView style={cc.sheet}>
-                <View style={cc.head}>
-                  <Text style={cc.headT}>Your coach card</Text>
-                  <TouchableOpacity onPress={() => setCardOpen(false)} hitSlop={12} accessibilityRole="button"
-                    accessibilityLabel="Close">
-                    <Ionicons name="close" size={22} color="#FFFFFF" />
-                  </TouchableOpacity>
-                </View>
-                <ScrollView showsVerticalScrollIndicator={false}>
-                  <CoachCard card={{
-                    name: user?.name,
-                    credential: card?.credential,
-                    essence: card?.essence,
-                    styleWords: card?.style_words,
-                    teaches: card?.teaches,
-                    worksWith: card?.works_with,
-                    howITeach: card?.how_i_teach,
-                    myMethod: card?.my_method,
-                    alloc: card?.alloc,
-                    bestFor: card?.best_for,
-                  }} observed={observed} />
-                  <Text style={cc.note}>
-                    The public page is not live yet — the link is reserved for you.
-                  </Text>
-                </ScrollView>
-              </SafeAreaView>
-            </View>
-          </Modal>
+          <CoachCardModal visible={cardOpen} onClose={() => setCardOpen(false)} name={user?.name} card={card} observed={observed} />
         </Animated.View>
       </SafeAreaView>
     </View>
@@ -752,12 +723,6 @@ const cc = StyleSheet.create({
   rowText: { flex: 1, minWidth: 0, gap: 3 },
   rowTitle: { fontFamily: Fonts.ttDemiBold, fontSize: 14.5, color: '#FFFFFF' },
   rowSub: { fontFamily: Fonts.ttRegular, fontSize: 12.5, color: 'rgba(255,255,255,0.62)' },
-  backdrop: { flex: 1, backgroundColor: 'rgba(10,10,10,0.72)' },
-  sheet: { flex: 1, paddingHorizontal: 20, paddingTop: 8, paddingBottom: 28 },
-  head: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14 },
-  headT: { fontFamily: Fonts.ttExtraBold, fontSize: 18, letterSpacing: -0.4, color: '#FFFFFF' },
-  note: { fontFamily: Fonts.ttRegular, fontSize: 12.5, lineHeight: 18, color: 'rgba(255,255,255,0.62)',
-    textAlign: 'center', marginTop: 16 },
 });
 
 const styles = StyleSheet.create({

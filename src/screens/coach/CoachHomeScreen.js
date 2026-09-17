@@ -29,6 +29,8 @@ import { getMyCouples, getPendingCoupleCoachRequests, respondToCoupleCoachReques
 import { CoachHomeScreenSkeleton } from '../../components/Skeleton';
 import { useGroupSwitch, Pulse, Bone, FadeIn } from '../../components/GroupSwitchSkeleton';
 import useSlideSwap from '../../components/useSlideSwap';
+import CoachLinksView from '../../components/CoachLinksView';
+import { useCoachTabView } from '../../context/CoachTabView';
 import { useCoachData } from '../../context/CoachDataContext';
 import { getStudentsReadiness } from '../../storage/storage';
 
@@ -282,6 +284,7 @@ export default function CoachHomeScreen({ navigation, route }) {
     requests, initialLoading: loading, refresh, updateRequests,
   } = useCoachData();
   const tabBarSpace = useTabBarSpace();
+  const { linksOpen } = useCoachTabView(); // the header's link button
 
   // Lesson readiness % per student — the ring and the number on each row.
   // null: no private lesson yet, so nothing to be ready for.
@@ -511,6 +514,7 @@ export default function CoachHomeScreen({ navigation, route }) {
     guardStudent(s, () => navigation.navigate('StudentDetail', { studentId: s.id, studentName: s.name }), () => refresh());
 
   if (loading) return <CoachHomeScreenSkeleton />;
+  if (linksOpen) return <View style={st.page}><CoachLinksView bottomSpace={tabBarSpace} /></View>;
 
   function studentRow(s, quiet, showLast) {
     const readiness = readinessByStudent[s.id] ?? null;

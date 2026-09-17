@@ -9,7 +9,7 @@ import { useCoachData } from '../context/CoachDataContext';
 import DjiSetupBanner from './DjiSetupBanner';
 import DjiSyncPill from './DjiSyncPill';
 import StyleTitle from './StyleTitle';
-import { useClassesView } from '../context/CoachClassesView';
+import { useCoachTabView } from '../context/CoachTabView';
 
 // May 2026 design refresh — gold/ink scale aligned with DashboardScreen.
 const GOLD_500 = '#E8B530';
@@ -28,10 +28,15 @@ const CLASS_STYLES = [
 // mode 'group': Home and Students put "Latin group ▾" after the bell — the
 // group their numbers are for (a menu when the coach teaches both).
 // mode 'classes': the Class tab's "Classes ▾", then its calendar and notes buttons.
-export default function CoachTabHeader({ mode = null }) {
+// links: the Students tab's link button beside settings, which opens its Links.
+export default function CoachTabHeader({ mode = null, links = false }) {
   const navigation = useNavigation();
   const { user, unreadCount, styleFilter, setStyleFilter, canSwitchStyle, notes } = useCoachData();
-  const classes = useClassesView();
+  const tabView = useCoachTabView();
+  const classes = {
+    view: tabView.classesView, setView: tabView.setClassesView,
+    style: tabView.classesStyle, setStyle: tabView.setClassesStyle,
+  };
   const initial = user?.name ? user.name[0].toUpperCase() : 'C';
   const classesLabel = classes.style === 'latin' ? 'Latin group' : classes.style === 'ballroom' ? 'Ballroom group' : 'Classes';
   const toggleView = (v) => classes.setView(classes.view === v ? 'list' : v);
@@ -116,6 +121,18 @@ export default function CoachTabHeader({ mode = null }) {
               )}
             </TouchableOpacity>
           </>
+        )}
+        {links && (
+          <TouchableOpacity
+            onPress={() => tabView.setLinksOpen(!tabView.linksOpen)}
+            style={[styles.settingsBtn, tabView.linksOpen && styles.settingsBtnOn]}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel="Links: your invite code and coach card"
+            accessibilityState={{ selected: tabView.linksOpen }}
+          >
+            <Ionicons name="link-outline" size={18} color={tabView.linksOpen ? '#FFFFFF' : '#141311'} />
+          </TouchableOpacity>
         )}
         <TouchableOpacity
           onPress={() => navigation.navigate('CoachSettings')}
@@ -230,6 +247,7 @@ const styles = StyleSheet.create({
     shadowColor: '#282214', shadowOpacity: 0.10, shadowOffset: { width: 0, height: 4 }, shadowRadius: 10,
     elevation: 2,
   },
+  settingsBtnOn: { backgroundColor: '#141311' },
   avatarWrap: {
     width: 40,
     height: 40,

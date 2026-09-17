@@ -23,7 +23,7 @@ import { hydrateAllFromCold } from '../storage/hydrate';
 import { pokeUploadWorker } from '../services/uploadWorker';
 import { CoachDataProvider } from '../context/CoachDataContext';
 import { DjiSyncProvider } from '../context/DjiSyncContext';
-import { ClassesViewProvider } from '../context/CoachClassesView';
+import { CoachTabViewProvider } from '../context/CoachTabView';
 import MicSyncFlowModal from '../components/MicSyncFlowModal';
 import SyncReminderModal from '../components/SyncReminderModal';
 import CoachTabHeader from '../components/CoachTabHeader';
@@ -40,10 +40,10 @@ function CoachMainTabs() {
   // The header sits on the tabs' warm paper.
   const headerBg = '#F2F0EB';
   return (
-    <ClassesViewProvider>
+    <CoachTabViewProvider>
     <View style={{ flex: 1, backgroundColor: headerBg }}>
       <SafeAreaView style={{ backgroundColor: headerBg }} edges={['top']}>
-        <CoachTabHeader mode={activeRoute === 'CLASS' ? 'classes' : 'group'} />
+        <CoachTabHeader mode={activeRoute === 'CLASS' ? 'classes' : 'group'} links={activeRoute === 'STUDENTS'} />
       </SafeAreaView>
       <View style={{ flex: 1 }}>
         <Tab.Navigator
@@ -68,7 +68,7 @@ function CoachMainTabs() {
         </Tab.Navigator>
       </View>
     </View>
-    </ClassesViewProvider>
+    </CoachTabViewProvider>
   );
 }
 

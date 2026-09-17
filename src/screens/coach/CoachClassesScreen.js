@@ -7,7 +7,7 @@ import MaskedView from '@react-native-masked-view/masked-view';
 import { useFocusEffect } from '@react-navigation/native';
 import { Fonts, Spacing } from '../../theme';
 import { useCoachData } from '../../context/CoachDataContext';
-import { useClassesView } from '../../context/CoachClassesView';
+import { useCoachTabView } from '../../context/CoachTabView';
 import { getMyClasses } from '../../storage/coachStorage';
 import { categoryFromDances } from '../../utils/danceCategory';
 import { useTabBarSpace } from '../../components/CustomTabBar';
@@ -223,7 +223,7 @@ function ListBones() {
 
 export default function CoachClassesScreen({ navigation }) {
   const { notes, students, refresh } = useCoachData();
-  const { view, style } = useClassesView();
+  const { classesView: view, classesStyle: style } = useCoachTabView();
   const tabBarSpace = useTabBarSpace();
   const { width } = useWindowDimensions();
 
