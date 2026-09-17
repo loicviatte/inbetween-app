@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Modal,
   Animated,
@@ -38,46 +38,48 @@ export default function BottomSheet({
   const ty = useRef(new Animated.Value(SCREEN_H)).current;
   const fade = useRef(new Animated.Value(0)).current;
 
-  // Which direction we're going. Reopening while the exit is still running used
-  // to leave two animations racing: the stale one would land the sheet back
-  // off-screen, or its callback would unmount a sheet that had just reopened —
-  // the dim stayed, the sheet didn't. Stop what's running, then take the turn.
+  // Two races had to go, both showing up as "the screen dims and no sheet
+  // arrives", about every other tap:
+  //   · the enter animation was started in the same commit that mounted the
+  //     sheet, so on the native driver it could be handed a view that wasn't
+  //     attached yet and simply not play — dim at full, sheet still off-screen;
+  //   · reopening mid-close left two runs attached to the same values, and
+  //     setValue between them is not reliable on the native driver.
+  // So: never setValue, animate from wherever the value is, start the entrance
+  // only once the sheet is in the tree, and let only the current intent unmount.
   const closingRef = useRef(false);
 
+  const enter = useCallback(() => {
+    closingRef.current = false;
+    Animated.parallel([
+      Animated.timing(fade, { toValue: 1, duration: 220, useNativeDriver: true }),
+      Animated.timing(ty, { toValue: 0, duration: 320, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+    ]).start();
+  }, [fade, ty]);
+
   useEffect(() => {
-    ty.stopAnimation();
-    fade.stopAnimation();
     if (visible) {
       closingRef.current = false;
-      setMounted(true);
-      ty.setValue(SCREEN_H);
-      fade.setValue(0);
-      Animated.parallel([
-        Animated.timing(fade, { toValue: 1, duration: 220, useNativeDriver: true }),
-        Animated.timing(ty, {
-          toValue: 0,
-          duration: 320,
-          easing: Easing.out(Easing.cubic),
-          useNativeDriver: true,
-        }),
-      ]).start();
+      if (mounted) enter();   // already in the tree — animate straight away
+      else setMounted(true);  // the effect below runs it once it is
     } else if (mounted) {
       closingRef.current = true;
       Animated.parallel([
         Animated.timing(fade, { toValue: 0, duration: 180, useNativeDriver: true }),
-        Animated.timing(ty, {
-          toValue: SCREEN_H,
-          duration: 240,
-          easing: Easing.in(Easing.cubic),
-          useNativeDriver: true,
-        }),
+        Animated.timing(ty, { toValue: SCREEN_H, duration: 240, easing: Easing.in(Easing.cubic), useNativeDriver: true }),
       ]).start(({ finished }) => {
-        // Only the run that's still the current intent may unmount.
         if (finished && closingRef.current) setMounted(false);
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
+
+  // The sheet has just been put in the tree: now the native side has a view to
+  // animate.
+  useEffect(() => {
+    if (mounted && visible && !closingRef.current) enter();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mounted]);
 
   if (!mounted) return null;
 
