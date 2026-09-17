@@ -572,10 +572,14 @@ export default function LogScreen({ navigation }) {
     }
   }
 
-  async function handleReminderContinue() {
-    if (dontRemind) {
-      await AsyncStorage.setItem(SKIP_ADD_REMINDER_KEY, 'true');
-    }
+  // The switch writes as it's flipped: leaving by Cancel or the backdrop has to
+  // honour it too, not just "Log it myself anyway".
+  function rememberDontRemind(on) {
+    setDontRemind(on);
+    AsyncStorage.setItem(SKIP_ADD_REMINDER_KEY, on ? 'true' : 'false').catch(() => {});
+  }
+
+  function handleReminderContinue() {
     setReminderVisible(false);
     setModalVisible(true);
   }
@@ -871,13 +875,13 @@ export default function LogScreen({ navigation }) {
                 </Text>
                 <TouchableOpacity
                   style={s.reminderToggleRow}
-                  onPress={() => setDontRemind((v) => !v)}
+                  onPress={() => rememberDontRemind(!dontRemind)}
                   activeOpacity={0.7}
                 >
                   <Text style={s.reminderToggleLabel}>Don't remind me again</Text>
                   <Switch
                     value={dontRemind}
-                    onValueChange={setDontRemind}
+                    onValueChange={rememberDontRemind}
                     trackColor={{ false: '#E0E0E0', true: GOLD }}
                     thumbColor="#fff"
                   />

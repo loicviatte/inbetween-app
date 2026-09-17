@@ -7,9 +7,6 @@ import {
   Animated,
   Modal,
   TextInput,
-  KeyboardAvoidingView,
-  Platform,
-  Pressable,
   ActivityIndicator,
   ScrollView,
   Alert,
@@ -57,9 +54,8 @@ import {
 } from '../storage/storage';
 import { getClassPendingValidation } from '../utils/algorithm';
 import { supabase } from '../services/supabase/client';
-import HeroCardGradient from '../components/HeroCardGradient';
 import QuestionDetailSheet from '../components/QuestionDetailSheet';
-import RadarChart, { RADAR_LABELS } from '../components/RadarChart';
+import { RADAR_LABELS } from '../components/RadarChart';
 import BottomSheet from '../components/BottomSheet';
 import { useProfile } from '../context/ProfileContext';
 import {
@@ -815,7 +811,7 @@ function SettingRow({ icon, label, value, onPress, isLast }) {
       onPress={onPress}
       activeOpacity={0.7}
     >
-      <Text style={set.label}>{label}</Text>
+      <Text style={set.label} numberOfLines={1}>{label}</Text>
       {!!value && <Text style={set.value}>{value}</Text>}
       <Ionicons name="chevron-forward" size={15} color="#767061" />
     </TouchableOpacity>
@@ -2609,10 +2605,6 @@ const cc = StyleSheet.create({
   reviewVal: { fontFamily: Fonts.jakartaExtraBold, fontSize: 14.5, color: Colors.black },
 });
 
-// ─── Statistics tab — counts triad + month/streak mini-card ───────────────────
-const stat = StyleSheet.create({
-});
-
 // ─── Settings tab ─────────────────────────────────────────────────────────────
 const set = StyleSheet.create({
   card: {
@@ -2632,7 +2624,7 @@ const set = StyleSheet.create({
     borderBottomColor: 'rgba(20,19,17,0.10)',
   },
   label: {
-    flexShrink: 0,
+    flexShrink: 1,
     fontFamily: Fonts.jakartaExtraBold,
     fontSize: 15.5,
     color: '#141311',
@@ -2766,9 +2758,6 @@ const ready = StyleSheet.create({
   },
 });
 
-
-const strengths = StyleSheet.create({
-});
 
 const em = StyleSheet.create({
   sheet: {

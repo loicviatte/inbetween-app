@@ -50,7 +50,7 @@ export const Fonts = {
   montserratSemiBold: 'Syne-SemiBold',
 };
 
-// Legacy Typography shim — used by FocusScreen, LogScreen, LogModal
+// Legacy Typography shim — used by LogScreen and LogModal
 export const Typography = {
   largeHeading: { fontFamily: 'Syne-SemiBold', fontSize: 24, color: '#0D0D12' },
   sectionTitle: { fontFamily: 'Syne-SemiBold', fontSize: 18, color: 'rgba(0,0,0,0.75)' },

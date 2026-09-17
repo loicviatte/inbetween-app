@@ -14,7 +14,6 @@ import {
   KeyboardAvoidingView,
   Platform,
   useWindowDimensions,
-  PanResponder,
   LayoutAnimation,
   UIManager,
   Alert,
@@ -42,7 +41,6 @@ import Svg, {
   Stop,
   Circle as SvgCircle,
   Path as SvgPath,
-  G as SvgG,
   Text as SvgText,
 } from 'react-native-svg';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -1188,10 +1186,14 @@ export default function FocusSessionScreen({ route, navigation }) {
   const overrunNextThresholdRef = useRef(OVERRUN_FIRST_PROMPT_SEC);
   const overrunTriggerSecRef = useRef(OVERRUN_FIRST_PROMPT_SEC);
   const overrunAutoStopTimerRef = useRef(null);
-  const [showFeelingModal, setShowFeelingModal] = useState(false);
+  const [showFeelingModal, setShowFeelingModalState] = useState(false);
+  const showFeelingModalRef = useRef(false);
+  const setShowFeelingModal = (on) => { showFeelingModalRef.current = on; setShowFeelingModalState(on); };
   const [showShortSessionPrompt, setShowShortSessionPrompt] = useState(false);
   const [shortSessionElapsed, setShortSessionElapsed] = useState(0);
-  const [showStopConfirm, setShowStopConfirm] = useState(false);
+  const [showStopConfirm, setShowStopConfirmState] = useState(false);
+  const showStopConfirmRef = useRef(false);
+  const setShowStopConfirm = (on) => { showStopConfirmRef.current = on; setShowStopConfirmState(on); };
   const sessionCompletedRef = useRef(false);
   const stopHoldAnim = useRef(new Animated.Value(0)).current;
   const stopHoldTimerRef = useRef(null);
@@ -1303,7 +1305,8 @@ export default function FocusSessionScreen({ route, navigation }) {
           over >= overrunNextThresholdRef.current &&
           !overrunModalOpenRef.current &&
           !sessionCompletedRef.current &&
-          !showFeelingModal
+          !showFeelingModalRef.current &&
+          !showStopConfirmRef.current
         ) {
           openOverrunModal();
         }
@@ -3377,9 +3380,6 @@ const fm = StyleSheet.create({
 });
 
 // ─── Chat styles ─────────────────────────────────────────────────────────────
-
-const chat = StyleSheet.create({
-});
 
 // Too-short session prompt — dark hero card with gold accents matching the
 // rest of the app's confirmation modals.
