@@ -28,7 +28,7 @@ import { useDjiSync } from '../../context/DjiSyncContext';
 import { getStudentFocusPoints, getStudentQuestions, getStudentOpenQuestions, getStudentRecentActivity, getStartClassRoster, markQuestionCovered, linkCoveredQuestionsToClass, getCoachStudentDetailBundle } from '../../storage/coachStorage';
 import { getLessonReadiness } from '../../storage/storage';
 import { getMyCouples, getCoupleReadiness, getCoupleFocusPoints, getCoupleActivity } from '../../storage/coupleStorage';
-import QuestionDetailSheet from '../../components/QuestionDetailSheet';
+import QuestionSheet from '../../components/coach/QuestionSheet';
 import MicCueSheet from '../../components/MicCueSheet';
 import { Pulse, Bone, FadeIn } from '../../components/GroupSwitchSkeleton';
 import {
@@ -2552,22 +2552,19 @@ export default function StartClassScreen({ navigation }) {
               )}
             </Modal>
 
-            {/* Question detail — the briefing's own sheet stands down while
-                the debrief is open, so only this one presents. */}
-            <Modal
-              visible={!!viewingQuestion}
-              transparent
-              animationType="fade"
-              onRequestClose={() => setViewingQuestion(null)}
-            >
-              {viewingQuestion && (
-                <QuestionDetailSheet
-                  question={viewingQuestion}
-                  role="coach"
-                  onClose={() => setViewingQuestion(null)}
-                />
-              )}
-            </Modal>
+            {/* The question, with its context — the briefing's own sheet stands
+                down while the debrief is open, so only this one presents. */}
+              <QuestionSheet
+                visible={!!viewingQuestion}
+                question={viewingQuestion}
+                studentId={viewingQuestion?.student_id || selectedStudent?.id}
+                studentName={selectedStudent?.name}
+                focusPoints={focusPoints}
+                inPerson
+                answered={questionVerdicts[viewingQuestion?.id] === 'covered'}
+                onAnswered={() => viewingQuestion && toggleAnswered(viewingQuestion.id)}
+                onClose={() => setViewingQuestion(null)}
+              />
           </SafeAreaView>
         </SafeAreaProvider>
       </Modal>
@@ -2930,20 +2927,17 @@ export default function StartClassScreen({ navigation }) {
         {renderEndConfirm()}
         {renderRecStartConfirmPrompt()}
         {renderRecStopConfirmPrompt()}
-        <Modal
-          visible={!!viewingQuestion && !debriefOpen}
-          transparent
-          animationType="fade"
-          onRequestClose={() => setViewingQuestion(null)}
-        >
-          {viewingQuestion && (
-            <QuestionDetailSheet
-              question={viewingQuestion}
-              role="coach"
-              onClose={() => setViewingQuestion(null)}
-            />
-          )}
-        </Modal>
+          <QuestionSheet
+            visible={!!viewingQuestion && !debriefOpen}
+            question={viewingQuestion}
+            studentId={viewingQuestion?.student_id || selectedStudent?.id}
+            studentName={selectedStudent?.name}
+            focusPoints={focusPoints}
+            inPerson
+            answered={questionVerdicts[viewingQuestion?.id] === 'covered'}
+            onAnswered={() => viewingQuestion && toggleAnswered(viewingQuestion.id)}
+            onClose={() => setViewingQuestion(null)}
+          />
       </>
     );
   }

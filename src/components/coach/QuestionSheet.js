@@ -47,9 +47,14 @@ function lessonKind(cls) {
  * Props: visible, question (coach_messages row), studentId, studentName,
  * focusPoints (what the caller already has, used if the lookup finds nothing),
  * reply + onReplyChange (the draft lives in the caller), onClose, onDone.
+ *
+ * `inPerson` is the version for during a lesson: the student is standing there,
+ * so there's nothing to type — just the context and "I answered", which marks
+ * it as covered (answered + onAnswered).
  */
 export default function QuestionSheet({
   visible, question, studentId, studentName, focusPoints, reply, onReplyChange, onClose, onDone,
+  inPerson, answered, onAnswered,
 }) {
   const insets = useSafeAreaInsets();
   const [sending, setSending] = useState(false);
@@ -77,10 +82,21 @@ export default function QuestionSheet({
     return () => { show.remove(); hide.remove(); };
   }, []);
 
-  const topGap = full ? 0 : 8;
+  // With the keyboard up it must still stop short of the status bar, or it
+  // reads as a full-screen page with its corners cut off.
+  const topGap = full ? 0 : insets.top + 10;
+  // Short context (one focus point, one lesson) shouldn't leave a field of
+  // empty paper between it and the reply: the sheet takes the height it needs,
+  // up to two thirds of the screen, and the handle still pulls it to full.
+  const [contentH, setContentH] = useState(0);
+  const footH = (inPerson ? 54 : 46 + 12 + 38) + (kb > 0 ? 8 : insets.bottom) + 10;
+  const wanted = contentH > 0 ? contentH + footH + 20 : Math.round(SCREEN_H * 0.66);
   const sheetH = Math.max(
-    260,
-    Math.min(full ? SCREEN_H : Math.round(SCREEN_H * 0.66), SCREEN_H - kb - topGap),
+    280,
+    Math.min(
+      full ? SCREEN_H : Math.min(Math.round(SCREEN_H * 0.66), wanted),
+      SCREEN_H - kb - topGap,
+    ),
   );
 
   useEffect(() => {
@@ -161,7 +177,16 @@ export default function QuestionSheet({
         <View style={[qs.grabBar, full && { width: 26 }]} />
       </Pressable>
 
-      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 12 }} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={{ paddingBottom: 12 }}
+        showsVerticalScrollIndicator={false}
+        onContentSizeChange={(w, h) => {
+          if (Math.abs(h - contentH) < 2) return;
+          LayoutAnimation.configureNext({ duration: 220, update: { type: LayoutAnimation.Types.easeInEaseOut } });
+          setContentH(h);
+        }}
+      >
         <View style={qs.head}>
           <View style={qs.q}>
             <Text style={qs.qT}>{questionText || question.message}</Text>
@@ -262,6 +287,18 @@ export default function QuestionSheet({
       </ScrollView>
 
       <View style={[qs.rep, { paddingBottom: (kb > 0 ? 8 : insets.bottom) + 10 }]}>
+        {inPerson ? (
+          <TouchableOpacity
+            style={[qs.done, answered && qs.doneOn]}
+            activeOpacity={0.88}
+            onPress={() => { onAnswered?.(); if (!answered) onClose?.(); }}
+            accessibilityRole="button"
+            accessibilityState={{ checked: !!answered }}
+          >
+            <Ionicons name="checkmark" size={18} color={answered ? '#3F6B3E' : L.INK} />
+            <Text style={[qs.doneT, answered && { color: '#3F6B3E' }]}>{answered ? 'Answered' : 'I answered'}</Text>
+          </TouchableOpacity>
+        ) : (
         <View style={qs.fld}>
           <TextInput
             style={qs.input}
@@ -285,9 +322,12 @@ export default function QuestionSheet({
               : <Ionicons name="arrow-up" size={18} color={reply.trim() ? L.INK : 'rgba(10,10,10,0.35)'} />}
           </TouchableOpacity>
         </View>
-        <TouchableOpacity style={qs.alt} onPress={handleDismiss} activeOpacity={0.7}>
-          <Text style={qs.altT}>I'll explain in person</Text>
-        </TouchableOpacity>
+        )}
+        {!inPerson && (
+          <TouchableOpacity style={qs.alt} onPress={handleDismiss} activeOpacity={0.7}>
+            <Text style={qs.altT}>I'll explain in person</Text>
+          </TouchableOpacity>
+        )}
       </View>
 
       {/* The lesson, over the sheet — back returns to the reply untouched. */}
@@ -400,6 +440,9 @@ const qs = StyleSheet.create({
   },
   send: { width: 46, height: 46, borderRadius: 23, backgroundColor: L.GOLD, alignItems: 'center', justifyContent: 'center' },
   sendOff: { backgroundColor: 'rgba(10,10,10,0.08)' },
+  done: { height: 54, borderRadius: 999, backgroundColor: L.GOLD, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9 },
+  doneOn: { backgroundColor: '#EAF3E9' },
+  doneT: { fontFamily: Fonts.ttBold, fontSize: 16.5, letterSpacing: -0.3, color: L.INK },
   alt: { paddingTop: 12, paddingBottom: 2, alignItems: 'center' },
   altT: { fontFamily: Fonts.ttDemiBold, fontSize: 13, color: L.INK_62 },
 
