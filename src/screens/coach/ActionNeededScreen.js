@@ -53,7 +53,7 @@ import {
 import FocusPointEditSheet from '../../components/FocusPointEditSheet';
 import QuestionSheet, { splitFocusTag } from '../../components/coach/QuestionSheet';
 import { dateLabel } from '../../components/coach/LessonUI';
-import { markQuestionCovered, getQuestionContext } from '../../storage/coachStorage';
+import { getQuestionContext } from '../../storage/coachStorage';
 import ClassContextSheet from '../../components/coach/ClassContextSheet';
 import ApproveConfirmSheet from '../../components/coach/ApproveConfirmSheet';
 import MergeCompareCard from '../../components/coach/MergeCompareCard';
@@ -315,13 +315,6 @@ export default function ActionNeededScreen({ navigation, route }) {
       .catch(() => setFocusPopup((p) => (p ? { ...p, ctx: { focus: null } } : p)));
   };
 
-  const handleAnswerInPerson = async (q) => {
-    try { await markQuestionCovered(q.id); } catch {}
-    setQuestions((prev) => prev.filter((x) => x.id !== q.id));
-    setDone((d) => ({ ...d, answered: d.answered + 1 }));
-    refresh();
-  };
-
   const handleMerge = async (mr) => {
     try {
       // Keep focus_a, delete focus_b, mark merged. Carry focus_b's
@@ -523,17 +516,14 @@ export default function ActionNeededScreen({ navigation, route }) {
                       style={s.ok}
                       activeOpacity={0.88}
                       accessibilityRole="button"
+                      accessibilityLabel={`See ${q.studentName}'s question`}
                       onPress={() => {
                         if (q.id !== activeQuestion?.id) setQuestionReply('');
                         setActiveQuestion(q);
                         setQuestionSheetVisible(true);
                       }}
                     >
-                      <Text style={s.okT}>Reply</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity style={s.keep} activeOpacity={0.8} onPress={() => handleAnswerInPerson(q)}
-                      accessibilityRole="button">
-                      <Text style={s.keepT}>In person</Text>
+                      <Text style={s.okT}>See</Text>
                     </TouchableOpacity>
                   </View>
                 </View>
