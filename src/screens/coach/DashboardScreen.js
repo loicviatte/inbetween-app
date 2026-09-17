@@ -298,7 +298,6 @@ export default function DashboardScreen({ navigation }) {
   const groupReadiness = withLesson.length
     ? Math.round(withLesson.reduce((n, s) => n + readinessByStudent[s.id], 0) / withLesson.length)
     : 0;
-  const needYou = students.filter((s) => s.status !== 'on_track').length;
   const groupWeeks = useMemo(() => {
     const w = new Array(10).fill(0);
     for (const s of students) (s.weeklyMinutes || []).forEach((m, i) => { w[i] += m; });
@@ -368,7 +367,7 @@ export default function DashboardScreen({ navigation }) {
             <Text style={st.bigLabel}>Group readiness</Text>
             <Text style={st.bigSub}>
               {students.length === 0 ? 'No students yet'
-                : `across ${students.length} student${students.length === 1 ? '' : 's'}${needYou ? `, ${needYou} need${needYou === 1 ? 's' : ''} you` : ''}`}
+                : `across ${students.length} student${students.length === 1 ? '' : 's'}`}
             </Text>
           </View>
         </View>
