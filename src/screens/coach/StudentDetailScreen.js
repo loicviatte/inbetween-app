@@ -8,7 +8,6 @@ import {
   Modal,
   Pressable,
   TextInput,
-  KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
   LayoutAnimation,
@@ -47,6 +46,7 @@ import { getNotifications, deleteNotification } from '../../storage/notification
 import { getUser, getLessonReadiness } from '../../storage/storage';
 import { categoryFromStyle } from '../../utils/danceCategory';
 import FocusPointEditSheet from '../../components/FocusPointEditSheet';
+import BottomSheet from '../../components/BottomSheet';
 import StyleTitle from '../../components/StyleTitle';
 import { Pulse, Bone, FadeIn } from '../../components/GroupSwitchSkeleton';
 import { useCoachData } from '../../context/CoachDataContext';
@@ -335,112 +335,112 @@ function QuestionSheet({ visible, question, reply, onReplyChange, focusPoints, s
   if (!question) return null;
 
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
-        <Pressable style={qs.overlay} onPress={onClose}>
-          <Pressable style={[qs.sheet, { paddingBottom: insets.bottom + 20 }]} onPress={() => {}}>
-            <View style={qs.handle} />
-            <Text style={qs.eyebrow}>From your student</Text>
-            <Text style={qs.title}>Their question</Text>
-            <View style={qs.bubble}>
-              <Text style={qs.qm}>“</Text>
-              <View style={{ flex: 1, minWidth: 0 }}>
-                <Text style={qs.bubbleText}>{questionText || question.message}</Text>
-                <Text style={qs.bubbleMeta}>{agoLabel(question.created_at)}</Text>
-              </View>
+    <BottomSheet
+      visible={visible}
+      onClose={onClose}
+      avoidKeyboard
+      overlayColor="rgba(10,10,10,0.45)"
+      sheetStyle={[qs.sheet, { paddingBottom: insets.bottom + 16 }]}
+    >
+      <View style={qs.handle} />
+      <Text style={qs.eyebrow}>From your student</Text>
+      <Text style={qs.title}>Their question</Text>
+      <View style={qs.bubble}>
+        <Text style={qs.qm}>“</Text>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={qs.bubbleText}>{questionText || question.message}</Text>
+          <Text style={qs.bubbleMeta}>{agoLabel(question.created_at)}</Text>
+        </View>
+      </View>
+
+      {!!focusName && (
+        <View style={qs.ctx}>
+          <Pressable
+            onPress={() => setExpanded((e) => !e)}
+            style={({ pressed }) => [qs.ctxHead, pressed && { backgroundColor: '#FBFAF7' }]}
+            accessibilityRole="button"
+            accessibilityState={{ expanded }}
+            accessibilityLabel={`About ${context?.focus?.name || focusName}`}
+          >
+            <View style={qs.ctxDot} />
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={qs.ctxName} numberOfLines={1}>{context?.focus?.name || focusName}</Text>
+              <Text style={qs.ctxMeta} numberOfLines={1}>
+                {context == null
+                  ? 'Looking it up…'
+                  : [TIER_LABEL[context.focus?.tier] || 'Focus point',
+                     context.cls ? `set ${dayLabel(context.cls.created_at)}` : null].filter(Boolean).join(' · ')}
+              </Text>
             </View>
+            <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={14} color="rgba(10,10,10,0.4)" />
+          </Pressable>
 
-            {!!focusName && (
-              <View style={qs.ctx}>
-                <Pressable
-                  onPress={() => setExpanded((e) => !e)}
-                  style={({ pressed }) => [qs.ctxHead, pressed && { backgroundColor: '#FBFAF7' }]}
-                  accessibilityRole="button"
-                  accessibilityState={{ expanded }}
-                  accessibilityLabel={`About ${context?.focus?.name || focusName}`}
-                >
-                  <View style={qs.ctxDot} />
-                  <View style={{ flex: 1, minWidth: 0 }}>
-                    <Text style={qs.ctxName} numberOfLines={1}>{context?.focus?.name || focusName}</Text>
-                    <Text style={qs.ctxMeta} numberOfLines={1}>
-                      {context == null
-                        ? 'Looking it up…'
-                        : [TIER_LABEL[context.focus?.tier] || 'Focus point',
-                           context.cls ? `set ${dayLabel(context.cls.created_at)}` : null].filter(Boolean).join(' · ')}
-                    </Text>
-                  </View>
-                  <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={14} color="rgba(10,10,10,0.4)" />
-                </Pressable>
-
-                {expanded && context != null && (
-                  <View style={qs.ctxBody}>
-                    {!!context.focus?.subtitle && <Text style={qs.ctxText}>{context.focus.subtitle}</Text>}
-                    {!!context.focus?.drill && (
-                      <>
-                        <Text style={qs.ctxLabel}>How they train it</Text>
-                        <Text style={qs.ctxText}>{context.focus.drill}</Text>
-                      </>
-                    )}
-                    {!!context.cls?.class_summary && (
-                      <>
-                        <Text style={qs.ctxLabel}>From the lesson</Text>
-                        <Text style={qs.ctxText} numberOfLines={5}>{context.cls.class_summary}</Text>
-                      </>
-                    )}
-                    {!context.focus?.subtitle && !context.focus?.drill && !context.cls?.class_summary && (
-                      <Text style={qs.ctxText}>No notes were written on this focus point.</Text>
-                    )}
-                    <View style={qs.ctxActions}>
-                      {!!context.focus?.id && (
-                        <TouchableOpacity style={qs.ctxBtn} activeOpacity={0.8} onPress={() => onOpenFocus(context.focus)}
-                          accessibilityRole="button">
-                          <Ionicons name="locate-outline" size={13} color={INK} />
-                          <Text style={qs.ctxBtnT}>The focus point</Text>
-                        </TouchableOpacity>
-                      )}
-                      {!!context.cls?.id && (
-                        <TouchableOpacity style={qs.ctxBtn} activeOpacity={0.8} onPress={() => onOpenClass(context.cls.id)}
-                          accessibilityRole="button">
-                          <Ionicons name="document-text-outline" size={13} color={INK} />
-                          <Text style={qs.ctxBtnT}>The lesson</Text>
-                        </TouchableOpacity>
-                      )}
-                    </View>
-                  </View>
+          {expanded && context != null && (
+            <View style={qs.ctxBody}>
+              {!!context.focus?.subtitle && <Text style={qs.ctxText}>{context.focus.subtitle}</Text>}
+              {!!context.focus?.drill && (
+                <>
+                  <Text style={qs.ctxLabel}>How they train it</Text>
+                  <Text style={qs.ctxText}>{context.focus.drill}</Text>
+                </>
+              )}
+              {!!context.cls?.class_summary && (
+                <>
+                  <Text style={qs.ctxLabel}>From the lesson</Text>
+                  <Text style={qs.ctxText} numberOfLines={5}>{context.cls.class_summary}</Text>
+                </>
+              )}
+              {!context.focus?.subtitle && !context.focus?.drill && !context.cls?.class_summary && (
+                <Text style={qs.ctxText}>No notes were written on this focus point.</Text>
+              )}
+              <View style={qs.ctxActions}>
+                {!!context.focus?.id && (
+                  <TouchableOpacity style={qs.ctxBtn} activeOpacity={0.8} onPress={() => onOpenFocus(context.focus)}
+                    accessibilityRole="button">
+                    <Ionicons name="locate-outline" size={13} color={INK} />
+                    <Text style={qs.ctxBtnT}>The focus point</Text>
+                  </TouchableOpacity>
+                )}
+                {!!context.cls?.id && (
+                  <TouchableOpacity style={qs.ctxBtn} activeOpacity={0.8} onPress={() => onOpenClass(context.cls.id)}
+                    accessibilityRole="button">
+                    <Ionicons name="document-text-outline" size={13} color={INK} />
+                    <Text style={qs.ctxBtnT}>The lesson</Text>
+                  </TouchableOpacity>
                 )}
               </View>
-            )}
-            <Text style={qs.label}>Your reply</Text>
-            <View style={qs.inputRow}>
-              <TextInput
-                style={qs.input}
-                value={reply}
-                onChangeText={onReplyChange}
-                placeholder="Type your reply…"
-                placeholderTextColor="rgba(10,10,10,0.38)"
-                multiline
-                maxLength={500}
-              />
-              <TouchableOpacity
-                style={[qs.sendBtn, !reply.trim() && qs.sendBtnDisabled]}
-                onPress={handleReply}
-                disabled={sending || !reply.trim()}
-                activeOpacity={0.85}
-                accessibilityRole="button"
-                accessibilityLabel="Send the reply"
-              >
-                {sending
-                  ? <ActivityIndicator color={INK} size="small" />
-                  : <Ionicons name="arrow-up" size={19} color={reply.trim() ? INK : 'rgba(10,10,10,0.35)'} />}
-              </TouchableOpacity>
             </View>
-            <TouchableOpacity style={qs.dismissBtn} onPress={handleDismiss} activeOpacity={0.7}>
-              <Text style={qs.dismissText}>I'll explain in person</Text>
-            </TouchableOpacity>
-          </Pressable>
-        </Pressable>
-      </KeyboardAvoidingView>
-    </Modal>
+          )}
+        </View>
+      )}
+      <Text style={qs.label}>Your reply</Text>
+      <View style={qs.inputRow}>
+        <TextInput
+          style={qs.input}
+          value={reply}
+          onChangeText={onReplyChange}
+          placeholder="Type your reply…"
+          placeholderTextColor="rgba(10,10,10,0.38)"
+          multiline
+          maxLength={500}
+        />
+        <TouchableOpacity
+          style={[qs.sendBtn, !reply.trim() && qs.sendBtnDisabled]}
+          onPress={handleReply}
+          disabled={sending || !reply.trim()}
+          activeOpacity={0.85}
+          accessibilityRole="button"
+          accessibilityLabel="Send the reply"
+        >
+          {sending
+            ? <ActivityIndicator color={INK} size="small" />
+            : <Ionicons name="arrow-up" size={19} color={reply.trim() ? INK : 'rgba(10,10,10,0.35)'} />}
+        </TouchableOpacity>
+      </View>
+      <TouchableOpacity style={qs.dismissBtn} onPress={handleDismiss} activeOpacity={0.7}>
+        <Text style={qs.dismissText}>I'll explain in person</Text>
+      </TouchableOpacity>
+    </BottomSheet>
   );
 }
 
@@ -1069,7 +1069,7 @@ export default function StudentDetailScreen({ route, navigation }) {
         }}
       />
 
-      <Modal visible={!!editingFocus} transparent animationType="slide" onRequestClose={() => setEditingFocus(null)}>
+      <Modal visible={!!editingFocus} transparent animationType="fade" onRequestClose={() => setEditingFocus(null)}>
         {editingFocus && (
           <FocusPointEditSheet
             fp={editingFocus}
@@ -1087,7 +1087,7 @@ export default function StudentDetailScreen({ route, navigation }) {
         )}
       </Modal>
 
-      <Modal visible={!!editingPendingFp} transparent animationType="slide" onRequestClose={() => setEditingPendingFp(null)}>
+      <Modal visible={!!editingPendingFp} transparent animationType="fade" onRequestClose={() => setEditingPendingFp(null)}>
         {editingPendingFp && (
           <FocusPointEditSheet
             fp={editingPendingFp}
@@ -1225,7 +1225,6 @@ const st = StyleSheet.create({
 
 // Question sheet styles
 const qs = StyleSheet.create({
-  overlay: { flex: 1, backgroundColor: 'rgba(10,10,10,0.45)', justifyContent: 'flex-end' },
   sheet: { backgroundColor: PAGE, borderTopLeftRadius: 26, borderTopRightRadius: 26, paddingHorizontal: Spacing.side, paddingTop: 10 },
   handle: { alignSelf: 'center', width: 36, height: 4, borderRadius: 2, backgroundColor: 'rgba(10,10,10,0.16)', marginBottom: 16 },
   eyebrow: { fontFamily: Fonts.ttDemiBold, fontSize: 9.5, letterSpacing: 1.6, textTransform: 'uppercase', color: GOLD_INK },
