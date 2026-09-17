@@ -38,8 +38,17 @@ export default function BottomSheet({
   const ty = useRef(new Animated.Value(SCREEN_H)).current;
   const fade = useRef(new Animated.Value(0)).current;
 
+  // Which direction we're going. Reopening while the exit is still running used
+  // to leave two animations racing: the stale one would land the sheet back
+  // off-screen, or its callback would unmount a sheet that had just reopened —
+  // the dim stayed, the sheet didn't. Stop what's running, then take the turn.
+  const closingRef = useRef(false);
+
   useEffect(() => {
+    ty.stopAnimation();
+    fade.stopAnimation();
     if (visible) {
+      closingRef.current = false;
       setMounted(true);
       ty.setValue(SCREEN_H);
       fade.setValue(0);
@@ -53,6 +62,7 @@ export default function BottomSheet({
         }),
       ]).start();
     } else if (mounted) {
+      closingRef.current = true;
       Animated.parallel([
         Animated.timing(fade, { toValue: 0, duration: 180, useNativeDriver: true }),
         Animated.timing(ty, {
@@ -62,7 +72,8 @@ export default function BottomSheet({
           useNativeDriver: true,
         }),
       ]).start(({ finished }) => {
-        if (finished) setMounted(false);
+        // Only the run that's still the current intent may unmount.
+        if (finished && closingRef.current) setMounted(false);
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

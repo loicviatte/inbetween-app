@@ -64,7 +64,13 @@ export default function QuestionSheet({
   const lessonX = useRef(new Animated.Value(1)).current; // 1 = off to the right
   const [lessonOpen, setLessonOpen] = useState(false);
 
-  const { text: questionText, focusName } = splitFocusTag(question?.message);
+  // The caller clears the question as it closes; hold the last one so the sheet
+  // has something to show while it slides away.
+  const lastQuestion = useRef(null);
+  if (question) lastQuestion.current = question;
+  const shown = question || lastQuestion.current;
+
+  const { text: questionText, focusName } = splitFocusTag(shown?.message);
 
   // The sheet has a fixed height, so a keyboard sliding in would push it past
   // the top of the screen and crop the question. It shrinks to what's left
@@ -140,20 +146,21 @@ export default function QuestionSheet({
   }
 
   async function handleReply() {
-    if (!reply.trim()) return;
+    if (!reply.trim() || !shown) return;
     setSending(true);
-    await replyToQuestion(question.id, reply.trim());
+    await replyToQuestion(shown.id, reply.trim());
     setSending(false);
     onReplyChange('');
     onDone();
   }
 
   async function handleDismiss() {
-    await dismissQuestion(question.id);
+    if (!shown) return;
+    await dismissQuestion(shown.id);
     onDone();
   }
 
-  if (!question) return null;
+  if (!shown) return null;
 
   const focus = ctx?.focus || null;
   const lesson = ctx?.lesson || null;
@@ -189,8 +196,8 @@ export default function QuestionSheet({
       >
         <View style={qs.head}>
           <View style={qs.q}>
-            <Text style={qs.qT}>{questionText || question.message}</Text>
-            <Text style={qs.qS}>{who} · {agoLabel(question.created_at)}</Text>
+            <Text style={qs.qT}>{questionText || shown.message}</Text>
+            <Text style={qs.qS}>{who} · {agoLabel(shown.created_at)}</Text>
           </View>
         </View>
 
