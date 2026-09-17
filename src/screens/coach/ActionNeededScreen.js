@@ -5,6 +5,7 @@ import {
   StyleSheet,
   TouchableOpacity,
   ScrollView,
+  ActivityIndicator,
   Modal,
   LayoutAnimation,
   Platform,
@@ -52,7 +53,7 @@ import {
 import FocusPointEditSheet from '../../components/FocusPointEditSheet';
 import QuestionSheet, { splitFocusTag } from '../../components/coach/QuestionSheet';
 import { dateLabel } from '../../components/coach/LessonUI';
-import { markQuestionCovered } from '../../storage/coachStorage';
+import { markQuestionCovered, getQuestionContext } from '../../storage/coachStorage';
 import ClassContextSheet from '../../components/coach/ClassContextSheet';
 import ApproveConfirmSheet from '../../components/coach/ApproveConfirmSheet';
 import MergeCompareCard from '../../components/coach/MergeCompareCard';
@@ -98,6 +99,8 @@ export default function ActionNeededScreen({ navigation, route }) {
   const [questionReply, setQuestionReply] = useState('');
 
   const [comparing, setComparing] = useState(null); // { mr, existing, incoming }
+  // The focus point a question was asked from, opened from the question itself.
+  const [focusPopup, setFocusPopup] = useState(null); // { name, ctx } — ctx null while loading
   // What the coach got through in this sitting — shown once nothing is left.
   const [done, setDone] = useState({ approved: 0, answered: 0, merged: 0 });
   const [reconcileGroups, setReconcileGroups] = useState([]);
@@ -305,6 +308,13 @@ export default function ActionNeededScreen({ navigation, route }) {
     );
   };
 
+  const openQuestionFocus = (q, focusName) => {
+    setFocusPopup({ name: focusName, ctx: null });
+    getQuestionContext(q.student_id, focusName)
+      .then((ctx) => setFocusPopup((p) => (p && p.name === focusName ? { ...p, ctx } : p)))
+      .catch(() => setFocusPopup((p) => (p ? { ...p, ctx: { focus: null } } : p)));
+  };
+
   const handleAnswerInPerson = async (q) => {
     try { await markQuestionCovered(q.id); } catch {}
     setQuestions((prev) => prev.filter((x) => x.id !== q.id));
@@ -497,10 +507,16 @@ export default function ActionNeededScreen({ navigation, route }) {
                     <Text style={s.qS}>{q.studentName} · {daysAgoLabel(q.created_at)}</Text>
                   </View>
                   {!!focusName && (
-                    <View style={s.fpx}>
+                    <Pressable
+                      style={({ pressed }) => [s.fpx, pressed && { backgroundColor: '#F4F2EC' }]}
+                      onPress={() => openQuestionFocus(q, focusName)}
+                      accessibilityRole="button"
+                      accessibilityLabel={`About ${focusName}`}
+                    >
                       <View style={s.fpxDot} />
                       <Text style={s.fpxT} numberOfLines={1}>{focusName}</Text>
-                    </View>
+                      <Ionicons name="chevron-forward" size={13} color="rgba(10,10,10,0.3)" />
+                    </Pressable>
                   )}
                   <View style={s.act}>
                     <TouchableOpacity
@@ -626,25 +642,24 @@ export default function ActionNeededScreen({ navigation, route }) {
         )}
       </Modal>
 
-      <Modal visible={!!rejectingFp} transparent animationType="slide" onRequestClose={() => setRejectingFp(null)}>
-        {rejectingFp && (
-          <RejectFocusSheet fp={rejectingFp} onConfirm={handleConfirmReject} onClose={() => setRejectingFp(null)} />
-        )}
-      </Modal>
+      <RejectFocusSheet
+        visible={!!rejectingFp}
+        fp={rejectingFp}
+        onConfirm={handleConfirmReject}
+        onClose={() => setRejectingFp(null)}
+      />
 
-      <Modal visible={!!approvingFp} transparent animationType="slide" onRequestClose={() => setApprovingFp(null)}>
+      <Modal visible={!!approvingFp} transparent animationType="fade" onRequestClose={() => setApprovingFp(null)}>
         {approvingFp && (
           <ApproveConfirmSheet fp={approvingFp} onConfirm={handleConfirmApprove} onCancel={() => setApprovingFp(null)} />
         )}
       </Modal>
 
-      <Modal visible={!!contextFp} transparent animationType="slide" onRequestClose={() => setContextFp(null)}>
-        {contextFp && <ClassContextSheet fp={contextFp} onClose={() => setContextFp(null)} />}
-      </Modal>
+      <ClassContextSheet visible={!!contextFp} fp={contextFp} onClose={() => setContextFp(null)} />
 
-      <Modal visible={!!reconciling} transparent animationType="slide" onRequestClose={() => setReconciling(null)}>
-        {reconciling && (
+      {!!reconciling && (
           <ReconcileFocusSheet
+            visible
             student={{
               name: studentMap[reconciling.userId]?.name || 'Student',
               initials: (studentMap[reconciling.userId]?.name || '?').split(' ').map((w) => w[0]).slice(0, 2).join('').toUpperCase(),
@@ -655,6 +670,12 @@ export default function ActionNeededScreen({ navigation, route }) {
             onConfirm={async (removedId) => { await applyReconcile(removedId); setReconciling(null); loadReconcile(); loadData(); }}
             onClose={() => setReconciling(null)}
           />
+      )}
+
+      {/* The focus point a question came from. */}
+      <Modal visible={!!focusPopup} transparent animationType="fade" onRequestClose={() => setFocusPopup(null)}>
+        {focusPopup && (
+          <FocusPopup popup={focusPopup} onClose={() => setFocusPopup(null)} />
         )}
       </Modal>
 
@@ -673,6 +694,51 @@ export default function ActionNeededScreen({ navigation, route }) {
     </SafeAreaView>
   );
 }
+
+// ─── The focus point behind a question ──────────────────────────────────────
+function FocusPopup({ popup, onClose }) {
+  const ctx = popup.ctx;
+  const fp = ctx?.focus || null;
+  const lesson = ctx?.lesson || null;
+  const rows = !ctx
+    ? []
+    : [
+        fp?.tier ? ['Tier', TIER_LABEL[fp.tier] || 'Focus point'] : null,
+        ['Practice', ctx.done > 0 ? `${ctx.done} of ${ctx.target} sessions done` : 'No practice yet'],
+        lesson ? ['Set in', `${lesson.title || lesson.dance || 'A lesson'} · ${dateLabel(lesson.created_at)}`] : null,
+        fp?.subtitle ? ['The cue', fp.subtitle] : null,
+        fp?.drill ? ['Drill', fp.drill] : null,
+      ].filter(Boolean);
+
+  return (
+    <Pressable style={s.popBack} onPress={onClose}>
+      <Pressable style={s.popBox} onPress={() => {}}>
+        <Text style={s.popH}>{fp?.name || popup.name}</Text>
+        <TouchableOpacity style={s.popCl} onPress={onClose} activeOpacity={0.8}
+          accessibilityRole="button" accessibilityLabel="Close">
+          <Ionicons name="close" size={14} color={INK} />
+        </TouchableOpacity>
+
+        {!ctx ? (
+          <View style={{ paddingVertical: 30, alignItems: 'center' }}><ActivityIndicator color={GOLD} /></View>
+        ) : !fp ? (
+          <Text style={s.popNote}>“{popup.name}” isn’t on their plan any more.</Text>
+        ) : (
+          <View style={s.sh}>
+            {rows.map(([dt, dd]) => (
+              <View key={dt}>
+                <Text style={s.shDt}>{dt}</Text>
+                <Text style={s.shDd}>{dd}</Text>
+              </View>
+            ))}
+          </View>
+        )}
+      </Pressable>
+    </Pressable>
+  );
+}
+
+const TIER_LABEL = { critical: 'Critical focus', important: 'Important focus', supporting: 'Supporting focus' };
 
 // ─── The two focus points, read side by side ────────────────────────────────
 function MergeContextSheet({ pair, studentName, onClose, onMerge, onKeepBoth }) {

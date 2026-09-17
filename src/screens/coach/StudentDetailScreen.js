@@ -816,19 +816,16 @@ export default function StudentDetailScreen({ route, navigation }) {
         )}
       </Modal>
 
-      <Modal visible={!!rejectingPendingFp} transparent animationType="slide" onRequestClose={() => setRejectingPendingFp(null)}>
-        {rejectingPendingFp && (
-          <RejectFocusSheet
-            fp={rejectingPendingFp}
-            onConfirm={handleConfirmRejectPendingFp}
-            onClose={() => setRejectingPendingFp(null)}
-          />
-        )}
-      </Modal>
+      <RejectFocusSheet
+        visible={!!rejectingPendingFp}
+        fp={rejectingPendingFp}
+        onConfirm={handleConfirmRejectPendingFp}
+        onClose={() => setRejectingPendingFp(null)}
+      />
 
-      <Modal visible={showReconcile} transparent animationType="slide" onRequestClose={() => setShowReconcile(false)}>
-        {reconcileGroup && (
+      {!!reconcileGroup && (
           <ReconcileFocusSheet
+            visible={showReconcile}
             student={{ name: displayName, initials: initialsOf(displayName) }}
             kept={reconcileGroup.kept}
             candidates={reconcileGroup.candidates}
@@ -840,8 +837,7 @@ export default function StudentDetailScreen({ route, navigation }) {
             }}
             onClose={() => setShowReconcile(false)}
           />
-        )}
-      </Modal>
+      )}
     </SafeAreaView>
   );
 }

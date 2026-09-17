@@ -2,6 +2,7 @@ import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Pressable } from 'react-native';
 import HeroCardGradient from '../HeroCardGradient';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import BottomSheet from '../BottomSheet';
 import { Fonts } from '../../theme';
 
 const GOLD = '#F6D27A';
@@ -13,7 +14,7 @@ function formatDate(iso) {
   return `${MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
 }
 
-export default function ClassContextSheet({ fp, onClose }) {
+export default function ClassContextSheet({ visible, fp, onClose }) {
   const src = Array.isArray(fp?.source_class_input) ? fp.source_class_input[0] : fp?.source_class_input;
   if (!src) return null;
 
@@ -24,8 +25,8 @@ export default function ClassContextSheet({ fp, onClose }) {
   const subtitle = src.teacher_name ? `${kindLabel} · ${src.teacher_name}` : kindLabel;
 
   return (
-    <Pressable style={s.backdrop} onPress={onClose}>
-      <Pressable style={s.sheet} onPress={() => { /* swallow taps on sheet */ }}>
+    <BottomSheet visible={visible} onClose={onClose} overlayColor="rgba(10,10,10,0.45)" sheetStyle={s.sheet}>
+      <>
         <HeroCardGradient />
         <View style={s.handle} />
 
@@ -47,8 +48,8 @@ export default function ClassContextSheet({ fp, onClose }) {
             <Text style={s.summaryText}>{src.class_summary}</Text>
           </ScrollView>
         )}
-      </Pressable>
-    </Pressable>
+      </>
+    </BottomSheet>
   );
 }
 

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import BottomSheet from '../BottomSheet';
 import { Fonts } from '../../theme';
 import HeroCardGradient from '../HeroCardGradient';
 
@@ -33,6 +34,7 @@ const C = {
 };
 
 export default function ReconcileFocusSheet({
+  visible,
   student = { name: 'Student', initials: '?' },
   coachName = 'your coach',
   kept = { name: '—', tier: 'critical', done: 0, target: 3 },
@@ -73,10 +75,8 @@ export default function ReconcileFocusSheet({
   }
 
   return (
-    <View style={s.overlay}>
-      <TouchableOpacity style={s.backdrop} activeOpacity={1} onPress={onClose} />
-
-      <View style={s.sheet}>
+    <BottomSheet visible={visible} onClose={onClose} overlayColor="rgba(10,10,10,0.42)" sheetStyle={s.sheet}>
+      <>
         <View style={s.grab} />
 
         {/* Header */}
@@ -182,7 +182,7 @@ export default function ReconcileFocusSheet({
             <Text style={s.confirmText}>{submitting ? 'Saving…' : 'Confirm'}</Text>
           </TouchableOpacity>
         </View>
-      </View>
+      </>
 
       {infoFp && (
         <View style={s.infoOverlay}>
@@ -196,7 +196,7 @@ export default function ReconcileFocusSheet({
           </View>
         </View>
       )}
-    </View>
+    </BottomSheet>
   );
 }
 

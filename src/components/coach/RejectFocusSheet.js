@@ -8,6 +8,7 @@ import {
   Platform,
   StyleSheet,
 } from 'react-native';
+import BottomSheet from '../BottomSheet';
 import { Fonts } from '../../theme';
 
 const C = {
@@ -18,7 +19,7 @@ const C = {
   lightGray: '#E5E5E5',
 };
 
-export default function RejectFocusSheet({ fp, onConfirm, onClose }) {
+export default function RejectFocusSheet({ visible, fp, onConfirm, onClose }) {
   const [reason, setReason] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -32,12 +33,8 @@ export default function RejectFocusSheet({ fp, onConfirm, onClose }) {
   }
 
   return (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      style={s.overlay}
-    >
-      <TouchableOpacity style={s.backdrop} activeOpacity={1} onPress={onClose} />
-      <View style={s.sheet}>
+    <BottomSheet visible={visible} onClose={onClose} avoidKeyboard overlayColor="rgba(10,10,10,0.45)" sheetStyle={s.sheet}>
+      <>
         <View style={s.handle} />
         <Text style={s.title}>Decline focus point</Text>
         <Text style={s.subtitle} numberOfLines={2}>
@@ -71,8 +68,8 @@ export default function RejectFocusSheet({ fp, onConfirm, onClose }) {
             <Text style={s.confirmText}>{submitting ? 'Declining…' : 'Decline'}</Text>
           </TouchableOpacity>
         </View>
-      </View>
-    </KeyboardAvoidingView>
+      </>
+    </BottomSheet>
   );
 }
 
