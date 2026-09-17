@@ -204,7 +204,8 @@ export default function AllFocusPointsScreen({ navigation, route }) {
   }, [filter]));
 
   // ── Derived ──
-  const showDanceFilter = danceStyle === 'Latin & Ballroom';
+  // Train knows whether the dancer's styles and their couple's add up to both.
+  const showDanceFilter = danceStyle === 'Latin & Ballroom' || !!route?.params?.canSwitch;
   const tabs = [{ key: 'solo', label: 'Solo' }];
   if (couple) tabs.push({ key: 'couple', label: 'Couple' });
   tabs.push({ key: 'group', label: 'Group' });

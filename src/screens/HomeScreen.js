@@ -1178,9 +1178,9 @@ export default function HomeScreen({ navigation }) {
   // empty.
   const emptyCta = (items.length === 0 && soloPending)
     ? soloCounts.active > 0
-      ? { label: 'Train your current focus points', onPress: () => navigation.navigate('AllFocusPoints', { category }) }
+      ? { label: 'Train your current focus points', onPress: () => navigation.navigate('AllFocusPoints', { category, canSwitch: showFilter }) }
       : soloCounts.past > 0
-        ? { label: 'Revisit your past focus points', onPress: () => navigation.navigate('AllFocusPoints', { category, view: 'past' }) }
+        ? { label: 'Revisit your past focus points', onPress: () => navigation.navigate('AllFocusPoints', { category, view: 'past', canSwitch: showFilter }) }
         : null
     : null;
   const seeAllCount = Math.max(focuses.length, items.length);
@@ -1370,7 +1370,7 @@ export default function HomeScreen({ navigation }) {
                 <View style={fp.head}>
                   <Text style={fp.label}>Focus points</Text>
                   <TouchableOpacity
-                    onPress={() => navigation.navigate('AllFocusPoints', { category, tab: shownMode })}
+                    onPress={() => navigation.navigate('AllFocusPoints', { category, tab: shownMode, canSwitch: showFilter })}
                     activeOpacity={0.6}
                     hitSlop={{ top: 8, bottom: 8, left: 12 }}
                   >
