@@ -340,9 +340,14 @@ function QuestionSheet({ visible, question, reply, onReplyChange, focusPoints, s
         <Pressable style={qs.overlay} onPress={onClose}>
           <Pressable style={[qs.sheet, { paddingBottom: insets.bottom + 20 }]} onPress={() => {}}>
             <View style={qs.handle} />
-            <Text style={qs.title}>Question from student</Text>
+            <Text style={qs.eyebrow}>From your student</Text>
+            <Text style={qs.title}>Their question</Text>
             <View style={qs.bubble}>
-              <Text style={qs.bubbleText}>{questionText || question.message}</Text>
+              <Text style={qs.qm}>“</Text>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={qs.bubbleText}>{questionText || question.message}</Text>
+                <Text style={qs.bubbleMeta}>{agoLabel(question.created_at)}</Text>
+              </View>
             </View>
 
             {!!focusName && (
@@ -405,13 +410,14 @@ function QuestionSheet({ visible, question, reply, onReplyChange, focusPoints, s
                 )}
               </View>
             )}
+            <Text style={qs.label}>Your reply</Text>
             <View style={qs.inputRow}>
               <TextInput
                 style={qs.input}
                 value={reply}
                 onChangeText={onReplyChange}
                 placeholder="Type your reply…"
-                placeholderTextColor="rgba(10,10,10,0.4)"
+                placeholderTextColor="rgba(10,10,10,0.38)"
                 multiline
                 maxLength={500}
               />
@@ -420,8 +426,12 @@ function QuestionSheet({ visible, question, reply, onReplyChange, focusPoints, s
                 onPress={handleReply}
                 disabled={sending || !reply.trim()}
                 activeOpacity={0.85}
+                accessibilityRole="button"
+                accessibilityLabel="Send the reply"
               >
-                {sending ? <ActivityIndicator color="#fff" size="small" /> : <Ionicons name="arrow-up" size={18} color="#fff" />}
+                {sending
+                  ? <ActivityIndicator color={INK} size="small" />
+                  : <Ionicons name="arrow-up" size={19} color={reply.trim() ? INK : 'rgba(10,10,10,0.35)'} />}
               </TouchableOpacity>
             </View>
             <TouchableOpacity style={qs.dismissBtn} onPress={handleDismiss} activeOpacity={0.7}>
@@ -1190,33 +1200,43 @@ const st = StyleSheet.create({
 
 // Question sheet styles
 const qs = StyleSheet.create({
-  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
-  sheet: { backgroundColor: '#FFFFFF', borderTopLeftRadius: 24, borderTopRightRadius: 24, paddingHorizontal: 20, paddingTop: 10 },
-  handle: { alignSelf: 'center', width: 36, height: 4, borderRadius: 2, backgroundColor: '#F4F2EC', marginBottom: 16 },
-  title: { fontFamily: Fonts.ttBold, fontSize: 17, color: INK, marginBottom: 14 },
-  bubble: { backgroundColor: '#FBFAF7', borderRadius: 16, padding: 14, marginBottom: 14, borderLeftWidth: 3, borderLeftColor: GOLD },
-  bubbleText: { fontFamily: Fonts.ttMedium, fontSize: 14, color: INK, lineHeight: 20 },
-  ctx: { borderRadius: 16, borderWidth: 1, borderColor: 'rgba(10,10,10,0.1)', overflow: 'hidden', marginBottom: 14 },
-  ctxHead: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 13, paddingVertical: 11 },
+  overlay: { flex: 1, backgroundColor: 'rgba(10,10,10,0.45)', justifyContent: 'flex-end' },
+  sheet: { backgroundColor: PAGE, borderTopLeftRadius: 26, borderTopRightRadius: 26, paddingHorizontal: Spacing.side, paddingTop: 10 },
+  handle: { alignSelf: 'center', width: 36, height: 4, borderRadius: 2, backgroundColor: 'rgba(10,10,10,0.16)', marginBottom: 16 },
+  eyebrow: { fontFamily: Fonts.ttDemiBold, fontSize: 9.5, letterSpacing: 1.6, textTransform: 'uppercase', color: GOLD_INK },
+  title: { fontFamily: Fonts.ttBold, fontSize: 24, letterSpacing: -0.8, color: INK, marginTop: 6, marginBottom: 14 },
+
+  bubble: {
+    flexDirection: 'row', gap: 10, backgroundColor: '#FFFFFF', borderRadius: 17, padding: 14, marginBottom: 12,
+    borderWidth: 1, borderColor: 'rgba(10,10,10,0.06)',
+  },
+  qm: { width: 15, fontFamily: Fonts.ttBold, fontSize: 24, lineHeight: 24, color: GOLD },
+  bubbleText: { fontFamily: Fonts.ttDemiBold, fontSize: 14.5, letterSpacing: -0.25, lineHeight: 20, color: INK },
+  bubbleMeta: { fontFamily: Fonts.ttRegular, fontSize: 11, color: INK_62, marginTop: 5 },
+
+  ctx: { backgroundColor: '#FFFFFF', borderRadius: 17, borderWidth: 1, borderColor: 'rgba(10,10,10,0.06)', overflow: 'hidden', marginBottom: 16 },
+  ctxHead: { flexDirection: 'row', alignItems: 'center', gap: 11, paddingHorizontal: 14, paddingVertical: 12 },
   ctxDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: GOLD },
-  ctxName: { fontFamily: Fonts.ttDemiBold, fontSize: 13.5, letterSpacing: -0.2, color: INK },
-  ctxMeta: { fontFamily: Fonts.ttRegular, fontSize: 11, color: INK_62, marginTop: 2 },
-  ctxBody: { paddingHorizontal: 13, paddingBottom: 13, gap: 6, borderTopWidth: 1, borderTopColor: 'rgba(10,10,10,0.07)', paddingTop: 11 },
-  ctxLabel: { fontFamily: Fonts.ttDemiBold, fontSize: 9, letterSpacing: 1.2, textTransform: 'uppercase', color: INK_62, marginTop: 4 },
+  ctxName: { fontFamily: Fonts.ttDemiBold, fontSize: 14, letterSpacing: -0.25, color: INK },
+  ctxMeta: { fontFamily: Fonts.ttRegular, fontSize: 10.5, color: INK_62, marginTop: 2 },
+  ctxBody: { paddingHorizontal: 14, paddingBottom: 14, paddingTop: 11, gap: 5, borderTopWidth: 1, borderTopColor: 'rgba(10,10,10,0.07)' },
+  ctxLabel: { fontFamily: Fonts.ttBold, fontSize: 9, letterSpacing: 1.35, textTransform: 'uppercase', color: INK_62, marginTop: 5 },
   ctxText: { fontFamily: Fonts.ttRegular, fontSize: 12.5, lineHeight: 18, color: 'rgba(10,10,10,0.75)' },
-  ctxActions: { flexDirection: 'row', gap: 8, marginTop: 10 },
+  ctxActions: { flexDirection: 'row', gap: 8, marginTop: 11 },
   ctxBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 6, height: 34, paddingHorizontal: 12, borderRadius: 999,
+    flexDirection: 'row', alignItems: 'center', gap: 6, height: 34, paddingHorizontal: 13, borderRadius: 999,
     borderWidth: 1, borderColor: 'rgba(10,10,10,0.16)',
   },
   ctxBtnT: { fontFamily: Fonts.ttDemiBold, fontSize: 12, color: INK },
-  inputRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, marginBottom: 12 },
+
+  label: { fontFamily: Fonts.ttDemiBold, fontSize: 9.5, letterSpacing: 1.6, textTransform: 'uppercase', color: INK_62, marginBottom: 8 },
+  inputRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 9 },
   input: {
-    flex: 1, backgroundColor: '#F4F2EC', borderRadius: 16, paddingHorizontal: 14, paddingVertical: 12,
-    fontFamily: Fonts.ttMedium, fontSize: 14, color: INK, maxHeight: 120,
+    flex: 1, minHeight: 50, maxHeight: 130, backgroundColor: '#FFFFFF', borderRadius: 17, paddingHorizontal: 15, paddingVertical: 14,
+    borderWidth: 1, borderColor: 'rgba(10,10,10,0.1)', fontFamily: Fonts.ttRegular, fontSize: 14, lineHeight: 19, color: INK,
   },
-  sendBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: INK, alignItems: 'center', justifyContent: 'center' },
-  sendBtnDisabled: { backgroundColor: 'rgba(10,10,10,0.25)' },
-  dismissBtn: { paddingVertical: 10, alignItems: 'center' },
-  dismissText: { fontFamily: Fonts.ttMedium, fontSize: 13, color: INK_62 },
+  sendBtn: { width: 50, height: 50, borderRadius: 25, backgroundColor: GOLD, alignItems: 'center', justifyContent: 'center' },
+  sendBtnDisabled: { backgroundColor: 'rgba(10,10,10,0.08)' },
+  dismissBtn: { height: 46, alignItems: 'center', justifyContent: 'center', marginTop: 6 },
+  dismissText: { fontFamily: Fonts.ttDemiBold, fontSize: 13.5, color: 'rgba(10,10,10,0.7)' },
 });
