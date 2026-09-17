@@ -984,6 +984,7 @@ export default function OnboardingScreen({ navigation, route }) {
   // Same mechanics RegisterScreen proved: answers ride in the auth metadata so
   // handle_new_user can persist them even when email confirmation returns no
   // session.
+  const childRetryRef = useRef(false);
   async function submit() {
     setBusy(true); setError('');
     // A parent's child is created after the account: hold the swap to the app
@@ -998,12 +999,20 @@ export default function OnboardingScreen({ navigation, route }) {
       metadata.lessons_per_month = a.lessons;
       metadata.solo_practice_frequency = a.soloLabel;
     }
-    const { data, error: signUpErr } = await supabase.auth.signUp({
-      email: a.email.trim(), password: a.password, options: { data: metadata },
-    });
-    if (signUpErr) { setBusy(false); setOnboardingHold(false); setError(signUpErr.message); return; }
-    const userId = data?.user?.id;
-    if (!data?.session) { setBusy(false); setOnboardingHold(false); go('confirm'); return; }
+    // A parent whose account exists but whose child couldn't be created: try
+    // again is only the child, not a second sign-up with the same email.
+    let userId;
+    const { data: { session: made } } = await supabase.auth.getSession();
+    if (isParent && childRetryRef.current && made?.user?.id) {
+      userId = made.user.id;
+    } else {
+      const { data, error: signUpErr } = await supabase.auth.signUp({
+        email: a.email.trim(), password: a.password, options: { data: metadata },
+      });
+      if (signUpErr) { setBusy(false); setOnboardingHold(false); setError(signUpErr.message); return; }
+      userId = data?.user?.id;
+      if (!data?.session) { setBusy(false); setOnboardingHold(false); go('confirm'); return; }
+    }
 
     let studioId = a.studioId;
     if (isCoach && a.createStudio && query.trim()) {
@@ -1050,10 +1059,14 @@ export default function OnboardingScreen({ navigation, route }) {
           focusPoints: a.focus,
         });
         if (childErr) {
-          setBusy(false); setOnboardingHold(false);
-          setError(childErr);
+          // Stay here (keep the hold): letting go would open the app on a
+          // parent account with no child. The button tries the child again.
+          childRetryRef.current = true;
+          setBusy(false);
+          setError(`${childErr} Tap again to retry.`);
           return;
         }
+        childRetryRef.current = false;
         // Anything that read "whose training is this" before the child existed
         // answered "the parent's own".
         clearSubjectCache();

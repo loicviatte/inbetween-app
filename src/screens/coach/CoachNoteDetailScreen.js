@@ -13,6 +13,7 @@ import {
   FlatList,
   Keyboard,
   Animated,
+  AppState,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -245,16 +246,30 @@ export default function CoachNoteDetailScreen({ route, navigation }) {
     };
   }, [linkedClass?.id, linkedClass?.title]);
 
+  // Saves run one after another: an autosave still inserting when the next save
+  // starts would otherwise insert the note a second time (idRef not set yet).
+  const inFlightSaveRef = useRef(null);
   async function persist(data) {
-    const savedId = await saveCoachNote({
-      ...(idRef.current ? { id: idRef.current } : {}),
-      title: data.title,
-      content: data.content,
-      video_clips: data.video_clips,
-      linked_student_id: data.linkedStudent?.id || null,
-      linked_class_input_id: data.linkedClass?.id || null,
-    });
-    if (!idRef.current && savedId) idRef.current = savedId;
+    if (inFlightSaveRef.current) {
+      try { await inFlightSaveRef.current; } catch {}
+    }
+    const p = (async () => {
+      const savedId = await saveCoachNote({
+        ...(idRef.current ? { id: idRef.current } : {}),
+        title: data.title,
+        content: data.content,
+        video_clips: data.video_clips,
+        linked_student_id: data.linkedStudent?.id || null,
+        linked_class_input_id: data.linkedClass?.id || null,
+      });
+      if (!idRef.current && savedId) idRef.current = savedId;
+    })();
+    inFlightSaveRef.current = p;
+    try {
+      await p;
+    } finally {
+      if (inFlightSaveRef.current === p) inFlightSaveRef.current = null;
+    }
   }
 
   function scheduleAutoSave() {
@@ -274,6 +289,17 @@ export default function CoachNoteDetailScreen({ route, navigation }) {
       };
     }, [])
   );
+
+  // Leaving the app (or it being killed from the background) inside the 800 ms
+  // autosave wait would lose the last words: save as it goes to the background.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active' || !hasChanges.current) return;
+      if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
+      persist(stateRef.current);
+    });
+    return () => sub.remove();
+  }, []);
 
   async function pickVideo() {
     if (!ImagePicker) {

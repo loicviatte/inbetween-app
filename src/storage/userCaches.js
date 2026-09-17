@@ -19,6 +19,7 @@ const USER_CACHE_KEYS = [
   '@profile_name',
   '@cache_profile',
   '@cache_home',
+  '@cache_home_couple',
   '@cache_log',
   '@skip_add_class_reminder',
   '@pending_class_drafts',
@@ -36,12 +37,28 @@ const USER_CACHE_KEYS = [
 // can't be listed exhaustively — wiped by prefix scan.
 const USER_CACHE_PREFIXES = [
   'startClass.bundle.v1:', // persisted Start-Class briefing bundles per student+style
+  '@cache_train_style:',   // Train's per-style snapshot
+  '@cache_all_focus_v2:',  // All focus points, per style
 ];
 
 async function clearPrefixedCaches() {
   try {
     const all = await AsyncStorage.getAllKeys();
     const doomed = (all || []).filter((k) => USER_CACHE_PREFIXES.some((p) => k.startsWith(p)));
+    if (doomed.length) await AsyncStorage.multiRemove(doomed);
+  } catch {}
+}
+
+// What one dancer's screens painted from: a parent switching child drops these
+// so Train, Stats and Lessons don't open on the child they just left.
+const TRAINING_CACHE_KEYS = ['@cache_home', '@cache_home_couple', '@cache_profile', '@cache_log'];
+const TRAINING_CACHE_PREFIXES = ['@cache_train_style:', '@cache_all_focus_v2:'];
+
+export async function clearTrainingCaches() {
+  try {
+    await AsyncStorage.multiRemove(TRAINING_CACHE_KEYS);
+    const all = await AsyncStorage.getAllKeys();
+    const doomed = (all || []).filter((k) => TRAINING_CACHE_PREFIXES.some((p) => k.startsWith(p)));
     if (doomed.length) await AsyncStorage.multiRemove(doomed);
   } catch {}
 }

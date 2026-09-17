@@ -1920,6 +1920,17 @@ export default function ProfileScreen({ navigation, route }) {
 
             {activeTab === 'settings' && (
               <View style={styles.tabBody}>
+                {/* A parent account whose child wasn't created (sign-up cut short) can still add one. */}
+                {isParent && children.length === 0 && (
+                  <>
+                    <SecLabel text="Your child" />
+                    <Text style={styles.noChildText}>Your child’s profile isn’t set up yet. Add them to start following their training.</Text>
+                    <TouchableOpacity style={styles.addChildBtn} onPress={() => setAddChild(true)} activeOpacity={0.8}>
+                      <Ionicons name="add" size={16} color="#8F6410" />
+                      <Text style={styles.addChildText}>Add a child</Text>
+                    </TouchableOpacity>
+                  </>
+                )}
                 {children.length > 0 && (
                   <>
                     <SecLabel text={children.length > 1 ? 'Children' : 'Your child'} />
@@ -2300,6 +2311,7 @@ const styles = StyleSheet.create({
   addChildBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
     marginTop: 10, paddingVertical: 12 },
   addChildText: { fontFamily: Fonts.ttDemiBold, fontSize: 13.5, color: '#8F6410' },
+  noChildText: { fontFamily: Fonts.ttRegular, fontSize: 13.5, lineHeight: 19, color: '#6B6656', paddingHorizontal: 4, marginBottom: 2 },
   withdrawText: { fontFamily: Fonts.ttDemiBold, fontSize: 14.5, color: '#A3281B' },
   withdrawSub: { fontFamily: Fonts.ttRegular, fontSize: 12.5, color: '#6B6656', marginTop: 2 },
 

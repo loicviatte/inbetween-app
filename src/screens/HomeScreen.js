@@ -35,6 +35,7 @@ import {
   getTeacherContextForAI,
   getClassInputs,
   invalidateCache,
+  subjectVersion,
 } from '../storage/storage';
 import {
   getTrainFocus,
@@ -523,6 +524,8 @@ export default function HomeScreen({ navigation }) {
   // FRESH_TTL ms of the last successful load, skip the network round-trip.
   const FRESH_TTL = 60000; // 60s
   const lastLoadRef = useRef(0);
+  // A parent who switched child: whatever this screen holds is the other child's.
+  const subjectRef = useRef(subjectVersion());
   // Per-style data cache so the Latin/Ballroom toggle is instant. Keyed by
   // category ('latin' | 'ballroom'); each entry is a full bundle of the slots,
   // readiness, couple data and session counts for that style. We snapshot the
@@ -797,6 +800,11 @@ export default function HomeScreen({ navigation }) {
   }, [showFilter, isLoading, category, couple?.coupleId]);
 
   useFocusEffect(useCallback(() => {
+    if (subjectRef.current !== subjectVersion()) {
+      subjectRef.current = subjectVersion();
+      lastLoadRef.current = 0;
+      categoryCacheRef.current = {};
+    }
     const isFirst = !hasLoadedRef.current;
     if (isFirst) setIsLoading(true);
     const reveal = () => {

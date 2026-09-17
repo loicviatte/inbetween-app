@@ -46,7 +46,10 @@ export async function getUserId() {
 }
 
 // Called when the guardian switches child, so the next read resolves again.
-export function clearSubjectCache() { _subjectId = null; _subjectFor = null; }
+// The version lets a mounted screen notice it now shows someone else.
+let _subjectVersion = 0;
+export function clearSubjectCache() { _subjectId = null; _subjectFor = null; _subjectVersion += 1; }
+export function subjectVersion() { return _subjectVersion; }
 
 // ─── In-memory cache (speeds up stack screens that reuse tab data) ───────────
 const _cache = {};

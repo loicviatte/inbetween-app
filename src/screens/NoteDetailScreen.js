@@ -13,6 +13,7 @@ import {
   FlatList,
   Keyboard,
   Animated,
+  AppState,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -244,6 +245,17 @@ export default function NoteDetailScreen({ route, navigation }) {
       };
     }, [])
   );
+
+  // Leaving the app (or it being killed from the background) inside the 800 ms
+  // autosave wait would lose the last words: save as it goes to the background.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active' || !hasChanges.current) return;
+      if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
+      persist(stateRef.current);
+    });
+    return () => sub.remove();
+  }, []);
 
   async function pickVideo() {
     if (!ImagePicker) {

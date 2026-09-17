@@ -11,6 +11,7 @@ import {
   FlatList,
   Alert,
   Pressable,
+  Linking,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -1007,6 +1008,25 @@ function SummaryTab({ cls, isProcessing }) {
   const hasFocus = !!(cls.ai_primary_focus || cls.ai_secondary_focus);
 
   if (!hasSummary && !hasPracticePoints && !hasFocus) {
+    // A class that failed, or has sat "processing" for a day, says so and
+    // gives a way to get it run again — instead of waiting forever.
+    const failed = cls.status === 'error' || cls.status === 'failed';
+    const stuck = isProcessing && Date.now() - new Date(cls.created_at).getTime() > 24 * 3600 * 1000;
+    if (failed || stuck) {
+      const mail = `mailto:hello@useinbetween.com?subject=${encodeURIComponent('Class not processed')}&body=${encodeURIComponent(`Class ${cls.id}`)}`;
+      return (
+        <View>
+          <Text style={s.placeholder}>
+            {failed
+              ? 'We couldn’t process this class. Its recording is kept: write to us and we’ll run it again.'
+              : 'This class is taking much longer than usual to process. Write to us and we’ll look at it.'}
+          </Text>
+          <TouchableOpacity onPress={() => Linking.openURL(mail).catch(() => {})} activeOpacity={0.7} style={{ marginTop: 10 }}>
+            <Text style={[s.placeholder, { color: '#8A6414', fontFamily: Fonts.jakartaBold }]}>Contact us</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
     return (
       <Text style={s.placeholder}>
         {isProcessing

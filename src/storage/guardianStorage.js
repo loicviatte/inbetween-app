@@ -5,6 +5,7 @@
 // This module is only for the screens that manage the relationship itself.
 import { supabase } from '../services/supabase/client';
 import { getAuthUserId, clearSubjectCache, invalidateCache } from './storage';
+import { clearTrainingCaches } from './userCaches';
 
 export async function isGuardian() {
   const { data: { session } } = await supabase.auth.getSession();
@@ -38,4 +39,5 @@ export async function setActiveChild(childId) {
   // Everything cached downstream belongs to the child we just left.
   clearSubjectCache();
   invalidateCache();
+  await clearTrainingCaches();
 }

@@ -119,7 +119,14 @@ function lessonStatus(item) {
     const left = formatCountdown(item._pendingDeadline);
     return { text: left ? `Focus points on the way · ready in ${left}` : 'Pending coach approval', tone: 'gold' };
   }
+  if (item.status === 'error' || item.status === 'failed') {
+    return { text: 'Couldn’t be analysed — your coach can ask us to run it again', tone: 'danger' };
+  }
   if (item.status === 'processing' || item.status === 'extracted' || item.status === 'pending') {
+    const day = 24 * 3600 * 1000;
+    if (Date.now() - new Date(item.created_at).getTime() > day) {
+      return { text: 'Taking longer than usual to analyse', tone: 'muted' };
+    }
     return { text: 'Analysing the lesson…', tone: 'gold' };
   }
   if (item._hasPendingFPs) return { text: 'Pending coach approval', tone: 'gold' };

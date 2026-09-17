@@ -144,36 +144,6 @@ export function CoachHomeScreenSkeleton() {
   );
 }
 
-// ─── SessionsFeedScreen skeleton ─────────────────────────────────────────────
-
-export function SessionsFeedScreenSkeleton() {
-  return (
-    <View style={s.safe}>
-      {/* Header */}
-      <View style={s.header}>
-        <SkeletonBox width={32} height={20} borderRadius={4} />
-      </View>
-
-      {/* "Recent" heading */}
-      <SkeletonBox width={100} height={26} borderRadius={6} style={{ marginBottom: 24 }} />
-
-      {/* Day label */}
-      <SkeletonBox width={60} height={11} borderRadius={4} style={{ marginBottom: 12 }} />
-
-      {/* Event cards */}
-      {[0,1,2,3,4].map(i => (
-        <View key={i} style={s.eventCard}>
-          <View style={{ flex: 1, gap: 7 }}>
-            <SkeletonBox width="45%" height={13} borderRadius={4} />
-            <SkeletonBox width="65%" height={11} borderRadius={4} />
-          </View>
-          <SkeletonBox width={44} height={11} borderRadius={4} />
-        </View>
-      ))}
-    </View>
-  );
-}
-
 // ─── Generic list skeleton ────────────────────────────────────────────────────
 // A pragmatic default: header + title + N card rows. Used wherever we
 // previously showed a centered <ActivityIndicator /> for a full-screen load.
@@ -294,15 +264,6 @@ const s = StyleSheet.create({
     padding: 14,
     marginBottom: 10,
     gap: 12,
-  },
-  eventCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F8F8F8',
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 8,
-    gap: 8,
   },
   genericCard: {
     flexDirection: 'row',
