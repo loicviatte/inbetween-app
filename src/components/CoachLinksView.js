@@ -71,7 +71,10 @@ function LinkEditSheet({ target, onClose, onDone }) {
   const picked = choice.key === key ? choice.list : t.linked;
   const setPicked = (fn) => setChoice({ key, list: fn(picked) });
   const couple = t.kind === 'couple';
-  const shown = STYLE_KEYS.filter((k) => t.dances.includes(k) || t.linked.includes(k));
+  // A student can be coached in a style they don't dance yet (it's added to
+  // their dances); a couple only in what they dance — both partners agree on that.
+  const shown = couple ? STYLE_KEYS.filter((k) => t.dances.includes(k) || t.linked.includes(k)) : STYLE_KEYS;
+  const newDances = couple ? [] : picked.filter((k) => !t.dances.includes(k));
   const changed = stylesLabel(picked) !== stylesLabel(t.linked);
   const taken = shown.filter((k) => !picked.includes(k) && t.taken?.[k]);
   const save = (latin, ballroom) => (couple ? setCoupleLink : setStudentLink)(t.id, { latin, ballroom });
@@ -147,6 +150,9 @@ function LinkEditSheet({ target, onClose, onDone }) {
         {taken.map((k) => (
           <Text key={k} style={ed.hint}>{t.first} {couple ? 'have' : 'has'} another {STYLE_NAMES[k]} {couple ? 'couple ' : ''}coach.</Text>
         ))}
+        {newDances.length > 0 && (
+          <Text style={ed.hint}>{stylesLabel(newDances)} will be added to {t.first}’s dances.</Text>
+        )}
         {picked.length === 0 && <Text style={ed.hint}>Keep at least one style, or remove {t.first} below.</Text>}
       </View>
 

@@ -4,8 +4,10 @@
 -- The coach can't write users.latin_coach_id / ballroom_coach_id (no RLS
 -- policy lets them), so both changes go through these SECURITY DEFINER
 -- functions, which only act on the caller's own links:
---   * a style is added only if the student (couple) dances it and no other
---     coach holds it — a coach never takes a student from another coach;
+--   * a style is added only if no other coach holds it — a coach never takes a
+--     student from another coach. A student who didn't dance it yet now does
+--     (Latin → Latin & Ballroom); a couple must already dance it (their dance
+--     types change only with both partners' approval);
 --   * turning every style off removes the link altogether.
 -- The student (both dancers) get a notification saying what changed.
 
@@ -57,6 +59,7 @@ declare
   v_want boolean;
   v_has boolean;
   v_holder uuid;
+  v_new_dance boolean := false;
 begin
   if v_coach is null then raise exception 'Not signed in.'; end if;
 
@@ -105,7 +108,7 @@ begin
 
     if v_want and not v_has then
       if not (v_cat = any (v_dances)) then
-        raise exception 'This student doesn''t dance %.', initcap(v_cat);
+        v_new_dance := true;
       end if;
       if (v_holder is not null and v_holder <> v_coach) or exists (
         select 1 from public.coach_requests
@@ -137,6 +140,11 @@ begin
       end if;
     end if;
   end loop;
+
+  -- Coached in a style they didn't dance yet: they dance both now.
+  if v_new_dance then
+    update public.users set dance_style = 'Latin & Ballroom' where id = p_student;
+  end if;
 
   -- Nothing left: no request of any kind stays between them.
   if not coalesce(p_latin, false) and not coalesce(p_ballroom, false) then
