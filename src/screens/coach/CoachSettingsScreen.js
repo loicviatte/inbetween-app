@@ -2,7 +2,7 @@
 // cards, rows and sheets. Account (photo, name, email), what they teach and
 // where, notification delivery, and log out.
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -22,7 +22,7 @@ import { SecLabel, SettingsCard, SettingRow, LogoutButton } from '../../componen
 
 const STYLES = ['Latin', 'Ballroom', 'Latin & Ballroom'];
 
-export default function CoachSettingsScreen({ navigation }) {
+export default function CoachSettingsScreen({ navigation, route }) {
   const { user, students, refresh } = useCoachData();
   const djiPhase = useDjiSync()?.phase;
   const [accountOpen, setAccountOpen] = useState(false);
@@ -68,6 +68,15 @@ export default function CoachSettingsScreen({ navigation }) {
       setSaving(false);
     }
   }
+  // Home's "Add your studio" lands straight on the studio sheet.
+  useEffect(() => {
+    if (route?.params?.open !== 'studio') return undefined;
+    navigation.setParams({ open: undefined });
+    const t = setTimeout(openStudio, 350); // once the screen has slid in
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [route?.params?.open]);
+
   const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
   const linkedLabel = couplesCount == null
     ? 'current students and couples'
@@ -156,7 +165,7 @@ export default function CoachSettingsScreen({ navigation }) {
             <Text style={em.title}>Dance studio</Text>
             <View style={em.field}>
               <Text style={em.fieldLabel}>Main studio</Text>
-              <StudioPicker value={editStudio} onChange={setEditStudio} />
+              <StudioPicker value={editStudio} onChange={setEditStudio} allowCreate />
             </View>
             <Text style={em.studioNote}>Your studio decides which group lessons and students you see.</Text>
             {!!studioError && <Text style={em.error}>{studioError}</Text>}

@@ -36,6 +36,8 @@ import {
   getClassInputs,
   invalidateCache,
   subjectVersion,
+  getMyCoach,
+  getMyCoachForCategory,
 } from '../storage/storage';
 import {
   getTrainFocus,
@@ -431,6 +433,18 @@ export default function HomeScreen({ navigation }) {
   // Train doesn't scroll: it keeps clear of the floating tab bar.
   const tabBarSpace = useTabBarSpace();
   const [category, setCategory] = useState(null); // global: 'latin' | 'ballroom' | null
+
+  // The dancer's coach for the style on screen: undefined until read, null when
+  // there is none, else the coach ({ pending } while the request waits). With
+  // nothing to train, it decides Train's first steps: a studio, then a coach.
+  const [coachLink, setCoachLink] = useState(undefined);
+  useFocusEffect(useCallback(() => {
+    let alive = true;
+    (category ? getMyCoachForCategory(category) : getMyCoach())
+      .then((c) => { if (alive) setCoachLink(c || null); })
+      .catch(() => { if (alive) setCoachLink(undefined); });
+    return () => { alive = false; };
+  }, [category]));
   const [categorySwitching, setCategorySwitching] = useState(false);
   // ── Couple feature ──
   const [couple, setCouple] = useState(null);
@@ -1156,12 +1170,25 @@ export default function HomeScreen({ navigation }) {
   const openN = focuses.length - doneN;
   const drillsLeft = focuses.reduce((n, f) => n + Math.max(0, (f.target ?? 0) - (f.done ?? 0)), 0);
   const soloPending = !isCouple && !!pendingValidation;
-  const lead = focuses.length === 0
+  // Nothing to train and no coach yet: Train walks a new dancer to one — their
+  // studio first (their coach and group lessons come through it), then the coach.
+  const setupStep = (!isCouple && focuses.length === 0 && items.length === 0 && !soloPending && coachLink !== undefined)
+    ? coachLink?.pending ? 'waiting'
+      : coachLink ? null
+        : !(user?.studio_id || user?.studio?.id) ? 'studio' : 'coach'
+    : null;
+  const coachFirst = firstName(coachLink?.name) || 'your coach';
+  const SETUP = {
+    studio: { lead: 'Add your studio to get started', sub: 'Your coach and your group lessons come through your studio.' },
+    coach: { lead: 'Link your coach', sub: 'Their corrections become the focus points you train here.' },
+    waiting: { lead: `Waiting for ${coachFirst} to accept`, sub: 'Your focus points arrive once they accept you.' },
+  };
+  const lead = setupStep ? SETUP[setupStep].lead : focuses.length === 0
     ? (soloPending ? 'Your latest lesson is being reviewed' : 'Nothing to prepare yet')
     : openN === 0
       ? 'You’re set for your next lesson'
       : `${plural(openN, 'focus point')} left before your next lesson`;
-  const sub = focuses.length === 0
+  const sub = setupStep ? SETUP[setupStep].sub : focuses.length === 0
     ? (isCouple
       ? 'Your couple private lesson brings shared focus points.'
       : soloPending
@@ -1425,6 +1452,22 @@ export default function HomeScreen({ navigation }) {
                 />
               </>
             ) : null}
+
+            {setupStep === 'studio' || setupStep === 'coach' ? (
+              <View style={rd.setup}>
+                <TouchableOpacity
+                  style={rd.setupBtn}
+                  activeOpacity={0.88}
+                  accessibilityRole="button"
+                  onPress={() => navigation.navigate('PROFILE', setupStep === 'studio'
+                    ? { tab: 'settings', open: 'studio' }
+                    : { tab: 'links', open: 'coach', category })}
+                >
+                  <Ionicons name={setupStep === 'studio' ? 'business-outline' : 'person-add-outline'} size={18} color={INK} />
+                  <Text style={rd.setupT}>{setupStep === 'studio' ? 'Add your studio' : 'Add your coach'}</Text>
+                </TouchableOpacity>
+              </View>
+            ) : null}
           </Animated.View>
         )}
 
@@ -1475,6 +1518,10 @@ const wk = StyleSheet.create({
 
 // ─── Readiness head ───────────────────────────────────────────────────────────
 const rd = StyleSheet.create({
+  // Train's first steps, as Home's Start pill is for a coach.
+  setup: { paddingHorizontal: SIDE, paddingTop: 24 },
+  setupBtn: { height: 58, borderRadius: 999, backgroundColor: GOLD, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 11 },
+  setupT: { fontFamily: Fonts.bold, fontSize: 19, letterSpacing: -0.4, color: INK },
   head: { flexDirection: 'row', alignItems: 'center', gap: 18, paddingTop: 16, paddingHorizontal: SIDE },
   dial: { width: DIAL_SIZE, height: DIAL_SIZE },
   center: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },

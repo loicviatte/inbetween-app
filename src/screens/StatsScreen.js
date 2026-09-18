@@ -805,6 +805,22 @@ export default function StatsScreen({ navigation, route }) {
       navigation.setParams({ tab: undefined });
     }
   }, [route?.params?.tab]);
+  // Train's first steps land on the sheet itself: { open: 'studio' | 'coach' }.
+  // Held until the profile is in — which coach slot to open depends on it.
+  useEffect(() => {
+    const open = route?.params?.open;
+    if (!open || isLoading) return undefined;
+    const cat = route?.params?.category;
+    navigation.setParams({ open: undefined, category: undefined });
+    const t = setTimeout(() => {
+      if (open === 'studio') openStudioModal();
+      if (open === 'coach') {
+        setCoachModal({ category: user?.dance_style === 'Latin & Ballroom' ? (cat === 'ballroom' ? 'ballroom' : 'latin') : null });
+      }
+    }, 350);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [route?.params?.open, isLoading]);
   // Links and Settings are detours: leaving for another tab brings the tab
   // back to Stats. A screen pushed on top (a class, notifications) keeps the
   // view, so coming back from it lands where you were.

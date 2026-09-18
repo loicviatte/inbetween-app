@@ -16,10 +16,12 @@ import { LinearGradient } from 'expo-linear-gradient';
 import MaskedView from '@react-native-masked-view/masked-view';
 import { Fonts, Spacing } from '../../theme';
 import { useCoachData } from '../../context/CoachDataContext';
+import { useCoachTabView } from '../../context/CoachTabView';
 import { markFirstScreenReady } from '../../utils/firstPaint';
 import { guardStudent, isAwaitingVerification } from '../../utils/studentLock';
 import { getStudentsReadiness } from '../../storage/storage';
 import { getStartClassRoster } from '../../storage/coachStorage';
+import { getMyCouples } from '../../storage/coupleStorage';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getActiveCoachClass, subscribeToActiveCoachClass } from '../../storage/activeCoachClass';
 import { supabase } from '../../services/supabase/client';
@@ -214,7 +216,29 @@ function StudentSquare({ s, readiness, onPress }) {
 
 export default function DashboardScreen({ navigation }) {
   // Everything below is for the header's group (Latin / Ballroom).
-  const { students: allStudents, styleStudents: students, styleFilter, styleCategory, actionCounts, refresh, initialLoading: loading } = useCoachData();
+  const { user, students: allStudents, styleStudents: students, styleFilter, styleCategory, actionCounts, requests, refresh, initialLoading: loading } = useCoachData();
+  const { setLinksOpen } = useCoachTabView();
+
+  // Whether this coach has taught yet: a lesson on record, or a couple coached.
+  // Read once; unknown (offline) counts as taught — never hold a lesson back.
+  const [taught, setTaught] = useState(null);
+  useEffect(() => {
+    if (!user?.id || taught) return undefined;
+    let alive = true;
+    Promise.all([
+      supabase.from('class_inputs').select('id', { count: 'exact', head: true })
+        .eq('user_id', user.id).not('is_deleted', 'is', true),
+      getMyCouples().catch(() => []),
+    ])
+      .then(([cls, couples]) => {
+        if (!alive) return;
+        if (cls.error) { setTaught(true); return; }
+        setTaught((cls.count ?? 0) > 0 || (couples || []).length > 0);
+      })
+      .catch(() => { if (alive) setTaught(true); });
+    return () => { alive = false; };
+    // A coach who adds a student and comes back is re-read then.
+  }, [user?.id, taught, allStudents.length]);
 
   // Cold-start: once the coach dashboard's initial data has loaded, let App.js
   // drop the logo overlay (mirrors HomeScreen's reveal() on the student side).
@@ -396,6 +420,22 @@ export default function DashboardScreen({ navigation }) {
     await refresh();
   });
 
+  // What stands between a new coach and a first lesson: a studio (students find
+  // their coach through it), then a student. Requests already waiting count as
+  // the way in. Only before a coach has taught: one who records lessons with
+  // couples or a studio's group, with no student linked, keeps Start.
+  const openStudents = () => { setLinksOpen(false); navigation.navigate('STUDENTS'); };
+  const setup = !user || taught !== false ? null
+    : !(user.studio_id || user.studio?.id)
+      ? { icon: 'business-outline', label: 'Add your studio', hint: 'Your students find you through your studio.',
+          onPress: () => navigation.navigate('CoachSettings', { open: 'studio' }) }
+      : allStudents.length > 0 ? null
+        : requests?.length
+          ? { icon: 'person-add-outline', label: `Review ${requests.length} request${requests.length === 1 ? '' : 's'}`,
+              hint: 'Students asked to join you. Accept them to record their lessons.', onPress: openStudents }
+          : { icon: 'person-add-outline', label: 'Add a student', hint: 'Share your invite code — a student links to you with it.',
+              onPress: () => { setLinksOpen(true); navigation.navigate('STUDENTS'); } };
+
   return (
     <View style={st.page}>
       <Animated.View pointerEvents="none" style={[st.pullLogo, { opacity: pull.logoOpacity }]}>
@@ -462,15 +502,25 @@ export default function DashboardScreen({ navigation }) {
         </View>
 
         {/* A running class isn't tied to the style being shown: its pill stays
-            put while the rest swaps. */}
+            put while the rest swaps. Before the first lesson, the same pill
+            walks a new coach through what a lesson needs: a studio, then a
+            student. */}
         {activeClass ? (
           <TouchableOpacity style={[st.start, st.startLive]} onPress={() => navigation.navigate('StartClass')} activeOpacity={0.88}>
             <View style={st.liveDot} />
             <Text style={[st.startT, { color: '#FFFFFF' }]}>Lesson in progress</Text>
             <Text style={st.liveTimer}>{chronoLabel}</Text>
           </TouchableOpacity>
-        ) : bones ? (
+        ) : bones || (!!user && taught === null) ? (
           <Pulse style={[st.start, st.startBones]}><Bone w={128} h={17} r={6} /></Pulse>
+        ) : setup ? (
+          <View style={st.setup}>
+            <TouchableOpacity style={st.start} onPress={setup.onPress} activeOpacity={0.88} accessibilityRole="button">
+              <Ionicons name={setup.icon} size={18} color={INK} />
+              <Text style={st.startT}>{setup.label}</Text>
+            </TouchableOpacity>
+            <Text style={st.setupHint}>{setup.hint}</Text>
+          </View>
         ) : (
           <TouchableOpacity
             style={st.start}
@@ -559,6 +609,8 @@ export default function DashboardScreen({ navigation }) {
 
 const st = StyleSheet.create({
   page: { flex: 1, backgroundColor: PAGE },
+  setup: { gap: 9 },
+  setupHint: { fontFamily: Fonts.regular, fontSize: 12, lineHeight: 16, color: INK_62, textAlign: 'center', paddingHorizontal: 12 },
   pullLogo: { position: 'absolute', top: (PULL_REST - 27) / 2, left: 0, right: 0, alignItems: 'center' },
 
   nudge: {
