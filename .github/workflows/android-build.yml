@@ -35,7 +35,8 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # eas-cli's dependencies (@oclif/*) now require Node 22 (2026-09-18).
+          node-version: 22
           cache: npm
 
       # Expo SDK 54 / RN 0.81 Gradle build needs JDK 17.
@@ -51,8 +52,7 @@ jobs:
       - name: Setup EAS
         uses: expo/expo-github-action@v8
         with:
-          # Pinned: eas-cli 24 needs Node 22 and broke setup on Node 20 (2026-09-18).
-          # 20.5.1 is the version the last good build used.
+          # Pinned to the version the last good build used, so a new release can't change a build.
           eas-version: 20.5.1
           token: ${{ secrets.EXPO_TOKEN }}
 
