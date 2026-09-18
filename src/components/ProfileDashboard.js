@@ -9,7 +9,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import Svg, { Circle, Defs, Line, LinearGradient, Path, Polyline, Stop, Text as SvgText } from 'react-native-svg';
 import { Fonts } from '../theme';
-import { getStudentDashboard } from '../storage/dashboardStorage';
+import { getStudentDashboard, getCoupleDashboard } from '../storage/dashboardStorage';
 import { categoryFromStyle } from '../utils/danceCategory';
 import { getMyCouple } from '../storage/coupleStorage';
 import { openFocusSession } from '../utils/openFocusSession';
@@ -234,12 +234,16 @@ export default function ProfileDashboard({ user, category, navigation, mode: mod
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [couple, setCouple] = useState(null);        // the couple row, or null if solo
+  const [coupleKnown, setCoupleKnown] = useState(false); // whether getMyCouple has answered
   const [modeState, setModeState] = useState('solo'); // 'solo' | 'couple'
   const mode = modeProp ?? modeState;
   const setMode = onChangeMode ?? setModeState;
 
   useEffect(() => {
-    getMyCouple().then(setCouple).catch(() => setCouple(null));
+    getMyCouple()
+      .then(setCouple)
+      .catch(() => setCouple(null))
+      .finally(() => setCoupleKnown(true));
   }, [refreshKey]);
 
   // The scope defaults to whatever style the profile says, but the header can
@@ -248,16 +252,20 @@ export default function ProfileDashboard({ user, category, navigation, mode: mod
 
   // `quiet`: a pull to refresh keeps the cards on screen while they refetch
   // (and keeps them if the refetch fails) instead of flashing the spinner.
+  // Couple reads the pair's own sessions, focus points and lessons; it waits
+  // for the couple to be known rather than painting the solo numbers first.
+  const coupleId = mode === 'couple' ? couple?.coupleId || null : null;
   const load = useCallback(async ({ quiet = false } = {}) => {
+    if (mode === 'couple' && !coupleKnown) return;
     if (!quiet) setLoading(true);
     try {
-      setData(await getStudentDashboard(cat));
+      setData(await (coupleId ? getCoupleDashboard(coupleId, cat) : getStudentDashboard(cat)));
     } catch {
       if (!quiet) setData(null);
     } finally {
       setLoading(false);
     }
-  }, [cat]);
+  }, [cat, mode, coupleId, coupleKnown]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
@@ -290,10 +298,9 @@ export default function ProfileDashboard({ user, category, navigation, mode: mod
   const isCouple = mode === 'couple';
   const scopeLabel = `${cat === 'ballroom' ? 'Ballroom' : 'Latin'}${couple ? ` · ${isCouple ? 'Couple' : 'Solo'}` : ''}`;
   const openDetail = (kind) =>
-    navigation?.navigate('StatsDetail', { kind, data, scope: scopeLabel });
-  // Every card below counts solo practice, which has no couple equivalent yet,
-  // so couple mode hides them rather than showing solo numbers under a Couple
-  // heading. (Readiness % lives on Train, for both sides.)
+    navigation?.navigate('StatsDetail', { kind, data, scope: scopeLabel, coupleId });
+  // Couple mode shows the same cards, counted from the pair's own sessions
+  // trained together and the focus points of their last couple lesson.
   const focuses = readiness?.focuses || [];
   const peak = Math.max(1, ...trend.map((t) => t.minutes));
   const topDance = dances[0];
@@ -302,7 +309,6 @@ export default function ProfileDashboard({ user, category, navigation, mode: mod
     <View style={s.root}>
       {scopeBar}
 
-      {!isCouple && (<>
       {/* ── trend ── */}
       <Card
         label="Trend"
@@ -324,7 +330,7 @@ export default function ProfileDashboard({ user, category, navigation, mode: mod
 
       {/* ── readiness: the only dark surface, spent once ── */}
       <View style={s.sect}>
-        <Text style={s.sectTxt}>Get ready for next private lesson</Text>
+        <Text style={s.sectTxt}>Get ready for next {isCouple ? 'couple' : 'private'} lesson</Text>
         <View style={s.sectRule} />
       </View>
       <TouchableOpacity
@@ -353,7 +359,7 @@ export default function ProfileDashboard({ user, category, navigation, mode: mod
                 activeOpacity={0.7}
                 accessibilityRole="button"
                 accessibilityLabel={`Train ${f.name}. Trained ${f.done ?? 0} of ${f.target ?? 0}.`}
-                onPress={() => openFocusSession(navigation, f.focusPointId)}
+                onPress={() => openFocusSession(navigation, f.focusPointId, { coupleId })}
               >
                 <FocusMark done={f.done ?? 0} target={f.target ?? 0} />
                 <View style={s.fText}>
@@ -467,17 +473,6 @@ export default function ProfileDashboard({ user, category, navigation, mode: mod
           <View style={s.lr}><Text style={s.lv}>{lessonCount}</Text></View>
         </View>
       </Card>
-      </>)}
-
-      {isCouple && (
-        <Card label="Couple training">
-          <Text style={s.read}>
-            Trend, momentum, streak and your dance mix all count{' '}
-            <Text style={s.readB}>solo practice</Text>, so they are not shown here yet.
-            Couple sessions only count when you train together.
-          </Text>
-        </Card>
-      )}
     </View>
   );
 }

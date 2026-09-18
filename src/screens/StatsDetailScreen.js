@@ -86,7 +86,7 @@ const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 // The trend card can only say how many minutes a week holds. This says what they
 // were made of — which days carried them, which focus points got the work, and
 // whether a lesson landed in the middle of it.
-function WeekCard({ week, goal, navigation }) {
+function WeekCard({ week, goal, navigation, coupleId }) {
   if (!week) return null;
   const { dayMinutes = [], dayIndex = 6, minutes = 0, sessions = 0, isCurrent } = week;
   const focusDone = week.focusDone || [];
@@ -133,7 +133,7 @@ function WeekCard({ week, goal, navigation }) {
               activeOpacity={0.7}
               accessibilityRole="button"
               accessibilityLabel={`Train ${f.name} again. ${f.sessions} sessions, ${f.minutes} minutes.`}
-              onPress={() => openFocusSession(navigation, f.id)}
+              onPress={() => openFocusSession(navigation, f.id, { coupleId })}
             >
               <View style={s.fwText}>
                 <Text style={s.fwName} numberOfLines={2}>{f.name}</Text>
@@ -180,7 +180,7 @@ function WeekCard({ week, goal, navigation }) {
 
 // The history below feeds the card above: tapping a week opens it up there, and
 // scrolls back to it, since by row eight the card is off the top of the screen.
-function TrendBody({ trend, goal, peak, navigation, scrollRef }) {
+function TrendBody({ trend, goal, peak, navigation, scrollRef, coupleId }) {
   const [sel, setSel] = useState(trend.length - 1);
   const topY = useRef(0);
   const rows = [...trend].reverse();
@@ -192,7 +192,7 @@ function TrendBody({ trend, goal, peak, navigation, scrollRef }) {
 
   return (
     <View onLayout={(e) => { topY.current = e.nativeEvent.layout.y; }}>
-      <WeekCard week={trend[sel]} goal={goal} navigation={navigation} />
+      <WeekCard week={trend[sel]} goal={goal} navigation={navigation} coupleId={coupleId} />
 
       <Card title="Week by week" side={`goal ${goal} min`}>
         {rows.map((t, i) => {
@@ -251,19 +251,20 @@ function build(kind, d, navigation, scrollRef, coupleId) {
   const focuses = readiness?.focuses || [];
   const left = focuses.reduce((a, f) => a + Math.max(0, (f.target ?? 0) - (f.done ?? 0)), 0);
   const peak = Math.max(1, weeklyGoal, ...trend.map((t) => t.minutes));
+  const lessonWord = coupleId ? 'couple lesson' : 'private lesson';
 
   switch (kind) {
     case 'readiness':
       return {
         title: 'Get ready',
-        n: `${readiness?.percent ?? 0}%`, word: 'ready for next private',
+        n: `${readiness?.percent ?? 0}%`, word: coupleId ? 'ready for next couple lesson' : 'ready for next private',
         percent: readiness?.percent ?? 0,
         note: readiness?.lastClassDate ? `From your ${fmt(readiness.lastClassDate)} lesson` : '',
         about: {
           q: 'What is readiness?',
           paras: [
-            'Every focus point your coach gives you needs a set number of training sessions before your next private lesson — three for a critical one, two for the others. Readiness is the share of those sessions you have done.',
-            'It follows your latest private lesson: its focus points are the plan, and only sessions trained since that lesson count. The next private lesson starts a new plan.',
+            `Every focus point your coach gives you needs a set number of training sessions before your next ${lessonWord} — three for a critical one, two for the others. Readiness is the share of those sessions you have done.`,
+            `It follows your latest ${lessonWord}: its focus points are the plan, and only sessions trained since that lesson count. The next ${lessonWord} starts a new plan.`,
           ],
         },
         say: left === 0
@@ -271,7 +272,7 @@ function build(kind, d, navigation, scrollRef, coupleId) {
           : `${left} session${left > 1 ? 's' : ''} to go — about ${readiness?.minutesRemaining ?? 0} minutes.`,
         body: (
           <>
-            <Card title="Your focus points" side={`${focuses.length} from last private`}>
+            <Card title="Your focus points" side={`${focuses.length} from last ${coupleId ? 'couple lesson' : 'private'}`}>
               {focuses.map((f, i) => (
                 <TouchableOpacity
                   key={f.focusPointId || i}
@@ -323,7 +324,7 @@ function build(kind, d, navigation, scrollRef, coupleId) {
         say: weeksTrained === 0
           ? 'No practice logged in this window yet.'
           : `You trained in ${weeksTrained} of the last ${trendWeeks} weeks.`,
-        body: <TrendBody trend={trend} goal={weeklyGoal} peak={peak} navigation={navigation} scrollRef={scrollRef} />,
+        body: <TrendBody trend={trend} goal={weeklyGoal} peak={peak} navigation={navigation} scrollRef={scrollRef} coupleId={coupleId} />,
       };
 
     case 'momentum':

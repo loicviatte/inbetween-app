@@ -11,6 +11,7 @@
 import { supabase } from '../services/supabase/client';
 import { getUserId, getLessonReadiness } from './storage';
 import { focusMatchesCategory } from '../utils/danceCategory';
+import { getCoupleReadiness } from './coupleStorage';
 
 const WEEKS_BACK = 26;           // enough history for a 10-week trend + streak
 const TREND_WEEKS = 10;
@@ -103,8 +104,7 @@ function computeMomentum(activeDays, firstDate, today) {
 // ─── The bundle ──────────────────────────────────────────────────────────────
 export async function getStudentDashboard(category = null) {
   const userId = await getUserId();
-  const today = new Date();
-  const since = new Date(today.getFullYear(), today.getMonth(), today.getDate() - WEEKS_BACK * 7);
+  const since = sinceDate();
 
   const [logsRes, readiness, lessonsRes, prefsRes] = await Promise.all([
     supabase
@@ -125,15 +125,70 @@ export async function getStudentDashboard(category = null) {
     supabase.from('users').select('weekly_goal_minutes').eq('id', userId).single(),
   ]);
 
-  const weeklyGoal = prefsRes?.data?.weekly_goal_minutes ?? 60;
+  return buildDashboard({
+    logs: inCategory(logsRes?.data || [], category),
+    readiness,
+    lessons: lessonsRes?.data || [],
+    weeklyGoal: prefsRes?.data?.weekly_goal_minutes ?? 60,
+  });
+}
 
-  const logs = (logsRes?.data || []).filter((l) => {
-    if (!category) return true;
-    // Keep untagged practice; only drop rows that clearly belong to the other style.
+// The couple's side of the same page: sessions the two trained together, the
+// couple's focus points from their last couple lesson, their couple lessons.
+// Logs come back in the solo shape so one aggregation reads both.
+export async function getCoupleDashboard(coupleId, category = null) {
+  const userId = await getUserId();
+  const since = sinceDate();
+
+  const [logsRes, readiness, lessonsRes, prefsRes] = await Promise.all([
+    supabase
+      .from('couple_practice_logs')
+      .select('started_at, duration_minutes, couple_focus_point_id, couple_focus_points(name, dance, tier)')
+      .eq('couple_id', coupleId)
+      .not('completed_at', 'is', null)
+      .gte('started_at', since.toISOString())
+      .order('started_at', { ascending: false }),
+    getCoupleReadiness(coupleId, category).catch(() => null),
+    supabase
+      .from('class_inputs')
+      .select('id, created_at, title, dance')
+      .eq('couple_id', coupleId)
+      .eq('is_deleted', false)
+      .order('created_at', { ascending: false })
+      .limit(200),
+    supabase.from('users').select('weekly_goal_minutes').eq('id', userId).single(),
+  ]);
+
+  const logs = (logsRes?.data || []).map((l) => ({
+    started_at: l.started_at,
+    duration_minutes: l.duration_minutes,
+    focus_point_id: l.couple_focus_point_id,
+    focus_points: l.couple_focus_points,
+  }));
+  return buildDashboard({
+    logs: inCategory(logs, category),
+    readiness,
+    lessons: lessonsRes?.data || [],
+    weeklyGoal: prefsRes?.data?.weekly_goal_minutes ?? 60,
+  });
+}
+
+function sinceDate() {
+  const today = new Date();
+  return new Date(today.getFullYear(), today.getMonth(), today.getDate() - WEEKS_BACK * 7);
+}
+
+// Keep untagged practice; only drop rows that clearly belong to the other style.
+function inCategory(logs, category) {
+  if (!category) return logs;
+  return logs.filter((l) => {
     const dances = l.focus_points?.dance;
     return !dances?.length || focusMatchesCategory({ dance: dances }, category);
   });
-  const lessons = lessonsRes?.data || [];
+}
+
+function buildDashboard({ logs, readiness, lessons, weeklyGoal }) {
+  const today = new Date();
 
   // ── minutes per week, and the trend ──
   const minutesByWeek = new Map();
