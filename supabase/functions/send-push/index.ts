@@ -197,44 +197,47 @@ async function sendPush(record: NotificationRecord): Promise<void> {
     return
   }
 
-  let pushToken = userRow?.push_token
-  let tokenOwner = record.user_id
+  // Every phone signed in to the account gets it.
+  let targets = await devicesOf(supabase, record.user_id, userRow?.push_token ?? null)
 
   // A managed child has no device of their own: the account that follows them
-  // does. Without this, every notification addressed to a child dancer reads a
-  // null token and silently goes nowhere.
-  if (!pushToken) {
+  // does. Without this, every notification addressed to a child dancer reads no
+  // token and silently goes nowhere.
+  if (targets.length === 0) {
     const { data: guards } = await supabase
       .from('guardians')
       .select('guardian_id, users!guardians_guardian_id_fkey(push_token)')
       .eq('child_id', record.user_id)
-    const withToken = (guards || []).find((g: { users?: { push_token?: string } }) => g.users?.push_token)
-    if (withToken) {
-      pushToken = withToken.users!.push_token!
-      tokenOwner = withToken.guardian_id
-      console.log(`[send-push] user ${record.user_id} has no device — routing to guardian ${tokenOwner}`)
+    for (const g of (guards || []) as { guardian_id: string; users?: { push_token?: string | null } }[]) {
+      targets = targets.concat(await devicesOf(supabase, g.guardian_id, g.users?.push_token ?? null))
+    }
+    if (targets.length > 0) {
+      console.log(`[send-push] user ${record.user_id} has no device — routing to their guardian`)
     }
   }
 
-  if (!pushToken) {
+  if (targets.length === 0) {
     console.log(`[send-push] No push token for user ${record.user_id} — skipping`)
     return
+  }
+
+  // One message per phone, in one request; Expo answers with one ticket per
+  // message, in the same order.
+  const message = {
+    title: record.title,
+    body: record.body,
+    // Include the notification type so the app can route to the right
+    // screen when the push is tapped (coach action-needed types go to
+    // the ActionNeeded view, others fall back to the Notifications list).
+    data: { ...(record.data ?? {}), type: record.type },
+    sound: 'default',
   }
 
   try {
     const res = await fetch('https://exp.host/--/api/v2/push/send', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        to: pushToken,
-        title: record.title,
-        body: record.body,
-        // Include the notification type so the app can route to the right
-        // screen when the push is tapped (coach action-needed types go to
-        // the ActionNeeded view, others fall back to the Notifications list).
-        data: { ...(record.data ?? {}), type: record.type },
-        sound: 'default',
-      }),
+      body: JSON.stringify(targets.map((t) => ({ ...message, to: t.token }))),
     })
 
     if (!res.ok) {
@@ -244,47 +247,62 @@ async function sendPush(record: NotificationRecord): Promise<void> {
     }
 
     // Expo returns HTTP 200 even for a dead token — the per-message status
-    // lives in the response BODY. Parse it and, on DeviceNotRegistered
-    // (app uninstalled / token rotated), null the stored token so we stop
-    // pushing into the void. Expo returns `data` as a single ticket for a
-    // single message, or an array — normalise to an array.
-    let ticketStatus: string | null = null
-    let ticketError: string | null = null
+    // lives in the response BODY.
+    let tickets: { status?: string; details?: { error?: string } }[] = []
     try {
       const json = await res.json()
-      const tickets = Array.isArray(json?.data) ? json.data : json?.data ? [json.data] : []
-      const ticket = tickets[0]
-      ticketStatus = ticket?.status ?? null
-      ticketError = ticket?.details?.error ?? null
+      tickets = Array.isArray(json?.data) ? json.data : json?.data ? [json.data] : []
     } catch (parseErr) {
       console.error(`[send-push] could not parse Expo response:`, parseErr)
       return
     }
 
-    if (ticketStatus === 'error') {
-      console.error(`[send-push] Expo ticket error for user ${record.user_id}: ${ticketError}`)
-      if (ticketError === 'DeviceNotRegistered') {
-        // Clear the stale token so future notifications don't silently no-op.
-        // Guard on the current value so we don't clobber a token the user
-        // re-registered between our send and this cleanup.
-        // Clear it where it actually lives: for a child dancer the dead token
-        // belongs to the guardian's row, not to theirs.
-        const { error: clearErr } = await supabase
-          .from('users')
-          .update({ push_token: null })
-          .eq('id', tokenOwner)
-          .eq('push_token', pushToken)
-        if (clearErr) {
-          console.error(`[send-push] failed to clear stale token for ${tokenOwner}:`, clearErr.message)
-        } else {
-          console.log(`[send-push] cleared stale push_token for user ${tokenOwner}`)
-        }
-      }
-      return
+    let sent = 0
+    for (let i = 0; i < targets.length; i += 1) {
+      const ticket = tickets[i]
+      if (ticket?.status !== 'error') { sent += 1; continue }
+      const why = ticket?.details?.error ?? null
+      console.error(`[send-push] Expo ticket error for user ${record.user_id}: ${why}`)
+      // App uninstalled / token rotated: forget that phone so we stop pushing
+      // into the void. Where it lives: for a child, on the guardian's side.
+      if (why === 'DeviceNotRegistered') await forgetDevice(supabase, targets[i])
     }
 
-    console.log(`[send-push] ✓ Push sent to user ${record.user_id}`)
+    console.log(`[send-push] ✓ Push sent to user ${record.user_id} on ${sent} of ${targets.length} device(s)`)
   } catch (err) {
     console.error(`[send-push] Fetch error:`, err)
+  }
+}
+
+interface Device { token: string; owner: string }
+
+// The account's phones (push_tokens), plus the single token an app older than
+// per-device tokens still writes on users.push_token — unless that phone has
+// since been signed in to another account, which now owns it.
+async function devicesOf(supabase: any, userId: string, legacy: string | null): Promise<Device[]> {
+  const [mine, legacyRow] = await Promise.all([
+    supabase.from('push_tokens').select('token').eq('user_id', userId),
+    legacy
+      ? supabase.from('push_tokens').select('user_id').eq('token', legacy).maybeSingle()
+      : Promise.resolve({ data: null }),
+  ])
+  if (mine.error) console.error(`[send-push] push_tokens lookup failed for ${userId}:`, mine.error.message)
+  const tokens = new Set<string>(((mine.data ?? []) as { token: string }[]).map((r) => r.token))
+  if (legacy && (!legacyRow.data || legacyRow.data.user_id === userId)) tokens.add(legacy)
+  return [...tokens].map((token) => ({ token, owner: userId }))
+}
+
+async function forgetDevice(supabase: any, d: Device): Promise<void> {
+  const { error: rowErr } = await supabase.from('push_tokens').delete().eq('token', d.token)
+  // Guard on the current value so we don't clobber a token re-registered in between.
+  const { error: legacyErr } = await supabase
+    .from('users')
+    .update({ push_token: null })
+    .eq('id', d.owner)
+    .eq('push_token', d.token)
+  if (rowErr || legacyErr) {
+    console.error(`[send-push] failed to forget a dead device of ${d.owner}:`, (rowErr || legacyErr)!.message)
+  } else {
+    console.log(`[send-push] forgot a dead device of user ${d.owner}`)
   }
 }

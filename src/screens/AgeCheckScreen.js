@@ -142,7 +142,7 @@ export default function AgeCheckScreen() {
   async function logOut() {
     haptic();
     const { data: { session } } = await supabase.auth.getSession();
-    clearPushToken(session?.user?.id);
+    await clearPushToken(session?.user?.id);
     await clearUserCaches();
     await supabase.auth.signOut({ scope: 'local' });
   }

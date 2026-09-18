@@ -66,11 +66,10 @@ async function performLogout(resetProfile) {
   await clearUserCaches();
   forgetMemoryCaches();
   forgetPairedChild();
-  // Drop this device's push token from the user's row BEFORE sign-out so a
-  // shared device stops receiving pushes tied to the ended session. Fire-and-
-  // forget: the write is dispatched with the still-valid session.
+  // This phone stops receiving the account's pushes BEFORE sign-out (it needs
+  // the session); the account's other phones keep theirs.
   const { data: { session } } = await supabase.auth.getSession();
-  clearPushToken(session?.user?.id);
+  await clearPushToken(session?.user?.id);
   await supabase.auth.signOut({ scope: 'local' });
 }
 
@@ -83,7 +82,7 @@ export function logOutCoachWithChecks({ djiUploading = false } = {}) {
     await clearUserCaches();
     forgetMemoryCaches();
     const { data: { session } } = await supabase.auth.getSession();
-    clearPushToken(session?.user?.id);
+    await clearPushToken(session?.user?.id);
     await supabase.auth.signOut({ scope: 'local' });
   };
   if (activeClass || djiUploading) {
