@@ -1922,11 +1922,11 @@ function Notice({ lead, body, inviteLabel, invited, onInvite, onSkip }) {
         <View style={s.noticeActs}>
           <TouchableOpacity style={[s.invite, invited && s.inviteDone]} onPress={onInvite} disabled={invited}
             activeOpacity={0.85} accessibilityRole="button">
-            <Text style={s.inviteT}>{invited ? `${inviteLabel} ✓` : inviteLabel}</Text>
+            <Text style={s.inviteT} numberOfLines={1}>{invited ? `${inviteLabel} ✓` : inviteLabel}</Text>
           </TouchableOpacity>
           {!!onSkip && (
-            <TouchableOpacity style={s.later} onPress={onSkip} activeOpacity={0.85} accessibilityRole="button">
-              <Text style={s.laterT}>Continue anyway</Text>
+            <TouchableOpacity style={s.skip} onPress={onSkip} activeOpacity={0.85} accessibilityRole="button">
+              <Text style={s.laterT} numberOfLines={1}>Continue anyway</Text>
             </TouchableOpacity>
           )}
         </View>
@@ -2160,9 +2160,17 @@ const s = StyleSheet.create({
   notice: { marginTop: 4, marginBottom: 10, gap: 12 },
   noticeP: { fontFamily: Fonts.regular, fontSize: 13, lineHeight: 19, color: T.ink2 },
   noticeB: { fontFamily: Fonts.semiBold, color: T.ink },
-  noticeActs: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  invite: { backgroundColor: T.ink, borderRadius: 999, paddingVertical: 10, paddingHorizontal: 16 },
-  inviteDone: { backgroundColor: 'rgba(10,10,10,0.55)' },
+  // Two pills of one size, side by side: the way forward, and the way past.
+  noticeActs: { flexDirection: 'row', gap: 8 },
+  invite: {
+    flex: 1, height: 42, borderRadius: 999, backgroundColor: T.ink, borderWidth: 1, borderColor: T.ink,
+    alignItems: 'center', justifyContent: 'center', paddingHorizontal: 14,
+  },
+  skip: {
+    flex: 1, height: 42, borderRadius: 999, borderWidth: 1, borderColor: 'rgba(10,10,10,0.22)',
+    alignItems: 'center', justifyContent: 'center', paddingHorizontal: 14,
+  },
+  inviteDone: { backgroundColor: 'rgba(10,10,10,0.55)', borderColor: 'transparent' },
   inviteT: { fontFamily: Fonts.semiBold, fontSize: 12.5, color: '#fff' },
 
   // screen 09/10/11
