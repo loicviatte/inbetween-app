@@ -364,6 +364,17 @@ const TERMS_URL = 'https://www.useinbetween.com/terms';
 const HEALTH_CONSENT =
   'Lessons are recorded and transcribed. Conversations during a lesson may include references to injuries, '
   + 'pain or physical limitations. I explicitly consent to InBetween processing this information as part of lesson content.';
+
+// What a coach or a student ticks before their account is made — the parent's
+// statements, in the first person. A parent doesn't see them here: they have
+// already given the same permission, for their child, in the minor consent.
+const accountChecks = (isCoach) => [
+  isCoach
+    ? 'I record my lessons with InBetween: the audio is transcribed and turned into focus points for my students'
+    : 'My lessons are recorded and transcribed, and turned into focus points for me to train',
+  'I understand I can withdraw this consent and delete my data at any time',
+  HEALTH_CONSENT,
+];
 const PRIVACY_URL = 'https://www.useinbetween.com/privacy';
 
 const DANCES = {
@@ -567,7 +578,7 @@ export default function OnboardingScreen({ navigation, route }) {
     parentFirstName: '', parentEmail: '', parentPhone: '', parentPhoneCountry: DEFAULT_COUNTRY,
     inviteId: '', deviceSecret: '', maskedEmail: '', inviteStatus: '', inviteNote: '', editingInvite: false, inviteClosed: false,
     invToken: '', invCode: '', consent: null, checks: [false, false, false, false], parentPassword: '', hasInvite: null, signupCopy: null,
-    healthConsent: false,
+    acctChecks: [false, false, false],
     signupPhone: '', signupPhoneCountry: DEFAULT_COUNTRY, smsId: '', smsMasked: '', smsCode: '', phoneToken: '',
     alloc: { Technique: 40, Musicality: 25, Mental: 20, Performance: 15 },
     name: '', childName: '', email: '', password: '', slug: '',
@@ -1041,7 +1052,7 @@ export default function OnboardingScreen({ navigation, route }) {
       child: childProfile,
       // The health-data permission, carried through email confirmation like the
       // rest, so the proof isn't lost when the session only arrives later.
-      healthConsentAt: a.healthConsent ? new Date().toISOString() : null,
+      healthConsentAt: healthConsentGiven() ? new Date().toISOString() : null,
       student: !isCoach && !isParent ? {
         lessons: a.lessons, soloLabel: a.soloLabel, weeklyGoal: weeklyTarget(a),
         coachId: a.coachId || null, cats: coachCats, focus: a.focus,
@@ -1066,7 +1077,7 @@ export default function OnboardingScreen({ navigation, route }) {
     }
     holdPendingOnboarding(false);
 
-    if (userId && a.healthConsent) {
+    if (userId && healthConsentGiven()) {
       supabase.from('users').update({ health_data_consent_at: new Date().toISOString() }).eq('id', userId)
         .then(({ error }) => { if (error) console.warn('[onboarding] health consent not saved:', error.message); });
     }
@@ -1140,6 +1151,9 @@ export default function OnboardingScreen({ navigation, route }) {
     // App.js's onAuthStateChange swaps to the home navigator for students.
   }
 
+  // The health sentence is the last box here, and the parent's fourth check.
+  const healthConsentGiven = () => (isParent ? !!a.checks[3] : !!a.acctChecks[2]);
+
   const allocLeft = 100 - AXES.reduce((t, k) => t + a.alloc[k], 0);
 
   const gate = {
@@ -1166,7 +1180,7 @@ export default function OnboardingScreen({ navigation, route }) {
     signature: !!a.signature, alloc: allocLeft === 0, leave: a.leave.length > 0,
     who: a.who.length > 0, cred: true, cardLocked: true, planReady: true, cardLive: true, confirm: true,
     account: !!(a.name.trim() && a.email.trim() && a.password.length >= 6
-      && a.healthConsent && (!isParent || a.childName.trim())),
+      && (isParent ? a.childName.trim() : a.acctChecks.every(Boolean))),
   }[step];
 
   const planLine = [a.role && (isCoach ? 'Coach' : isParent ? 'Parent' : 'Student'), a.style, a.level].filter(Boolean).join(' · ');
@@ -1643,12 +1657,12 @@ export default function OnboardingScreen({ navigation, route }) {
       );
 
       case 'planReady': return (
-        <Q h1="Your plan is ready." sub="Add your first lesson whenever you’re ready — focus points come from it.">
+        <Q h1="Your account is ready." sub="Add your first lesson whenever you’re ready — focus points come from it.">
           <Rise delay={0.1}>
             <View style={s.pcard}>
               <View style={s.peb}>
                 <Text style={s.pebT}>WEEKLY TARGET</Text>
-                <Text style={s.pebT}>{[a.level, a.style].filter(Boolean).join(' · ') || 'Your plan'}</Text>
+                <Text style={s.pebT}>{[a.level, a.style].filter(Boolean).join(' · ') || 'Your training'}</Text>
               </View>
               <View style={s.pd1}>
                 <Text style={s.pd1B} allowFontScaling={false}>{weeklyTarget(a)}</Text>
@@ -1706,7 +1720,7 @@ export default function OnboardingScreen({ navigation, route }) {
       );
 
       default: return ( // account
-        <Q h1={isCoach ? (COACH_CARD_ONBOARDING ? 'Publish your coach card' : 'Create your account') : 'Save your plan'}
+        <Q h1={isCoach ? (COACH_CARD_ONBOARDING ? 'Publish your coach card' : 'Create your account') : 'Create your account'}
           sub={isCoach ? (COACH_CARD_ONBOARDING ? 'Under a minute. Your card is built and waiting.' : 'Under a minute. Everything you just set up is already in.')
             : isParent ? 'Under a minute. The account is yours; the training is theirs.'
             : 'Under a minute. Everything you just set up is already in.'}>
@@ -1718,13 +1732,15 @@ export default function OnboardingScreen({ navigation, route }) {
             <Rise delay={0.12}><Field label="Password" value={a.password} onChange={(t) => set({ password: t })}
               placeholder="Min. 6 characters" secureTextEntry textContentType="newPassword" /></Rise>
           </View>
-          <Rise delay={0.18}>
-            <CheckRow
-              label={HEALTH_CONSENT}
-              on={a.healthConsent}
-              onPress={() => { haptic(); set({ healthConsent: !a.healthConsent }); }}
-            />
-          </Rise>
+          {!isParent && accountChecks(isCoach).map((line, i) => (
+            <Rise key={line} delay={0.18 + i * 0.05}>
+              <CheckRow
+                label={line}
+                on={a.acctChecks[i]}
+                onPress={() => { haptic(); set({ acctChecks: a.acctChecks.map((c, k) => (k === i ? !c : c)) }); }}
+              />
+            </Rise>
+          ))}
           {!!error && <Text style={s.err}>{error}</Text>}
         </Q>
       );
@@ -1751,8 +1767,9 @@ export default function OnboardingScreen({ navigation, route }) {
     : step === 'focusLocked' ? 'See it'
     : step === 'recall' ? 'Build my focus points'
     : step === 'cardLocked' ? 'See it'
-    : step === 'planReady' ? 'Save my plan'
-    : step === 'account' ? (isCoach && COACH_CARD_ONBOARDING ? 'Publish my card' : 'Create account')
+    : step === 'planReady' ? 'Create account'
+    : step === 'account' ? (isCoach && COACH_CARD_ONBOARDING ? 'Publish my card'
+      : a.focus.length ? 'Save my focus points' : 'Create account')
     : step === 'cardLive' ? 'Done'
     : step === 'confirm' ? 'Go to sign in'
     : step === 'cred' ? 'Build my card'
