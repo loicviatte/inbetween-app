@@ -1732,15 +1732,20 @@ export default function OnboardingScreen({ navigation, route }) {
             <Rise delay={0.12}><Field label="Password" value={a.password} onChange={(t) => set({ password: t })}
               placeholder="Min. 6 characters" secureTextEntry textContentType="newPassword" /></Rise>
           </View>
-          {!isParent && accountChecks(isCoach).map((line, i) => (
-            <Rise key={line} delay={0.18 + i * 0.05}>
-              <CheckRow
-                label={line}
-                on={a.acctChecks[i]}
-                onPress={() => { haptic(); set({ acctChecks: a.acctChecks.map((c, k) => (k === i ? !c : c)) }); }}
-              />
-            </Rise>
-          ))}
+          {!isParent && (
+            <View style={s.perm}>
+              <Rise delay={0.16}><Text style={s.permT}>Your permission</Text></Rise>
+              {accountChecks(isCoach).map((line, i) => (
+                <Rise key={line} delay={0.2 + i * 0.05}>
+                  <CheckRow
+                    label={line}
+                    on={a.acctChecks[i]}
+                    onPress={() => { haptic(); set({ acctChecks: a.acctChecks.map((c, k) => (k === i ? !c : c)) }); }}
+                  />
+                </Rise>
+              ))}
+            </View>
+          )}
           {!!error && <Text style={s.err}>{error}</Text>}
         </Q>
       );
@@ -2098,6 +2103,9 @@ const s = StyleSheet.create({
 
   // .fields / .lbl / .field
   fields: { gap: 13 },
+  perm: { marginTop: 26 },
+  permT: { marginBottom: 11, fontFamily: Fonts.medium, fontSize: 10, letterSpacing: 1.4,
+    textTransform: 'uppercase', color: T.ink2 },
   field: {},
   lbl: { marginBottom: 9, fontFamily: Fonts.medium, fontSize: 10, letterSpacing: 1.4,
     textTransform: 'uppercase', color: T.ink2 },
