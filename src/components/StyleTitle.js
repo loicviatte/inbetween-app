@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, Modal, Pressable, StyleSheet } from 'react-native';
+import { View, Text, TouchableOpacity, Modal, Pressable, StyleSheet, useWindowDimensions } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Fonts } from '../theme';
 
@@ -49,32 +49,50 @@ export default function StyleTitle({ label, category, canSwitch, disabled, sub, 
       ) : title}
       {sub ? <Text style={st.sub} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.8}>{sub}</Text> : null}
 
-      <Modal
-        visible={!!menu}
-        transparent
-        animationType="fade"
-        statusBarTranslucent
-        onRequestClose={() => setMenu(null)}
-      >
-        <Pressable style={st.backdrop} onPress={() => setMenu(null)}>
-          <View style={[st.sheet, { top: menu?.y ?? 0, left: menu?.x ?? 0 }]}>
-            {options.map((opt, i) => (
-              <TouchableOpacity
-                key={opt.key}
-                style={[st.option, i > 0 && st.optionDivider]}
-                activeOpacity={0.65}
-                onPress={() => { setMenu(null); if (opt.key !== category) onSelect?.(opt.key); }}
-              >
-                <Text style={st.optionLabel}>{opt.label}</Text>
-                {opt.key === category ? (
-                  <Ionicons name="checkmark" size={18} color="#FFFFFF" style={st.check} />
-                ) : null}
-              </TouchableOpacity>
-            ))}
-          </View>
-        </Pressable>
-      </Modal>
+      <StyleMenu
+        at={menu}
+        options={options}
+        value={category}
+        onSelect={onSelect}
+        onClose={() => setMenu(null)}
+      />
     </View>
+  );
+}
+
+// The dark menu of styles, under whatever opened it. `at` is where its top-left
+// corner goes in window coordinates; it is kept on screen, so a button at the
+// right edge can pass its own right edge minus MENU_W.
+export const MENU_W = 220;
+export function StyleMenu({ at, options = STYLES, value, onSelect, onClose }) {
+  const { width } = useWindowDimensions();
+  const left = at ? Math.max(12, Math.min(at.x, width - MENU_W - 12)) : 0;
+  return (
+    <Modal
+      visible={!!at}
+      transparent
+      animationType="fade"
+      statusBarTranslucent
+      onRequestClose={onClose}
+    >
+      <Pressable style={st.backdrop} onPress={onClose}>
+        <View style={[st.sheet, { top: at?.y ?? 0, left }]}>
+          {options.map((opt, i) => (
+            <TouchableOpacity
+              key={opt.key}
+              style={[st.option, i > 0 && st.optionDivider]}
+              activeOpacity={0.65}
+              onPress={() => { onClose(); if (opt.key !== value) onSelect?.(opt.key); }}
+            >
+              <Text style={st.optionLabel}>{opt.label}</Text>
+              {opt.key === value ? (
+                <Ionicons name="checkmark" size={18} color="#FFFFFF" style={st.check} />
+              ) : null}
+            </TouchableOpacity>
+          ))}
+        </View>
+      </Pressable>
+    </Modal>
   );
 }
 
@@ -89,7 +107,7 @@ const st = StyleSheet.create({
   backdrop: { flex: 1, backgroundColor: 'transparent' },
   sheet: {
     position: 'absolute',
-    minWidth: 220,
+    minWidth: MENU_W,
     borderRadius: 16,
     overflow: 'hidden',
     backgroundColor: 'rgba(28,28,30,0.96)',
@@ -99,7 +117,7 @@ const st = StyleSheet.create({
     shadowRadius: 22,
     elevation: 14,
   },
-  option: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 15, minWidth: 220 },
+  option: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 15, minWidth: MENU_W },
   optionDivider: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: 'rgba(255,255,255,0.15)' },
   optionLabel: { fontFamily: Fonts.semiBold, fontSize: 15, color: '#FFFFFF', flex: 1 },
   check: { marginLeft: 12 },
