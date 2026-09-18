@@ -1,6 +1,8 @@
 // Every focus point the dancer can train (docs/design/all-focus-points.html):
 // one feed per side — what is active now, then what has been retired — in the
-// dark cards of the Train page, with the practice button on each one.
+// dark cards of the Train page, with the practice button on each one. A group
+// lesson's focus points retire when the same coach's next group lesson goes
+// live, so the Group side shows the latest lesson per coach, then the rest.
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View,
@@ -21,6 +23,7 @@ import {
   getAllFocusPointsBundle,
   getActiveSoloFocusPoints,
   getPastFocusPoints,
+  getPastGroupFocusPoints,
   getSessionCountForFocus,
   startTrainingSession,
 } from '../utils/algorithm';
@@ -28,6 +31,7 @@ import { getActiveSession } from '../storage/activeSession';
 import { SkeletonBox } from '../components/Skeleton';
 import { StyleMenu, MENU_W } from '../components/StyleTitle';
 import { dayLabel } from '../utils/dates';
+import { categoryFromDances } from '../utils/danceCategory';
 
 const PAGE = '#F2F0EB';
 const INK = '#0A0A0A';
@@ -63,16 +67,15 @@ const EMPTY = {
   group:  'Focus points from your last group lessons show up here.',
 };
 
+const GROUP_HEAD = { latin: 'Latin group', ballroom: 'Ballroom group' };
+
 // Where a focus point comes from: "Private · Sat 5 Jul", "Latin group · Today".
 function sourceOf(item, kind) {
   const cls = item.class_inputs;
   const when = cls?.created_at || item.created_at;
   let head = 'Private';
   if (kind === 'couple') head = 'Couple';
-  if (kind === 'group') {
-    const style = cls?.dance || (Array.isArray(item.dance) ? item.dance[0] : item.dance);
-    head = style ? `${style} group` : 'Group';
-  }
+  if (kind === 'group') head = GROUP_HEAD[categoryFromDances(item.dance)] || 'Group';
   return [head, when ? dayLabel(when) : null].filter(Boolean).join(' · ');
 }
 
@@ -173,9 +176,10 @@ export default function AllFocusPointsScreen({ navigation, route }) {
   const [group, setGroup] = useState([]);
   const [startingId, setStartingId] = useState(null);
   // Retired focus points — still trainable, listed under the active ones on
-  // the Solo side. Fetched apart from the bundle, so with their own loading
-  // flag: the warm cache flips `loading` in ms, long before this query lands.
+  // the Solo and Group sides. Fetched apart from the bundle, so with their own
+  // loading flag: the warm cache flips `loading` in ms, long before they land.
   const [past, setPast] = useState([]);
+  const [pastGroup, setPastGroup] = useState([]);
   const [pastLoading, setPastLoading] = useState(true);
   const [styleMenu, setStyleMenu] = useState(null);
   const styleBtnRef = useRef(null);
@@ -215,6 +219,7 @@ export default function AllFocusPointsScreen({ navigation, route }) {
     // Drop the previous category's retired rows so a style switch can't paint
     // stale content while the new query is in flight.
     setPast([]);
+    setPastGroup([]);
     setPastLoading(true);
 
     getAllFocusPointsBundle(cat).then(async (b) => {
@@ -238,12 +243,17 @@ export default function AllFocusPointsScreen({ navigation, route }) {
       setLoading(false);
     }).catch(() => { if (active) setLoading(false); });
 
-    // 3) Retired focus points — a separate light query (the bundle RPC only
-    //    returns active ones). Never blocks the first paint.
-    getPastFocusPoints(cat)
-      .then((p) => { if (active) setPast(p || []); })
-      .catch(() => { if (active) setPast([]); })
-      .finally(() => { if (active) setPastLoading(false); });
+    // 3) Retired focus points — separate light queries (the bundle RPC only
+    //    returns active ones). Never block the first paint.
+    Promise.all([
+      getPastFocusPoints(cat).catch(() => []),
+      getPastGroupFocusPoints(cat).catch(() => []),
+    ]).then(([solo, group]) => {
+      if (!active) return;
+      setPast(solo || []);
+      setPastGroup(group || []);
+      setPastLoading(false);
+    });
 
     return () => { active = false; };
   }, [filter]));
@@ -256,8 +266,8 @@ export default function AllFocusPointsScreen({ navigation, route }) {
   tabs.push({ key: 'group', label: 'Group' });
   const activeTab = (tab === 'couple' && !couple) ? 'solo' : tab;
   const list = activeTab === 'solo' ? solo : activeTab === 'couple' ? couplePts : group;
-  // Retired focus points are solo ones: couple and group show their active set.
-  const pastList = activeTab === 'solo' ? past : [];
+  // Couple focus points have no retired list here: that side shows its active set.
+  const pastList = activeTab === 'solo' ? past : activeTab === 'group' ? pastGroup : [];
   const styleLabel = STYLE_OPTIONS.find((o) => o.key === filter)?.label || 'All styles';
   const liveId = getActiveSession()?.focusPointId || null;
 

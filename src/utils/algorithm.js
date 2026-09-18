@@ -197,6 +197,41 @@ export async function getPastFocusPoints(category = null) {
   return fetchSoloFocusPoints('past', category, 'last_mentioned_at');
 }
 
+// Retired group focus points — the Past section of the Group side. A group
+// lesson's focus points move here once the same coach's next group lesson goes
+// live (trigger trg_retire_superseded_group_focus). Focus points of a lesson the
+// student didn't attend are soft-deleted, so they never show. Newest lesson first.
+export async function getPastGroupFocusPoints(category = null) {
+  const userId = await getUserId();
+  const { data, error } = await supabase
+    .from('focus_points')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('group_fp', true)
+    .eq('status', 'past')
+    .eq('is_deleted', false)
+    .eq('is_archived', false)
+    .eq('is_other', false)
+    .is('alias_of', null)
+    .order('created_at', { ascending: false })
+    .limit(40);
+  if (error) throw new Error(`focus_points(group past): ${error.message}`);
+  const points = (data || []).filter((fp) => focusMatchesCategory(fp, category));
+
+  const classOf = (p) => p.source_class_input_id || p.class_input_id || null;
+  const classIds = [...new Set(points.map(classOf).filter(Boolean))];
+  if (classIds.length === 0) return points;
+  const { data: classes } = await supabase
+    .from('class_inputs')
+    .select('id, created_at, teacher_name, dance, lesson_type')
+    .in('id', classIds);
+  const clsById = new Map((classes || []).map((c) => [c.id, c]));
+  const when = (p) => new Date(p.class_inputs?.created_at || p.created_at).getTime();
+  return points
+    .map((p) => ({ ...p, class_inputs: clsById.get(classOf(p)) || null }))
+    .sort((a, b) => when(b) - when(a));
+}
+
 // The student's real active SOLO focus points.
 //
 // get_all_focus_points builds its `solo` array by INNER JOINing the last
