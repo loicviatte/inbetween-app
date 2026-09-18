@@ -10,7 +10,7 @@ import { supabase } from '../services/supabase/client';
 import { readCachedRole } from '../services/auth/role';
 import { locallyRespondedAttendance } from '../storage/attendanceState';
 import { respondToAttendance } from '../storage/storage';
-import { GenericListSkeleton } from '../components/Skeleton';
+import { Pulse, Bone } from '../components/GroupSwitchSkeleton';
 import NotificationDetailSheet from '../components/NotificationDetailSheet';
 import PullLogo, { usePullRefresh } from '../components/PullLogo';
 import { showAgeReviewPopup } from '../utils/studentLock';
@@ -546,7 +546,7 @@ export default function NotificationsScreen({ navigation }) {
         </View>
 
         {loading ? (
-          <GenericListSkeleton rows={6} showHeader={false} showTitle={false} />
+          <ListBones />
         ) : (
           <View style={{ flex: 1 }}>
             {pull.ios ? (
@@ -622,6 +622,29 @@ export default function NotificationsScreen({ navigation }) {
         </Modal>
       </SafeAreaView>
     </View>
+  );
+}
+
+// The list while it loads: a day's head and a card of rows, as bones.
+function ListBones() {
+  return (
+    <Pulse style={st.list}>
+      <View style={st.group}>
+        <Bone w={54} h={9} r={3} />
+        <Bone w={14} h={9} r={3} />
+      </View>
+      <View style={st.card}>
+        {[0, 1, 2, 3, 4].map((i) => (
+          <View key={i} style={[st.row, i > 0 && st.rowSep]}>
+            <Bone w={36} h={36} r={10} />
+            <View style={[st.body, { gap: 7, paddingTop: 2 }]}>
+              <Bone w={i % 2 ? '52%' : '68%'} h={12} r={4} />
+              <Bone w="88%" h={9} r={4} />
+            </View>
+          </View>
+        ))}
+      </View>
+    </Pulse>
   );
 }
 

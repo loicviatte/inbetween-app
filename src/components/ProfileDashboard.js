@@ -6,7 +6,7 @@
 // Every figure comes from getStudentDashboard(), which derives them all from one
 // practice_logs query, so no two cards can disagree.
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import Svg, { Circle, Defs, Line, LinearGradient, Path, Polyline, Stop, Text as SvgText } from 'react-native-svg';
 import { Fonts } from '../theme';
 import { getStudentDashboard } from '../storage/dashboardStorage';
@@ -14,6 +14,7 @@ import { categoryFromStyle } from '../utils/danceCategory';
 import { getMyCouple } from '../storage/coupleStorage';
 import { openFocusSession } from '../utils/openFocusSession';
 import ModeTabs from './ModeTabs';
+import { StatsBones } from './ProfileSkeleton';
 
 // The mock's warm world. Not in theme/Colors — that palette predates this screen
 // and carries none of these. Contrast ratios noted where they were engineered.
@@ -276,7 +277,7 @@ export default function ProfileDashboard({ user, category, navigation, mode: mod
     return (
       <View style={s.root}>
         {scopeBar}
-        <View style={s.loading}><ActivityIndicator color={C.goldInk} /></View>
+        <StatsBones />
       </View>
     );
   }
@@ -483,7 +484,6 @@ export default function ProfileDashboard({ user, category, navigation, mode: mod
 
 const s = StyleSheet.create({
   root: { paddingHorizontal: 0 },
-  loading: { paddingVertical: 48, alignItems: 'center' },
 
   // Solo | Couple tabs — the space below matches Train's.
   tabs: { marginBottom: 18 },

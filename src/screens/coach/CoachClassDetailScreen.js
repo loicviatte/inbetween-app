@@ -20,7 +20,7 @@ import HeroCardGradient from '../../components/HeroCardGradient';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useFocusEffect } from '@react-navigation/native';
 import { Colors, Fonts, Spacing } from '../../theme';
-import { GenericListSkeleton } from '../../components/Skeleton';
+import { Pulse, Bone } from '../../components/GroupSwitchSkeleton';
 import {
   getCoachClassDetail,
   setStudentAttendance,
@@ -780,7 +780,7 @@ export default function CoachClassDetailScreen({ route, navigation }) {
     return (
       <SafeAreaView style={s.safe} edges={['top']}>
         <TopBar onBack={() => navigation.goBack()} />
-        <GenericListSkeleton rows={4} variant="detail" showHeader={false} showTitle={false} />
+        <DetailBones />
       </SafeAreaView>
     );
   }
@@ -933,6 +933,42 @@ export default function CoachClassDetailScreen({ route, navigation }) {
 }
 
 // ─── Sub-components ─────────────────────────────────────────────────────────
+
+// The lesson while it loads: its hero, the tabs and a summary, as bones.
+const ON_DARK = { backgroundColor: 'rgba(255,255,255,0.14)' };
+function DetailBones() {
+  return (
+    <View>
+      <View style={s.heroCard}>
+        <HeroCardGradient />
+        <Pulse style={{ gap: 12 }}>
+          <View style={s.heroTopRow}>
+            <Bone w={80} h={10} r={4} style={ON_DARK} />
+            <Bone w={70} h={10} r={4} style={ON_DARK} />
+          </View>
+          <View style={s.heroPills}>
+            <Bone w={58} h={20} r={10} style={ON_DARK} />
+            <Bone w={70} h={20} r={10} style={ON_DARK} />
+          </View>
+          <Bone w="78%" h={24} r={6} style={ON_DARK} />
+          <View style={[s.heroStatsRow, { justifyContent: 'space-around' }]}>
+            {[0, 1, 2].map((i) => <Bone key={i} w={34} h={26} r={5} style={ON_DARK} />)}
+          </View>
+        </Pulse>
+      </View>
+      <Pulse style={[s.tabsBar, { paddingTop: 12, paddingBottom: 12, justifyContent: 'space-around' }]}>
+        {[0, 1, 2].map((i) => <Bone key={i} w={70} h={12} r={4} />)}
+      </Pulse>
+      <Pulse style={[s.tabContent, { gap: 10 }]}>
+        <Bone w={70} h={9} r={3} style={{ marginBottom: 4 }} />
+        <Bone w="100%" h={12} r={4} />
+        <Bone w="96%" h={12} r={4} />
+        <Bone w="90%" h={12} r={4} />
+        <Bone w="62%" h={12} r={4} />
+      </Pulse>
+    </View>
+  );
+}
 
 function TopBar({ onBack }) {
   return (

@@ -26,7 +26,6 @@ import { respondToCoachRequest } from '../../storage/coachStorage';
 import { setStudentAge } from '../../services/ageCheck';
 import { guardStudent } from '../../utils/studentLock';
 import { getMyCouples, getPendingCoupleCoachRequests, respondToCoupleCoachRequest, getCoupleReadiness } from '../../storage/coupleStorage';
-import { CoachHomeScreenSkeleton } from '../../components/Skeleton';
 import { useGroupSwitch, Pulse, Bone, FadeIn } from '../../components/GroupSwitchSkeleton';
 import useSlideSwap from '../../components/useSlideSwap';
 import CoachLinksView from '../../components/CoachLinksView';
@@ -483,11 +482,15 @@ export default function CoachHomeScreen({ navigation, route }) {
     setCoupleReqs((prev) => prev.filter((r) => r.id !== reqId));
   }
 
-  // Latin group ↔ Ballroom group: bones until what's on screen is read for the new group.
-  const switching = useGroupSwitch(
+  // Bones in the screen's own layout — on the first load, until the roster and
+  // its readiness are in, and when the group switches, until what's on screen
+  // is read for the new group.
+  const firstDone = useRef(false);
+  if (!loading && readinessFor === readinessSig) firstDone.current = true;
+  const bones = useGroupSwitch(
     styleFilter,
     readinessFor === readinessSig && (view === 'students' || couplesFor === styleCategory),
-  );
+  ) || !firstDone.current;
 
   const filteredStudents = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -514,7 +517,6 @@ export default function CoachHomeScreen({ navigation, route }) {
   const openStudent = (s) =>
     guardStudent(s, () => navigation.navigate('StudentDetail', { studentId: s.id, studentName: s.name }), () => refresh());
 
-  if (loading) return <CoachHomeScreenSkeleton />;
   if (linksOpen) return <View style={st.page}><CoachLinksView bottomSpace={tabBarSpace} /></View>;
 
   function studentRow(s, quiet, showLast) {
@@ -596,12 +598,12 @@ export default function CoachHomeScreen({ navigation, route }) {
         {/* Roster summary */}
         <Animated.View style={[st.sum, viewSlideStyle]}>
           <View style={st.sumTop}>
-            {switching
+            {bones
               ? <Pulse><Bone w={40} h={30} r={7} style={{ marginTop: 2 }} /></Pulse>
               : <Text style={st.sumCount}>{total}</Text>}
             <Text style={st.sumLabel}>{isStudents ? 'Students' : 'Couples'}</Text>
           </View>
-          {switching ? (
+          {bones ? (
             <Pulse style={{ gap: 11 }}>
               <Bone w="100%" h={9} r={3} />
               <View style={st.legend}>
@@ -621,7 +623,17 @@ export default function CoachHomeScreen({ navigation, route }) {
               </View>
             </>
           )}
-          {isStudents && (
+          {isStudents && bones && (
+            <View style={st.chips}>
+              {[0, 1].map((i) => (
+                <Pulse key={i} style={st.chip}>
+                  <Bone w={22} h={18} r={5} />
+                  <Bone w="60%" h={8} r={4} />
+                </Pulse>
+              ))}
+            </View>
+          )}
+          {isStudents && !bones && (
             <View style={st.chips}>
               <TouchableOpacity style={[st.chip, asked === 0 && st.chipZero]} onPress={() => navigation.navigate('ActionNeeded', { tab: 'questions' })} activeOpacity={0.8}>
                 <Text style={[st.chipN, asked === 0 && st.chipNZero]}>{asked}</Text>
@@ -689,7 +701,7 @@ export default function CoachHomeScreen({ navigation, route }) {
           </>
         )}
 
-        {switching ? (
+        {bones ? (
           <RosterBones />
         ) : (
         <FadeIn>

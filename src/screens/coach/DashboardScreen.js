@@ -15,7 +15,6 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { LinearGradient } from 'expo-linear-gradient';
 import MaskedView from '@react-native-masked-view/masked-view';
 import { Fonts, Spacing } from '../../theme';
-import DashboardSkeleton from '../../components/DashboardSkeleton';
 import { useCoachData } from '../../context/CoachDataContext';
 import { markFirstScreenReady } from '../../utils/firstPaint';
 import { guardStudent, isAwaitingVerification } from '../../utils/studentLock';
@@ -347,7 +346,11 @@ export default function DashboardScreen({ navigation }) {
       })
       .catch(() => { if (current()) { setReadinessByStudent({}); setReadinessFor(signature); } });
   }, [students, styleCategory]);
-  const switching = useGroupSwitch(styleFilter, readinessFor === readinessSig);
+  // Bones in the screen's own layout — on the first load, until the roster and
+  // its readiness are in, and for a second when the group switches.
+  const firstDone = useRef(false);
+  if (!loading && readinessFor === readinessSig) firstDone.current = true;
+  const bones = useGroupSwitch(styleFilter, readinessFor === readinessSig) || !firstDone.current;
 
   const withLesson = students.filter((s) => readinessByStudent[s.id] != null);
   const groupReadiness = withLesson.length
@@ -393,8 +396,6 @@ export default function DashboardScreen({ navigation }) {
     await refresh();
   });
 
-  if (loading) return <DashboardSkeleton />;
-
   return (
     <View style={st.page}>
       <Animated.View pointerEvents="none" style={[st.pullLogo, { opacity: pull.logoOpacity }]}>
@@ -416,7 +417,7 @@ export default function DashboardScreen({ navigation }) {
       {/* ── Group readiness, practice, what's waiting, Start class ── */}
       <View style={st.att}>
         <View style={st.big}>
-          {switching ? (
+          {bones ? (
             <Pulse><Bone w={96} h={52} r={12} /></Pulse>
           ) : (
             <FadeIn style={st.bigNum}>
@@ -426,7 +427,7 @@ export default function DashboardScreen({ navigation }) {
           )}
           <View style={st.bigSide}>
             <Text style={st.bigLabel}>Group readiness</Text>
-            {switching ? (
+            {bones ? (
               <Pulse><Bone w={112} h={10} r={4} style={{ marginVertical: 3 }} /></Pulse>
             ) : (
               <Text style={st.bigSub}>
@@ -437,10 +438,10 @@ export default function DashboardScreen({ navigation }) {
           </View>
         </View>
 
-        {switching ? <ChartBones /> : <PracticeChart weeks={groupWeeks} />}
+        {bones ? <ChartBones /> : <PracticeChart weeks={groupWeeks} />}
 
         <View style={st.chips}>
-          {switching
+          {bones
             ? [0, 1, 2].map((i) => (
                 <Pulse key={i} style={st.chip}>
                   <Bone w={26} h={19} r={5} />
@@ -468,7 +469,7 @@ export default function DashboardScreen({ navigation }) {
             <Text style={[st.startT, { color: '#FFFFFF' }]}>Lesson in progress</Text>
             <Text style={st.liveTimer}>{chronoLabel}</Text>
           </TouchableOpacity>
-        ) : switching ? (
+        ) : bones ? (
           <Pulse style={[st.start, st.startBones]}><Bone w={128} h={17} r={6} /></Pulse>
         ) : (
           <TouchableOpacity
@@ -492,7 +493,9 @@ export default function DashboardScreen({ navigation }) {
 
       {/* ── Sort ── */}
       <View style={st.sort}>
-        <Text style={st.sortCount}>{students.length} student{students.length === 1 ? '' : 's'}</Text>
+        {bones
+          ? <Pulse style={st.sortCount}><Bone w={74} h={9} r={3} /></Pulse>
+          : <Text style={st.sortCount}>{students.length} student{students.length === 1 ? '' : 's'}</Text>}
         {SORTS.map(([key, label]) => (
           <TouchableOpacity key={key} style={[st.sortBtn, sort === key && st.sortBtnOn]} onPress={() => setSort(key)} activeOpacity={0.75}>
             <Text style={[st.sortBtnT, sort === key && { color: '#FFFFFF' }]}>{label}</Text>
@@ -520,7 +523,7 @@ export default function DashboardScreen({ navigation }) {
           onContentSizeChange={(_, h) => { gridMetrics.current.content = h; updateMore(); }}
           onScroll={(e) => { gridMetrics.current.y = e.nativeEvent.contentOffset.y; updateMore(); }}
         >
-          {switching ? (
+          {bones ? (
             [0, 1, 2, 3].map((i) => <View key={i} style={st.cell}><SquareBones /></View>)
           ) : sorted.length === 0 ? (
             <Text style={st.empty}>
