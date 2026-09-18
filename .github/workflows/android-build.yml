@@ -51,7 +51,9 @@ jobs:
       - name: Setup EAS
         uses: expo/expo-github-action@v8
         with:
-          eas-version: latest
+          # Pinned: eas-cli 24 needs Node 22 and broke setup on Node 20 (2026-09-18).
+          # 20.5.1 is the version the last good build used.
+          eas-version: 20.5.1
           token: ${{ secrets.EXPO_TOKEN }}
 
       # --local builds on this runner (no cloud queue). The Android signing
