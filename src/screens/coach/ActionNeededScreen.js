@@ -31,6 +31,8 @@ const EXPAND_ANIMATION = {
 };
 import { Pressable } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { LinearGradient } from 'expo-linear-gradient';
+import MaskedView from '@react-native-masked-view/masked-view';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Fonts, Spacing } from '../../theme';
 import { useCoachData } from '../../context/CoachDataContext';
@@ -74,6 +76,8 @@ const INK_62 = 'rgba(10,10,10,0.62)';
 const PAGE = '#F2F0EB';
 const GOLD = '#E8B530';
 const RED = '#A8412F';
+// How far the list dissolves as it passes under the header and off the bottom.
+const EDGE_FADE = 14;
 
 // ════════════════════════════════════════════════════════════════════════════
 export default function ActionNeededScreen({ navigation, route }) {
@@ -420,6 +424,16 @@ export default function ActionNeededScreen({ navigation, route }) {
         </View>
       )}
 
+      <MaskedView
+        style={{ flex: 1 }}
+        maskElement={
+          <View style={{ flex: 1 }}>
+            <LinearGradient colors={['transparent', '#000']} style={{ height: EDGE_FADE }} />
+            <View style={{ flex: 1, backgroundColor: '#000' }} />
+            <LinearGradient colors={['#000', 'rgba(0,0,0,0.5)', 'transparent']} locations={[0, 0.55, 1]} style={{ height: 34 }} />
+          </View>
+        }
+      >
       <ScrollView contentContainerStyle={s.feed} showsVerticalScrollIndicator={false}>
         {fpLoading && totalCount === 0 && (
           <View style={{ gap: 10, paddingTop: 18 }}>
@@ -577,6 +591,7 @@ export default function ActionNeededScreen({ navigation, route }) {
           </>
         )}
       </ScrollView>
+      </MaskedView>
 
       {/* ── Nothing left ── */}
       {allClear && (
