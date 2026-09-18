@@ -124,6 +124,13 @@ const REQUEST_TYPES = new Set([
   'couple_coach_accepted',
 ])
 
+// A child's account (one a parent follows) is pushed less: nothing at night,
+// whatever the settings say, and no rewards meant to bring them back. The
+// notification itself still lands in the app. (The ICO Children's Code:
+// no nudges that keep a child on the app, notifications off at night.)
+const CHILD_NIGHT: [number, number] = [21, 7]
+const CHILD_UNPUSHED = new Set(['focus_mastered'])
+
 const QUIET_WINDOWS: Record<string, [number, number]> = {
   '21-7': [21, 7],
   '22-8': [22, 8],
@@ -144,10 +151,17 @@ function localHour(timeZone: string): number {
   }
 }
 
+function inWindow(hour: number, [start, end]: [number, number]): boolean {
+  return hour >= start || hour < end
+}
+
 // Why this push shouldn't go out, or null to send it.
-function silencedBy(record: NotificationRecord, user: RecipientPrefs | null): string | null {
+function silencedBy(record: NotificationRecord, user: RecipientPrefs | null, isChild = false): string | null {
   const prefs = (user?.notification_prefs ?? {}) as Record<string, unknown>
   if (prefs.push === 'off') return 'push off'
+  const tz = typeof prefs.tz === 'string' ? prefs.tz : 'Europe/London'
+  if (isChild && CHILD_UNPUSHED.has(record.type)) return 'child account — no reward pushes'
+  if (isChild && inWindow(localHour(tz), CHILD_NIGHT)) return 'child account — night'
   if (REQUEST_TYPES.has(record.type)) return null
 
   if (record.type === 'transcript_ready' && user?.notify_lesson_ready === false) return 'lesson summary off'
@@ -161,11 +175,7 @@ function silencedBy(record: NotificationRecord, user: RecipientPrefs | null): st
   if (!Number.isNaN(pausedUntil) && pausedUntil > Date.now()) return 'paused'
 
   const window = QUIET_WINDOWS[String(prefs.quiet)]
-  if (window) {
-    const hour = localHour(typeof prefs.tz === 'string' ? prefs.tz : 'Europe/London')
-    const [start, end] = window
-    if (hour >= start || hour < end) return 'quiet hours'
-  }
+  if (window && inWindow(localHour(tz), window)) return 'quiet hours'
   return null
 }
 
@@ -191,7 +201,12 @@ async function sendPush(record: NotificationRecord): Promise<void> {
     return
   }
 
-  const silenced = silencedBy(record, userRow)
+  // A child's account: a parent follows it (guardians.child_id).
+  const { count: guardianCount } = await supabase
+    .from('guardians')
+    .select('child_id', { count: 'exact', head: true })
+    .eq('child_id', record.user_id)
+  const silenced = silencedBy(record, userRow, (guardianCount ?? 0) > 0)
   if (silenced) {
     console.log(`[send-push] ${record.type} for ${record.user_id} not pushed — ${silenced}`)
     return

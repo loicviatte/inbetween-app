@@ -7,6 +7,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Haptics from 'expo-haptics';
 import { Fonts } from '../theme';
 import { getUser, saveUserPreferences } from '../storage/storage';
+import { supabase } from '../services/supabase/client';
 
 // ─── Notification settings (docs/design/notifications.html) ───────────────────
 // One switch per notification the app really sends a dancer, under the
@@ -42,6 +43,10 @@ const QUIET_HOURS = [
   { key: '22-8', label: '22:00 – 8:00' },
   { key: '23-7', label: '23:00 – 7:00' },
 ];
+
+// A child's account is never pushed at night or for milestones (send-push):
+// the settings say so rather than offering what won't happen.
+const CHILD_QUIET = QUIET_HOURS.filter((o) => o.key !== 'off');
 
 const labelOf = (list, key) => (list.find((o) => o.key === key) || list[0]).label;
 const firstName = (name) => (name || '').trim().split(/\s+/)[0] || '';
@@ -151,6 +156,7 @@ export default function NotificationSettingsScreen({ navigation, route }) {
   const [prefs, setPrefs] = useState(DEFAULT_PREFS);
   const [lessonReady, setLessonReady] = useState(true);
   const [coachName, setCoachName] = useState(route?.params?.coachName || null);
+  const [isChild, setIsChild] = useState(false); // a parent follows this account
 
   useEffect(() => {
     let alive = true;
@@ -158,6 +164,8 @@ export default function NotificationSettingsScreen({ navigation, route }) {
       if (!alive || !u) return;
       setPrefs({ ...DEFAULT_PREFS, ...(u.notification_prefs || {}) });
       setLessonReady(u.notify_lesson_ready ?? true);
+      supabase.from('guardians').select('child_id', { count: 'exact', head: true }).eq('child_id', u.id)
+        .then(({ count }) => { if (alive) setIsChild((count ?? 0) > 0); });
     }).catch(() => {});
     // The coach's name from the Stats cache — no round-trip.
     AsyncStorage.getItem('@cache_profile').then((profile) => {
@@ -274,9 +282,11 @@ export default function NotificationSettingsScreen({ navigation, route }) {
 
           <Section title="Your training" />
           <View style={st.card}>
-            <SwitchRow first title="Focus points mastered" sub="When one of your focus points is cleared"
-              value={prefs.milestones} onChange={(v) => setPref('milestones', v)} />
-            <SwitchRow title="Possible duplicates" sub="When two of your focus points may be the same"
+            {!isChild && (
+              <SwitchRow first title="Focus points mastered" sub="When one of your focus points is cleared"
+                value={prefs.milestones} onChange={(v) => setPref('milestones', v)} />
+            )}
+            <SwitchRow first={isChild} title="Possible duplicates" sub="When two of your focus points may be the same"
               value={prefs.focus_reviews} onChange={(v) => setPref('focus_reviews', v)} />
           </View>
           </>)}
@@ -286,11 +296,20 @@ export default function NotificationSettingsScreen({ navigation, route }) {
             <SegRow first title="Push" sub="On this phone"
               options={[{ key: 'on', label: 'ON' }, { key: 'off', label: 'OFF' }]}
               value={prefs.push} onChange={(v) => setPref('push', v)} />
-            <ValueRow title="Quiet hours" sub="Nothing buzzes between these times"
-              value={labelOf(QUIET_HOURS, prefs.quiet)}
-              onPress={() => pick('Quiet hours', QUIET_HOURS, 'quiet')} />
+            {isChild ? (
+              <ValueRow title="Quiet hours" sub="At least 21:00 – 7:00 under 18"
+                value={prefs.quiet === 'off' ? '21:00 – 7:00' : labelOf(QUIET_HOURS, prefs.quiet)}
+                onPress={() => pick('Quiet hours', CHILD_QUIET, 'quiet')} />
+            ) : (
+              <ValueRow title="Quiet hours" sub="Nothing buzzes between these times"
+                value={labelOf(QUIET_HOURS, prefs.quiet)}
+                onPress={() => pick('Quiet hours', QUIET_HOURS, 'quiet')} />
+            )}
           </View>
-          <Text style={st.note}>Everything still lands in Notifications — these settings only decide what reaches your phone.</Text>
+          <Text style={st.note}>
+            {isChild ? 'Under 18, nothing buzzes at night and nothing is sent to bring you back, like a focus point mastered. ' : ''}
+            Everything still lands in Notifications — these settings only decide what reaches your phone.
+          </Text>
         </ScrollView>
 
         <View style={[st.foot, { paddingBottom: Math.max(insets.bottom, 12) }]}>
