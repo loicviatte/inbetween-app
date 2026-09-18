@@ -14,6 +14,7 @@
 // recording) inside EdgeRuntime.waitUntil so we ack the webhook fast.
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { callAnthropic } from '../_shared/aiLogger.ts'
 import { composeTranscript, identifyCoachSpeaker } from '../_shared/transcript.ts'
 
 declare global {
@@ -180,24 +181,21 @@ async function callClaudeForTranslation(prompt: string, maxTokens: number): Prom
     return null
   }
   try {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
+    const data = await callAnthropic(
+      {
         model: 'claude-haiku-4-5',
         max_tokens: maxTokens,
         messages: [{ role: 'user', content: prompt }],
-      }),
-    })
-    if (!res.ok) {
-      console.warn('[assemblyai-webhook] translate http error:', res.status, await res.text().catch(() => ''))
-      return null
-    }
-    const data = await res.json()
+      },
+      {
+        function_name: 'assemblyai-webhook',
+        context: 'translate',
+        class_input_id: null,
+        user_id: null,
+        // deno-lint-ignore no-explicit-any
+        supabase: supabase as any,
+      },
+    )
     const text = data?.content?.[0]?.text
     return typeof text === 'string' ? text : null
   } catch (err) {
