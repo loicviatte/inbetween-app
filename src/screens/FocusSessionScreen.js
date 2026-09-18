@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback, memo } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -27,7 +27,6 @@ import {
   AudioModule,
   RecordingPresets,
   setAudioModeAsync,
-  createAudioPlayer,
   useAudioRecorder,
 } from 'expo-audio';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -93,7 +92,6 @@ async function transcribeAudio(uri) {
 }
 
 const DURATIONS = [5, 10, 15, 20, 25, 30, 45, 60, 90];
-const TICK_SOUND = require('../../assets/metronome_tick.wav');
 
 const FEELINGS = [
   { emoji: '😤', label: 'Hard' },
@@ -108,20 +106,6 @@ function formatTime(seconds) {
   const s = (seconds % 60).toString().padStart(2, '0');
   return `${m}:${s}`;
 }
-
-// WDSF competition tempos — BPM = bars/min × beats/bar
-const DANCES = [
-  { id: 'chacha',    name: 'Cha Cha',    bpm: 120, beats: 4, category: 'L' }, // 30 bars/min × 4
-  { id: 'samba',     name: 'Samba',      bpm: 100, beats: 2, category: 'L' }, // 50 bars/min × 2
-  { id: 'rumba',     name: 'Rumba',      bpm: 100, beats: 4, category: 'L' }, // 25 bars/min × 4
-  { id: 'paso',      name: 'Paso Doble', bpm: 124, beats: 2, category: 'L' }, // 62 bars/min × 2
-  { id: 'jive',      name: 'Jive',       bpm: 176, beats: 4, category: 'L' }, // 44 bars/min × 4
-  { id: 'waltz',     name: 'Waltz',      bpm: 90,  beats: 3, category: 'S' }, // 30 bars/min × 3
-  { id: 'tango',     name: 'Tango',      bpm: 132, beats: 4, category: 'S' }, // 33 bars/min × 4
-  { id: 'vwaltz',    name: 'V.Waltz',    bpm: 180, beats: 3, category: 'S' }, // 60 bars/min × 3
-  { id: 'foxtrot',   name: 'Foxtrot',    bpm: 120, beats: 4, category: 'S' }, // 30 bars/min × 4
-  { id: 'quickstep', name: 'Quickstep',  bpm: 200, beats: 4, category: 'S' }, // 50 bars/min × 4
-];
 
 // ─── Session Skeleton Bones (renders INSIDE the focus card) ──────────────────
 
@@ -271,236 +255,6 @@ function FocusPager({ focusPoint }) {
     </View>
   );
 }
-
-// ─── Metronome ────────────────────────────────────────────────────────────────
-
-const M_ITEM_H = 38;
-const BPM_VALUES = Array.from({ length: 181 }, (_, i) => 40 + i); // 40–220 step 1
-
-const MetronomeStrip = memo(function MetronomeStrip({ onRunningChange, onBeat, focusDances }) {
-  const defaultBpmIdx = BPM_VALUES.indexOf(120);
-  const [bpmIdx, setBpmIdx]   = useState(defaultBpmIdx);
-  const [danceIdx, setDanceIdx] = useState(0);
-  const [hasScrolledDance, setHasScrolledDance] = useState(false);
-  const [running, setRunning]  = useState(false);
-  const [currentBeat, setCurrentBeat] = useState(0); // 0-based, 0 = downbeat
-
-  // Resolve which dance to pick when BPM matches multiple dances
-  // Priority: dance linked to the focus point > random pick
-  const focusDanceNames = (Array.isArray(focusDances) ? focusDances : []).map(d => (d || '').toLowerCase());
-
-  const bpmRef   = useRef(BPM_VALUES[defaultBpmIdx]);
-  const beatsRef = useRef(DANCES[0].beats); // beats per bar
-  const beatRef  = useRef(0);               // current beat counter
-  const pulseAnim = useRef(new Animated.Value(1)).current;
-  const schedulerRef    = useRef(null);
-  const tickTimeoutsRef = useRef([]);
-  const nextTickAtRef   = useRef(0);
-  const soundPoolRef    = useRef([]);
-  const poolIdxRef      = useRef(0);
-  const danceScrollRef  = useRef(null);
-  const bpmScrollRef    = useRef(null);
-  const bpmScrollIsAuto = useRef(false);
-
-  useEffect(() => { bpmRef.current = BPM_VALUES[bpmIdx]; }, [bpmIdx]);
-
-  useEffect(() => {
-    setAudioModeAsync({ playsInSilentMode: true }).catch(() => {});
-    // 6 players: 0-2 = accent (downbeat), 3-5 = soft (off-beats)
-    soundPoolRef.current = [0, 1, 2, 3, 4, 5].map(() => createAudioPlayer(TICK_SOUND));
-    return () => {
-      stopMetro();
-      soundPoolRef.current.forEach(p => { try { p.remove(); } catch {} });
-      soundPoolRef.current = [];
-    };
-  }, []);
-
-  function playTick(isDownbeat) {
-    const pool = soundPoolRef.current;
-    if (!pool.length) return;
-    // Accent pool: 0-2, soft pool: 3-5
-    const baseIdx = isDownbeat ? 0 : 3;
-    const idx = baseIdx + (poolIdxRef.current % 3);
-    const player = pool[idx];
-    try {
-      player.volume = isDownbeat ? 1.0 : 0.35;
-      player.seekTo(0).catch(() => {});
-      player.play();
-    } catch {}
-    poolIdxRef.current = (poolIdxRef.current + 1) % 3;
-  }
-
-  function fireBeat(beatNum) {
-    const isDownbeat = beatNum === 0;
-    pulseAnim.setValue(isDownbeat ? 1.5 : 1.2);
-    Animated.timing(pulseAnim, { toValue: 1, duration: 180, useNativeDriver: true }).start();
-    setCurrentBeat(beatNum);
-    if (isDownbeat) onBeat?.();
-    playTick(isDownbeat);
-  }
-
-  function startMetro(overrideBpm) {
-    const initialBpm = overrideBpm ?? bpmRef.current;
-    beatRef.current = 0;
-    fireBeat(0);
-    beatRef.current = 1;
-    nextTickAtRef.current = Date.now() + (60000 / initialBpm);
-
-    function scheduler() {
-      const intervalMs = 60000 / bpmRef.current;
-      const now = Date.now();
-      while (nextTickAtRef.current < now + 300) {
-        const delay = Math.max(0, nextTickAtRef.current - now);
-        const capturedBeat = beatRef.current;
-        const id = setTimeout(() => {
-          fireBeat(capturedBeat);
-        }, delay);
-        tickTimeoutsRef.current.push(id);
-        beatRef.current = (beatRef.current + 1) % beatsRef.current;
-        nextTickAtRef.current += intervalMs;
-      }
-      if (tickTimeoutsRef.current.length > 40)
-        tickTimeoutsRef.current = tickTimeoutsRef.current.slice(-20);
-    }
-    schedulerRef.current = setInterval(scheduler, 50);
-    setRunning(true); onRunningChange?.(true);
-  }
-
-  function stopMetro() {
-    if (schedulerRef.current) clearInterval(schedulerRef.current);
-    schedulerRef.current = null;
-    tickTimeoutsRef.current.forEach(id => clearTimeout(id));
-    tickTimeoutsRef.current = [];
-    pulseAnim.setValue(1);
-    beatRef.current = 0;
-    setCurrentBeat(0);
-    setRunning(false); onRunningChange?.(false);
-  }
-
-  function toggleMetro() { running ? stopMetro() : startMetro(); }
-
-  function onDanceScrollEnd(e) {
-    const idx = Math.max(0, Math.min(DANCES.length - 1, Math.round(e.nativeEvent.contentOffset.y / M_ITEM_H)));
-    setDanceIdx(idx);
-    if (!hasScrolledDance) setHasScrolledDance(true);
-    setIsCustomBpm(false);
-    const dance = DANCES[idx];
-    beatsRef.current = dance.beats;
-    beatRef.current  = 0;
-    const newBpmIdx = BPM_VALUES.reduce((best, b, i) =>
-      Math.abs(b - dance.bpm) < Math.abs(BPM_VALUES[best] - dance.bpm) ? i : best, 0);
-    setBpmIdx(newBpmIdx);
-    bpmRef.current = BPM_VALUES[newBpmIdx];
-    bpmScrollRef.current?.scrollTo({ y: newBpmIdx * M_ITEM_H, animated: false });
-    if (running) { stopMetro(); setTimeout(() => startMetro(BPM_VALUES[newBpmIdx]), 50); }
-  }
-
-  const [isCustomBpm, setIsCustomBpm] = useState(false);
-
-  function resolveDanceForBpm(bpm) {
-    const matches = DANCES.map((d, i) => ({ ...d, idx: i })).filter(d => d.bpm === bpm);
-    if (matches.length === 0) return null;
-    if (matches.length === 1) return matches[0];
-    // Multiple dances share this BPM — prefer the one linked to focus point
-    const linked = matches.find(d => focusDanceNames.includes(d.name.toLowerCase()));
-    return linked || matches[Math.floor(Math.random() * matches.length)];
-  }
-
-  function onBpmScrollEnd(e) {
-    const idx = Math.max(0, Math.min(BPM_VALUES.length - 1, Math.round(e.nativeEvent.contentOffset.y / M_ITEM_H)));
-    setBpmIdx(idx);
-    bpmRef.current = BPM_VALUES[idx];
-
-    const matched = resolveDanceForBpm(BPM_VALUES[idx]);
-    if (matched) {
-      setDanceIdx(matched.idx);
-      beatsRef.current = matched.beats;
-      beatRef.current = 0;
-      setHasScrolledDance(true);
-      setIsCustomBpm(false);
-      danceScrollRef.current?.scrollTo({ y: matched.idx * M_ITEM_H, animated: false });
-    } else {
-      setIsCustomBpm(true);
-    }
-
-    if (running) { stopMetro(); setTimeout(() => startMetro(BPM_VALUES[idx]), 50); }
-  }
-
-  const beats = DANCES[danceIdx]?.beats ?? 4;
-
-  return (
-    <View style={m.wrap}>
-      {/* Dance scroll */}
-      <ScrollView
-        ref={danceScrollRef}
-        style={m.col}
-        showsVerticalScrollIndicator={false}
-        snapToInterval={M_ITEM_H}
-        decelerationRate="fast"
-        contentOffset={{ x: 0, y: danceIdx * M_ITEM_H }}
-        onMomentumScrollEnd={onDanceScrollEnd}
-        contentContainerStyle={m.scrollContent}
-      >
-        {DANCES.map((d, i) => {
-          const dist = Math.abs(i - danceIdx);
-          const isCenter = dist === 0;
-          const label = isCenter && isCustomBpm
-            ? 'Custom BPM'
-            : (isCenter && !hasScrolledDance)
-              ? 'Scroll to select'
-              : d.name;
-          const isPlaceholder = isCenter && (isCustomBpm || !hasScrolledDance);
-          return (
-            <View key={d.id} style={m.item}>
-              <Text style={[
-                m.danceText,
-                isCenter && m.itemActive,
-                isPlaceholder && m.itemPlaceholder,
-              ]}>{label}</Text>
-            </View>
-          );
-        })}
-      </ScrollView>
-
-      {/* Separator */}
-      <View style={m.sep} />
-
-      {/* BPM scroll */}
-      <ScrollView
-        ref={bpmScrollRef}
-        style={m.colBpm}
-        showsVerticalScrollIndicator={false}
-        snapToInterval={M_ITEM_H}
-        decelerationRate="fast"
-        contentOffset={{ x: 0, y: bpmIdx * M_ITEM_H }}
-        onMomentumScrollEnd={onBpmScrollEnd}
-        contentContainerStyle={m.scrollContent}
-      >
-        {BPM_VALUES.map((b, i) => {
-          const dist = Math.abs(i - bpmIdx);
-          return (
-            <View key={b} style={m.item}>
-              <Text style={[m.bpmText, dist === 0 && m.itemActive]}>{b}</Text>
-            </View>
-          );
-        })}
-      </ScrollView>
-
-      {/* Beat dots + play */}
-      <View style={m.right}>
-        <TouchableOpacity
-          style={[m.playBtn, running && m.playBtnActive]}
-          onPress={toggleMetro}
-          activeOpacity={0.8}
-        >
-          <Animated.View style={running ? { transform: [{ scale: pulseAnim }] } : undefined}>
-            <Text style={[m.playIcon, running && m.playIconActive]}>{running ? '■' : '▶'}</Text>
-          </Animated.View>
-        </TouchableOpacity>
-      </View>
-    </View>
-  );
-});
 
 // ─── Feeling Slider ───────────────────────────────────────────────────────────
 
@@ -1117,11 +871,6 @@ export default function FocusSessionScreen({ route, navigation }) {
     }).start();
   }
 
-  const [metroOpen, setMetroOpen] = useState(false);
-  const [metroRunning, setMetroRunning] = useState(false);
-  const metroAnim = useRef(new Animated.Value(0)).current;
-  const beatAnim  = useRef(new Animated.Value(0)).current;
-
   const [aiOpen, setAiOpen] = useState(false);
   const aiAnim = useRef(new Animated.Value(0)).current;
   const aiIsAnimatingRef = useRef(false);
@@ -1135,10 +884,6 @@ export default function FocusSessionScreen({ route, navigation }) {
   const [aiTranscribing, setAiTranscribing] = useState(false);
   const aiRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
 
-  function handleBeat() {
-    beatAnim.setValue(1);
-    Animated.timing(beatAnim, { toValue: 0, duration: 200, useNativeDriver: false }).start();
-  }
   const [timeLeft, setTimeLeft] = useState(15 * 60);
   // Partner-view: show the EXACT same in-progress screen as the partner who
   // started it — flip sessionActive on with their timing and mirror the chrono.
@@ -1194,7 +939,6 @@ export default function FocusSessionScreen({ route, navigation }) {
   const sessionCompletedRef = useRef(false);
   const stopHoldAnim = useRef(new Animated.Value(0)).current;
   const stopHoldTimerRef = useRef(null);
-  const { width: screenW } = useWindowDimensions();
   const intervalRef = useRef(null);
   const contentFade = useRef(new Animated.Value(0)).current;
 
@@ -1474,21 +1218,7 @@ export default function FocusSessionScreen({ route, navigation }) {
     clearActiveSession();
   }
 
-  function closeMetro() {
-    if (!metroOpen) return;
-    setMetroOpen(false);
-    Animated.spring(metroAnim, { toValue: 0, useNativeDriver: false, bounciness: 4, speed: 14 }).start();
-  }
-
-  function toggleMetroPanel() {
-    const toValue = metroOpen ? 0 : 1;
-    if (!metroOpen) setAiOpen(false);
-    setMetroOpen(!metroOpen);
-    Animated.spring(metroAnim, { toValue, useNativeDriver: false, bounciness: 4, speed: 14 }).start();
-  }
-
   function toggleAiPanel() {
-    if (!aiOpen) closeMetro();
     const opening = !aiOpen;
     LayoutAnimation.configureNext({
       duration: 250,
@@ -2002,7 +1732,7 @@ I don't have that in your data, but you can send the question to your coach if y
                 <View style={styles.subtitleWrap}>
                   <Text style={styles.focusSubtitle}>{focusPoint.subtitle}</Text>
                   {focusPoint?.context ? (
-                    <TouchableOpacity onPress={() => { closeMetro(); toggleContext(); }} activeOpacity={0.7} style={styles.readMoreBtn}>
+                    <TouchableOpacity onPress={toggleContext} activeOpacity={0.7} style={styles.readMoreBtn}>
                       <Text style={styles.readMoreText}>{contextExpanded ? 'Read less ↑' : 'Read more ↓'}</Text>
                     </TouchableOpacity>
                   ) : null}
@@ -2197,7 +1927,7 @@ I don't have that in your data, but you can send the question to your coach if y
                 </>
               ) : (
                 <View style={{ marginTop: 56 }}>
-                  <DurationPicker value={duration} onChange={(d) => { closeMetro(); setDuration(d); setTimeLeft(d * 60); }} />
+                  <DurationPicker value={duration} onChange={(d) => { setDuration(d); setTimeLeft(d * 60); }} />
                 </View>
               )}
             </View>
@@ -2206,22 +1936,6 @@ I don't have that in your data, but you can send the question to your coach if y
 
         {/* CTA — outside KAV, toujours collé en bas */}
         <View style={styles.ctaWrap}>
-          {!sessionDone && (
-            <Animated.View style={[styles.metroPill, {
-              width: metroAnim.interpolate({ inputRange: [0, 1], outputRange: [48, screenW - Spacing.side * 2] }),
-              borderRadius: metroAnim.interpolate({ inputRange: [0, 1], outputRange: [24, 16] }),
-            }]}>
-              <TouchableOpacity onPress={toggleMetroPanel} activeOpacity={0.8} style={styles.metroPillCircle}>
-                <Animated.Text style={[styles.metroPillIcon, metroRunning && {
-                  color: beatAnim.interpolate({ inputRange: [0, 1], outputRange: ['#FFFFFF', Colors.orange] }),
-                }]}>♩</Animated.Text>
-              </TouchableOpacity>
-              <Animated.View style={[styles.metroPillContent, { opacity: metroAnim }]} pointerEvents={metroOpen ? 'auto' : 'none'}>
-                <MetronomeStrip onRunningChange={setMetroRunning} onBeat={handleBeat} focusDances={focusPoint?.dance} />
-              </Animated.View>
-            </Animated.View>
-          )}
-
           {!sessionActive && !sessionDone && (
             <TouchableOpacity style={styles.startBtn} onPress={startSession} activeOpacity={0.88}>
               <Text style={styles.startBtnText}>START SESSION</Text>
@@ -2578,30 +2292,6 @@ const styles = StyleSheet.create({
   doneCheck: { fontSize: 48 },
   doneTitle: { fontFamily: Fonts.semiBold, fontSize: 20, color: Colors.black },
 
-  metroPill: {
-    backgroundColor: '#1A1A1A',
-    height: 48,
-    overflow: 'hidden',
-    flexDirection: 'row',
-    alignItems: 'center',
-    position: 'relative',
-  },
-  metroPillCircle: {
-    width: 48,
-    height: 48,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-  },
-  metroPillIcon: {
-    fontSize: 20,
-    color: '#FFFFFF',
-  },
-  metroPillContent: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
   ctaWrap: {
     paddingHorizontal: Spacing.side,
     paddingBottom: 8,
@@ -3078,90 +2768,6 @@ const modal = StyleSheet.create({
     flex: 1,
   },
   fpDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.activeLog },
-});
-
-// ─── Metronome styles ─────────────────────────────────────────────────────────
-
-const PILL_H_OPEN = M_ITEM_H * 3 + 20; // 134
-
-const m = StyleSheet.create({
-  wrap: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingRight: 12,
-  },
-  col: {
-    flex: 2,
-    height: M_ITEM_H * 3,
-  },
-  colBpm: {
-    flex: 1,
-    height: M_ITEM_H * 3,
-  },
-  scrollContent: {
-    paddingVertical: M_ITEM_H,
-  },
-  item: {
-    height: M_ITEM_H,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  danceText: {
-    fontFamily: Fonts.medium,
-    fontSize: 13,
-    color: 'rgba(255,255,255,0.4)',
-    letterSpacing: 0.3,
-  },
-  bpmText: {
-    fontFamily: Fonts.extraBold,
-    fontSize: 18,
-    color: 'rgba(255,255,255,0.4)',
-    letterSpacing: 0.5,
-  },
-  itemActive: {
-    color: '#FFFFFF',
-  },
-  itemPlaceholder: {
-    fontSize: 11,
-    color: 'rgba(255,255,255,0.35)',
-    fontStyle: 'italic',
-  },
-  sep: {
-    width: StyleSheet.hairlineWidth,
-    height: M_ITEM_H * 3,
-    backgroundColor: 'rgba(255,255,255,0.15)',
-    alignSelf: 'center',
-    marginHorizontal: 4,
-  },
-  right: {
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingRight: 4,
-    marginLeft: 8,
-    flexShrink: 0,
-  },
-  playBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-  },
-  playBtnActive: {
-    backgroundColor: Colors.orange,
-    shadowColor: Colors.orange,
-    shadowOpacity: 0.6,
-    shadowOffset: { width: 0, height: 3 },
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  playIcon: { fontSize: 13, color: '#FFFFFF' },
-  playIconActive: { color: '#000' },
 });
 
 // ─── Feeling slider styles ────────────────────────────────────────────────────
