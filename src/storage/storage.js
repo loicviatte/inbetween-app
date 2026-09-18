@@ -1,11 +1,55 @@
 import { supabase } from '../services/supabase/client';
 import { categoryFromStyle, categoryFromDances } from '../utils/danceCategory';
 
-export async function getUserId() {
+// The signed-in account. Use this only where the ACCOUNT is what matters —
+// sign-out, push tokens, anything keyed to auth itself.
+export async function getAuthUserId() {
   const { data: { session } } = await supabase.auth.getSession();
   if (!session?.user) throw new Error('Not authenticated');
   return session.user.id;
 }
+
+// Whose training this app is showing. For almost everyone that is themselves.
+// A parent's account holds no training of its own — the dancers are their
+// children — so it resolves to the one they are currently following, and every
+// caller below (focus points, practice logs, readiness, the dashboard) reads
+// the right person without knowing a guardian exists.
+let _subjectId = null;
+let _subjectFor = null;
+
+supabase.auth.onAuthStateChange(() => { _subjectId = null; _subjectFor = null; });
+
+export async function getUserId() {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session?.user) throw new Error('Not authenticated');
+  const authId = session.user.id;
+  // Only a parent account pays for the lookup: the flag is written into the
+  // auth metadata at sign-up, so everyone else short-circuits here.
+  if (session.user.user_metadata?.account_for !== 'child') return authId;
+  if (_subjectFor === authId && _subjectId) return _subjectId;
+  const [{ data: me }, { data: kids }] = await Promise.all([
+    supabase.from('users').select('active_child_id').eq('id', authId).maybeSingle(),
+    supabase.from('guardians').select('child_id').eq('guardian_id', authId).order('created_at'),
+  ]);
+  // The stored choice wins, but only while it is still one of their children —
+  // an unlinked child must never keep the app pointed at a stranger.
+  const linked = (kids || []).map((r) => r.child_id);
+  const chosen = me?.active_child_id && linked.includes(me.active_child_id)
+    ? me.active_child_id
+    : linked[0];
+  // No child yet (a sign-up still creating one): answer self, but don't keep
+  // that answer — the next read should find the child.
+  if (!chosen) return authId;
+  _subjectFor = authId;
+  _subjectId = chosen;
+  return _subjectId;
+}
+
+// Called when the guardian switches child, so the next read resolves again.
+// The version lets a mounted screen notice it now shows someone else.
+let _subjectVersion = 0;
+export function clearSubjectCache() { _subjectId = null; _subjectFor = null; _subjectVersion += 1; }
+export function subjectVersion() { return _subjectVersion; }
 
 // ─── In-memory cache (speeds up stack screens that reuse tab data) ───────────
 const _cache = {};
@@ -39,9 +83,38 @@ export async function getUser() {
   return data;
 }
 
+// The signed-in account's own row. For everyone but a guardian this is the
+// same row getUser() returns; for a guardian it is the parent rather than the
+// dancer, which is what "your account" has to mean on a settings screen.
+export async function getAccountUser() {
+  const authId = await getAuthUserId();
+  const { data } = await supabase.from('users').select('id, name, email, account_for').eq('id', authId).maybeSingle();
+  return data || null;
+}
+
+// Renames the ACCOUNT, never the dancer. A parent editing "your account" must
+// not silently rename their child.
+export async function saveAccountName(name) {
+  const authId = await getAuthUserId();
+  const { error } = await supabase.from('users').update({ name }).eq('id', authId);
+  if (error) throw error;
+}
+
 export async function saveUserProfile({ name, studio_id, dance_style }) {
   const userId = await getUserId();
   await supabase.from('users').update({ name, studio_id, dance_style }).eq('id', userId);
+}
+
+// Student preferences surfaced on Profile > Settings. Partial patch: pass only
+// the keys that changed.
+export async function saveUserPreferences(patch) {
+  const userId = await getUserId();
+  const allowed = ['weekly_goal_minutes', 'notify_practice_reminders', 'notify_lesson_ready', 'notification_prefs'];
+  const body = {};
+  for (const k of allowed) if (patch[k] !== undefined) body[k] = patch[k];
+  if (!Object.keys(body).length) return;
+  const { error } = await supabase.from('users').update(body).eq('id', userId);
+  if (error) throw error;
 }
 
 export async function updateUserSummary(summary) {
@@ -114,6 +187,18 @@ async function _getClassInputs() {
   });
 }
 export const getClassInputs = cached('classInputs', _getClassInputs);
+
+// Minutes each lesson ran, from its recording — { [classInputId]: minutes }.
+// Recordings are the coach's to read, so this goes through lesson_minutes,
+// which returns minutes only, for lessons the caller can already see. Lessons
+// without a recording (logged by hand) are simply absent.
+export async function getLessonMinutes(classInputIds) {
+  const ids = (classInputIds || []).filter(Boolean);
+  if (ids.length === 0) return {};
+  const { data, error } = await supabase.rpc('lesson_minutes', { p_ids: ids });
+  if (error || !data) return {};
+  return Object.fromEntries(data.map((r) => [r.class_input_id, r.minutes]));
+}
 
 export async function respondToAttendance(classInputId, attended) {
   const { data, error } = await supabase.functions.invoke('attendance-response', {

@@ -9,6 +9,7 @@ import {
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Colors, Fonts } from '../theme';
+import { dayLabel } from '../utils/dates';
 
 const ATTENDANCE_TYPES = new Set(['attendance_check', 'group_class_attendance']);
 
@@ -22,7 +23,6 @@ const TYPE_LABELS = {
   focus_point_rejected:   { label: 'Declined', color: '#FF3B30' },
   merge_request:          { label: 'Merge',    color: '#5788E6' },
   merge_request_student:  { label: 'Merge',    color: '#5788E6' },
-  name_match_confirm:     { label: 'Name match', color: '#FF9500' },
   sync_reminder:          { label: 'Sync',      color: Colors.orange },
 };
 
@@ -30,7 +30,7 @@ function formatDate(dateStr) {
   if (!dateStr) return '';
   const d = new Date(dateStr);
   if (Number.isNaN(d.getTime())) return dateStr;
-  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+  return dayLabel(d);
 }
 
 export default function NotificationDetailSheet({ notif, priorAttendance, onClose, onAttendanceChange }) {
@@ -100,7 +100,7 @@ function AttendanceEditView({ notif, priorAttendance, onChange, onClose }) {
     if (hasPrior && priorAttendance === true && newAnswer === false) {
       Alert.alert(
         'Are you sure?',
-        'The focus points your coach assigned from this class will be removed.',
+        'The focus points your coach assigned from this lesson will be removed.',
         [
           { text: 'Cancel', style: 'cancel' },
           { text: 'Remove', style: 'destructive', onPress: () => applyChange(false) },
@@ -114,7 +114,7 @@ function AttendanceEditView({ notif, priorAttendance, onChange, onClose }) {
   return (
     <View>
       <Text style={[s.category, { color: Colors.orange }]}>Attendance</Text>
-      <Text style={s.title}>Were you at {coachName}'s group class?</Text>
+      <Text style={s.title}>Were you at {coachName}'s group lesson?</Text>
       {!!classDate && <Text style={s.date}>{formatDate(classDate)}</Text>}
 
       {hasPrior && (
@@ -206,14 +206,14 @@ const s = StyleSheet.create({
     marginBottom: 18,
   },
   category: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 10,
     letterSpacing: 1.2,
     textTransform: 'uppercase',
     marginBottom: 10,
   },
   title: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 20,
     color: Colors.black,
     letterSpacing: -0.3,
@@ -221,13 +221,13 @@ const s = StyleSheet.create({
     marginBottom: 8,
   },
   date: {
-    fontFamily: Fonts.jakartaSemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 13,
     color: Colors.orange,
     marginBottom: 4,
   },
   body: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 14.5,
     color: '#5C6370',
     lineHeight: 21,
@@ -242,12 +242,12 @@ const s = StyleSheet.create({
     marginBottom: 18,
   },
   priorText: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13.5,
     color: Colors.secondary,
   },
   priorBold: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     color: Colors.black,
   },
   buttons: {
@@ -265,24 +265,24 @@ const s = StyleSheet.create({
     gap: 6,
   },
   currentTag: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     opacity: 0.8,
   },
   btnPrimary: { backgroundColor: Colors.black },
-  btnPrimaryText: { fontFamily: Fonts.jakartaBold, fontSize: 15, color: Colors.white },
+  btnPrimaryText: { fontFamily: Fonts.semiBold, fontSize: 15, color: Colors.white },
   btnSecondary: {
     backgroundColor: Colors.statCardBg,
     borderWidth: 0.5,
     borderColor: Colors.statCardBorder,
   },
-  btnSecondaryText: { fontFamily: Fonts.jakartaBold, fontSize: 15, color: Colors.secondary },
+  btnSecondaryText: { fontFamily: Fonts.semiBold, fontSize: 15, color: Colors.secondary },
   cancelBtn: {
     alignItems: 'center',
     paddingVertical: 12,
     marginTop: 4,
   },
   cancelText: {
-    fontFamily: Fonts.jakartaSemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 13,
     color: Colors.secondary,
   },
@@ -294,7 +294,7 @@ const s = StyleSheet.create({
     marginTop: 12,
   },
   closeText: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 15,
     color: Colors.white,
   },

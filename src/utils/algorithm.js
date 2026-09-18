@@ -1,13 +1,11 @@
 import { supabase } from '../services/supabase/client';
 import { focusMatchesCategory } from './danceCategory';
-import { getLessonReadiness } from '../storage/storage';
+// getUserId is the training subject, not the signed-in account: a parent's
+// account follows their child, so the Train screen has to read the child's
+// focus points and log the child's sessions. A local copy of it used to return
+// the account's own id here, which showed a parent an empty Train screen.
+import { getLessonReadiness, getUserId } from '../storage/storage';
 import { getCoupleReadiness } from '../storage/coupleStorage';
-
-async function getUserId() {
-  const { data: { session } } = await supabase.auth.getSession();
-  if (!session?.user) throw new Error('Not authenticated');
-  return session.user.id;
-}
 
 function ordinal(n) {
   const s = ['th', 'st', 'nd', 'rd'];
@@ -197,6 +195,41 @@ async function fetchSoloFocusPoints(status, category, orderCol) {
 // reconcile drops untrained ones here too. Copy should say "retired".
 export async function getPastFocusPoints(category = null) {
   return fetchSoloFocusPoints('past', category, 'last_mentioned_at');
+}
+
+// Retired group focus points — the Past section of the Group side. A group
+// lesson's focus points move here once the same coach's next group lesson goes
+// live (trigger trg_retire_superseded_group_focus). Focus points of a lesson the
+// student didn't attend are soft-deleted, so they never show. Newest lesson first.
+export async function getPastGroupFocusPoints(category = null) {
+  const userId = await getUserId();
+  const { data, error } = await supabase
+    .from('focus_points')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('group_fp', true)
+    .eq('status', 'past')
+    .eq('is_deleted', false)
+    .eq('is_archived', false)
+    .eq('is_other', false)
+    .is('alias_of', null)
+    .order('created_at', { ascending: false })
+    .limit(40);
+  if (error) throw new Error(`focus_points(group past): ${error.message}`);
+  const points = (data || []).filter((fp) => focusMatchesCategory(fp, category));
+
+  const classOf = (p) => p.source_class_input_id || p.class_input_id || null;
+  const classIds = [...new Set(points.map(classOf).filter(Boolean))];
+  if (classIds.length === 0) return points;
+  const { data: classes } = await supabase
+    .from('class_inputs')
+    .select('id, created_at, teacher_name, dance, lesson_type')
+    .in('id', classIds);
+  const clsById = new Map((classes || []).map((c) => [c.id, c]));
+  const when = (p) => new Date(p.class_inputs?.created_at || p.created_at).getTime();
+  return points
+    .map((p) => ({ ...p, class_inputs: clsById.get(classOf(p)) || null }))
+    .sort((a, b) => when(b) - when(a));
 }
 
 // The student's real active SOLO focus points.
@@ -586,13 +619,13 @@ export async function refreshNudgeMessage() {
     if (weekCount >= 3) {
       nudge = `Strong week — ${weekCount} sessions logged.`;
     } else if (!user?.last_active_date) {
-      nudge = "You haven't logged a session yet. Log your first class to get started.";
+      nudge = "You haven't logged a session yet. Log your first lesson to get started.";
     } else {
       const daysSince = Math.floor(
         (Date.now() - new Date(user.last_active_date).getTime()) / 86400000
       );
       if (daysSince > 5) {
-        nudge = `You haven't logged a session in ${daysSince} days. Log your next class to update your focus.`;
+        nudge = `You haven't logged a session in ${daysSince} days. Log your next lesson to update your focus.`;
       }
     }
     await supabase.from('users').update({ nudge_message: nudge }).eq('id', userId);

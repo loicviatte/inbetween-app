@@ -4,37 +4,40 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
-  ActivityIndicator,
-  Alert,
   Animated,
-  Modal,
-  Pressable,
-  LayoutAnimation,
+  ScrollView,
+  RefreshControl,
   Platform,
-  UIManager,
   PanResponder,
   Dimensions,
+  Easing,
 } from 'react-native';
-import { Image } from 'expo-image';
-import Svg, { Circle } from 'react-native-svg';
+import Svg, { Circle, Path } from 'react-native-svg';
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import TabHeader from '../components/TabHeader';
-import * as Clipboard from 'expo-clipboard';
+import * as Haptics from 'expo-haptics';
+import TabHeader, { useIsParentAccount } from '../components/TabHeader';
+import StyleTitle from '../components/StyleTitle';
+import { useTabBarSpace } from '../components/CustomTabBar';
+import ModeTabs, { COUPLE_BLUE } from '../components/ModeTabs';
+import PullLogo, { usePullRefresh } from '../components/PullLogo';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
-import { Colors, Fonts, Spacing } from '../theme';
+import { Fonts } from '../theme';
 import {
   getUser,
   getTrainingSessionsThisWeek,
   getSessionsThisWeek,
   getFocusTrainedThisWeek,
   getWeekActivity,
-  getRecentClassInputs,
-  getTopFocusPointsWithCounts,
   getTeacherContextForAI,
+  getClassInputs,
+  invalidateCache,
+  subjectVersion,
+  getMyCoach,
+  getMyCoachForCategory,
 } from '../storage/storage';
 import {
   getTrainFocus,
@@ -43,38 +46,17 @@ import {
   getSoloFocusCounts,
 } from '../utils/algorithm';
 import { markFirstScreenReady } from '../utils/firstPaint';
-import { getMyCouple, getCoupleReadiness, mostTrainedMode, getCoupleLock } from '../storage/coupleStorage';
+import { getMyCouple, getCoupleReadiness, getCoupleLock } from '../storage/coupleStorage';
 import { supabase } from '../services/supabase/client';
 import {
   getActiveSession,
-  clearActiveSession,
   subscribeToActiveSession,
   getSessionTimeLeft,
 } from '../storage/activeSession';
-import { generateCoachShareSummary } from '../services/ai/anthropic';
-import LogModal from '../components/LogModal';
 import HomeSkeleton from '../components/HomeSkeleton';
-import MetricGauge from '../components/MetricGauge';
-import BottomSheet from '../components/BottomSheet';
 import { getAllStudentMetrics } from '../utils/studentMetrics';
+import { getStudentDashboard } from '../storage/dashboardStorage';
 
-// Enable LayoutAnimation on Android (no-op on iOS where it's always on).
-if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
-  UIManager.setLayoutAnimationEnabledExperimental(true);
-}
-
-// Accordion swap animation — easeInEaseOut on the layout (position/size) while
-// the inner content cross-fades (opacity on create/delete).
-function animateAccordionSwap() {
-  LayoutAnimation.configureNext({
-    duration: 300,
-    update: { type: LayoutAnimation.Types.easeInEaseOut },
-    create: { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity },
-    delete: { type: LayoutAnimation.Types.easeInEaseOut, property: LayoutAnimation.Properties.opacity },
-  });
-}
-
-const SHARE_LOADING_MSGS = ['Gathering your notes...', 'Writing summary...', 'Almost ready...'];
 const HOME_CACHE_KEY = '@cache_home';
 // Couple card is fetched non-blocking (separate from the solo HOME_CACHE), so it
 // gets its own cache slice — lets the couple focus paint instantly on reopen
@@ -92,6 +74,27 @@ function persistStyleData(cat, d) {
   }
 }
 
+// ─── Train palette (docs/design/train-screen.html) ────────────────────────────
+const PAGE = '#F2F0EB';
+const INK = '#0A0A0A';
+const INK_2 = 'rgba(10,10,10,0.65)';
+const INK_3 = 'rgba(10,10,10,0.34)';
+const LINE = 'rgba(10,10,10,0.12)';
+const GOLD = '#E8B530';
+const GOLD_300 = '#F6D27A';
+const GOLD_INK = '#8A6414';
+const NAVY = '#22314D';
+const SIDE = 20;
+const CARD_GAP = 11;
+// Pull to refresh on a page that doesn't scroll: how far the page must be
+// pulled (after the rubber-band damping) to refresh, and where it rests while
+// the refresh runs.
+const PULL_TRIGGER = 64;
+const PULL_REST = 52;
+const pullDamp = (dy) => Math.min(Math.max(0, dy) * 0.5, 120);
+// How much of the next focus card shows at the right edge, inviting the swipe.
+const CARD_PEEK = 46;
+
 function formatTime(seconds) {
   const s = Math.max(0, Math.floor(seconds));
   const m = Math.floor(s / 60).toString().padStart(2, '0');
@@ -99,22 +102,9 @@ function formatTime(seconds) {
   return `${m}:${sc}`;
 }
 
-function ordinal(n) {
-  if (!n) return '1st';
-  const s = ['th', 'st', 'nd', 'rd'];
-  const v = n % 100;
-  return n + (s[(v - 20) % 10] || s[v] || s[0]);
-}
-
-const DAY_NAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-const FEELING_EMOJI = { Hard: '😤', Struggled: '😰', Okay: '😐', Good: '🙂', Great: '🔥' };
-
-function fmtTime(iso) {
-  const d = new Date(iso);
-  const h = d.getHours(), m = d.getMinutes();
-  const ampm = h >= 12 ? 'PM' : 'AM';
-  return `${h % 12 || 12}:${m.toString().padStart(2, '0')} ${ampm}`;
-}
+const DAY_LETTERS = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 function currentWeekRange() {
   const now = new Date();
@@ -123,38 +113,243 @@ function currentWeekRange() {
   mon.setDate(now.getDate() - dow);
   const sun = new Date(mon);
   sun.setDate(mon.getDate() + 6);
-  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   if (mon.getMonth() === sun.getMonth()) {
-    return `${months[mon.getMonth()]} ${mon.getDate()} – ${sun.getDate()}`;
+    return `${MONTHS[mon.getMonth()]} ${mon.getDate()}–${sun.getDate()}`;
   }
-  return `${months[mon.getMonth()]} ${mon.getDate()} – ${months[sun.getMonth()]} ${sun.getDate()}`;
+  return `${MONTHS[mon.getMonth()]} ${mon.getDate()} – ${MONTHS[sun.getMonth()]} ${sun.getDate()}`;
 }
 
-function CategoryToggle({ category, onPress, disabled }) {
-  const label = category === 'latin' ? 'Latin' : 'Ballroom';
+const firstName = (name) => (name || '').trim().split(/\s+/)[0] || '';
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+// The weekly session goal, from how often the dancer said they practise solo.
+// Accepts both the stored keys ('3_4_per_week') and the onboarding labels
+// ('3 to 4 times a week'). Unknown → no goal, the rail just counts.
+function weeklySessionGoal(freq) {
+  const f = (freq || '').toLowerCase();
+  if (!f) return null;
+  if (f.includes('daily')) return 6;
+  if (/3.{0,4}4/.test(f)) return 4;
+  if (/1.{0,4}2/.test(f)) return 2;
+  if (f.includes('few') || f.includes('month')) return 1;
+  return null;
+}
+
+// "Fri 11 Jul · with Marc · 6 corrections"
+function lessonMeta(lesson) {
+  if (!lesson) return '';
+  const d = new Date(lesson.created_at);
+  const parts = [`${WEEKDAYS[d.getDay()]} ${d.getDate()} ${MONTHS[d.getMonth()]}`];
+  if (lesson.lesson_type === 'group') parts.push('group lesson');
+  else {
+    const teacher = firstName(lesson.teacher_name || lesson._teacher_fallback);
+    if (teacher) parts.push(`with ${teacher}`);
+  }
+  if (lesson.corrections > 0) parts.push(plural(lesson.corrections, 'correction'));
+  return parts.join(' · ');
+}
+
+// ─── This week: one segment per day, gold once a session is done ─────────────
+// The whole rail opens Trend, where each week breaks down in detail.
+function WeekRail({ activity, goal, onPress, accent = GOLD, accentInk = GOLD_INK }) {
+  const today = (new Date().getDay() + 6) % 7;
+  const done = Object.values(activity || {}).reduce((n, d) => n + (d?.sessions?.length ?? 0), 0);
+  const count = goal ? `${done} of ${plural(goal, 'session')}` : plural(done, 'session');
   return (
     <TouchableOpacity
-      style={[s.toggle, disabled && { opacity: 0.4 }]}
+      style={wk.wrap}
       onPress={onPress}
-      activeOpacity={0.75}
-      disabled={disabled}
+      activeOpacity={0.6}
+      accessibilityRole="button"
+      accessibilityLabel={`This week, ${count}. Open your trend`}
     >
-      <Text style={s.toggleLabel}>{label}</Text>
-      <Ionicons name="chevron-down" size={16} color={Colors.black} />
+      <View style={wk.top}>
+        <Text style={wk.title}>This week</Text>
+        <View style={wk.metaRow}>
+          <Text style={wk.meta} numberOfLines={1}>{count} · {currentWeekRange()}</Text>
+          <Ionicons name="chevron-forward" size={11} color={INK_3} />
+        </View>
+      </View>
+      <View style={wk.days}>
+        {DAY_LETTERS.map((letter, i) => {
+          const trained = (activity?.[i]?.sessions?.length ?? 0) > 0;
+          const isToday = i === today;
+          return (
+            <View key={i} style={wk.day}>
+              <View style={[wk.seg, trained ? { backgroundColor: accent } : isToday && wk.segNow]} />
+              <Text style={[wk.letter, isToday && [wk.letterNow, { color: accentInk }]]}>{letter}</Text>
+            </View>
+          );
+        })}
+      </View>
     </TouchableOpacity>
   );
 }
 
-function SwitchBone({ width, height, radius = 8, color = 'rgba(17,12,17,0.06)', style }) {
+// ─── Readiness dial: a 270° arc open at the bottom, with a gold head ──────────
+const DIAL_ARC = 'M 18.18 81.82 A 45 45 0 1 1 81.82 81.82';
+const DIAL_LEN = 212.06;
+const DIAL_SIZE = 132;
+
+function ReadyDial({ percent, color = GOLD }) {
+  const pc = Math.max(0, Math.min(100, Math.round(percent || 0)));
+  const th = ((135 + 2.7 * pc) * Math.PI) / 180;
+  return (
+    <View style={rd.dial}>
+      <Svg width={DIAL_SIZE} height={DIAL_SIZE} viewBox="0 0 100 100">
+        <Path d={DIAL_ARC} fill="none" stroke={LINE} strokeWidth={3} strokeLinecap="round" />
+        {pc > 0 ? (
+          <Path
+            d={DIAL_ARC}
+            fill="none"
+            stroke={color}
+            strokeWidth={3}
+            strokeLinecap="round"
+            strokeDasharray={[DIAL_LEN, DIAL_LEN]}
+            strokeDashoffset={DIAL_LEN * (1 - pc / 100)}
+          />
+        ) : null}
+        <Circle cx={50 + 45 * Math.cos(th)} cy={50 + 45 * Math.sin(th)} r={4.4} fill={color} />
+      </Svg>
+      <View style={rd.center} pointerEvents="none">
+        <Text style={rd.pct} allowFontScaling={false}>
+          {pc}<Text style={rd.pctUnit}>%</Text>
+        </Text>
+        <Text style={rd.ready} allowFontScaling={false}>Ready</Text>
+      </View>
+    </View>
+  );
+}
+
+// ─── A focus point in the carousel ────────────────────────────────────────────
+function FocusSlide({ width, couple, tag, index, count, who, focus, done, target, action }) {
+  const full = target > 0 && done >= target;
+  return (
+    <View style={[fc.card, { width, backgroundColor: couple ? NAVY : INK }]}>
+      <View style={fc.body}>
+        <View style={fc.top}>
+          <Text style={fc.tag}>{tag}</Text>
+          {count > 1 ? (
+            <View style={fc.ix}>
+              <Text style={fc.ixTxt}>Focus <Text style={fc.ixNum}>{index + 1}</Text> of {count}</Text>
+            </View>
+          ) : null}
+          {who ? (
+            <View style={fc.who}>
+              <View style={[fc.av, { borderColor: couple ? NAVY : INK }]}>
+                <Text style={fc.avTxt}>{who[0]}</Text>
+              </View>
+              <LinearGradient
+                colors={[GOLD_300, GOLD]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={[fc.av, fc.avPartner, { borderColor: couple ? NAVY : INK }]}
+              >
+                <Text style={[fc.avTxt, { color: INK }]}>{who[1]}</Text>
+              </LinearGradient>
+            </View>
+          ) : null}
+        </View>
+        <Text style={fc.title} numberOfLines={2}>{focus.name}</Text>
+        {focus.subtitle ? <Text style={fc.desc} numberOfLines={2}>{focus.subtitle}</Text> : null}
+      </View>
+
+      <View style={fc.foot}>
+        {target > 0 ? (
+          <View style={fc.steps}>
+            <View style={fc.ticks}>
+              {Array.from({ length: target }).map((_, i) => (
+                <View key={i} style={[fc.tick, i < done && fc.tickOn]} />
+              ))}
+            </View>
+            <Text style={fc.stepsTxt}>{done} of {target} drilled</Text>
+          </View>
+        ) : null}
+        <SlideAction action={action} full={full} />
+      </View>
+    </View>
+  );
+}
+
+function SlideAction({ action, full }) {
+  if (action.kind === 'progress' || action.kind === 'partner') {
+    const partner = action.kind === 'partner';
+    return (
+      <TouchableOpacity style={fc.live} onPress={action.onPress} activeOpacity={0.8}>
+        <View style={fc.liveLeft}>
+          {partner
+            ? <Ionicons name="lock-closed" size={13} color="rgba(255,255,255,0.85)" />
+            : <View style={fc.liveDot} />}
+          <Text style={fc.liveTxt} numberOfLines={1}>{action.label}</Text>
+        </View>
+        <View style={fc.liveLeft}>
+          <Text style={[fc.liveTimer, action.over && { color: GOLD }]}>{action.timer}</Text>
+          <Ionicons name="chevron-forward" size={14} color="rgba(255,255,255,0.5)" />
+        </View>
+      </TouchableOpacity>
+    );
+  }
+  const idle = action.kind === 'locked' || action.kind === 'starting';
+  const again = full && !idle;
+  const label = action.kind === 'locked' ? 'Finish your session first'
+    : action.kind === 'starting' ? 'Starting…'
+    : again ? 'Drill again' : 'Start now';
+  return (
+    <TouchableOpacity
+      style={[fc.go, again && fc.goAgain, idle && { opacity: 0.5 }]}
+      onPress={action.onPress}
+      disabled={idle}
+      activeOpacity={0.85}
+    >
+      <Text style={[fc.goTxt, again && { color: '#FFFFFF' }]}>{label}</Text>
+      {!idle ? <Ionicons name="arrow-forward" size={16} color={again ? '#FFFFFF' : INK} /> : null}
+    </TouchableOpacity>
+  );
+}
+
+function CarouselDots({ count, active, onDot }) {
+  if (count <= 1) return null;
+  return (
+    <View style={dt.row}>
+      {Array.from({ length: count }).map((_, i) => (
+        <TouchableOpacity
+          key={i}
+          onPress={() => onDot(i)}
+          hitSlop={{ top: 10, bottom: 10, left: 3, right: 3 }}
+          accessibilityLabel={`Focus point ${i + 1}`}
+        >
+          <View style={[dt.dot, i === active && dt.dotOn]} />
+        </TouchableOpacity>
+      ))}
+      <Text style={dt.label}>{active === count - 1 ? 'Last' : 'Swipe'} · {active + 1} of {count}</Text>
+    </View>
+  );
+}
+
+function LessonSummaryCard({ lesson, onPress }) {
+  return (
+    <TouchableOpacity style={ls.card} onPress={onPress} activeOpacity={0.8}>
+      <View style={ls.icon}>
+        <Ionicons name="document-text-outline" size={17} color={GOLD_INK} />
+      </View>
+      <View style={ls.text}>
+        <Text style={ls.title} numberOfLines={1}>Read last lesson summary</Text>
+        <Text style={ls.meta} numberOfLines={1}>{lessonMeta(lesson)}</Text>
+      </View>
+      <Ionicons name="chevron-forward" size={14} color={INK_3} />
+    </TouchableOpacity>
+  );
+}
+
+function Bone({ width, height, radius = 8, color = 'rgba(10,10,10,0.07)', style }) {
   return (
     <View style={[{ width, height, borderRadius: radius, backgroundColor: color }, style]} />
   );
 }
 
-// Skeleton shown while a not-yet-prefetched style loads after a toggle.
-// Mirrors the focus-card region + the "Get ready" dock (the only parts that
-// change with the style); the This-week card above stays put.
-function TrainSwitchSkeleton({ paired }) {
+// Skeleton shown while a not-yet-prefetched style loads after a toggle. Mirrors
+// the style-dependent part (dial + focus cards); the week rail above stays put.
+function TrainSwitchSkeleton({ cardWidth }) {
   const pulse = useRef(new Animated.Value(0.4)).current;
   useEffect(() => {
     const loop = Animated.loop(
@@ -166,406 +361,34 @@ function TrainSwitchSkeleton({ paired }) {
     loop.start();
     return () => { try { loop.stop(); } catch {} };
   }, []);
-  const onDark = 'rgba(255,255,255,0.14)';
+  const onDark = 'rgba(255,255,255,0.12)';
   return (
     <Animated.View style={{ opacity: pulse }}>
-      <View style={[s.scroll, s.scrollContent]}>
-        {/* Primary (expanded) focus card */}
-        <View style={tk.bigCard}>
-          <SwitchBone width={92} height={22} radius={999} color={onDark} />
-          <SwitchBone width="80%" height={28} radius={7} color={onDark} style={{ marginTop: 16 }} />
-          <SwitchBone width="55%" height={28} radius={7} color={onDark} style={{ marginTop: 8 }} />
-          <SwitchBone width="100%" height={50} radius={13} color={onDark} style={{ marginTop: 24 }} />
+      <View style={rd.head}>
+        <Bone width={DIAL_SIZE} height={DIAL_SIZE} radius={DIAL_SIZE / 2} />
+        <View style={[rd.copy, { gap: 10 }]}>
+          <Bone width="90%" height={16} radius={5} />
+          <Bone width="60%" height={16} radius={5} />
+          <Bone width="75%" height={11} radius={4} />
         </View>
-        {/* Secondary (collapsed) card — only when paired */}
-        {paired ? (
-          <View style={tk.smallCard}>
-            <SwitchBone width={26} height={26} radius={13} color={onDark} />
-            <View style={{ flex: 1, marginLeft: 11 }}>
-              <SwitchBone width={70} height={9} radius={3} color={onDark} />
-              <SwitchBone width="58%" height={16} radius={5} color={onDark} style={{ marginTop: 7 }} />
-            </View>
-          </View>
-        ) : null}
       </View>
-      {/* Get ready · next private */}
-      <View style={s.bottomDock}>
-        <View style={tk.readyCard}>
-          <View style={tk.readyTop}>
-            <SwitchBone width={120} height={9} radius={3} />
-            <SwitchBone width={48} height={9} radius={3} />
-          </View>
-          {[0, 1, 2].map((i) => (
-            <View key={i} style={tk.readyRow}>
-              <SwitchBone width={26} height={26} radius={13} />
-              <SwitchBone width={`${58 - i * 8}%`} height={13} radius={4} style={{ marginLeft: 12 }} />
-            </View>
-          ))}
+      <View style={fp.head}>
+        <Bone width={90} height={10} radius={3} />
+      </View>
+      <View style={{ flexDirection: 'row', paddingHorizontal: SIDE, gap: CARD_GAP }}>
+        <View style={[fc.card, { width: cardWidth, height: 292, backgroundColor: INK }]}>
+          <Bone width={96} height={10} radius={3} color={onDark} />
+          <Bone width="80%" height={26} radius={6} color={onDark} style={{ marginTop: 16 }} />
+          <Bone width="100%" height={13} radius={4} color={onDark} style={{ marginTop: 16 }} />
+          <Bone width="100%" height={46} radius={23} color={onDark} style={{ marginTop: 'auto' }} />
         </View>
+        <View style={[fc.card, { width: cardWidth, height: 292, backgroundColor: INK }]} />
       </View>
     </Animated.View>
   );
 }
 
-function CategoryPicker({ visible, current, onSelect, onClose }) {
-  return (
-    <Modal
-      visible={visible}
-      animationType="fade"
-      transparent
-      onRequestClose={onClose}
-    >
-      <Pressable style={s.pickerBackdrop} onPress={onClose}>
-        <SafeAreaView edges={['top']} style={s.pickerAnchor} pointerEvents="box-none">
-          <Pressable style={s.pickerSheet} onPress={(e) => e.stopPropagation()}>
-            {[
-              { key: 'latin', label: 'Latin' },
-              { key: 'ballroom', label: 'Ballroom' },
-            ].map((opt, i) => {
-              const on = opt.key === current;
-              return (
-                <TouchableOpacity
-                  key={opt.key}
-                  style={[s.pickerRow, i > 0 && s.pickerRowDivider]}
-                  activeOpacity={0.65}
-                  onPress={() => onSelect(opt.key)}
-                >
-                  <Text style={s.pickerLabel}>{opt.label}</Text>
-                  {on && (
-                    <Ionicons name="checkmark" size={18} color="#FFFFFF" style={s.pickerCheck} />
-                  )}
-                </TouchableOpacity>
-              );
-            })}
-          </Pressable>
-        </SafeAreaView>
-      </Pressable>
-    </Modal>
-  );
-}
-
-// ─── Condensed "next class readiness" strip ──────────────────────────────────
-// Mini version of the Profile readiness card — one glanceable line so the
-// student sees their progress without leaving the Train tab. Taps through to
-// the full breakdown on Profile.
-function NextClassReadinessCard({ readiness, onPress, pendingValidation }) {
-  const hasData = !!readiness;
-  const percent = hasData ? Math.max(0, Math.min(100, readiness.percent || 0)) : 0;
-  const focusCount = hasData ? (readiness.focuses?.length || 0) : 0;
-  const minutesRemaining = hasData ? readiness.minutesRemaining ?? 0 : 0;
-  const focusLabel = focusCount === 1 ? 'focus point' : 'focus points';
-  return (
-    <TouchableOpacity
-      style={s.readyCard}
-      onPress={onPress}
-      activeOpacity={0.85}
-    >
-      <View style={s.readyHeaderRow}>
-        <Text style={s.readyLabel} numberOfLines={1}>Get ready for next private lesson</Text>
-        <Ionicons name="chevron-forward" size={16} color="rgba(13,13,18,0.35)" />
-      </View>
-      {hasData ? (
-        <View style={s.readyBodyRow}>
-          <Text style={s.readyPct} allowFontScaling={false}>
-            {percent}<Text style={s.readyPctSm}>%</Text>
-          </Text>
-          <View style={s.readyRightCol}>
-            <View style={s.readyTrack}>
-              <View style={[s.readyFill, { width: `${percent}%` }]} />
-            </View>
-            <Text style={s.readyMetaLine} numberOfLines={1}>
-              {percent >= 100
-                ? `All ${focusCount} ${focusLabel} trained`
-                : `${focusCount} ${focusLabel} · ~${minutesRemaining} min to go`}
-            </Text>
-          </View>
-        </View>
-      ) : (
-        <Text style={s.readyEmpty}>
-          {pendingValidation
-            ? 'Your new focus points are being reviewed.'
-            : 'Log your last private to start tracking.'}
-        </Text>
-      )}
-    </TouchableOpacity>
-  );
-}
-
-function WeekHeatmap({ activity, onDayPress }) {
-  const todayIdx = (new Date().getDay() + 6) % 7;
-  const labels = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
-  return (
-    <View style={h.row}>
-      {labels.map((label, i) => {
-        const day = activity[i];
-        const hasSessions = (day?.sessions?.length ?? 0) > 0;
-        const hasClasses = (day?.classes?.length ?? 0) > 0;
-        const hasActivity = hasSessions || hasClasses;
-        const isToday = i === todayIdx;
-        return (
-          <TouchableOpacity
-            key={i}
-            style={[h.cell, isToday && h.cellToday]}
-            onPress={() => hasActivity && onDayPress(i)}
-            activeOpacity={hasActivity ? 0.7 : 1}
-          >
-            <Text style={[h.label, isToday && h.labelToday]}>{label}</Text>
-            <View style={h.dots}>
-              {hasSessions && <View style={[h.dot, h.dotSession]} />}
-              {hasClasses && <View style={[h.dot, h.dotClass]} />}
-            </View>
-          </TouchableOpacity>
-        );
-      })}
-    </View>
-  );
-}
-
-// ─── Couple feature theme ─────────────────────────────────────────────────────
-const CBLUE = '#2E4670';
-const CBLUE_DARK = '#16243C';
-const CBLUE_DOT = '#8FB0DD';
-
-// Small avatar — photo if available, else an initial chip.
-function MiniAvatar({ uri, initial, variant }) {
-  if (uri) return <Image source={{ uri }} style={cc.miniAv} contentFit="cover" />;
-  return (
-    <View style={[cc.miniAv, cc.miniAvFallback, variant === 'couple' && cc.miniAvCouple]}>
-      <Text style={cc.miniAvTxt}>{(initial || '·').toUpperCase()}</Text>
-    </View>
-  );
-}
-
-// Pair stack: my avatar + partner chip, overlapping (couple cards).
-function PairAvatars({ uri, partnerInitial }) {
-  return (
-    <View style={cc.pairStack}>
-      <MiniAvatar uri={uri} initial="" />
-      <View style={[cc.miniAv, cc.miniAvCouple, cc.pairSecond]}>
-        <Text style={cc.miniAvTxt}>{(partnerInitial || 'P').toUpperCase()}</Text>
-      </View>
-    </View>
-  );
-}
-
-// Tappable swipe dots; active dot is elongated. theme: 'solo' | 'couple'.
-function SwipeDots({ count, active, onDot, theme }) {
-  if (!count || count <= 1) return null;
-  return (
-    <View style={cc.dotsRow}>
-      {Array.from({ length: count }).map((_, i) => (
-        <TouchableOpacity key={i} onPress={() => onDot(i)} activeOpacity={0.7}
-          hitSlop={{ top: 10, bottom: 10, left: 4, right: 4 }}>
-          <View style={[cc.dot, i === active && cc.dotOn,
-            i === active && (theme === 'couple' ? cc.dotOnCouple : cc.dotOnSolo)]} />
-        </TouchableOpacity>
-      ))}
-    </View>
-  );
-}
-
-// Concentric readiness ring — outer blue = couple, inner gold = solo.
-// couplePct null → single (solo-only) ring for unpaired users.
-function ConcentricReadiness({ soloPct = 0, couplePct = null, size = 58 }) {
-  const u = size / 68;
-  const ro = 30 * u, ri = 20 * u, sw = 6 * u, ctr = size / 2;
-  const co = 2 * Math.PI * ro, ci = 2 * Math.PI * ri;
-  const clamp = (p) => Math.max(0, Math.min(100, p || 0));
-  const sp = clamp(soloPct), cp = clamp(couplePct);
-  const paired = couplePct != null;
-  return (
-    <Svg width={size} height={size}>
-      {paired ? (
-        <Circle cx={ctr} cy={ctr} r={ro} fill="none" stroke="rgba(10,10,10,0.08)" strokeWidth={sw} />
-      ) : null}
-      {paired ? (
-        <Circle cx={ctr} cy={ctr} r={ro} fill="none" stroke={CBLUE} strokeWidth={sw} strokeLinecap="round"
-          strokeDasharray={co} strokeDashoffset={co * (1 - cp / 100)} transform={`rotate(-90 ${ctr} ${ctr})`} />
-      ) : null}
-      <Circle cx={ctr} cy={ctr} r={ri} fill="none" stroke="rgba(10,10,10,0.07)" strokeWidth={sw} />
-      <Circle cx={ctr} cy={ctr} r={ri} fill="none" stroke={Colors.orange} strokeWidth={sw} strokeLinecap="round"
-        strokeDasharray={ci} strokeDashoffset={ci * (1 - sp / 100)} transform={`rotate(-90 ${ctr} ${ctr})`} />
-    </Svg>
-  );
-}
-
-// A 1-2 word focus title reads best stacked: when it's exactly two words, break
-// the second onto its own line (fills the reserved 2-line title box cleanly).
-function twoWordTitle(name) {
-  const n = (name || '').trim();
-  const parts = n.split(/\s+/);
-  return parts.length === 2 ? parts.join('\n') : n;
-}
-
-// Small progress ring — fills to done/target. Track-only (no arc) when done is 0.
-function ProgRing({ done = 0, target = 0, color = '#E8B530', size = 17, sw = 2.6 }) {
-  const r = (size - sw) / 2, ctr = size / 2, circ = 2 * Math.PI * r;
-  const pct = target > 0 ? Math.max(0, Math.min(1, done / target)) : 0;
-  const has = done > 0;
-  return (
-    <Svg width={size} height={size}>
-      <Circle cx={ctr} cy={ctr} r={r} fill="none" stroke={has ? 'rgba(10,10,10,0.13)' : 'rgba(10,10,10,0.18)'} strokeWidth={sw} />
-      {has ? (
-        <Circle cx={ctr} cy={ctr} r={r} fill="none" stroke={color} strokeWidth={sw} strokeLinecap="round"
-          strokeDasharray={circ} strokeDashoffset={circ * (1 - pct)} transform={`rotate(-90 ${ctr} ${ctr})`} />
-      ) : null}
-    </Svg>
-  );
-}
-
-// Train focus card — solo (gold/black) or couple (blue); primary (expanded) or
-// secondary (collapsed). Carousel via tappable dots. See docs/design.
-function FocusCard({
-  theme, expanded, focus, count, idx, onDot, pill, sub, progress, headerAvatar,
-  onStart, starting, onExpand, sessionActive, onResume, timerNode, emptyText, lockedLabel,
-  locked, compact, onViewPartner, emptyCta,
-}) {
-  const isCouple = theme === 'couple';
-  const empty = !focus;
-
-  // Horizontal swipe to move between focus points (same as tapping the dots).
-  // Latest idx/count/onDot live in a ref so the once-created PanResponder reads
-  // current values; only claim clearly-horizontal drags so taps on the Start
-  // button + dots still pass through.
-  const swipeRef = useRef({ idx, count, onDot, locked });
-  swipeRef.current = { idx, count, onDot, locked };
-  const pan = useRef(
-    PanResponder.create({
-      onMoveShouldSetPanResponder: (_, g) =>
-        !swipeRef.current.locked && Math.abs(g.dx) > 12 && Math.abs(g.dx) > Math.abs(g.dy) * 1.5,
-      onPanResponderRelease: (_, g) => {
-        const s = swipeRef.current;
-        if (s.locked || !s.count || s.count <= 1) return;
-        if (g.dx <= -40) s.onDot(Math.min(s.idx + 1, s.count - 1));
-        else if (g.dx >= 40) s.onDot(Math.max(s.idx - 1, 0));
-      },
-    })
-  ).current;
-
-  // Visible swipe feedback: replay a quick fade + horizontal slide on the info
-  // block whenever the focus index changes (swipe or dot tap).
-  const infoT = useRef(new Animated.Value(1)).current;
-  const prevIdxRef = useRef(idx);
-  useEffect(() => {
-    if (prevIdxRef.current === idx) return;
-    prevIdxRef.current = idx;
-    infoT.setValue(0);
-    Animated.timing(infoT, { toValue: 1, duration: 200, useNativeDriver: true }).start();
-  }, [idx]);
-
-  // The root <View> keeps the SAME element type whether expanded or collapsed,
-  // so its native identity survives the accordion swap and LayoutAnimation can
-  // morph its height + position smoothly. Padding lives on the inner wrappers
-  // (colPad / expPad) so the whole collapsed card stays tappable, and the
-  // expanded ↔ collapsed content cross-fades via the create/delete opacity.
-  return (
-    <View style={[
-      cc.card,
-      { backgroundColor: isCouple ? CBLUE : '#1C1C1E' },
-      expanded
-        ? (isCouple ? cc.cardCoupleExp : cc.cardSoloExp)
-        : (isCouple ? cc.cardCouple : cc.cardSolo),
-    ]}>
-      {isCouple ? (
-        <LinearGradient colors={[CBLUE, CBLUE_DARK]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
-          style={[StyleSheet.absoluteFillObject, { borderRadius: 22 }]} pointerEvents="none" />
-      ) : (
-        // Solo: solid #1C1C1E base + a soft gold glow bottom-right — matches the
-        // production "today's focus" hero card exactly.
-        <LinearGradient colors={['transparent', 'transparent', 'rgba(242,185,64,0.18)']} locations={[0, 0.3, 1]}
-          start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }}
-          style={[StyleSheet.absoluteFillObject, { borderRadius: 22 }]} pointerEvents="none" />
-      )}
-
-      {!expanded ? (
-        <TouchableOpacity activeOpacity={locked ? 1 : 0.85} onPress={onExpand} disabled={locked} style={cc.colPad}>
-          <View style={cc.collapsedRow}>
-            {headerAvatar}
-            <View style={cc.collapsedMid}>
-              <Text style={[cc.labelBare, isCouple ? cc.labelCouple : cc.labelSolo]} numberOfLines={1}>{pill}</Text>
-              <Text style={cc.collapsedTitle} numberOfLines={1}>{empty ? (emptyText || '—') : focus.name}</Text>
-            </View>
-            <View style={cc.expandBtn}>
-              <Ionicons name="chevron-expand" size={18} color="#fff" />
-            </View>
-          </View>
-        </TouchableOpacity>
-      ) : (
-        <View style={[cc.expPad, compact && cc.expPadSmall]} {...pan.panHandlers}>
-          <View style={cc.expTopRow}>
-            <View style={cc.expTopLeft}>
-              <View style={[cc.pill, isCouple ? cc.pillCouple : cc.pillSolo]}>
-                {!isCouple ? <View style={cc.pillDot} /> : null}
-                <Text style={cc.pillTxt}>{pill}</Text>
-              </View>
-              {progress ? <Text style={cc.progressTxt}>{progress}<Text style={cc.progressUnit}> trained</Text></Text> : null}
-            </View>
-            {headerAvatar}
-          </View>
-          {empty ? (
-            <View>
-              <Text style={cc.emptyTxt}>{emptyText}</Text>
-              {emptyCta ? (
-                <TouchableOpacity
-                  onPress={emptyCta.onPress}
-                  activeOpacity={0.7}
-                  style={cc.emptyCtaBtn}
-                >
-                  <Text style={cc.emptyCtaTxt}>{emptyCta.label}</Text>
-                  <Ionicons name="chevron-forward" size={14} color="#fff" />
-                </TouchableOpacity>
-              ) : null}
-            </View>
-          ) : (
-            <View>
-              <Animated.View style={{ opacity: infoT, transform: [{ translateX: infoT.interpolate({ inputRange: [0, 1], outputRange: [14, 0] }) }] }}>
-                <Text
-                  style={[cc.expTitle, compact && cc.expTitleSmall]}
-                  numberOfLines={compact ? 1 : 2}
-                  adjustsFontSizeToFit={compact}
-                  minimumFontScale={0.5}
-                >{compact ? (focus.name || '').trim() : twoWordTitle(focus.name)}</Text>
-                <View style={[cc.expBodyBox, compact && cc.expBodyBoxSmall]}>
-                  {!!focus.subtitle && <Text style={cc.expDesc} numberOfLines={2}>{focus.subtitle}</Text>}
-                </View>
-              </Animated.View>
-              <View style={[cc.expNavRow, compact && cc.expNavRowSmall]}>
-                <SwipeDots count={count} active={idx} onDot={locked ? () => {} : onDot} theme={theme} />
-                {!locked && count > 1 && idx < count - 1 ? <Text style={cc.swipeHint}>SWIPE ›</Text> : null}
-              </View>
-              {lockedLabel ? (
-                <TouchableOpacity style={cc.lockBanner} onPress={onViewPartner} activeOpacity={0.8} disabled={!onViewPartner}>
-                  <Ionicons name="lock-closed" size={14} color="rgba(255,255,255,0.85)" />
-                  <Text style={[cc.lockTxt, { flex: 1 }]} numberOfLines={1}>{lockedLabel}</Text>
-                  {onViewPartner ? <Ionicons name="chevron-forward" size={15} color="rgba(255,255,255,0.6)" /> : null}
-                </TouchableOpacity>
-              ) : sessionActive ? (
-                <TouchableOpacity style={cc.inProgBtn} onPress={onResume} activeOpacity={0.8}>
-                  <View style={cc.inProgLeft}><View style={cc.inProgDot} /><Text style={cc.inProgTxt}>In Progress</Text></View>
-                  {timerNode}
-                </TouchableOpacity>
-              ) : (
-                <TouchableOpacity style={[cc.startBtnSolo, (starting || locked) && { opacity: 0.5 }]}
-                  onPress={onStart} disabled={starting || locked} activeOpacity={0.88}>
-                  <Text style={cc.startTxt}>{starting ? 'Starting…' : locked ? 'Finish current session first' : 'Start Now'}</Text>
-                  {!starting && !locked ? <Text style={cc.startArrow}>→</Text> : null}
-                </TouchableOpacity>
-              )}
-            </View>
-          )}
-        </View>
-      )}
-    </View>
-  );
-}
-
 export default function HomeScreen({ navigation }) {
-  // Computed per-render (not a module const) so it survives Fast Refresh and
-  // reacts to the actual window — drives the compact Train layout on short phones.
-  // < 890 covers the standard iPhones (SE 667, mini 812, 13/14/15 + Pro 844-852)
-  // whose Train layout overflows; the larger 11/XR (896) and Plus/Max (926+)
-  // have room and keep the full-size layout.
-  const SMALL_SCREEN = Dimensions.get('window').height < 890;
   // Pre-mount sibling tabs (LOG + PROFILE) shortly after TRAIN settles, so
   // a tap on either feels instant instead of paying parse + first-fetch
   // cost. Idempotent: subsequent calls are no-ops once the screen renders.
@@ -589,7 +412,6 @@ export default function HomeScreen({ navigation }) {
   const [slot3, setSlot3] = useState(null);
   const [sessionCount, setSessionCount] = useState(0);
   const [slot2Count, setSlot2Count] = useState(0);
-  const [comingUpModal, setComingUpModal] = useState(false);
   const [starting, setStarting] = useState(false);
   const [activeSession, setActiveSessionState] = useState(null);
   const [countdown, setCountdown] = useState(0);
@@ -607,61 +429,117 @@ export default function HomeScreen({ navigation }) {
   const [soloCounts, setSoloCounts] = useState({ active: 0, past: 0 });
   const [metrics, setMetrics] = useState({ progression: 0, retention: 100, global: 0 });
   const [showFilter, setShowFilter] = useState(false);
+  const isParent = useIsParentAccount();
+  // Train doesn't scroll: it keeps clear of the floating tab bar.
+  const tabBarSpace = useTabBarSpace();
   const [category, setCategory] = useState(null); // global: 'latin' | 'ballroom' | null
+
+  // The dancer's coach for the style on screen: undefined until read, null when
+  // there is none, else the coach ({ pending } while the request waits). With
+  // nothing to train, it decides Train's first steps: a studio, then a coach.
+  const [coachLink, setCoachLink] = useState(undefined);
+  useFocusEffect(useCallback(() => {
+    let alive = true;
+    (category ? getMyCoachForCategory(category) : getMyCoach())
+      .then((c) => { if (alive) setCoachLink(c || null); })
+      .catch(() => { if (alive) setCoachLink(undefined); });
+    return () => { alive = false; };
+  }, [category]));
   const [categorySwitching, setCategorySwitching] = useState(false);
   // ── Couple feature ──
   const [couple, setCouple] = useState(null);
   const [coupleSlots, setCoupleSlots] = useState({ slot1: null, slot2: null, slot3: null });
   const [coupleReadiness, setCoupleReadiness] = useState(null);
-  const [primaryMode, setPrimaryMode] = useState('solo'); // which Train card is large
-  // Readiness card shows a LAGGED primary (rdlPrimary) so a swap can SLIDE the
-  // old content out one side + fade, then slide the new in from the other side —
-  // independent of the top cards, which swap immediately. Only user swaps slide
-  // (load syncs silently). couple enters from the right, solo from the left.
-  const [rdlPrimary, setRdlPrimary] = useState('solo');
-  const rdlSlide = useRef(new Animated.Value(0)).current; // px horizontal offset; 0 = settled
-  const slideDirRef = useRef(-1);
-  const userSwapRef = useRef(false);
-  const swapPrimary = (target) => {
-    userSwapRef.current = true;
-    slideDirRef.current = target === 'couple' ? -1 : 1;
-    animateAccordionSwap();
-    setPrimaryMode(target);
-  };
-  useEffect(() => {
-    if (rdlPrimary === primaryMode) return;
-    if (!userSwapRef.current) { setRdlPrimary(primaryMode); return; }
-    userSwapRef.current = false;
-    const out = slideDirRef.current * 90;
-    Animated.timing(rdlSlide, { toValue: out, duration: 150, useNativeDriver: true }).start(() => {
-      setRdlPrimary(primaryMode);
-      rdlSlide.setValue(-out);
-      Animated.timing(rdlSlide, { toValue: 0, duration: 220, useNativeDriver: true }).start();
-    });
-  }, [primaryMode, rdlPrimary, rdlSlide]);
+  // Solo | Couple tab. Solo comes first and is the default; a running session
+  // or a side with nothing to train moves it (effects below).
+  const [mode, setMode] = useState('solo');
   const [soloIdx, setSoloIdx] = useState(0);
   const [coupleIdx, setCoupleIdx] = useState(0);
   const [coupleLock, setCoupleLock] = useState(null);
   const [myUserId, setMyUserId] = useState(null);
   const [lockRemaining, setLockRemaining] = useState(0);
-  const [pickerVisible, setPickerVisible] = useState(false);
-  const [dayModal, setDayModal] = useState(null);
-  const [logModalVisible, setLogModalVisible] = useState(false);
-  const [photoUri, setPhotoUri] = useState(null);
-  const [shareState, setShareState] = useState('default');
-  const [shareLoadingMsg, setShareLoadingMsg] = useState(SHARE_LOADING_MSGS[0]);
-  const shareMsgRef = useRef(null);
+  // Trend bundle for "This week", prefetched per style so the tap opens at once.
+  const trendRef = useRef({ cat: undefined, data: null });
+  // Latest reviewed lesson on each side, for "Read last lesson summary".
+  const [lessons, setLessons] = useState({ solo: null, couple: null });
+  const [refreshing, setRefreshing] = useState(false);
+  // Train fits on the screen on most phones: then the page is fixed (nothing
+  // to scroll up to) and only a pull down does something — it refreshes. When
+  // the content is taller than the screen (small phones) it scrolls normally,
+  // with the system pull to refresh.
+  const [viewportH, setViewportH] = useState(0);
+  const [contentH, setContentH] = useState(0);
+  const overflow = viewportH > 0 && contentH > viewportH + 1;
+  const pullY = useRef(new Animated.Value(0)).current;
+  const pullLogoRef = useRef(null);
+  // When the page does scroll (small phones), the pull is read off the scroll.
+  const pageScrollRef = useRef(null);
+  const pagePull = usePullRefresh({
+    refreshing,
+    onRefresh: () => handleRefresh(),
+    scrollToTop: () => pageScrollRef.current?.scrollTo({ y: 0, animated: true }),
+    logoRef: pullLogoRef,
+  });
+  const pullRef = useRef({ enabled: false, busy: false, armed: false, refresh: null, logo: pullLogoRef });
+  pullRef.current.enabled = !overflow;
+  const pullResponder = useRef(PanResponder.create({
+    // Capture: a pull that starts on a card or a button is still a pull.
+    onMoveShouldSetPanResponderCapture: (_, g) => {
+      const p = pullRef.current;
+      return p.enabled && !p.busy && g.dy > 10 && g.dy > Math.abs(g.dx) * 1.5;
+    },
+    onPanResponderMove: (_, g) => {
+      const y = pullDamp(g.dy);
+      pullY.setValue(y);
+      const p = pullRef.current;
+      p.logo.current?.setProgress(y / PULL_TRIGGER);  // the mark draws itself as the page comes down
+      if (!p.armed && y >= PULL_TRIGGER) {
+        p.armed = true;
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+      } else if (p.armed && y < PULL_TRIGGER) {
+        p.armed = false;
+      }
+    },
+    onPanResponderRelease: (_, g) => {
+      const p = pullRef.current;
+      p.armed = false;
+      if (pullDamp(g.dy) < PULL_TRIGGER) {
+        Animated.spring(pullY, { toValue: 0, useNativeDriver: true, bounciness: 0, speed: 18 })
+          .start(() => p.logo.current?.setProgress(0));
+        return;
+      }
+      p.busy = true;
+      Animated.spring(pullY, { toValue: PULL_REST, useNativeDriver: true, bounciness: 0, speed: 18 }).start();
+      Promise.resolve(p.refresh?.()).finally(() => {
+        Animated.timing(pullY, { toValue: 0, duration: 220, useNativeDriver: true }).start(() => {
+          p.busy = false;
+          p.logo.current?.setProgress(0);
+        });
+      });
+    },
+    onPanResponderTerminate: () => {
+      const p = pullRef.current;
+      p.armed = false;
+      Animated.spring(pullY, { toValue: 0, useNativeDriver: true, bounciness: 0, speed: 18 })
+        .start(() => p.logo.current?.setProgress(0));
+    },
+    onPanResponderTerminationRequest: () => false,
+  })).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
+  const carouselRef = useRef(null);
+  const carouselIdxRef = useRef(0);
   const [isLoading, setIsLoading] = useState(true);
   // True once the first load cycle has resolved the focus slots. Until then, an
   // empty focus area means "still loading" (show skeleton), not "no focus points"
-  // (show the empty card) — avoids the misleading "log your next class" flash.
+  // (show the empty state) — avoids the misleading "log your next class" flash.
   const [initialLoadDone, setInitialLoadDone] = useState(false);
   const hasLoadedRef = useRef(false);
   // Throttle background refreshes: if the user pops back to TRAIN within
   // FRESH_TTL ms of the last successful load, skip the network round-trip.
   const FRESH_TTL = 60000; // 60s
   const lastLoadRef = useRef(0);
+  // A parent who switched child: whatever this screen holds is the other child's.
+  const subjectRef = useRef(subjectVersion());
   // Per-style data cache so the Latin/Ballroom toggle is instant. Keyed by
   // category ('latin' | 'ballroom'); each entry is a full bundle of the slots,
   // readiness, couple data and session counts for that style. We snapshot the
@@ -708,14 +586,38 @@ export default function HomeScreen({ navigation }) {
     setSlot2(d.slot2);
     setSlot3(d.slot3);
     setReadiness(d.readiness);
-    setSoloIdx(0);
-    setCoupleIdx(0);
     if (hasCouple) {
       setCoupleSlots(d.coupleSlots || { slot1: null, slot2: null, slot3: null });
       setCoupleReadiness(d.coupleReadiness ?? null);
     }
     setSessionCount(d.sessionCount || 0);
     setSlot2Count(d.slot2Count || 0);
+  }
+
+  // The newest reviewed lesson on each side. Reuses getClassInputs (cached), the
+  // same list ClassDetail opens from, so the summary opens instantly.
+  async function loadLessons(coupleId) {
+    const list = await getClassInputs();
+    const reviewed = (c) => c.status === 'scored' && !c.admin_rejected_at;
+    const solo = list.find((c) => reviewed(c) && !c.couple_id) || null;
+    const coupleLesson = coupleId ? (list.find((c) => reviewed(c) && c.couple_id === coupleId) || null) : null;
+    let coupleCorrections = 0;
+    if (coupleLesson) {
+      const { count } = await supabase
+        .from('couple_focus_points')
+        .select('id', { count: 'exact', head: true })
+        .eq('class_input_id', coupleLesson.id)
+        .eq('is_deleted', false)
+        .eq('is_other', false);
+      coupleCorrections = count || 0;
+    }
+    setLessons({
+      solo: solo && {
+        ...solo,
+        corrections: (solo.focus_points || []).filter((fp) => !fp.is_other && !fp.is_deleted).length,
+      },
+      couple: coupleLesson && { ...coupleLesson, corrections: coupleCorrections },
+    });
   }
 
   async function load(catOverride) {
@@ -725,7 +627,7 @@ export default function HomeScreen({ navigation }) {
     // The Latin/Ballroom toggle is GLOBAL: one style applies to both the solo
     // and couple cards. It only appears when the union of what the dancer does
     // solo AND what the couple does spans BOTH styles — otherwise there's
-    // nothing to toggle. A card is later hidden if its owner doesn't do the
+    // nothing to toggle. A side is later hidden if its owner doesn't do the
     // selected style (handled in render). Couple is fetched up-front (parallel
     // with the user) because the toggle's default depends on it.
     const [u, coupleV, pendingCls] = await Promise.all([
@@ -759,16 +661,13 @@ export default function HomeScreen({ navigation }) {
     // Supabase fetches that produce the first paint.
     setTimeout(() => { getTeacherContextForAI().catch(() => {}); }, 2000);
 
-    // ─── First paint blocks ONLY on the hero focus (the get_train_focus bundle)
-    // + the local photo. The week stats + metrics aren't needed for the hero, so
-    // they fill in just after (below) instead of adding ~4 serial pooler
-    // round-trips to the cold-start critical path.
+    // ─── First paint blocks ONLY on the hero focus (the get_train_focus bundle).
+    // The week stats, metrics and last lessons aren't needed for it, so they
+    // fill in just after (below) instead of adding round-trips to the
+    // cold-start critical path.
     setMyUserId(u?.id || null);
     const coupleId = coupleV?.coupleId || null;
-    const [catData, savedPhoto] = await Promise.all([
-      fetchCategoryData(cat),
-      AsyncStorage.getItem('@profile_photo'),
-    ]);
+    const catData = await fetchCategoryData(cat);
     setUser(u);
     setCouple(coupleV);
     // A transient failure returns { error:true } with null slots — DON'T apply it,
@@ -778,27 +677,28 @@ export default function HomeScreen({ navigation }) {
       applyCategoryData(catData, !!coupleId);
       persistStyleData(cat, catData);
     }
-    setPhotoUri(savedPhoto || null);
     lastLoadRef.current = Date.now();
+    loadLessons(coupleId).catch(() => {});
+    setTimeout(() => {
+      getStudentDashboard(cat)
+        .then((d) => { if (d) trendRef.current = { cat, data: d }; })
+        .catch(() => {});
+    }, 1500);
 
-    // ─── Couple lock + primary card (category-independent) ──
+    // ─── Couple lock (category-independent) ──
     if (coupleId) {
       getCoupleLock(coupleId).then(setCoupleLock).catch(() => setCoupleLock(null));
-      mostTrainedMode(coupleId).then((primary) => {
-        setPrimaryMode(primary);
-        // Cache the couple slice for instant paint on reopen — only when there's
-        // a focus to show (don't poison the next launch with an empty couple).
-        if (catData.coupleSlots?.slot1) {
-          AsyncStorage.setItem(COUPLE_CACHE_KEY, JSON.stringify({
-            couple: coupleV, coupleSlots: catData.coupleSlots,
-            coupleReadiness: catData.coupleReadiness ?? null, primaryMode: primary, category: cat,
-          })).catch(() => {});
-        }
-      }).catch(() => setPrimaryMode('solo'));
+      // Cache the couple slice for instant paint on reopen — only when there's
+      // a focus to show (don't poison the next launch with an empty couple).
+      if (catData.coupleSlots?.slot1) {
+        AsyncStorage.setItem(COUPLE_CACHE_KEY, JSON.stringify({
+          couple: coupleV, coupleSlots: catData.coupleSlots,
+          coupleReadiness: catData.coupleReadiness ?? null, category: cat,
+        })).catch(() => {});
+      }
     } else {
       setCoupleSlots({ slot1: null, slot2: null, slot3: null });
       setCoupleReadiness(null);
-      setPrimaryMode('solo');
       setCoupleLock(null);
       AsyncStorage.removeItem(COUPLE_CACHE_KEY).catch(() => {}); // unpaired → drop stale couple
     }
@@ -839,9 +739,9 @@ export default function HomeScreen({ navigation }) {
   // common back-and-forth toggle is instant (cache hit → swap now, refresh
   // quietly). Only an un-prefetched style shows the switch skeleton.
   async function handleSelectCategory(next) {
-    setPickerVisible(false);
     if (next === category) return;
     AsyncStorage.setItem(CATEGORY_STORAGE_KEY, next).catch(() => {});
+    getSoloFocusCounts(next).then(setSoloCounts).catch(() => {});
 
     const prev = category;
     const hasCouple = !!(couple?.coupleId);
@@ -853,7 +753,7 @@ export default function HomeScreen({ navigation }) {
       };
     }
 
-    setCategory(next); // optimistic — toggle label + card visibility flip now
+    setCategory(next); // optimistic — title + side visibility flip now
     const seq = ++switchSeqRef.current;
 
     const cached = categoryCacheRef.current[next];
@@ -914,7 +814,11 @@ export default function HomeScreen({ navigation }) {
   }, [showFilter, isLoading, category, couple?.coupleId]);
 
   useFocusEffect(useCallback(() => {
-    setShareState('default');
+    if (subjectRef.current !== subjectVersion()) {
+      subjectRef.current = subjectVersion();
+      lastLoadRef.current = 0;
+      categoryCacheRef.current = {};
+    }
     const isFirst = !hasLoadedRef.current;
     if (isFirst) setIsLoading(true);
     const reveal = () => {
@@ -978,7 +882,6 @@ export default function HomeScreen({ navigation }) {
             if (cc.couple) setCouple(cc.couple);
             if (cc.coupleSlots) setCoupleSlots(cc.coupleSlots);
             setCoupleReadiness(cc.coupleReadiness ?? null);
-            if (cc.primaryMode) setPrimaryMode(cc.primaryMode);
           }
         } catch {}
       }
@@ -989,6 +892,11 @@ export default function HomeScreen({ navigation }) {
         : (Date.now() - lastLoadRef.current < FRESH_TTL);
       if (!fresh) {
         try { await load(); } catch {}
+      } else if (isFirst) {
+        // A fresh cache skips load(), but the last lessons aren't cached.
+        getMyCouple()
+          .then((cv) => loadLessons(cv?.coupleId || null))
+          .catch(() => {});
       }
       hasLoadedRef.current = true;
       setIsLoading(false);
@@ -1028,34 +936,47 @@ export default function HomeScreen({ navigation }) {
     };
   }, []));
 
-  async function handleShare() {
-    if (shareState === 'loading') return;
-    setShareState('loading');
-    setShareLoadingMsg(SHARE_LOADING_MSGS[0]);
-    let msgIdx = 0;
-    shareMsgRef.current = setInterval(() => {
-      msgIdx = (msgIdx + 1) % SHARE_LOADING_MSGS.length;
-      setShareLoadingMsg(SHARE_LOADING_MSGS[msgIdx]);
-    }, 1500);
-    try {
-      const [recentInputs, topFocusPoints] = await Promise.all([
-        getRecentClassInputs(3),
-        getTopFocusPointsWithCounts(3),
-      ]);
-      const summary = await generateCoachShareSummary({
-        recentInputs,
-        topFocusPoints,
-        totalFocusWorked: user?.total_focus_worked || 0,
-        lastActiveDate: user?.last_active_date || null,
-      });
-      clearInterval(shareMsgRef.current);
-      await Clipboard.setStringAsync(summary);
-      setShareState('success');
-    } catch {
-      clearInterval(shareMsgRef.current);
-      setShareState('default');
-      Alert.alert('Something went wrong', 'Try again.');
-    }
+  // Pull to refresh: everything Train shows is refetched — including the
+  // lessons list and the Trend bundle, which otherwise ride their caches.
+  async function handleRefresh() {
+    setRefreshing(true);
+    invalidateCache('classInputs');
+    trendRef.current = { cat: undefined, data: null };
+    try { await load(); } catch {}
+    setRefreshing(false);
+  }
+  pullRef.current.refresh = handleRefresh;
+
+  // The Profile dashboard bundle behind Trend and Readiness, for this style.
+  async function dashboardBundle() {
+    const cat = category;
+    if (trendRef.current.cat === cat && trendRef.current.data) return trendRef.current.data;
+    const data = await getStudentDashboard(cat).catch(() => null);
+    if (data) trendRef.current = { cat, data };
+    return data;
+  }
+
+  async function openTrend() {
+    const data = await dashboardBundle();
+    if (!data) return;
+    navigation.navigate('StatsDetail', {
+      kind: 'trend',
+      data,
+      scope: `${styleName}${paired ? ' · Solo' : ''}`,
+    });
+  }
+
+  // Opens on the side on screen, with the very readiness the dial shows, so the
+  // detail can't disagree with it.
+  async function openReadiness() {
+    const data = await dashboardBundle();
+    if (!data) return;
+    navigation.navigate('StatsDetail', {
+      kind: 'readiness',
+      data: { ...data, readiness: sideReadiness },
+      scope: `${styleName}${paired ? (isCouple ? ' · Couple' : ' · Solo') : ''}`,
+      coupleId: isCouple ? couple?.coupleId : undefined,
+    });
   }
 
   async function handleStartSession(focusPoint, rank, count) {
@@ -1100,41 +1021,89 @@ export default function HomeScreen({ navigation }) {
   }
 
   const isSessionActive = !!activeSession;
-  // Which card is actually training — the chrono + lock must land on the right
-  // one. activeSession carries `couple` (set by FocusSessionScreen on start).
+  // Which side is actually training — the chrono + lock must land on the right
+  // card. activeSession carries `couple` (set by FocusSessionScreen on start).
   const coupleSessionActive = isSessionActive && activeSession.couple === true;
   const soloSessionActive = isSessionActive && !activeSession.couple;
   const paired = !!couple;
 
-  // Global Latin/Ballroom filter. A card is shown only if its owner actually
-  // does the selected style — so picking Ballroom hides the solo card for a
+  // Global Latin/Ballroom filter. A side is shown only if its owner actually
+  // does the selected style — so picking Ballroom hides the solo side for a
   // Latin-only dancer whose couple does Ballroom (and vice-versa). When there's
   // no active filter (category null), everything shows as before.
   const soloDoesLatin = (user?.dance_style || '').includes('Latin');
   const soloDoesBallroom = (user?.dance_style || '').includes('Ballroom');
   const soloInStyle = !category || (category === 'latin' ? soloDoesLatin : soloDoesBallroom);
   const coupleInStyle = !category || (category === 'latin' ? !!couple?.doesLatin : !!couple?.doesBallroom);
-  // Couple lock — live mirror: when the partner holds the lock, the couple card
-  // shows their training EXACTLY like training it yourself (primary + "In
-  // Progress" pill + both cards locked).
+  // Couple lock — live mirror: when the partner holds the lock, the couple side
+  // shows their training EXACTLY like training it yourself (tab forced + "is
+  // training" on the card + every Start locked).
   const partnerLock = (coupleLock && myUserId && coupleLock.lockedByUserId !== myUserId) ? coupleLock : null;
   const coupleInProgress = coupleSessionActive || !!partnerLock;
   const anyInProgress = isSessionActive || !!partnerLock;
-  // Auto-expand rule: when both cards are present for the current style but one
-  // side (solo / couple) has no focus points in progress, force the side WITH
-  // focuses to be primary/expanded — overrides the saved swap state. An active /
-  // in-progress session still wins (handled by soloSessionActive/coupleInProgress).
   const soloHasFocus = !!slot1;
   const coupleHasFocus = !!(coupleSlots && coupleSlots.slot1);
-  const autoExpand = (paired && !soloSessionActive && !coupleInProgress)
-    ? (!soloHasFocus && coupleHasFocus ? 'couple'
-      : (!coupleHasFocus && soloHasFocus ? 'solo' : null))
-    : null;
-  // The card that's actually training stays visible regardless of the style
-  // filter (can't hide a running session behind a filter); the idle card still
+  // The side that's actually training stays visible regardless of the style
+  // filter (can't hide a running session behind a filter); the idle side still
   // follows the filter.
   const soloVisible = soloInStyle || soloSessionActive;
   const coupleVisible = paired && (coupleInStyle || coupleInProgress);
+  const showTabs = soloVisible && coupleVisible;
+  const viewMode = showTabs ? mode : coupleVisible ? 'couple' : 'solo';
+
+  // Solo ↔ Couple slide. The tabs answer the tap at once; everything below
+  // them slides out towards the side being left, the other side's content is
+  // swapped in (shownMode lags viewMode by the exit) and slides in from the
+  // opposite edge. Only a tap slides — a mode set by a session or by the data
+  // just swaps.
+  const [shownMode, setShownMode] = useState(viewMode);
+  const modeSlideX = useRef(new Animated.Value(0)).current;
+  const modeSlideO = useRef(new Animated.Value(1)).current;
+  const modeTapRef = useRef(false);
+  const modeTargetRef = useRef(viewMode);
+  modeTargetRef.current = viewMode;
+  useEffect(() => {
+    if (shownMode === viewMode) { modeTapRef.current = false; return; }
+    if (!modeTapRef.current) { setShownMode(viewMode); return; }
+    modeTapRef.current = false;
+    // Couple sits to the right of Solo: going there pushes the page left.
+    const dir = viewMode === 'couple' ? -1 : 1;
+    const shift = Dimensions.get('window').width * 0.45;
+    modeSlideX.stopAnimation();
+    modeSlideO.stopAnimation();
+    Animated.parallel([
+      Animated.timing(modeSlideX, { toValue: dir * shift, duration: 150, easing: Easing.in(Easing.quad), useNativeDriver: true }),
+      Animated.timing(modeSlideO, { toValue: 0, duration: 150, useNativeDriver: true }),
+    ]).start(({ finished }) => {
+      if (!finished) return;
+      setShownMode(modeTargetRef.current);
+      modeSlideX.setValue(-dir * shift);
+      Animated.parallel([
+        Animated.timing(modeSlideX, { toValue: 0, duration: 280, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
+        Animated.timing(modeSlideO, { toValue: 1, duration: 220, useNativeDriver: true }),
+      ]).start();
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewMode]);
+  const modeSlideStyle = { opacity: modeSlideO, transform: [{ translateX: modeSlideX }] };
+  function tapMode(next) {
+    if (next === viewMode) return;
+    modeTapRef.current = true;
+    setMode(next);
+  }
+
+  // A running session (yours or your partner's) opens its own tab.
+  const forcedMode = soloSessionActive ? 'solo' : coupleInProgress ? 'couple' : null;
+  useEffect(() => {
+    if (forcedMode) setMode(forcedMode);
+  }, [forcedMode]);
+  // When only one side has focus points in progress, open that side.
+  useEffect(() => {
+    if (forcedMode) return;
+    if (!soloHasFocus && coupleHasFocus) setMode('couple');
+    else if (soloHasFocus && !coupleHasFocus) setMode('solo');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [soloHasFocus, coupleHasFocus]);
 
   useEffect(() => {
     const cid = couple?.coupleId;
@@ -1173,1185 +1142,455 @@ export default function HomeScreen({ navigation }) {
   }, [partnerLock?.coupleFocusPointId, partnerLock?.startedAt]);
   const activeFocusName = activeSession?.focusPointName ?? null;
 
-  const heroMessage = slot1?.subtitle || null;
+  // ─── The side on screen ──────────────────────────────────────────────────
+  const isCouple = shownMode === 'couple';
+  const items = (isCouple
+    ? [coupleSlots.slot1, coupleSlots.slot2, coupleSlots.slot3]
+    : [slot1, slot2, slot3]).filter(Boolean);
+  // A session started on a focus that isn't among the three cards (e.g. from All
+  // focus points) still gets its card, first, so it can be resumed from here.
+  const liveId = isCouple
+    ? (coupleSessionActive ? activeSession?.focusPointId : partnerLock?.coupleFocusPointId)
+    : (soloSessionActive ? activeSession?.focusPointId : null);
+  if (liveId && !items.some((f) => f.id === liveId)) {
+    items.unshift({
+      id: liveId,
+      name: (partnerLock && !coupleSessionActive && isCouple) ? partnerLock.focusName : (activeFocusName || 'Focus point'),
+      subtitle: null,
+    });
+  }
+  const sideReadiness = isCouple ? coupleReadiness : readiness;
+  const focuses = sideReadiness?.focuses ?? [];
+  const progressOf = (fp) => {
+    const r = focuses.find((f) => f.focusPointId === fp.id);
+    const target = r?.target ?? fp.train_target ?? (fp.tier ? (fp.tier === 'critical' ? 3 : 2) : 0);
+    return { done: Math.min(r?.done ?? 0, target), target };
+  };
+  const doneN = focuses.filter((f) => (f.target ?? 0) > 0 && (f.done ?? 0) >= f.target).length;
+  const openN = focuses.length - doneN;
+  const drillsLeft = focuses.reduce((n, f) => n + Math.max(0, (f.target ?? 0) - (f.done ?? 0)), 0);
+  const soloPending = !isCouple && !!pendingValidation;
+  // Nothing to train and no coach yet: Train walks a new dancer to one — their
+  // studio first (their coach and group lessons come through it), then the coach.
+  const setupStep = (!isCouple && focuses.length === 0 && items.length === 0 && !soloPending && coachLink !== undefined)
+    ? coachLink?.pending ? 'waiting'
+      : coachLink ? null
+        : !(user?.studio_id || user?.studio?.id) ? 'studio' : 'coach'
+    : null;
+  const coachFirst = firstName(coachLink?.name) || 'your coach';
+  const SETUP = {
+    studio: { lead: 'Add your studio to get started', sub: 'Your coach and your group lessons come through your studio.' },
+    coach: { lead: 'Link your coach', sub: 'Their corrections become the focus points you train here.' },
+    waiting: { lead: `Waiting for ${coachFirst} to accept`, sub: 'Your focus points arrive once they accept you.' },
+  };
+  const lead = setupStep ? SETUP[setupStep].lead : focuses.length === 0
+    ? (soloPending ? 'Your latest lesson is being reviewed' : 'Nothing to prepare yet')
+    : openN === 0
+      ? 'You’re set for your next lesson'
+      : `${plural(openN, 'focus point')} left before your next lesson`;
+  const sub = setupStep ? SETUP[setupStep].sub : focuses.length === 0
+    ? (isCouple
+      ? 'Your couple private lesson brings shared focus points.'
+      : soloPending
+        ? 'Your new focus points appear once it’s approved.'
+        // No lesson at all yet: a new dancer can start from a lesson they had.
+        : !lessons.solo
+          ? 'Attend or manually log your last lesson to get focus points.'
+          : 'Log your next private lesson to get focus points.')
+    : openN === 0
+      ? `All ${focuses.length} fully drilled — nothing left to prepare`
+      : `${doneN === 0 ? 'None fully drilled yet' : `${doneN} of ${focuses.length} fully drilled`} · ${plural(drillsLeft, 'drill')} to go`;
+  // Only offer a way out of the pending state if there is genuinely something on
+  // the other side — prefer active; fall back to Past; offer nothing if both are
+  // empty.
+  const emptyCta = (items.length === 0 && soloPending)
+    ? soloCounts.active > 0
+      ? { label: 'Train your current focus points', onPress: () => navigation.navigate('AllFocusPoints', { category, canSwitch: showFilter }) }
+      : soloCounts.past > 0
+        ? { label: 'Revisit your past focus points', onPress: () => navigation.navigate('AllFocusPoints', { category, view: 'past', canSwitch: showFilter }) }
+        : null
+    : null;
+  const seeAllCount = Math.max(focuses.length, items.length);
+
+  const partnerFirst = firstName(couple?.partner?.name) || 'Partner';
+  const who = isCouple
+    ? [(firstName(user?.name).charAt(0) || '·').toUpperCase(), partnerFirst.charAt(0).toUpperCase()]
+    : null;
+
+  function actionFor(fp, idx, full) {
+    if (isCouple && partnerLock && fp.id === partnerLock.coupleFocusPointId && !coupleSessionActive) {
+      return {
+        kind: 'partner',
+        label: `${partnerFirst} is training`,
+        timer: formatTime(lockRemaining),
+        onPress: () => navigation.navigate('FocusSession', {
+          focusPointId: partnerLock.coupleFocusPointId,
+          focusPointData: items.find((f) => f.id === partnerLock.coupleFocusPointId && f.couple_id) || undefined,
+          couple: true,
+          coupleId: couple.coupleId,
+          partnerView: true,
+          partnerStartedAt: new Date(partnerLock.startedAt).getTime(),
+          partnerDuration: partnerLock.durationMinutes || 7,
+        }),
+      };
+    }
+    const mine = isCouple ? coupleSessionActive : soloSessionActive;
+    if (mine && fp.id === activeSession?.focusPointId) {
+      return {
+        kind: 'progress',
+        label: 'In progress',
+        timer: countdown > 0 ? formatTime(countdown) : `+ ${formatTime(homeOverTime)}`,
+        over: countdown <= 0,
+        onPress: () => navigation.navigate('FocusSession', {
+          focusPointId: activeSession?.focusPointId,
+          sessionId: activeSession?.sessionId,
+          rank: activeSession?.rank,
+          sessionCount: activeSession?.sessionCount,
+          ...(isCouple ? { couple: true, coupleId: activeSession?.coupleId } : {}),
+        }),
+      };
+    }
+    if (anyInProgress) return { kind: 'locked' };
+    if (starting) return { kind: 'starting' };
+    return {
+      kind: full ? 'again' : 'start',
+      onPress: () => (isCouple ? handleStartCoupleSession(fp) : handleStartSession(fp, idx, sessionCount)),
+    };
+  }
+
+  const windowWidth = Dimensions.get('window').width;
+  const cardWidth = items.length > 1 ? windowWidth - SIDE * 2 - CARD_PEEK : windowWidth - SIDE * 2;
+  const interval = cardWidth + CARD_GAP;
+  const carouselIdx = Math.min(isCouple ? coupleIdx : soloIdx, Math.max(0, items.length - 1));
+  const setCarouselIdx = isCouple ? setCoupleIdx : setSoloIdx;
+  const liveIdx = liveId ? items.findIndex((f) => f.id === liveId) : -1;
+  const carouselKey = `${shownMode}:${category || 'all'}:${items.map((f) => f.id).join(',')}`;
+
+  // The carousel remounts (back at the first card) whenever its set of cards
+  // changes; a running session scrolls its own card into view.
+  const prevCarouselKeyRef = useRef(carouselKey);
+  useEffect(() => {
+    const remounted = prevCarouselKeyRef.current !== carouselKey;
+    prevCarouselKeyRef.current = carouselKey;
+    if (liveIdx >= 0) {
+      setCarouselIdx(liveIdx);
+      carouselIdxRef.current = liveIdx;
+      requestAnimationFrame(() => carouselRef.current?.scrollTo({ x: liveIdx * interval, animated: false }));
+    } else if (remounted) {
+      setCarouselIdx(0);
+      carouselIdxRef.current = 0;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveIdx, carouselKey]);
+
+  const lesson = isCouple ? lessons.couple : lessons.solo;
+
+  const styleName = category === 'ballroom' ? 'Ballroom'
+    : category === 'latin' ? 'Latin'
+    : soloDoesLatin && !soloDoesBallroom ? 'Latin'
+    : soloDoesBallroom && !soloDoesLatin ? 'Ballroom'
+    : couple?.doesLatin ? 'Latin'
+    : couple?.doesBallroom ? 'Ballroom'
+    : 'Train';
 
   if (isLoading) {
     return <HomeSkeleton />;
   }
 
+  // Whose training is on screen: the dancer on Solo, the pair on Couple.
+  const me = firstName(user?.name);
+  const dancers = isCouple ? [me, partnerFirst].filter(Boolean).join(' & ') : me;
+  const headerSub = isParent
+    ? [dancers, 'parent’s account'].filter(Boolean).join(' · ')
+    : (dancers || null);
+
   return (
-    <View style={{ flex: 1 }}>
-      <LinearGradient
-        colors={['#F2F2EF', '#F8F2E2', '#F4EAD0', '#FFFFFF', '#FFFFFF']}
-        locations={[0, 0.4, 0.7, 0.85, 1]}
-        style={StyleSheet.absoluteFillObject}
-      />
+    <View style={{ flex: 1, backgroundColor: PAGE }}>
     <SafeAreaView style={s.safe} edges={['top', 'left', 'right']}>
-      <Animated.View style={{ flex: 1, opacity: fadeAnim }}>
+      <Animated.View style={{ flex: 1, opacity: fadeAnim, paddingBottom: tabBarSpace }}>
 
       <TabHeader
         navigation={navigation}
-        center={
-          showFilter ? (
-            <CategoryToggle
-              category={category}
-              onPress={() => setPickerVisible(true)}
-              disabled={anyInProgress}
-            />
-          ) : null
+        style={s.header}
+        lead={
+          <StyleTitle
+            label={styleName}
+            category={category}
+            canSwitch={showFilter}
+            disabled={anyInProgress}
+            onSelect={handleSelectCategory}
+            sub={headerSub}
+          />
         }
       />
 
-      {/* ── This Week — anchored at the top, right under the header ── */}
-      <View style={[w.card, SMALL_SCREEN && w.cardSmall]}>
-        <View style={[w.head, SMALL_SCREEN && w.headSmall]}>
-          <Text style={w.title}>This week</Text>
-          <Text style={w.date}>{currentWeekRange()}</Text>
-        </View>
-        <View style={w.dayRow}>
-          {['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((label, i) => {
-            const day = weekActivity[i];
-            const classes = day?.classes ?? [];
-            const hasTraining = (day?.sessions?.length ?? 0) > 0;
-            const hasClass = classes.some((c) => c.lesson_type === 'group');
-            const hasPrivate = classes.some((c) => c.lesson_type !== 'group');
-            const hasActivity = hasTraining || classes.length > 0;
-            const isToday = i === ((new Date().getDay() + 6) % 7);
-            return (
-              <TouchableOpacity
-                key={i}
-                style={w.dayCol}
-                activeOpacity={hasActivity ? 0.6 : 1}
-                onPress={() => hasActivity && setDayModal(i)}
-              >
-                <Text style={[w.dayLetter, isToday && w.dayLetterToday, SMALL_SCREEN && w.dayLetterSmall]}>{label}</Text>
-                <View style={w.pillRow}>
-                  {hasTraining ? <View style={[w.pill, w.pillTraining]} /> : null}
-                  {hasClass ? <View style={[w.pill, w.pillClass]} /> : null}
-                  {hasPrivate ? <View style={[w.pill, w.pillPrivate]} /> : null}
-                </View>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-        <View style={w.statLine}>
-          <View style={w.stat}><Text style={w.statNum}>{sessionsThisWeek}</Text><Text style={w.statLbl}>Training</Text></View>
-          <View style={w.stat}><Text style={w.statNum}>{classesThisWeek}</Text><Text style={w.statLbl}>Class</Text></View>
-          <View style={w.stat}><Text style={w.statNum}>{focusTrainedThisWeek}</Text><Text style={w.statLbl}>Focus trained</Text></View>
-        </View>
-      </View>
-
-      {/* Swap the focus cards + "Get ready" dock for a skeleton while they load
-          — either a not-yet-prefetched style toggle, or the very first load
-          before the slots resolve. The This-week card above is style-agnostic,
-          so it stays put. After the first load resolves, an empty focus area is
-          the genuine "no focus points" state (the empty card), not loading. */}
-      {(categorySwitching || (!initialLoadDone && !slot1 && !coupleSlots?.slot1)) ? (
-        <TrainSwitchSkeleton paired={paired} />
-      ) : (
-       <>
-      {/* ── Top section ── */}
-      <View style={[s.scroll, s.scrollContent]}>
-
-        {/* Solo + Couple focus cards (accordion). Primary = large, the other
-            collapses below; tapping the small card swaps which is primary. */}
-        {(() => {
-          const soloFocuses = [slot1, slot2, slot3].filter(Boolean);
-          const sIdx = Math.min(soloIdx, Math.max(0, soloFocuses.length - 1));
-          const curSolo = soloSessionActive
-            ? { name: activeFocusName ?? soloFocuses[sIdx]?.name ?? slot1?.name, subtitle: heroMessage }
-            : (soloFocuses[sIdx] || null);
-          // The training card is forced primary/expanded; a couple session
-          // forces the couple card primary instead.
-          const soloIsPrimary = soloSessionActive ? true
-            : coupleInProgress ? false
-            : ((autoExpand ?? primaryMode) === 'solo');
-
-          const timerNode = (
-            <View style={s.inProgressRight}>
-              {countdown > 0 ? (
-                <Text style={s.inProgressTimer}>{formatTime(countdown)}</Text>
-              ) : (
-                <Text style={[s.inProgressTimer, { color: Colors.orange }]}>+ {formatTime(homeOverTime)}</Text>
-              )}
-              <Text style={s.inProgressArrow}>›</Text>
-            </View>
-          );
-
-          // Partner training: same "In Progress" pill, counting down THEIR time.
-          const partnerTimerNode = (
-            <View style={s.inProgressRight}>
-              <Text style={s.inProgressTimer}>{formatTime(lockRemaining)}</Text>
-              <Text style={s.inProgressArrow}>›</Text>
-            </View>
-          );
-
-          const soloProgress = (() => {
-            const fp = soloFocuses[sIdx];
-            const r = fp && readiness?.focuses?.find((f) => f.focusPointId === fp.id);
-            return r ? `${r.done}/${r.target}` : null;
-          })();
-          const soloCard = (
-            <FocusCard
-              key="solo"
-              theme="solo"
-              expanded={soloIsPrimary || !paired || (soloVisible && !coupleVisible)}
-              focus={curSolo}
-              count={soloFocuses.length}
-              idx={sIdx}
-              onDot={setSoloIdx}
-              pill="SOLO · FOCUS"
-              sub={null}
-              progress={soloProgress}
-              headerAvatar={null}
-              onStart={() => handleStartSession(soloFocuses[sIdx], sIdx, sessionCount)}
-              starting={starting}
-              onExpand={() => swapPrimary('solo')}
-              sessionActive={soloSessionActive}
-              onResume={() => navigation.navigate('FocusSession', {
-                focusPointId: activeSession?.focusPointId,
-                sessionId: activeSession?.sessionId,
-                rank: activeSession?.rank,
-                sessionCount: activeSession?.sessionCount,
-              })}
-              timerNode={timerNode}
-              locked={anyInProgress}
-              compact={SMALL_SCREEN}
-              emptyText={
-                pendingValidation
-                  ? "Your latest class is still being reviewed. Your new focus points will appear once it's approved."
-                  : 'Log your next class to see your focus points appear.'
-              }
-              // Only offer a CTA if there is genuinely something on the other
-              // side — otherwise it lands on an empty screen showing the very
-              // dead-end copy this state exists to replace. Prefer active; fall
-              // back to the Past tab; offer nothing if both are empty.
-              emptyCta={
-                !pendingValidation
-                  ? null
-                  : soloCounts.active > 0
-                    ? {
-                        label: 'Train your current focus points',
-                        onPress: () => navigation.navigate('AllFocusPoints', { category }),
-                      }
-                    : soloCounts.past > 0
-                      ? {
-                          label: 'Revisit your past focus points',
-                          onPress: () => navigation.navigate('AllFocusPoints', { category, view: 'past' }),
-                        }
-                      : null
-              }
-            />
-          );
-
-          if (!paired) return soloCard;
-
-          const coupleFocuses = [coupleSlots.slot1, coupleSlots.slot2, coupleSlots.slot3].filter(Boolean);
-          const cIdx = Math.min(coupleIdx, Math.max(0, coupleFocuses.length - 1));
-          const partnerFirst = (couple?.partner?.name || 'Partner').split(' ')[0];
-          const lockedLabel = partnerLock ? `Focus point started · ${formatTime(lockRemaining)}` : null;
-          // The in-progress focus the partner holds — look up its subtitle from
-          // our own couple focuses (same shared points) so B sees the same
-          // little description line under the title as A.
-          const partnerFocusObj = partnerLock ? (coupleFocuses.find((f) => f.id === partnerLock.coupleFocusPointId) || null) : null;
-          const coupleFocus = coupleSessionActive
-            ? { name: activeFocusName ?? coupleFocuses[cIdx]?.name, subtitle: coupleFocuses[cIdx]?.subtitle }
-            : partnerLock ? { name: partnerLock.focusName, subtitle: partnerFocusObj?.subtitle ?? null }
-            : (coupleFocuses[cIdx] || null);
-          const coupleProgress = (() => {
-            const fp = coupleFocuses[cIdx];
-            const r = fp && coupleReadiness?.focuses?.find((f) => f.focusPointId === fp.id);
-            return r ? `${r.done}/${r.target}` : null;
-          })();
-          const coupleCard = (
-            <FocusCard
-              key="couple"
-              theme="couple"
-              expanded={!soloIsPrimary || (coupleVisible && !soloVisible)}
-              focus={coupleFocus}
-              count={partnerLock ? 0 : coupleFocuses.length}
-              idx={cIdx}
-              onDot={setCoupleIdx}
-              pill="COUPLE · FOCUS"
-              sub={partnerLock ? 'training in progress' : null}
-              progress={partnerLock ? null : coupleProgress}
-              headerAvatar={<PairAvatars uri={photoUri} partnerInitial={partnerFirst.charAt(0)} />}
-              onStart={() => handleStartCoupleSession(coupleFocuses[cIdx])}
-              starting={starting}
-              onExpand={() => swapPrimary('couple')}
-              sessionActive={coupleInProgress}
-              onResume={() => partnerLock
-                ? navigation.navigate('FocusSession', {
-                    focusPointId: partnerLock.coupleFocusPointId,
-                    focusPointData: partnerFocusObj || undefined,
-                    couple: true,
-                    coupleId: couple.coupleId,
-                    partnerView: true,
-                    partnerStartedAt: new Date(partnerLock.startedAt).getTime(),
-                    partnerDuration: partnerLock.durationMinutes || 7,
-                  })
-                : navigation.navigate('FocusSession', {
-                    focusPointId: activeSession?.focusPointId,
-                    sessionId: activeSession?.sessionId,
-                    rank: activeSession?.rank,
-                    sessionCount: activeSession?.sessionCount,
-                    couple: true,
-                    coupleId: activeSession?.coupleId,
-                  })}
-              timerNode={partnerLock ? partnerTimerNode : timerNode}
-              locked={anyInProgress}
-              compact={SMALL_SCREEN}
-              emptyText="Attend your couple private lesson to get shared focus points."
-            />
-          );
-
-          // Global style filter hides whichever card's owner doesn't do the
-          // selected style. If only one remains, show it solo (full-width).
-          if (coupleVisible && !soloVisible) return coupleCard;
-          if (soloVisible && !coupleVisible) return soloCard;
-          if (!soloVisible && !coupleVisible) return null;
-
-          return (
-            <View style={cc.stack}>
-              {soloIsPrimary ? soloCard : coupleCard}
-              {soloIsPrimary ? coupleCard : soloCard}
-            </View>
-          );
-        })()}
-
-        {/* See all focus points */}
-        <TouchableOpacity
-          style={[cc.allLink, SMALL_SCREEN && { paddingVertical: 6 }]}
-          onPress={() => navigation.navigate('AllFocusPoints', { category })}
-          activeOpacity={0.7}
+      <View style={{ flex: 1 }} {...pullResponder.panHandlers}>
+      {/* The InBetween mark: drawn by the pull, then a line runs round it while
+          Train reloads. When the page scrolls (small phones) the system pull
+          drives it through onScroll instead — iOS only; Android keeps its
+          native spinner there. */}
+      {!(overflow && Platform.OS === 'android') ? (
+        <Animated.View
+          style={[s.pullSpinner, overflow ? null : { opacity: pullY.interpolate({ inputRange: [0, 6], outputRange: [0, 1], extrapolate: 'clamp' }) }]}
+          pointerEvents="none"
         >
-          <Text style={cc.allLinkText}>All focus points</Text>
-          <Ionicons name="chevron-forward" size={14} color="rgba(13,13,18,0.4)" />
-        </TouchableOpacity>
-      </View>
+          <PullLogo ref={pullLogoRef} refreshing={refreshing} />
+        </Animated.View>
+      ) : null}
+      <Animated.View style={{ flex: 1, transform: [{ translateY: pullY }] }}>
+      <ScrollView
+        ref={pageScrollRef}
+        style={{ flex: 1 }}
+        contentContainerStyle={s.scrollContent}
+        showsVerticalScrollIndicator={false}
+        scrollEnabled={overflow}
+        onLayout={(e) => setViewportH(e.nativeEvent.layout.height)}
+        onContentSizeChange={(_, h) => setContentH(h)}
+        {...(overflow ? pagePull.scrollProps : {})}
+        refreshControl={overflow && !pagePull.ios ? (
+          <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} tintColor={GOLD_INK} colors={[GOLD]} />
+        ) : undefined}
+      >
+        <WeekRail
+          activity={weekActivity}
+          goal={weeklySessionGoal(user?.solo_practice_frequency)}
+          onPress={openTrend}
+          accent={isCouple ? COUPLE_BLUE : GOLD}
+          accentInk={isCouple ? COUPLE_BLUE : GOLD_INK}
+        />
 
-      {/* ── Bottom dock ── */}
-      <View style={[s.bottomDock, SMALL_SCREEN && { paddingTop: 8 }]}>
-        {/* Get ready — the PRIMARY card's focuses as a list (gold solo / blue couple);
-            the SECONDARY shrinks to a column of rings (couple→right, solo→left). */}
-        {(() => {
-          const soloF = readiness?.focuses ?? [];
-          const coupleF = coupleReadiness?.focuses ?? [];
-          // Respect the global style filter: a hidden card's readiness drops too.
-          const bothVisible = soloVisible && coupleVisible;
-          // An active session pins "Get ready" to the card that's training and
-          // drops the swap-to-other side, so it mirrors the locked focus cards.
-          const primaryCouple = coupleSessionActive ? true
-            : soloSessionActive ? false
-            : paired && (
-              (coupleVisible && !soloVisible) ? true
-              : (soloVisible && !coupleVisible) ? false
-              : (autoExpand ? autoExpand === 'couple' : rdlPrimary === 'couple')
-            );
-          const mainF = primaryCouple ? coupleF : soloF;
-          const sideF = (!isSessionActive && paired && bothVisible) ? (primaryCouple ? soloF : coupleF) : [];
-          const mainColor = primaryCouple ? CBLUE : '#E8B530';
-          const sideColor = primaryCouple ? '#E8B530' : CBLUE;
-          const sideOnLeft = primaryCouple; // solo (secondary) shrinks left; couple shrinks right
-          const labelColor = primaryCouple ? CBLUE : '#A8801A';
-          const completed = mainF.filter((f) => (f.target ?? 0) > 0 && (f.done ?? 0) >= f.target).length;
-          const sideBox = primaryCouple
-            ? { backgroundColor: 'rgba(232,181,48,0.08)', borderColor: 'rgba(232,181,48,0.22)' }
-            : { backgroundColor: 'rgba(46,70,112,0.06)', borderColor: 'rgba(46,70,112,0.16)' };
-          const sideEl = sideF.length > 0 ? (
+        {showTabs ? <ModeTabs mode={viewMode} onChange={tapMode} disabled={anyInProgress} style={s.tabs} /> : null}
+
+        {/* Swap the dial + cards for a skeleton while they load — either a
+            not-yet-prefetched style toggle, or the very first load before the
+            slots resolve. After the first load resolves, an empty side is the
+            genuine "no focus points" state, not loading. */}
+        {(categorySwitching || (!initialLoadDone && !slot1 && !coupleSlots?.slot1)) ? (
+          <TrainSwitchSkeleton cardWidth={windowWidth - SIDE * 2 - CARD_PEEK} />
+        ) : (
+          <Animated.View style={modeSlideStyle}>
+            {/* Dial + copy open the readiness detail — once there is something
+                to break down. */}
             <TouchableOpacity
-              style={[rdl.side, sideBox, sideOnLeft ? { marginRight: 12 } : { marginLeft: 12 }]}
+              style={rd.head}
+              onPress={openReadiness}
+              disabled={focuses.length === 0}
               activeOpacity={0.7}
-              onPress={() => swapPrimary(primaryCouple ? 'solo' : 'couple')}
+              accessibilityRole="button"
+              accessibilityLabel={`${sideReadiness?.percent ?? 0}% ready. ${lead}. Open readiness`}
             >
-              {sideF.map((f) => (
-                <View key={f.focusPointId} style={rdl.srow}>
-                  <ProgRing done={f.done ?? 0} target={f.target ?? 0} color={sideColor} size={16} sw={2.4} />
-                </View>
-              ))}
-            </TouchableOpacity>
-          ) : null;
-          return (
-            <TouchableOpacity style={rdl.card} activeOpacity={isSessionActive ? 1 : 0.85}
-              disabled={isSessionActive} onPress={() => navigation.navigate('PROFILE')}>
-              <View style={rdl.topRow}>
-                <Text style={rdl.eye}>Get ready · next private</Text>
-                <View style={rdl.hd}>
-                  {isSessionActive ? <Ionicons name="lock-closed" size={11} color={labelColor} /> : null}
-                  <Text style={[rdl.lab, { color: labelColor }]}>{primaryCouple ? 'Couple' : 'Solo'}</Text>
-                  <Text style={rdl.cnt}>{completed}/{mainF.length}</Text>
-                </View>
+              <ReadyDial percent={sideReadiness?.percent ?? 0} color={isCouple ? COUPLE_BLUE : GOLD} />
+              <View style={rd.copy}>
+                <Text style={rd.lead}>{lead}</Text>
+                <Text style={rd.sub}>{sub}</Text>
+                {emptyCta ? (
+                  <TouchableOpacity onPress={emptyCta.onPress} activeOpacity={0.7} style={rd.cta}>
+                    <Text style={rd.ctaTxt}>{emptyCta.label} →</Text>
+                  </TouchableOpacity>
+                ) : null}
               </View>
-              <Animated.View style={[rdl.split, { opacity: rdlSlide.interpolate({ inputRange: [-90, 0, 90], outputRange: [0, 1, 0], extrapolate: 'clamp' }), transform: [{ translateX: rdlSlide }] }]}>
-                {sideOnLeft ? sideEl : null}
-                <View style={rdl.main}>
-                  {mainF.length === 0 ? (
-                    <Text style={rdl.empty}>
-                      {pendingValidation
-                        ? 'Your new focus points are being reviewed.'
-                        : 'Log your last private to start.'}
-                    </Text>
-                  ) : mainF.map((f) => {
-                    const todo = (f.done ?? 0) === 0;
+              {focuses.length > 0 ? <Ionicons name="chevron-forward" size={13} color={INK_3} /> : null}
+            </TouchableOpacity>
+
+            {items.length > 0 ? (
+              <>
+                <View style={fp.head}>
+                  <Text style={fp.label}>Focus points</Text>
+                  <TouchableOpacity
+                    onPress={() => navigation.navigate('AllFocusPoints', { category, tab: shownMode, canSwitch: showFilter })}
+                    activeOpacity={0.6}
+                    hitSlop={{ top: 8, bottom: 8, left: 12 }}
+                  >
+                    <Text style={fp.link}>See all {seeAllCount} →</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <ScrollView
+                  key={carouselKey}
+                  ref={carouselRef}
+                  horizontal
+                  style={fp.carousel}
+                  showsHorizontalScrollIndicator={false}
+                  decelerationRate="fast"
+                  snapToInterval={interval}
+                  snapToAlignment="start"
+                  disableIntervalMomentum
+                  contentContainerStyle={fp.track}
+                  scrollEventThrottle={16}
+                  onScroll={(e) => {
+                    const k = Math.max(0, Math.min(items.length - 1, Math.round(e.nativeEvent.contentOffset.x / interval)));
+                    if (k !== carouselIdxRef.current) {
+                      carouselIdxRef.current = k;
+                      setCarouselIdx(k);
+                    }
+                  }}
+                >
+                  {items.map((f, i) => {
+                    const { done, target } = progressOf(f);
                     return (
-                      <View key={f.focusPointId} style={rdl.fp}>
-                        <ProgRing done={f.done ?? 0} target={f.target ?? 0} color={mainColor} />
-                        <Text style={[rdl.nm, todo && rdl.nmTodo]} numberOfLines={1}>{f.name}</Text>
-                        <Text style={[rdl.fr, { color: todo ? 'rgba(13,13,18,0.45)' : labelColor }]}>{f.done ?? 0}/{f.target ?? 0}</Text>
-                      </View>
+                      <FocusSlide
+                        key={f.id}
+                        width={cardWidth}
+                        couple={isCouple}
+                        tag={isCouple ? 'Couple focus' : 'Solo focus'}
+                        index={i}
+                        count={items.length}
+                        who={who}
+                        focus={f}
+                        done={done}
+                        target={target}
+                        action={actionFor(f, i, target > 0 && done >= target)}
+                      />
                     );
                   })}
-                </View>
-                {!sideOnLeft ? sideEl : null}
-              </Animated.View>
-            </TouchableOpacity>
-          );
-        })()}
+                </ScrollView>
 
+                <CarouselDots
+                  count={items.length}
+                  active={carouselIdx}
+                  onDot={(k) => carouselRef.current?.scrollTo({ x: k * interval, animated: true })}
+                />
+              </>
+            ) : null}
+
+            {setupStep === 'studio' || setupStep === 'coach' ? (
+              <View style={rd.setup}>
+                <TouchableOpacity
+                  style={rd.setupBtn}
+                  activeOpacity={0.88}
+                  accessibilityRole="button"
+                  onPress={() => navigation.navigate('PROFILE', setupStep === 'studio'
+                    ? { tab: 'settings', open: 'studio' }
+                    : { tab: 'links', open: 'coach', category })}
+                >
+                  <Ionicons name={setupStep === 'studio' ? 'business-outline' : 'person-add-outline'} size={18} color={INK} />
+                  <Text style={rd.setupT}>{setupStep === 'studio' ? 'Add your studio' : 'Add your coach'}</Text>
+                </TouchableOpacity>
+              </View>
+            ) : null}
+          </Animated.View>
+        )}
+
+        {lesson ? (
+          <Animated.View style={[s.foot, modeSlideStyle]}>
+            <LessonSummaryCard
+              lesson={lesson}
+              onPress={() => navigation.navigate('ClassDetail', { inputId: lesson.id })}
+            />
+          </Animated.View>
+        ) : null}
+      </ScrollView>
+      </Animated.View>
       </View>
-       </>
-      )}
 
-      <LogModal
-        visible={logModalVisible}
-        onClose={() => setLogModalVisible(false)}
-        onSubmitted={() => { setLogModalVisible(false); load(); }}
-      />
-
-      <CategoryPicker
-        visible={pickerVisible}
-        current={category}
-        onSelect={handleSelectCategory}
-        onClose={() => setPickerVisible(false)}
-      />
-
-      <Modal visible={comingUpModal} transparent animationType="fade" onRequestClose={() => setComingUpModal(false)}>
-        <TouchableOpacity style={s.comingUpOverlay} activeOpacity={1} onPress={() => setComingUpModal(false)}>
-          <TouchableOpacity style={s.comingUpSheet} activeOpacity={1} onPress={() => {}}>
-            <Text style={s.comingUpEmoji}>🎯</Text>
-            <Text style={s.comingUpTitle}>Work on the most important focus first</Text>
-            <Text style={s.comingUpBody}>Complete your primary focus point before moving to the next one. Focused repetition builds mastery faster.</Text>
-            <TouchableOpacity style={s.comingUpDismiss} onPress={() => setComingUpModal(false)} activeOpacity={0.8}>
-              <Text style={s.comingUpDismissText}>Got it</Text>
-            </TouchableOpacity>
-          </TouchableOpacity>
-        </TouchableOpacity>
-      </Modal>
-
-      <BottomSheet visible={dayModal !== null} onClose={() => setDayModal(null)} sheetStyle={dm.sheet}>
-            <View style={dm.handle} />
-            <Text style={dm.dayName}>{dayModal !== null ? DAY_NAMES[dayModal] : ''}</Text>
-            {(weekActivity[dayModal]?.sessions?.length ?? 0) > 0 && (
-              <View style={dm.section}>
-                <Text style={dm.sectionLabel}>Training Sessions</Text>
-                {weekActivity[dayModal].sessions.map((s) => (
-                  <View key={s.id} style={dm.row}>
-                    <View style={[dm.dot, dm.dotSession]} />
-                    <View style={{ flex: 1 }}>
-                      <Text style={dm.rowText}>{fmtTime(s.started_at)}</Text>
-                      {!!s.focusName && <Text style={dm.rowSub} numberOfLines={1}>{s.focusName}</Text>}
-                    </View>
-                    {!!s.feeling && <Text style={dm.feeling}>{FEELING_EMOJI[s.feeling] ?? s.feeling}</Text>}
-                  </View>
-                ))}
-              </View>
-            )}
-            {(weekActivity[dayModal]?.classes?.length ?? 0) > 0 && (
-              <View style={dm.section}>
-                <Text style={dm.sectionLabel}>Class Logs</Text>
-                {weekActivity[dayModal].classes.map((c) => (
-                  <View key={c.id} style={dm.row}>
-                    <View style={[dm.dot, dm.dotClass]} />
-                    <View style={{ flex: 1 }}>
-                      <Text style={dm.rowText}>{fmtTime(c.created_at)}</Text>
-                      {!!(c.title || c.ai_primary_focus || c.practice_point_1) && (
-                        <Text style={dm.rowSub} numberOfLines={1}>{c.title || c.ai_primary_focus || c.practice_point_1}</Text>
-                      )}
-                    </View>
-                  </View>
-                ))}
-              </View>
-            )}
-      </BottomSheet>
       </Animated.View>
     </SafeAreaView>
     </View>
   );
 }
 
-// ─── Heatmap styles ───────────────────────────────────────────────────────────
-const h = StyleSheet.create({
-  row: { flexDirection: 'row', gap: 6 },
-  cell: {
-    flex: 1,
-    aspectRatio: 1,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  cellToday: { backgroundColor: '#0D0D12' },
-  label: { fontFamily: Fonts.jakartaSemiBold, fontSize: 14, color: '#0D0D12' },
-  labelToday: { color: Colors.orange },
-  dots: { flexDirection: 'row', gap: 3, marginTop: 3, height: 5 },
-  dot: { width: 4, height: 4, borderRadius: 2 },
-  dotSession: { backgroundColor: '#4A90D9' },
-  dotClass: { backgroundColor: '#4CD964' },
-});
-
-// ─── Day modal styles ─────────────────────────────────────────────────────────
-const dm = StyleSheet.create({
-  overlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.35)',
-    justifyContent: 'flex-end',
-  },
-  sheet: {
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    paddingHorizontal: 22,
-    paddingBottom: 36,
-    paddingTop: 12,
-  },
-  handle: {
-    width: 36, height: 4,
-    backgroundColor: 'rgba(17,12,17,0.12)',
-    borderRadius: 2,
-    alignSelf: 'center',
-    marginBottom: 18,
-  },
-  dayName: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 18,
-    color: '#111',
-    marginBottom: 16,
-  },
-  section: { marginBottom: 16 },
-  sectionLabel: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 10,
-    color: '#ACADB9',
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-    marginBottom: 8,
-  },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 10,
-    paddingVertical: 6,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#F2F2F2',
-  },
-  dot: { width: 8, height: 8, borderRadius: 4, marginTop: 4 },
-  dotSession: { backgroundColor: '#4A90D9' },
-  dotClass: { backgroundColor: '#4CD964' },
-  rowText: { fontFamily: Fonts.jakartaMedium, fontSize: 14, color: '#111' },
-  rowSub: { fontFamily: Fonts.jakartaRegular, fontSize: 12, color: '#ACADB9', marginTop: 2 },
-  feeling: { fontSize: 16, marginLeft: 'auto' },
-});
-
 // ─── Main styles ──────────────────────────────────────────────────────────────
 const s = StyleSheet.create({
   safe: { flex: 1, backgroundColor: 'transparent' },
-  scroll: {},
-  scrollContent: {
-    paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: 8,
-  },
-
-  // Header
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 18,
-  },
-  notifBtn: {
-    width: 36,
-    height: 36,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  logo: {
-    fontFamily: Fonts.monument,
-    fontSize: 20,
-    color: Colors.black,
-    letterSpacing: 1,
-  },
-  avatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#F5E6C8',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  avatarText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 14,
-    color: '#8A6A2E',
-  },
-  avatarPhoto: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-  },
-
-  // ── Latin / Ballroom toggle (centered in TabHeader, Instagram-style) ────
-  toggle: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingVertical: 6,
-    paddingHorizontal: 8,
-  },
-  toggleLabel: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 18,
-    color: Colors.black,
-    letterSpacing: -0.3,
-  },
-  pickerBackdrop: {
-    flex: 1,
-    backgroundColor: 'transparent',
-  },
-  pickerAnchor: {
-    alignItems: 'center',
-    paddingTop: 50,
-  },
-  pickerSheet: {
-    minWidth: 220,
-    borderRadius: 16,
-    overflow: 'hidden',
-    backgroundColor: 'rgba(28,28,30,0.96)',
-    shadowColor: '#000',
-    shadowOpacity: 0.35,
-    shadowOffset: { width: 0, height: 10 },
-    shadowRadius: 22,
-    elevation: 14,
-  },
-  pickerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 15,
-    minWidth: 220,
-  },
-  pickerRowDivider: {
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: 'rgba(255,255,255,0.15)',
-  },
-  pickerLabel: {
-    fontFamily: Fonts.jakartaSemiBold,
-    fontSize: 15,
-    color: '#FFFFFF',
-    flex: 1,
-  },
-  pickerCheck: {
-    marginLeft: 12,
-  },
-
-  // Hero card
-  hero: {
-    backgroundColor: '#1C1C1E',
-    borderRadius: 20,
-    borderWidth: 2,
-    borderColor: 'rgba(242,185,64,0.45)',
-    padding: 20,
-    paddingBottom: 18,
-    marginBottom: 12,
-    shadowColor: '#000',
-    shadowOpacity: 0.09,
-    shadowOffset: { width: 0, height: 2 },
-    shadowRadius: 12,
-    elevation: 8,
-  },
-  heroTopRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 14,
-  },
-  heroBadge: {
-    alignSelf: 'flex-start',
-    backgroundColor: Colors.orange,
-    borderRadius: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-  },
-  heroCounter: {
-    fontFamily: Fonts.ttLight,
-    fontSize: 11,
-    color: 'rgba(255,255,255,0.55)',
-    letterSpacing: 0.6,
-  },
-  heroBadgeText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 10,
-    color: '#fff',
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-  },
-  heroFocusName: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 30,
-    color: '#fff',
-    letterSpacing: -0.8,
-    lineHeight: 34,
-    marginBottom: 4,
-  },
-  heroMessage: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 13,
-    color: '#FFFFFF',
-    lineHeight: 20,
-    marginBottom: 18,
-  },
-  heroEmptyHint: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 13,
-    color: 'rgba(255,255,255,0.6)',
-    lineHeight: 19,
-    marginBottom: 18,
-  },
-  startBtn: {
-    backgroundColor: Colors.orange,
-    borderRadius: 13,
-    paddingVertical: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-  },
-  startBtnText: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 15,
-    color: '#fff',
-  },
-  startBtnArrow: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 17,
-    color: '#fff',
-    marginTop: -1,
-  },
-  inProgressBtn: {
-    backgroundColor: '#1C1C1E',
-    borderRadius: 13,
-    paddingVertical: 16,
-    paddingHorizontal: 20,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.1)',
-    shadowColor: '#000',
-    shadowOpacity: 0.18,
-    shadowOffset: { width: 0, height: 3 },
-    shadowRadius: 10,
-    elevation: 4,
-  },
-  inProgressLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  inProgressRight: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  inProgressDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 3.5,
-    backgroundColor: '#4CD964',
-    shadowColor: '#4CD964',
-    shadowOpacity: 0.8,
-    shadowOffset: { width: 0, height: 0 },
-    shadowRadius: 5,
-  },
-  inProgressLabel: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 15,
-    color: '#fff',
-  },
-  inProgressTimer: {
-    fontFamily: Fonts.monument,
-    fontSize: 14,
-    color: 'rgba(255,255,255,0.45)',
-    letterSpacing: 1,
-  },
-  inProgressArrow: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 20,
-    color: 'rgba(255,255,255,0.3)',
-    lineHeight: 22,
-  },
-
-  // "or" divider
-  orRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    marginBottom: 12,
-  },
-  orLine: { flex: 1, height: 1, backgroundColor: '#EFEFEF' },
-  orText: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 11,
-    color: '#C8C8C8',
-  },
-
-  // Alt row
-  altRow: {
-    flexDirection: 'row',
-    alignItems: 'stretch',
-    gap: 9,
-    marginBottom: 4,
-  },
-  altCard: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 14,
-    padding: 13,
-    paddingHorizontal: 14,
-  },
-  altCardHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 6,
-  },
-  altTryLabel: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 9,
-    color: '#C8C8C8',
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-  },
-  altName: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 14,
-    color: '#111',
-    letterSpacing: -0.3,
-  },
-  altCardLocked: {
-    opacity: 0.4,
-  },
-  altLockIcon: {
-    fontSize: 9,
-    color: '#C8C8C8',
-  },
-  altCardComingUp: {
-    opacity: 0.6,
-  },
-  allFocusBtn: {
-    width: 64,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  allFocusBtnText: {
-    fontFamily: Fonts.jakartaSemiBold,
-    fontSize: 13,
-    color: '#0D0D12',
-    letterSpacing: -0.2,
-  },
-
-  // Coming up modal
-  comingUpOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 32,
-  },
-  comingUpSheet: {
-    backgroundColor: '#fff',
-    borderRadius: 20,
-    padding: 28,
-    alignItems: 'center',
-    width: '100%',
-  },
-  comingUpEmoji: {
-    fontSize: 36,
-    marginBottom: 14,
-  },
-  comingUpTitle: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 17,
-    color: '#111',
-    textAlign: 'center',
-    letterSpacing: -0.3,
-    marginBottom: 10,
-  },
-  comingUpBody: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 13,
-    color: '#888',
-    textAlign: 'center',
-    lineHeight: 20,
-    marginBottom: 24,
-  },
-  comingUpDismiss: {
-    backgroundColor: '#111',
-    borderRadius: 12,
-    paddingVertical: 13,
-    paddingHorizontal: 32,
-    alignSelf: 'stretch',
-    alignItems: 'center',
-  },
-  comingUpDismissText: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 15,
-    color: '#fff',
-  },
-
-  // Bottom dock — flows naturally right after the hero / alt row. The empty
-  // space below the stats cards is intentional (it preserves the layout that
-  // existed when the metric gauges occupied that area).
-  bottomDock: {
-    flexShrink: 0,
-    paddingHorizontal: 20,
-    paddingTop: 14,
-    paddingBottom: 4,
-    backgroundColor: 'transparent',
-  },
-  dockSep: {
-    width: 72,
-    height: 1,
-    backgroundColor: '#D8D8D8',
-    alignSelf: 'center',
-    marginBottom: 14,
-  },
-
-  // Next class readiness (condensed)
-  readyCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    marginBottom: 14,
-    // Soft gold outline — ties the card to the yellow progress bar inside
-    borderWidth: 1,
-    borderColor: 'rgba(232,181,48,0.32)',
-    // Subtle elevation — sits one layer above the page gradient.
-    // iOS only: Android ignores the gold shadowColor and draws a grey
-    // elevation halo that clashes with the rounded gold border (the "weird
-    // border" artifact). The gold borderWidth alone reads cleanly on Android.
-    ...Platform.select({
-      ios: {
-        shadowColor: '#E8B530',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.1,
-        shadowRadius: 12,
-      },
-      android: {},
-    }),
-  },
-  readyHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 14,
-  },
-  readyLabel: {
-    flex: 1,
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 13,
-    color: '#0D0D12',
-    letterSpacing: -0.1,
-    marginRight: 8,
-  },
-  readyBodyRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  readyPct: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 34,
-    color: '#0D0D12',
-    letterSpacing: -1.4,
-    // Bumped from 34 → 42 so the rounded bottoms of "100" aren't clipped
-    // by a too-tight line box on iOS (Jakarta needs ~1.2× headroom).
-    lineHeight: 42,
-    includeFontPadding: false,
-  },
-  readyPctSm: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 15,
-    color: 'rgba(13,13,18,0.4)',
-    letterSpacing: -0.3,
-  },
-  readyRightCol: {
-    flex: 1,
-    marginLeft: 16,
-    justifyContent: 'center',
-  },
-  readyTrack: {
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: 'rgba(13,13,18,0.06)',
-    overflow: 'hidden',
-    marginBottom: 8,
-  },
-  readyFill: {
-    height: '100%',
-    backgroundColor: '#E8B530',
-    borderRadius: 3,
-  },
-  readyMetaLine: {
-    fontFamily: Fonts.jakartaSemiBold,
-    fontSize: 11.5,
-    color: 'rgba(13,13,18,0.55)',
-    letterSpacing: 0.1,
-  },
-  readyEmpty: {
-    fontFamily: Fonts.jakartaSemiBold,
-    fontSize: 12,
-    color: 'rgba(13,13,18,0.55)',
-    paddingVertical: 4,
-  },
-
-  // This Week
-  weekSection: { marginBottom: 14 },
-  sectionLabelRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 10,
-  },
-  sectionLabel: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 11,
-    color: '#0D0D12',
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-  },
-  sectionDate: {
-    fontFamily: Fonts.jakartaSemiBold,
-    fontSize: 11,
-    color: 'rgba(13,13,18,0.5)',
-    letterSpacing: 0.4,
-  },
-
-  // Stats cards
-  statsRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 14,
-  },
-
-  // Health gauges (stacked horizontal bars)
-  gaugeRow: {
-    flexDirection: 'column',
-    paddingHorizontal: 6,
-    marginBottom: 4,
-  },
-  statCard: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 14,
-    paddingVertical: 16,
-    alignItems: 'center',
-  },
-  statValue: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 28,
-    color: '#0D0D12',
-    letterSpacing: -0.5,
-    marginBottom: 6,
-  },
-  statLabel: {
-    fontFamily: Fonts.jakartaSemiBold,
-    fontSize: 9,
-    color: '#888',
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-
-  // Share with Coach
-  shareSection: { marginBottom: 5 },
-  shareDesc: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 11,
-    color: '#C8C8C8',
-    lineHeight: 16,
-    textAlign: 'center',
-    marginBottom: 9,
-  },
-  shareBtn: {
-    borderRadius: 12,
-    paddingVertical: 11,
-    paddingHorizontal: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1.5,
-    borderColor: '#E8E8E8',
-    backgroundColor: 'transparent',
-  },
-  shareBtnLoading: { borderColor: 'rgba(17,12,17,0.08)' },
-  shareBtnSuccess: { borderColor: '#22a861', backgroundColor: 'rgba(34,168,97,0.06)' },
-  shareInner: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  shareIconArrow: { fontSize: 13, color: '#888' },
-  shareBtnText: { fontFamily: Fonts.jakartaSemiBold, fontSize: 12, color: '#888' },
-  shareBtnTextLoading: { fontFamily: Fonts.jakartaRegular, fontSize: 13, color: 'rgba(17,12,17,0.4)', marginLeft: 8 },
-  shareBtnTextSuccess: { fontFamily: Fonts.jakartaBold, fontSize: 13, color: '#22a861' },
+  header: { paddingTop: 6, paddingBottom: 0 },
+  tabs: { marginTop: 16, marginHorizontal: SIDE },
+  pullSpinner: { position: 'absolute', top: (PULL_REST - 27) / 2, left: 0, right: 0, alignItems: 'center' },
+  scrollContent: { flexGrow: 1, paddingBottom: 14 },
+  // The summary card sits at the foot of the screen when there's room, and
+  // simply follows the cards when there isn't.
+  foot: { marginTop: 'auto', paddingTop: 18, paddingHorizontal: SIDE },
 });
 
-// ─── Couple feature: Train cards, dots, avatars, concentric readiness ─────────
-const cc = StyleSheet.create({
-  stack: { gap: 12 },
-
-  // Single-layer card: clips the gradient + content to the radius and draws the
-  // border. NO drop shadow on purpose — on iOS overflow:hidden clipped it away
-  // anyway (so it was invisible), but a shadow on a clipped + animated view
-  // forces an offscreen re-render every frame, which was the choppy-swap cause
-  // AND made a heavy shadow slide up during the swap. Padding lives on
-  // colPad/expPad so the root view stays a stable, morph-able container.
-  card: { borderRadius: 22, overflow: 'hidden', position: 'relative' },
-  expPad: { padding: 18, paddingBottom: 16 },
-  colPad: { padding: 13 },
-  cardSolo: { borderWidth: 1, borderColor: 'rgba(255,255,255,0.13)' },
-  cardCouple: { borderWidth: 1, borderColor: 'rgba(127,151,187,0.42)' },
-  cardSoloExp: { borderWidth: 2, borderColor: 'rgba(242,185,64,0.45)' },
-  cardCoupleExp: { borderWidth: 1, borderColor: 'rgba(127,151,187,0.5)' },
-
-  // Expanded
-  expTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  pill: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999 },
-  pillSolo: { backgroundColor: 'rgba(255,255,255,0.16)' },
-  pillCouple: { backgroundColor: 'rgba(255,255,255,0.14)' },
-  pillDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: Colors.orange },
-  pillTxt: { fontFamily: Fonts.jakartaExtraBold, fontSize: 9.5, letterSpacing: 1.2, color: '#fff', textTransform: 'uppercase' },
-  expTopLeft: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1, minWidth: 0 },
-  progressTxt: { fontFamily: Fonts.jakartaExtraBold, fontSize: 13, color: 'rgba(255,255,255,0.92)', letterSpacing: 0.2 },
-  progressUnit: { fontFamily: Fonts.jakartaSemiBold, fontSize: 11, color: 'rgba(255,255,255,0.55)', letterSpacing: 0.2 },
-  expTitle: { fontFamily: Fonts.jakartaExtraBold, fontSize: 30, color: '#fff', letterSpacing: -0.8, lineHeight: 33, marginTop: 12, minHeight: 66 },
-  expSub: { fontFamily: Fonts.ttLight, fontSize: 11.5, color: 'rgba(255,255,255,0.55)', marginTop: 5 },
-  expBodyBox: { minHeight: 38, marginTop: 9 },
-  expDesc: { fontFamily: Fonts.jakartaRegular, fontSize: 13, color: 'rgba(255,255,255,0.8)', lineHeight: 19 },
-  expNavRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 12, marginBottom: 12, minHeight: 18 },
-  // Compact overrides for short screens (saves ~55px on the expanded card).
-  expPadSmall: { padding: 14, paddingBottom: 12 },
-  expTitleSmall: { fontSize: 24, lineHeight: 27, marginTop: 18, minHeight: 30 },
-  expBodyBoxSmall: { minHeight: 30, marginTop: 6 },
-  expNavRowSmall: { marginTop: 8, marginBottom: 8 },
-  swipeHint: { fontFamily: Fonts.jakartaBold, fontSize: 9.5, letterSpacing: 1.4, color: 'rgba(255,255,255,0.45)' },
-  emptyTxt: { fontFamily: Fonts.jakartaRegular, fontSize: 14, color: 'rgba(255,255,255,0.72)', lineHeight: 20, marginTop: 14, marginBottom: 6 },
-  emptyCtaBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start', paddingVertical: 10, marginBottom: 2 },
-  emptyCtaTxt: { fontFamily: Fonts.jakartaBold, fontSize: 13, color: '#fff' },
-
-  // Start
-  startBtnSolo: { backgroundColor: Colors.orange, borderRadius: 13, paddingVertical: 15, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10 },
-  startTxt: { fontFamily: Fonts.jakartaBold, fontSize: 15, color: '#fff' },
-  startArrow: { fontFamily: Fonts.jakartaBold, fontSize: 17, color: '#fff', marginTop: -1 },
-  lockBanner: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: 'rgba(0,0,0,0.28)', borderRadius: 13, paddingVertical: 14, borderWidth: 1, borderColor: 'rgba(255,255,255,0.14)' },
-  lockTxt: { fontFamily: Fonts.jakartaBold, fontSize: 13.5, color: 'rgba(255,255,255,0.9)' },
-
-  // In-progress (solo)
-  inProgBtn: { backgroundColor: 'rgba(0,0,0,0.28)', borderRadius: 13, paddingVertical: 14, paddingHorizontal: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderWidth: 1, borderColor: 'rgba(255,255,255,0.12)', marginTop: 4 },
-  inProgLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  inProgDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.orange },
-  inProgTxt: { fontFamily: Fonts.jakartaBold, fontSize: 14, color: '#fff' },
-
-  // Collapsed
-  collapsedRow: { flexDirection: 'row', alignItems: 'center', gap: 11 },
-  collapsedMid: { flex: 1, minWidth: 0 },
-  labelBare: { fontFamily: Fonts.jakartaExtraBold, fontSize: 9, letterSpacing: 1.1, textTransform: 'uppercase' },
-  labelSolo: { color: 'rgba(255,255,255,0.55)' },
-  labelCouple: { color: '#A9C2E2' },
-  collapsedTitle: { fontFamily: Fonts.jakartaBold, fontSize: 16.5, color: '#fff', letterSpacing: -0.3, marginTop: 3 },
-  expandBtn: { width: 38, height: 38, borderRadius: 19, backgroundColor: 'rgba(255,255,255,0.12)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.26)', alignItems: 'center', justifyContent: 'center' },
-
-  // Dots
-  dotsRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  dot: { width: 7, height: 7, borderRadius: 4, backgroundColor: 'rgba(255,255,255,0.25)' },
-  dotOn: { width: 20, borderRadius: 4 },
-  dotOnSolo: { backgroundColor: Colors.orange },
-  dotOnCouple: { backgroundColor: CBLUE_DOT },
-
-  // Mini avatars
-  miniAv: { width: 26, height: 26, borderRadius: 13, borderWidth: 1.5, borderColor: '#F7F6F3', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', backgroundColor: '#3A3A3A' },
-  miniAvFallback: { backgroundColor: '#5A4A22' },
-  miniAvCouple: { backgroundColor: CBLUE },
-  miniAvTxt: { fontFamily: Fonts.jakartaExtraBold, fontSize: 10, color: '#fff' },
-  pairStack: { flexDirection: 'row', alignItems: 'center' },
-  pairSecond: { marginLeft: -10 },
-
-  // Readiness card
-  readyCard: { flexDirection: 'row', alignItems: 'center', gap: 14, backgroundColor: 'rgba(255,255,255,0.7)', borderWidth: 1, borderColor: 'rgba(10,10,10,0.09)', borderRadius: 20, paddingVertical: 14, paddingHorizontal: 16, marginBottom: 14 },
-  readyRingWrap: { width: 58, height: 58 },
-  readyMid: { flex: 1, minWidth: 0 },
-  readyEye: { fontFamily: Fonts.jakartaExtraBold, fontSize: 9, letterSpacing: 0.8, color: '#A8801A', textTransform: 'uppercase' },
-  readySub: { fontFamily: Fonts.jakartaSemiBold, fontSize: 12.5, color: 'rgba(10,10,10,0.7)', marginTop: 4 },
-  readyStatRow: { flexDirection: 'row', alignItems: 'center', marginTop: 5 },
-  readyDot: { width: 7, height: 7, borderRadius: 3.5, marginRight: 5 },
-  readyDotCouple: { marginLeft: 14 },
-  readyAvs: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  haloGold: { borderRadius: 999, padding: 2, borderWidth: 2, borderColor: Colors.orange },
-  haloBlue: { borderWidth: 2, borderColor: CBLUE },
-
-  // All focus points link
-  allLink: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4, paddingVertical: 12, marginTop: 2 },
-  allLinkText: { fontFamily: Fonts.jakartaSemiBold, fontSize: 13, color: 'rgba(13,13,18,0.45)' },
+// ─── This week rail ───────────────────────────────────────────────────────────
+const wk = StyleSheet.create({
+  wrap: { paddingTop: 24, paddingHorizontal: SIDE },
+  top: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 10 },
+  title: { fontFamily: Fonts.semiBold, fontSize: 10, letterSpacing: 1.6, textTransform: 'uppercase', color: INK },
+  metaRow: { flexDirection: 'row', alignItems: 'center', gap: 4, flexShrink: 1 },
+  meta: { fontFamily: Fonts.regular, fontSize: 11.5, color: INK_2, flexShrink: 1 },
+  days: { flexDirection: 'row', marginTop: 9, marginHorizontal: -2.5 },
+  day: { flex: 1, paddingHorizontal: 2.5 },
+  seg: { height: 3, borderRadius: 2, backgroundColor: LINE },
+  segNow: { backgroundColor: INK_3 },
+  letter: { fontFamily: Fonts.regular, fontSize: 9, letterSpacing: 0.9, color: INK_2, textAlign: 'center', paddingTop: 5 },
+  letterNow: { fontFamily: Fonts.bold, color: GOLD_INK },
 });
 
-// ─── This Week card (top of Train) ────────────────────────────────────────────
-const w = StyleSheet.create({
-  // Flush on the page background (no card box) with a hairline separating it
-  // from the focus card below — matches the mockup.
-  card: { paddingHorizontal: 20, paddingTop: 4, paddingBottom: 16, borderBottomWidth: 1, borderBottomColor: 'rgba(10,10,10,0.07)' },
-  head: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 16 },
-  title: { fontFamily: Fonts.ttExtraBold, fontSize: 15, color: '#0D0D12', letterSpacing: 1.4, textTransform: 'uppercase' },
-  date: { fontFamily: Fonts.ttLight, fontSize: 15, color: 'rgba(13,13,18,0.4)', letterSpacing: 0.3 },
-  dayRow: { flexDirection: 'row', marginBottom: 6 },
-  dayCol: { flex: 1, alignItems: 'center' },
-  dayLetter: { fontFamily: Fonts.jakartaExtraBold, fontSize: 20, color: 'rgba(13,13,18,0.3)', letterSpacing: 0.5 },
-  dayLetterToday: { color: Colors.orange },
-  // Compact overrides for short screens (saves ~25px of header height).
-  cardSmall: { paddingTop: 2, paddingBottom: 8 },
-  headSmall: { marginBottom: 8 },
-  dayLetterSmall: { fontSize: 15 },
-  pillRow: { flexDirection: 'row', gap: 3, marginTop: 7, height: 4 },
-  pill: { width: 9, height: 4, borderRadius: 2 },
-  pillTraining: { backgroundColor: Colors.orange },
-  pillClass: { backgroundColor: '#4CD964' },
-  pillPrivate: { backgroundColor: '#4A90D9' },
-  statLine: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 16 },
-  stat: { flexDirection: 'row', alignItems: 'center', gap: 7 },
-  statNum: { fontFamily: Fonts.ttBold, fontSize: 17, color: '#0D0D12' },
-  statLbl: { fontFamily: Fonts.ttLight, fontSize: 14, color: 'rgba(13,13,18,0.55)', letterSpacing: 0.2 },
+// ─── Readiness head ───────────────────────────────────────────────────────────
+const rd = StyleSheet.create({
+  // Train's first steps, as Home's Start pill is for a coach.
+  setup: { paddingHorizontal: SIDE, paddingTop: 24 },
+  setupBtn: { height: 58, borderRadius: 999, backgroundColor: GOLD, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 11 },
+  setupT: { fontFamily: Fonts.bold, fontSize: 19, letterSpacing: -0.4, color: INK },
+  head: { flexDirection: 'row', alignItems: 'center', gap: 18, paddingTop: 16, paddingHorizontal: SIDE },
+  dial: { width: DIAL_SIZE, height: DIAL_SIZE },
+  center: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
+  pct: { fontFamily: Fonts.bold, fontSize: 40, letterSpacing: -1.8, color: INK, fontVariant: ['tabular-nums'], lineHeight: 45 },
+  pctUnit: { fontFamily: Fonts.medium, fontSize: 17, letterSpacing: 0, color: INK_2 },
+  ready: { fontFamily: Fonts.semiBold, fontSize: 9.5, letterSpacing: 1.52, textTransform: 'uppercase', color: INK_2, marginTop: 2 },
+  copy: { flex: 1, minWidth: 0, gap: 6 },
+  lead: { fontFamily: Fonts.semiBold, fontSize: 15.5, letterSpacing: -0.28, lineHeight: 20, color: INK },
+  sub: { fontFamily: Fonts.regular, fontSize: 12.5, lineHeight: 18, color: INK_2 },
+  cta: { alignSelf: 'flex-start', paddingVertical: 4 },
+  ctaTxt: { fontFamily: Fonts.semiBold, fontSize: 12.5, color: GOLD_INK },
 });
 
-// ─── Get ready · next private — readiness card (bottom of Train) ──────────────
-const rdl = StyleSheet.create({
-  card: { backgroundColor: 'rgba(255,255,255,0.5)', borderWidth: 1, borderColor: 'rgba(10,10,10,0.09)', borderRadius: 16, paddingHorizontal: 14, paddingVertical: 12, marginBottom: 4, ...Platform.select({ ios: { shadowColor: '#000', shadowOpacity: 0.05, shadowOffset: { width: 0, height: 5 }, shadowRadius: 14 }, android: {} }) },
-  topRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
-  eye: { fontFamily: Fonts.jakartaExtraBold, fontSize: 9, letterSpacing: 1.2, textTransform: 'uppercase', color: '#A8801A' },
-  hd: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  lab: { fontFamily: Fonts.jakartaExtraBold, fontSize: 10, letterSpacing: 1.1, textTransform: 'uppercase' },
-  cnt: { fontFamily: Fonts.jakartaBold, fontSize: 11, color: 'rgba(13,13,18,0.45)' },
-  split: { flexDirection: 'row', alignItems: 'stretch' },
-  main: { flex: 1, minWidth: 0 },
-  fp: { flexDirection: 'row', alignItems: 'center', gap: 9, paddingVertical: 3.5 },
-  nm: { flex: 1, fontFamily: Fonts.jakartaSemiBold, fontSize: 13, color: 'rgba(10,10,10,0.72)' },
-  nmTodo: { color: 'rgba(13,13,18,0.45)', fontFamily: Fonts.jakartaMedium },
-  fr: { fontFamily: Fonts.jakartaExtraBold, fontSize: 11.5 },
-  empty: { fontFamily: Fonts.jakartaSemiBold, fontSize: 12.5, color: 'rgba(13,13,18,0.45)', paddingVertical: 4 },
-  side: { width: 50, borderWidth: 1, borderRadius: 13, alignItems: 'center', justifyContent: 'space-around', paddingVertical: 5 },
-  srow: { alignItems: 'center', justifyContent: 'center', paddingVertical: 2 },
+// ─── Focus points header + track ──────────────────────────────────────────────
+const fp = StyleSheet.create({
+  head: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, paddingTop: 16, paddingHorizontal: SIDE, paddingBottom: 9 },
+  label: { fontFamily: Fonts.semiBold, fontSize: 10, letterSpacing: 1.6, textTransform: 'uppercase', color: INK_2 },
+  link: { fontFamily: Fonts.semiBold, fontSize: 12.5, color: GOLD_INK },
+  // A ScrollView grows by default; the cards keep their own height instead of
+  // filling the free space of the page.
+  carousel: { flexGrow: 0 },
+  track: { paddingHorizontal: SIDE, gap: CARD_GAP, alignItems: 'stretch' },
 });
 
-// ─── Train switch skeleton (Latin↔Ballroom toggle) ───────────────────────────
-const tk = StyleSheet.create({
-  bigCard: { backgroundColor: '#1C1C1E', borderRadius: 22, padding: 18, paddingBottom: 16 },
-  smallCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#1C1C1E', borderRadius: 22, padding: 13, marginTop: 12 },
-  readyCard: { backgroundColor: 'rgba(255,255,255,0.5)', borderWidth: 1, borderColor: 'rgba(10,10,10,0.09)', borderRadius: 16, paddingHorizontal: 14, paddingVertical: 12, marginBottom: 4 },
-  readyTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 },
-  readyRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 4 },
+// ─── Focus card ───────────────────────────────────────────────────────────────
+const fc = StyleSheet.create({
+  card: { minHeight: 292, borderRadius: 20, paddingVertical: 16, paddingHorizontal: 18 },
+  body: { gap: 10 },
+  top: { flexDirection: 'row', alignItems: 'center', gap: 9, minHeight: 27 },
+  tag: { fontFamily: Fonts.semiBold, fontSize: 9.5, letterSpacing: 1.33, textTransform: 'uppercase', color: GOLD },
+  ix: { paddingLeft: 9, borderLeftWidth: 1, borderLeftColor: 'rgba(255,255,255,0.24)' },
+  ixTxt: { fontFamily: Fonts.regular, fontSize: 11, letterSpacing: 0.11, color: 'rgba(255,255,255,0.7)' },
+  ixNum: { fontFamily: Fonts.semiBold, color: '#FFFFFF' },
+  who: { marginLeft: 'auto', flexDirection: 'row', alignItems: 'center' },
+  // 23pt disc + a 2pt ring in the card colour, so the pair reads as cut out.
+  av: { width: 27, height: 27, borderRadius: 13.5, borderWidth: 2, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.2)', overflow: 'hidden' },
+  avPartner: { marginLeft: -10 },
+  avTxt: { fontFamily: Fonts.semiBold, fontSize: 9.5, color: '#FFFFFF' },
+  title: { fontFamily: Fonts.bold, fontSize: 28, letterSpacing: -1.06, lineHeight: 30, color: '#FFFFFF' },
+  desc: { fontFamily: Fonts.regular, fontSize: 13.5, lineHeight: 19, color: 'rgba(255,255,255,0.72)' },
+  foot: { marginTop: 'auto', paddingTop: 14, gap: 12 },
+  steps: { flexDirection: 'row', alignItems: 'center', gap: 9 },
+  ticks: { flex: 1, flexDirection: 'row', gap: 4 },
+  tick: { flex: 1, height: 4, borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.22)' },
+  tickOn: { backgroundColor: GOLD },
+  stepsTxt: { fontFamily: Fonts.regular, fontSize: 11.5, color: 'rgba(255,255,255,0.75)', fontVariant: ['tabular-nums'] },
+  go: { height: 46, borderRadius: 999, backgroundColor: GOLD, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9 },
+  goAgain: { backgroundColor: 'transparent', borderWidth: 1, borderColor: 'rgba(255,255,255,0.3)' },
+  goTxt: { fontFamily: Fonts.semiBold, fontSize: 15, letterSpacing: -0.15, color: INK },
+  live: { height: 46, borderRadius: 999, paddingHorizontal: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: 'rgba(255,255,255,0.1)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.18)' },
+  liveLeft: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1 },
+  liveDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: GOLD },
+  liveTxt: { fontFamily: Fonts.semiBold, fontSize: 14.5, color: '#FFFFFF', flexShrink: 1 },
+  liveTimer: { fontFamily: Fonts.semiBold, fontSize: 14, color: 'rgba(255,255,255,0.7)', fontVariant: ['tabular-nums'] },
+});
+
+// ─── Carousel dots ────────────────────────────────────────────────────────────
+const dt = StyleSheet.create({
+  row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingTop: 12 },
+  dot: { width: 7, height: 7, borderRadius: 3.5, backgroundColor: 'rgba(10,10,10,0.2)' },
+  dotOn: { width: 20, backgroundColor: GOLD },
+  label: { fontFamily: Fonts.regular, fontSize: 10.5, letterSpacing: 0.63, color: INK_2, marginLeft: 7 },
+});
+
+// ─── Last lesson summary ──────────────────────────────────────────────────────
+const ls = StyleSheet.create({
+  card: { flexDirection: 'row', alignItems: 'center', gap: 13, paddingVertical: 13, paddingHorizontal: 15, borderRadius: 15, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: 'rgba(10,10,10,0.09)' },
+  icon: { width: 34, height: 34, borderRadius: 10, backgroundColor: '#FCEFC9', alignItems: 'center', justifyContent: 'center' },
+  text: { flex: 1, minWidth: 0, gap: 2 },
+  title: { fontFamily: Fonts.semiBold, fontSize: 15, letterSpacing: -0.22, color: INK },
+  meta: { fontFamily: Fonts.regular, fontSize: 11.5, color: INK_2 },
 });

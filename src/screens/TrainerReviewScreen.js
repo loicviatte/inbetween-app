@@ -16,6 +16,7 @@ import { Fonts, Spacing } from '../theme';
 import { supabase } from '../services/supabase/client';
 import { clearUserCaches } from '../storage/userCaches';
 import { clearPushToken } from '../services/notifications';
+import { dateLabel } from '../utils/dates';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -585,7 +586,7 @@ function ClassCard({ classGroup, onPress }) {
             const raw = classGroup.candidates[0]?.created_at;
             const d = raw ? new Date(raw) : null;
             return d && !Number.isNaN(d.getTime())
-              ? d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+              ? dateLabel(d)
               : '';
           })()}
         </Text>
@@ -953,8 +954,8 @@ export default function TrainerReviewScreen({ navigation }) {
     await clearUserCaches();
     // Drop this device's push token before sign-out (shared-device hygiene).
     const { data: { session } } = await supabase.auth.getSession();
-    clearPushToken(session?.user?.id);
-    await supabase.auth.signOut();
+    await clearPushToken(session?.user?.id);
+    await supabase.auth.signOut({ scope: 'local' });
   }
 
   const isLoading = loading || scoreLoading;
@@ -1201,26 +1202,15 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
   },
   headerTitle: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 16,
     color: WHITE,
     letterSpacing: -0.2,
   },
   logoutText: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     color: SECONDARY,
-  },
-  classTitleRow: {
-    paddingHorizontal: Spacing.side,
-    paddingBottom: 8,
-  },
-  classTitleText: {
-    fontFamily: Fonts.jakartaSemiBold,
-    fontSize: 12,
-    color: ORANGE,
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
   },
   center: {
     flex: 1,
@@ -1234,14 +1224,14 @@ const styles = StyleSheet.create({
     color: '#4CAF50',
   },
   doneTitle: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 22,
     color: WHITE,
     marginBottom: 8,
     letterSpacing: -0.3,
   },
   doneSubtitle: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 14,
     color: SECONDARY,
     textAlign: 'center',
@@ -1255,7 +1245,7 @@ const styles = StyleSheet.create({
     borderColor: CARD_BORDER,
   },
   refreshBtnText: {
-    fontFamily: Fonts.jakartaSemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 14,
     color: WHITE,
   },
@@ -1281,16 +1271,12 @@ const tabStyles = StyleSheet.create({
     borderColor: ORANGE,
   },
   tabPillText: {
-    fontFamily: Fonts.jakartaSemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 13,
     color: SECONDARY,
   },
   tabPillTextActive: {
     color: BG,
-  },
-  tabBadge: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 13,
   },
 });
 
@@ -1303,7 +1289,7 @@ const crStyles = StyleSheet.create({
     marginBottom: 16,
   },
   backBtnText: {
-    fontFamily: Fonts.jakartaSemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 13,
     color: SECONDARY,
   },
@@ -1317,7 +1303,7 @@ const crStyles = StyleSheet.create({
     alignItems: 'center',
   },
   submittedBannerText: {
-    fontFamily: Fonts.jakartaSemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 14,
     color: '#4CAF50',
   },
@@ -1332,7 +1318,7 @@ const crStyles = StyleSheet.create({
     opacity: 0.35,
   },
   submitBtnText: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 15,
     color: BG,
   },
@@ -1347,13 +1333,13 @@ const dcStyles = StyleSheet.create({
     overflow: 'hidden',
   },
   actionBadgeText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 10,
     textTransform: 'uppercase',
     letterSpacing: 0.8,
   },
   existingText: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     color: SECONDARY,
     marginBottom: 10,
@@ -1363,14 +1349,14 @@ const dcStyles = StyleSheet.create({
     marginBottom: 16,
   },
   studentName: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 18,
     color: WHITE,
     letterSpacing: -0.3,
     marginBottom: 2,
   },
   classTitle: {
-    fontFamily: Fonts.jakartaSemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 12,
     color: ORANGE,
     textTransform: 'uppercase',
@@ -1384,7 +1370,7 @@ const clStyles = StyleSheet.create({
     paddingBottom: 48,
   },
   classHeader: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 18,
     color: WHITE,
     letterSpacing: -0.3,
@@ -1404,14 +1390,14 @@ const clStyles = StyleSheet.create({
   },
   cardBody: { flex: 1 },
   title: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 15,
     color: WHITE,
     marginBottom: 4,
     letterSpacing: -0.2,
   },
   date: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 12,
     color: SECONDARY,
   },
@@ -1428,7 +1414,7 @@ const clStyles = StyleSheet.create({
     borderColor: 'rgba(76,175,80,0.3)',
   },
   badgeText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 13,
     color: ORANGE,
   },
@@ -1462,12 +1448,12 @@ const fpStyles = StyleSheet.create({
     marginBottom: 10,
   },
   doneBadgeText: {
-    fontFamily: Fonts.jakartaSemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 11,
     color: '#4CAF50',
   },
   index: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 10,
     color: SECONDARY,
     textTransform: 'uppercase',
@@ -1475,14 +1461,14 @@ const fpStyles = StyleSheet.create({
     marginBottom: 6,
   },
   title: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 18,
     color: WHITE,
     letterSpacing: -0.3,
     marginBottom: 4,
   },
   subtitle: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     color: SECONDARY,
     lineHeight: 19,
@@ -1503,12 +1489,12 @@ const fpStyles = StyleSheet.create({
     borderColor: CARD_BORDER,
   },
   danceBadgeText: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 11,
     color: SECONDARY,
   },
   tapHint: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 11,
     color: 'rgba(255,255,255,0.2)',
     fontStyle: 'italic',
@@ -1521,7 +1507,7 @@ const subStyles = StyleSheet.create({
     paddingBottom: 48,
   },
   label: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 10,
     color: SECONDARY,
     textTransform: 'uppercase',
@@ -1547,7 +1533,7 @@ const subStyles = StyleSheet.create({
     borderColor: ORANGE,
   },
   pillText: {
-    fontFamily: Fonts.jakartaSemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 13,
     color: SECONDARY,
   },
@@ -1555,13 +1541,13 @@ const subStyles = StyleSheet.create({
     color: BG,
   },
   idHint: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 10,
     color: 'rgba(255,255,255,0.2)',
     marginTop: 6,
   },
   emptyStudents: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     color: SECONDARY,
     fontStyle: 'italic',
@@ -1578,7 +1564,7 @@ const subStyles = StyleSheet.create({
     borderRadius: 12,
     paddingHorizontal: 14,
     paddingVertical: 12,
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     color: WHITE,
     minHeight: 220,
@@ -1600,7 +1586,7 @@ const subStyles = StyleSheet.create({
     borderColor: 'rgba(232,64,64,0.3)',
   },
   resultText: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     lineHeight: 20,
   },
@@ -1615,7 +1601,7 @@ const subStyles = StyleSheet.create({
   },
   submitBtnDisabled: { opacity: 0.35 },
   submitBtnText: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 15,
     color: BG,
   },
@@ -1636,7 +1622,7 @@ const vStyles = StyleSheet.create({
     marginBottom: 12,
   },
   labelBadge: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 10,
     color: SECONDARY,
     textTransform: 'uppercase',
@@ -1649,25 +1635,11 @@ const vStyles = StyleSheet.create({
     overflow: 'hidden',
   },
   title: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 22,
     color: WHITE,
     marginBottom: 5,
     letterSpacing: -0.4,
-  },
-  subtitle: {
-    fontFamily: Fonts.jakartaSemiBold,
-    fontSize: 14,
-    color: 'rgba(255,255,255,0.85)',
-    marginBottom: 10,
-    lineHeight: 20,
-  },
-  context: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 13,
-    color: SECONDARY,
-    lineHeight: 19,
-    marginBottom: 10,
   },
   reasoningBox: {
     backgroundColor: 'rgba(255,255,255,0.04)',
@@ -1679,7 +1651,7 @@ const vStyles = StyleSheet.create({
     borderLeftColor: 'rgba(255,157,0,0.4)',
   },
   reasoningLabel: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 9,
     color: 'rgba(255,157,0,0.6)',
     textTransform: 'uppercase',
@@ -1687,19 +1659,11 @@ const vStyles = StyleSheet.create({
     marginBottom: 3,
   },
   reasoningText: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 12,
     color: 'rgba(255,255,255,0.5)',
     lineHeight: 17,
     fontStyle: 'italic',
-  },
-  drill: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 12,
-    color: 'rgba(255,157,0,0.7)',
-    fontStyle: 'italic',
-    marginBottom: 10,
-    lineHeight: 17,
   },
   danceRow: {
     flexDirection: 'row',
@@ -1716,7 +1680,7 @@ const vStyles = StyleSheet.create({
     borderColor: CARD_BORDER,
   },
   danceBadgeText: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 11,
     color: SECONDARY,
   },
@@ -1741,7 +1705,7 @@ const vStyles = StyleSheet.create({
     fontSize: 14,
   },
   ratingLabel: {
-    fontFamily: Fonts.jakartaSemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 12,
     color: SECONDARY,
   },
@@ -1753,7 +1717,7 @@ const vStyles = StyleSheet.create({
     borderRadius: 10,
     paddingHorizontal: 12,
     paddingVertical: 10,
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     color: WHITE,
     textAlignVertical: 'top',
@@ -1767,7 +1731,7 @@ const vStyles = StyleSheet.create({
     borderTopColor: 'rgba(255,255,255,0.07)',
   },
   fieldLabel: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 9,
     color: ORANGE,
     textTransform: 'uppercase',
@@ -1776,7 +1740,7 @@ const vStyles = StyleSheet.create({
     opacity: 0.8,
   },
   fieldContent: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     color: WHITE,
     lineHeight: 19,

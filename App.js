@@ -31,6 +31,7 @@ import {
   resetAnalyticsUser,
 } from './src/services/analytics';
 import AuthNavigator from './src/navigation/AuthNavigator';
+import { useOnboardingHold } from './src/utils/onboardingHold';
 import StudentAppNavigator from './src/navigation/StudentAppNavigator';
 import { isFirstScreenReady, onFirstScreenReady } from './src/utils/firstPaint';
 import InBetweenLoader from './src/components/InBetweenLoader';
@@ -95,6 +96,14 @@ const COACH_ACTION_TYPES = new Set([
   'name_match_confirm',
 ]);
 
+// Onboarding answers that couldn't be saved at sign-up (email confirmation held
+// the session back) are applied at the first sign-in. Loaded only when there
+// are some: this file is the cold-start path.
+function finishOnboarding(s) {
+  if (!s?.user?.user_metadata?.pending_onboarding) return;
+  require('./src/services/pendingOnboarding').applyPendingOnboarding(s).catch(() => {});
+}
+
 function handleNotificationTap(data) {
   if (!navigationRef.isReady()) return;
   const type = data?.type;
@@ -103,6 +112,15 @@ function handleNotificationTap(data) {
     // no 'Dashboard' route in either — the old target was a dead no-op). Land on
     // the Notifications list, which is registered in both navigators.
     navigationRef.navigate('Notifications');
+    return;
+  }
+  if ((type === 'attendance_check' || type === 'group_class_attendance') && data?.class_input_id) {
+    // "Were you in this class?" → the answer screen itself, as from the list.
+    navigationRef.navigate('AttendanceConfirm', {
+      classInputId: data.class_input_id,
+      coachName: data.coach_name,
+      classDate: data.lesson_date ?? data.class_date,
+    });
     return;
   }
   if (type === 'sync_reminder') {
@@ -141,6 +159,7 @@ function handleNotificationTap(data) {
 
 export default function App() {
   const [session, setSession] = useState(undefined);
+  const onboardingHeld = useOnboardingHold();
   const [userRole, setUserRole] = useState(null);
   const [userEmail, setUserEmail] = useState(null);
   // Cold-start: hold the logo until the first screen has painted (Home /
@@ -191,18 +210,17 @@ export default function App() {
     registerPushToken(userId).catch(() => {}); // fire-and-forget
   }
 
-  // TT Travels Next powers the onboarding / auth flow. In dev & production
-  // builds these are embedded natively (expo-font config plugin) so they
-  // paint on the first frame; in Expo Go the config-plugin fonts aren't
-  // available, so we also register them at runtime. We deliberately do NOT
-  // gate the first frame on this — text simply re-flows once they resolve.
+  // Syne sets the whole app. In production builds it is embedded natively
+  // (expo-font config plugin) so it paints on the first frame; on a binary
+  // built before the switch (or in Expo Go) it isn't, so we also register it
+  // at runtime. We deliberately do NOT gate the first frame on this — text
+  // simply re-flows once the faces resolve.
   useFonts({
-    'TTTravelsNextTrl-Lt': require('./assets/fonts/TTTravelsNext-Light.ttf'),
-    'TTTravelsNextTrl-Rg': require('./assets/fonts/TTTravelsNext-Regular.ttf'),
-    'TTTravelsNextTrl-Md': require('./assets/fonts/TTTravelsNext-Medium.ttf'),
-    'TTTravelsNextTrl-DmBd': require('./assets/fonts/TTTravelsNext-DemiBold.ttf'),
-    'TTTravelsNextTrl-Bd': require('./assets/fonts/TTTravelsNext-Bold.ttf'),
-    'TTTravelsNextTrl-XBd': require('./assets/fonts/TTTravelsNext-ExtraBold.ttf'),
+    'Syne-Regular': require('@expo-google-fonts/syne/400Regular/Syne_400Regular.ttf'),
+    'Syne-Medium': require('@expo-google-fonts/syne/500Medium/Syne_500Medium.ttf'),
+    'Syne-SemiBold': require('@expo-google-fonts/syne/600SemiBold/Syne_600SemiBold.ttf'),
+    'Syne-Bold': require('@expo-google-fonts/syne/700Bold/Syne_700Bold.ttf'),
+    'Syne-ExtraBold': require('@expo-google-fonts/syne/800ExtraBold/Syne_800ExtraBold.ttf'),
   });
 
   // Kick off the batched AsyncStorage hydration. Singleton promise so any
@@ -273,6 +291,7 @@ export default function App() {
       setUserEmail(s?.user?.email ?? null);
       maybeRegisterPush(s?.user?.id ?? null);
       loadRoleFor(s);
+      finishOnboarding(s);
       // Refresh the token in the background so the session's user_metadata
       // (esp. `role`) reflects any change made AFTER the user last signed in —
       // e.g. a student later promoted to coach. Otherwise they keep running on
@@ -288,6 +307,7 @@ export default function App() {
       setUserEmail(s?.user?.email ?? null);
       maybeRegisterPush(s?.user?.id ?? null);
       loadRoleFor(s);
+      finishOnboarding(s);
     });
 
     return () => subscription.unsubscribe();
@@ -329,7 +349,9 @@ export default function App() {
 
   // Show loading until session + role are resolved. Fonts are embedded
   // natively (expo-font config plugin), so no fontsLoaded gate.
-  const isLoading = session === undefined || (session !== null && userRole === null);
+  // Onboarding asks to keep the auth navigator while it shows the last screen
+  // of a sign-up it just completed (see src/utils/onboardingHold.js).
+  const isLoading = !onboardingHeld && (session === undefined || (session !== null && userRole === null));
 
   if (isLoading) {
     // Session/role not resolved yet — no navigator to mount, so the logo is all
@@ -338,7 +360,7 @@ export default function App() {
   }
 
   let activeNavigator;
-  if (!session) {
+  if (!session || onboardingHeld) {
     activeNavigator = <AuthNavigator />;
   } else if (userEmail === TRAINER_EMAIL) {
     const TrainerNavigator = require('./src/navigation/TrainerNavigator').default;

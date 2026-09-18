@@ -23,6 +23,7 @@ import { hydrateAllFromCold } from '../storage/hydrate';
 import { pokeUploadWorker } from '../services/uploadWorker';
 import { CoachDataProvider } from '../context/CoachDataContext';
 import { DjiSyncProvider } from '../context/DjiSyncContext';
+import { CoachTabViewProvider } from '../context/CoachTabView';
 import MicSyncFlowModal from '../components/MicSyncFlowModal';
 import SyncReminderModal from '../components/SyncReminderModal';
 import CoachTabHeader from '../components/CoachTabHeader';
@@ -36,16 +37,20 @@ const CoachStack = createNativeStackNavigator();
 
 function CoachMainTabs() {
   const [activeRoute, setActiveRoute] = useState('DASHBOARD');
-  const headerBg = activeRoute === 'DASHBOARD' ? '#F2F2EF' : '#FFFFFF';
+  // The header sits on the tabs' warm paper.
+  const headerBg = '#F2F0EB';
   return (
-    <View style={{ flex: 1, backgroundColor: '#FFFFFF' }}>
+    <CoachTabViewProvider>
+    <View style={{ flex: 1, backgroundColor: headerBg }}>
       <SafeAreaView style={{ backgroundColor: headerBg }} edges={['top']}>
-        <CoachTabHeader />
+        <CoachTabHeader mode={activeRoute === 'CLASS' ? 'classes' : 'group'} links={activeRoute === 'STUDENTS'} />
       </SafeAreaView>
       <View style={{ flex: 1 }}>
         <Tab.Navigator
           initialRouteName="DASHBOARD"
-          tabBar={(props) => <CustomTabBar {...props} />}
+          // Students and Class float the bar over their lists (frosted, like the
+          // student app); Home keeps it in its own row — its CTA sits above it.
+          tabBar={(props) => <CustomTabBar {...props} overlay={activeRoute !== 'DASHBOARD'} />}
           screenListeners={{
             state: (e) => {
               const r = e.data?.state?.routes?.[e.data.state.index];
@@ -58,11 +63,12 @@ function CoachMainTabs() {
           }}
         >
           <Tab.Screen name="STUDENTS" component={CoachHomeScreen} />
-          <Tab.Screen name="DASHBOARD" component={DashboardScreen} />
-          <Tab.Screen name="CLASS" component={CoachClassesScreen} />
+          <Tab.Screen name="DASHBOARD" component={DashboardScreen} options={{ tabBarLabel: 'HOME' }} />
+          <Tab.Screen name="CLASS" component={CoachClassesScreen} options={{ tabBarLabel: 'LESSONS' }} />
         </Tab.Navigator>
       </View>
     </View>
+    </CoachTabViewProvider>
   );
 }
 
@@ -96,7 +102,7 @@ function useCoachStartupEffects(navigationRef) {
         if (persisted) {
           Alert.alert(
             'Recording interrupted',
-            'Keep the app open to continue recording the class. Tap Continue to pick up where you left off.',
+            'Keep the app open to continue recording the lesson. Tap Continue to pick up where you left off.',
             [
               {
                 text: 'Continue',
@@ -113,7 +119,7 @@ function useCoachStartupEffects(navigationRef) {
         } else {
           Alert.alert(
             'Recording interrupted',
-            'Your previous recording was interrupted. The class was not saved. Please start a new one.',
+            'Your previous recording was interrupted. The lesson was not saved. Please start a new one.',
             [{ text: 'OK', style: 'default' }],
           );
         }
@@ -144,11 +150,6 @@ export default function CoachAppNavigator({ navigationRef }) {
           options={{ animation: 'slide_from_right' }}
         />
         <CoachStack.Screen
-          name="CoachSessionDetail"
-          getComponent={() => require('../screens/coach/CoachSessionDetailScreen').default}
-          options={{ animation: 'slide_from_right' }}
-        />
-        <CoachStack.Screen
           name="Notifications"
           getComponent={() => require('../screens/NotificationsScreen').default}
           options={{ animation: 'slide_from_left' }}
@@ -159,28 +160,18 @@ export default function CoachAppNavigator({ navigationRef }) {
           options={{ animation: 'slide_from_bottom' }}
         />
         <CoachStack.Screen
-          name="LocalUpload"
-          getComponent={() => require('../screens/coach/LocalUploadScreen').default}
-          options={{ animation: 'slide_from_right' }}
-        />
-        <CoachStack.Screen
           name="ActionNeeded"
           getComponent={() => require('../screens/coach/ActionNeededScreen').default}
           options={{ animation: 'slide_from_right' }}
         />
         <CoachStack.Screen
-          name="FocusValidation"
-          getComponent={() => require('../screens/coach/FocusValidationScreen').default}
+          name="CoachSettings"
+          getComponent={() => require('../screens/coach/CoachSettingsScreen').default}
           options={{ animation: 'slide_from_right' }}
         />
         <CoachStack.Screen
-          name="NameMatchConfirm"
-          getComponent={() => require('../screens/coach/NameMatchConfirmScreen').default}
-          options={{ animation: 'slide_from_bottom', presentation: 'modal' }}
-        />
-        <CoachStack.Screen
-          name="CoachProfile"
-          getComponent={() => require('../screens/coach/CoachProfileScreen').default}
+          name="NotificationSettings"
+          getComponent={() => require('../screens/NotificationSettingsScreen').default}
           options={{ animation: 'slide_from_right' }}
         />
         <CoachStack.Screen

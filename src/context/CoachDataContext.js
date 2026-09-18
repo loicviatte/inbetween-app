@@ -1,11 +1,13 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { AppState } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Notifications from 'expo-notifications';
 import { getMyStudents, getCoachActivityFeed, getPendingCoachRequests, getCoachNotes, getPendingFocusPoints, getReconcileNeeded } from '../storage/coachStorage';
 import { getPendingCoupleFocusPoints } from '../storage/coupleStorage';
 import { getUser } from '../storage/storage';
 import { getNotifications } from '../storage/notificationsStorage';
 import { supabase } from '../services/supabase/client';
+import { categoryFromStyle } from '../utils/danceCategory';
 
 const CoachDataContext = createContext(null);
 
@@ -19,6 +21,8 @@ export function CoachDataProvider({ children }) {
   const [actionCounts, setActionCounts] = useState({ focus: 0, merge: 0, name: 0, reconcile: 0, total: 0 });
   const [studentActionCounts, setStudentActionCounts] = useState({});
   const [initialLoading, setInitialLoading] = useState(true);
+  const [styleChoice, setStyleChoice] = useState(null); // 'latin' | 'ballroom' | null (not picked yet)
+  const [styleReadFor, setStyleReadFor] = useState(null); // the storage key the pick was read from
   const loaded = useRef(false);
 
   // Short-lived per-key cache so navigating away and back to a screen
@@ -60,12 +64,7 @@ export function CoachDataProvider({ children }) {
   }, []);
 
   const computeUnread = useCallback((notifs) => {
-    return (notifs || []).filter(
-      (n) =>
-        !n.read ||
-        n.type === 'merge_request_student' ||
-        n.type === 'name_match_confirm'
-    ).length;
+    return (notifs || []).filter((n) => !n.read || n.type === 'merge_request_student').length;
   }, []);
 
   const loadAll = useCallback(async () => {
@@ -112,28 +111,21 @@ export function CoachDataProvider({ children }) {
 
       const focusCount = (fps || []).length + (coupleFps || []).length;
       const mergeCount = mergesRes?.count || 0;
-      const nameNotifs = (notifs || []).filter((x) => x.type === 'name_match_confirm');
-      const nameCount = nameNotifs.length;
       const reconcileCount = (reconcileGroups || []).length;
       setActionCounts({
         focus: focusCount,
         merge: mergeCount,
-        name: nameCount,
         reconcile: reconcileCount,
-        total: focusCount + mergeCount + nameCount + reconcileCount,
+        total: focusCount + mergeCount + reconcileCount,
       });
 
-      // Per-student action count (focus validation + merge + name match)
+      // Per-student action count (focus validation + merge)
       const perStudent = {};
       for (const fp of fps || []) {
         if (fp.user_id) perStudent[fp.user_id] = (perStudent[fp.user_id] || 0) + 1;
       }
       for (const mr of mergesRes?.data || []) {
         if (mr.student_id) perStudent[mr.student_id] = (perStudent[mr.student_id] || 0) + 1;
-      }
-      for (const notif of nameNotifs) {
-        const sid = notif.data?.student_id;
-        if (sid) perStudent[sid] = (perStudent[sid] || 0) + 1;
       }
       setStudentActionCounts(perStudent);
     }).catch(() => {});
@@ -180,6 +172,54 @@ export function CoachDataProvider({ children }) {
     await loadAll();
   }, [loadAll]);
 
+  // ── Latin group / Ballroom group ──────────────────────────────────────────
+  // The header's style filter for Home and Students. The styles on offer are
+  // the coach's own dance style plus whatever their students are coached in
+  // here, so a coach whose roster spans both can switch even if their profile
+  // says one. The pick is remembered per coach.
+  const coachStyles = useMemo(() => {
+    const set = new Set();
+    if (user?.dance_style === 'Latin & Ballroom') { set.add('latin'); set.add('ballroom'); }
+    const own = categoryFromStyle(user?.dance_style);
+    if (own) set.add(own);
+    for (const s of students) for (const c of s.coachStyles || []) set.add(c);
+    return ['latin', 'ballroom'].filter((c) => set.has(c));
+  }, [user?.dance_style, students]);
+  const canSwitchStyle = coachStyles.length > 1;
+  const styleFilter = styleChoice && coachStyles.includes(styleChoice)
+    ? styleChoice
+    : (coachStyles[0] || 'latin');
+  // What readiness is scoped to: the group, or null (any style) when nothing
+  // says which style this coach teaches.
+  const styleCategory = coachStyles.length ? styleFilter : null;
+  const styleKey = user?.id ? `coachStyleFilter.v1:${user.id}` : null;
+
+  useEffect(() => {
+    if (!styleKey) return;
+    let alive = true;
+    AsyncStorage.getItem(styleKey)
+      .then((v) => { if (alive && (v === 'latin' || v === 'ballroom')) setStyleChoice(v); })
+      .catch(() => {})
+      .finally(() => { if (alive) setStyleReadFor(styleKey); });
+    return () => { alive = false; };
+  }, [styleKey]);
+  // Screens wait for the remembered group, so a Ballroom pick doesn't open on
+  // Latin and switch a beat later.
+  const styleLoading = !!styleKey && styleReadFor !== styleKey;
+
+  const setStyleFilter = useCallback((cat) => {
+    setStyleChoice(cat);
+    if (styleKey) AsyncStorage.setItem(styleKey, cat).catch(() => {});
+  }, [styleKey]);
+
+  // Students in the chosen group. One-style coaches see everyone; a student
+  // with no known style (legacy request) shows in both groups.
+  const styleStudents = useMemo(() => (
+    canSwitchStyle
+      ? students.filter((s) => !s.coachStyles?.length || s.coachStyles.includes(styleFilter))
+      : students
+  ), [students, canSwitchStyle, styleFilter]);
+
   // Targeted setters for screens that mutate data locally
   const updateStudents = useCallback((fn) => {
     setStudents((prev) => (typeof fn === 'function' ? fn(prev) : fn));
@@ -202,13 +242,18 @@ export function CoachDataProvider({ children }) {
         unreadCount,
         actionCounts,
         studentActionCounts,
-        initialLoading,
+        initialLoading: initialLoading || styleLoading,
         refresh,
         updateStudents,
         updateRequests,
         updateNotes,
         getOrFetch,
         invalidateCache,
+        styleFilter,
+        setStyleFilter,
+        canSwitchStyle,
+        styleCategory,
+        styleStudents,
       }}
     >
       {children}

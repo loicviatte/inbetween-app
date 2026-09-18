@@ -1,117 +1,163 @@
-import React, { useState, useCallback } from 'react';
+// Every focus point the dancer can train (docs/design/all-focus-points.html):
+// one feed per side — what is active now, then what has been retired — in the
+// dark cards of the Train page, with the practice button on each one. A group
+// lesson's focus points retire when the same coach's next group lesson goes
+// live, so the Group side shows the latest lesson per coach, then the rest.
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
   ScrollView,
+  ActivityIndicator,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
+import { LinearGradient } from 'expo-linear-gradient';
+import MaskedView from '@react-native-masked-view/masked-view';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Colors, Fonts, Spacing } from '../theme';
+import { Fonts } from '../theme';
 import {
   getAllFocusPointsBundle,
   getActiveSoloFocusPoints,
   getPastFocusPoints,
+  getPastGroupFocusPoints,
   getSessionCountForFocus,
   startTrainingSession,
 } from '../utils/algorithm';
 import { getActiveSession } from '../storage/activeSession';
-import { GenericListSkeleton } from '../components/Skeleton';
-import HeroCardGradient from '../components/HeroCardGradient';
+import { SkeletonBox } from '../components/Skeleton';
+import { StyleMenu, MENU_W } from '../components/StyleTitle';
+import { dayLabel } from '../utils/dates';
+import { categoryFromDances } from '../utils/danceCategory';
 
-const GOLD = '#F6D27A';
-const CBLUE = '#2E4670';
+const PAGE = '#F2F0EB';
+const INK = '#0A0A0A';
+const INK_62 = 'rgba(10,10,10,0.62)';
+const INK_65 = 'rgba(10,10,10,0.65)';
+const LINE = 'rgba(10,10,10,0.12)';
+const GOLD = '#E8B530';
+const GOLD_INK = '#8A6414';
+const SALMON = '#F6A192';
+const RED = '#A8412F';
+const NAVY = '#22314D';
+const SIDE = 20;
+const EDGE_FADE = 14;
 const CACHE_KEY = '@cache_all_focus_v2:'; // suffixed by dance category ('all' | 'latin' | 'ballroom')
 
-const TIER_COLOR = {
-  critical:  '#FF4B4B',
-  important: Colors.orange,
-  supporting:'#ACADB9',
+// Tone on the dark card, then on the white one of a retired focus point.
+const TIER = {
+  critical:   { label: 'Critical',   dark: SALMON, light: RED },
+  important:  { label: 'Important',  dark: GOLD,   light: GOLD_INK },
+  supporting: { label: 'Supporting', dark: GOLD,   light: GOLD_INK },
+};
+const NO_TIER = { label: 'Focus', dark: GOLD, light: GOLD_INK };
+
+const STYLE_OPTIONS = [
+  { key: 'all', label: 'All styles' },
+  { key: 'latin', label: 'Latin' },
+  { key: 'ballroom', label: 'Ballroom' },
+];
+
+const EMPTY = {
+  solo:   'Log a private lesson to get your next focus points.',
+  couple: 'Your shared focus points from couple lessons show up here.',
+  group:  'Focus points from your last group lessons show up here.',
 };
 
-const TIER_LABEL = {
-  critical:  'Critical',
-  important: 'Important',
-  supporting:'Supporting',
-};
+const GROUP_HEAD = { latin: 'Latin group', ballroom: 'Ballroom group' };
 
-function formatDate(iso) {
-  if (!iso) return null;
-  const d = new Date(iso);
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+// Where a focus point comes from: "Private · Sat 5 Jul", "Latin group · Today".
+function sourceOf(item, kind) {
+  const cls = item.class_inputs;
+  const when = cls?.created_at || item.created_at;
+  let head = 'Private';
+  if (kind === 'couple') head = 'Couple';
+  if (kind === 'group') head = GROUP_HEAD[categoryFromDances(item.dance)] || 'Group';
+  return [head, when ? dayLabel(when) : null].filter(Boolean).join(' · ');
 }
 
-function FocusCard({ item, tab, accent, onPractice, starting }) {
-  const cls = item.class_inputs;
-  const tier = item.tier || 'supporting';
-  const isCouple = tab === 'couple';
-  const showProgress =
-    (tab === 'solo' || tab === 'couple') &&
-    Number.isFinite(item._target) && item._target > 0;
-  const done = item._done || 0;
-  const target = item._target || 0;
-  const complete = showProgress && done >= target;
+function Marker({ label, count, onLayout }) {
+  return (
+    <View style={s.mk} onLayout={onLayout}>
+      <Text style={s.mkT}>{label}</Text>
+      <View style={s.mkLine} />
+      <Text style={s.mkN}>{count}</Text>
+    </View>
+  );
+}
+
+function FocusCard({ item, kind, past, live, busy, disabled, onPractice }) {
+  const tier = TIER[item.tier] || NO_TIER;
+  const tone = past ? tier.light : tier.dark;
+  // Only the active set knows how many sessions each point asks for; a retired
+  // one has no count worth showing.
+  const target = !past && Number.isFinite(item._target) && item._target > 0 ? item._target : 0;
+  const done = target ? Math.min(item._done || 0, target) : 0;
+  const complete = target > 0 && done >= target;
+  const label = live ? 'Resume' : past ? 'Again' : 'Practice';
+  const ghost = past || complete;
+  const ink = past ? INK : ghost ? '#FFFFFF' : INK;
 
   return (
-    <View style={c.card}>
-      <HeroCardGradient />
-
-      {/* Top row: tier + progress */}
-      <View style={c.topRow}>
-        <View style={c.tierGroup}>
-          <View style={[c.tierDot, { backgroundColor: TIER_COLOR[tier] }]} />
-          <Text style={c.tierLabel}>{TIER_LABEL[tier] || 'Focus'}</Text>
+    <View style={[c.card, { backgroundColor: kind === 'solo' ? INK : NAVY }, past && c.cardPast]}>
+      <View style={c.cb}>
+        <View style={c.tag}>
+          <View style={[c.dot, { backgroundColor: tone }]} />
+          <Text style={[c.tagT, { color: tone }]}>{tier.label}</Text>
         </View>
-        {showProgress && (
-          <View style={c.progressWrap}>
-            {complete && <Ionicons name="checkmark-circle" size={12} color={GOLD} />}
-            <Text style={c.progressText}>{done}/{target} sessions</Text>
-          </View>
-        )}
+        <Text style={[c.src, past && c.srcPast]} numberOfLines={1}>{sourceOf(item, kind)}</Text>
       </View>
 
-      {/* Name */}
-      <Text style={c.name}>{item.name}</Text>
-
-      {/* Subtitle */}
+      <Text style={[c.name, past && c.namePast]}>{item.name}</Text>
       {!!item.subtitle && (
-        <Text style={c.subtitle} numberOfLines={4}>{item.subtitle}</Text>
+        <Text style={[c.cue, past && c.cuePast]} numberOfLines={4}>{item.subtitle}</Text>
       )}
 
-      {/* Linked class (group tab) */}
-      {!!cls && (
-        <View style={c.classBlock}>
-          <View style={c.classDivider} />
-          <View style={c.classRow}>
-            <Ionicons name="people-outline" size={11} color={GOLD} />
-            <Text style={c.classMeta}>
-              {[cls.teacher_name, cls.dance, formatDate(cls.created_at)].filter(Boolean).join(' · ')}
-            </Text>
-          </View>
-          {!!cls.class_summary && (
-            <Text style={c.classSummary} numberOfLines={2}>{cls.class_summary}</Text>
-          )}
-        </View>
-      )}
+      <View style={[c.foot, !target && c.footEnd]}>
+        {target > 0 && (
+          <>
+            <View style={c.tk}>
+              {Array.from({ length: target }).map((_, i) => (
+                <View key={i} style={[c.seg, i < done && c.segOn]} />
+              ))}
+            </View>
+            <Text style={c.count}>{done} of {target}</Text>
+          </>
+        )}
+        <TouchableOpacity
+          style={[c.go, complete && c.goDone, past && c.goPast, disabled && !busy && c.goIdle]}
+          activeOpacity={0.85}
+          disabled={disabled}
+          onPress={() => onPractice(item)}
+          accessibilityRole="button"
+          accessibilityLabel={`${label} ${item.name}`}
+        >
+          {busy
+            ? <ActivityIndicator size="small" color={ink} style={c.spin} />
+            : <Ionicons name="play" size={11} color={ink} />}
+          <Text style={[c.goT, { color: ink }, past && c.goTPast]}>{label}</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
 
-      {/* Practice */}
-      <TouchableOpacity
-        style={[c.practiceBtn, { backgroundColor: accent }]}
-        activeOpacity={0.85}
-        disabled={starting}
-        onPress={() => onPractice(item)}
-      >
-        <Ionicons name="play" size={13} color={isCouple ? '#FFFFFF' : '#1C1C1E'} />
-        <Text style={[c.practiceText, { color: isCouple ? '#FFFFFF' : '#1C1C1E' }]}>Practice</Text>
-      </TouchableOpacity>
+function FeedSkeleton() {
+  return (
+    <View style={s.skel}>
+      <SkeletonBox width={120} height={10} borderRadius={3} style={s.skelMk} />
+      {[0, 1, 2].map((i) => (
+        <SkeletonBox key={i} width="100%" height={i === 0 ? 184 : 168} borderRadius={20} style={s.skelCard} />
+      ))}
     </View>
   );
 }
 
 export default function AllFocusPointsScreen({ navigation, route }) {
+  const insets = useSafeAreaInsets();
   // Open on the same Latin/Ballroom style the user is viewing in Train. Train
   // passes its active `category` ('latin' | 'ballroom' | null) as a route param;
   // null (single-style or no filter) maps to 'all'.
@@ -122,21 +168,27 @@ export default function AllFocusPointsScreen({ navigation, route }) {
   const [loading, setLoading] = useState(true);
   const [danceStyle, setDanceStyle] = useState(null);
   const [couple, setCouple] = useState(null);
-  const [tab, setTab] = useState('solo'); // 'solo' | 'couple' | 'group'
+  // Train's "See all" opens on the side (Solo | Couple) the user was viewing.
+  const [tab, setTab] = useState(['couple', 'group'].includes(route?.params?.tab) ? route.params.tab : 'solo'); // 'solo' | 'couple' | 'group'
   const [filter, setFilter] = useState(initialFilter); // 'all' | 'latin' | 'ballroom'
   const [solo, setSolo] = useState([]);
   const [couplePts, setCouplePts] = useState([]);
   const [group, setGroup] = useState([]);
-  const [starting, setStarting] = useState(false);
-  // Active / Past toggle (Solo tab). "Past" = retired focus points — still
-  // trainable. Train deep-links straight here with view:'past' when a pending
-  // class has left the student with no active focus points to work on.
-  const [view, setView] = useState(route?.params?.view === 'past' ? 'past' : 'active');
+  const [startingId, setStartingId] = useState(null);
+  // Retired focus points — still trainable, listed under the active ones on
+  // the Solo and Group sides. Fetched apart from the bundle, so with their own
+  // loading flag: the warm cache flips `loading` in ms, long before they land.
   const [past, setPast] = useState([]);
-  // Past is fetched separately from the bundle, so it needs its own loading
-  // flag — otherwise the warm AsyncStorage cache flips `loading` false in ms
-  // and tapping Past shows "no past focus points" before the query even lands.
+  const [pastGroup, setPastGroup] = useState([]);
   const [pastLoading, setPastLoading] = useState(true);
+  const [styleMenu, setStyleMenu] = useState(null);
+  const styleBtnRef = useRef(null);
+
+  // Train deep-links here with view:'past' when a lesson under review leaves
+  // the dancer nothing active: land on the retired ones, once.
+  const scrollRef = useRef(null);
+  const wantPast = useRef(route?.params?.view === 'past');
+  const [pastAt, setPastAt] = useState(null);
 
   useFocusEffect(useCallback(() => {
     let active = true;
@@ -163,11 +215,11 @@ export default function AllFocusPointsScreen({ navigation, route }) {
     }).catch(() => {});
 
     // 2) ONE round-trip — get_all_focus_points returns solo + couple_pts + group
-    //    (category-scoped) + couple meta + dance_style. Replaces the old
-    //    ~11-query staircase (getMyCouple alone was 4 serial queries).
-    // Drop the previous category's Past rows so a category switch can't paint
+    //    (category-scoped) + couple meta + dance_style.
+    // Drop the previous category's retired rows so a style switch can't paint
     // stale content while the new query is in flight.
     setPast([]);
+    setPastGroup([]);
     setPastLoading(true);
 
     getAllFocusPointsBundle(cat).then(async (b) => {
@@ -178,10 +230,9 @@ export default function AllFocusPointsScreen({ navigation, route }) {
         AsyncStorage.setItem(key, JSON.stringify(b)).catch(() => {});
         // The bundle's `solo` array is the last private's readiness CHECKLIST —
         // it INNER JOINs get_lesson_readiness, so it comes back EMPTY whenever
-        // readiness collapses (newest class awaiting admin approval → its focus
+        // readiness collapses (newest lesson awaiting admin approval → its focus
         // points are RLS-hidden). The student still has active focus points;
-        // fall back to them so they stay reachable instead of seeing a bogus
-        // "nothing in progress".
+        // fall back to them so they stay reachable.
         if (!(b.solo || []).length) {
           try {
             const fallback = await getActiveSoloFocusPoints(cat);
@@ -192,52 +243,49 @@ export default function AllFocusPointsScreen({ navigation, route }) {
       setLoading(false);
     }).catch(() => { if (active) setLoading(false); });
 
-    // 3) Retired focus points for the Past toggle — a separate light query (the
-    //    bundle RPC only returns active ones). Never blocks the first paint.
-    getPastFocusPoints(cat)
-      .then((p) => { if (active) setPast(p || []); })
-      .catch(() => { if (active) setPast([]); })
-      .finally(() => { if (active) setPastLoading(false); });
+    // 3) Retired focus points — separate light queries (the bundle RPC only
+    //    returns active ones). Never block the first paint.
+    Promise.all([
+      getPastFocusPoints(cat).catch(() => []),
+      getPastGroupFocusPoints(cat).catch(() => []),
+    ]).then(([solo, group]) => {
+      if (!active) return;
+      setPast(solo || []);
+      setPastGroup(group || []);
+      setPastLoading(false);
+    });
 
     return () => { active = false; };
   }, [filter]));
 
   // ── Derived ──
-  const showDanceFilter = danceStyle === 'Latin & Ballroom';
+  // Train knows whether the dancer's styles and their couple's add up to both.
+  const showDanceFilter = danceStyle === 'Latin & Ballroom' || !!route?.params?.canSwitch;
   const tabs = [{ key: 'solo', label: 'Solo' }];
   if (couple) tabs.push({ key: 'couple', label: 'Couple' });
   tabs.push({ key: 'group', label: 'Group' });
   const activeTab = (tab === 'couple' && !couple) ? 'solo' : tab;
-  const accent = activeTab === 'couple' ? CBLUE : GOLD;
-  // The Active/Past toggle only applies to Solo — couple and group always show
-  // their active sets.
-  const showViewToggle = activeTab === 'solo';
-  const pastView = showViewToggle && view === 'past';
-  const list = activeTab === 'solo'
-    ? (pastView ? past : solo)
-    : activeTab === 'couple' ? couplePts : group;
+  const list = activeTab === 'solo' ? solo : activeTab === 'couple' ? couplePts : group;
+  // Couple focus points have no retired list here: that side shows its active set.
+  const pastList = activeTab === 'solo' ? past : activeTab === 'group' ? pastGroup : [];
+  const styleLabel = STYLE_OPTIONS.find((o) => o.key === filter)?.label || 'All styles';
+  const liveId = getActiveSession()?.focusPointId || null;
 
-  const emptyCopy = pastView
-    ? { title: 'No retired focus points', body: 'Focus points that leave your active set show up here.' }
-    : {
-        solo:   { title: 'Nothing in progress', body: 'Log a private lesson to get your next focus points.' },
-        couple: { title: 'No couple focus points', body: 'Your shared focus points from couple lessons show up here.' },
-        group:  { title: 'No recent group focus', body: 'Focus points from your last group classes show up here.' },
-      }[activeTab];
+  useEffect(() => {
+    if (!wantPast.current || loading || pastLoading || activeTab !== 'solo') return;
+    if (!pastList.length) { wantPast.current = false; return; }
+    if (pastAt == null) return;
+    wantPast.current = false;
+    requestAnimationFrame(() => scrollRef.current?.scrollTo({ y: Math.max(0, pastAt - 6), animated: true }));
+  }, [loading, pastLoading, activeTab, pastAt, pastList.length]);
 
-  // "past" is not the same as "graduated": a coach can retire a focus point,
-  // and the carry-over reconcile drops untrained ones here too. Say retired.
-  const countLabel = pastView
-    ? `${list.length} retired · no longer in your active set`
-    : {
-        solo:   `${list.length} in progress · from your last private`,
-        couple: `${list.length} shared · from your last couple lesson`,
-        group:  `${list.length} · from your last 2 group classes`,
-      }[activeTab];
+  function openStyles() {
+    styleBtnRef.current?.measureInWindow((x, y, w, h) => setStyleMenu({ x: x + w - MENU_W, y: y + h + 8 }));
+  }
 
   // ── Practice launch ──
   async function handlePractice(item) {
-    if (starting || !item?.id) return;
+    if (startingId || !item?.id) return;
 
     // A session is already running — resume it rather than starting a second one.
     const session = getActiveSession();
@@ -253,7 +301,7 @@ export default function AllFocusPointsScreen({ navigation, route }) {
       return;
     }
 
-    setStarting(true);
+    setStartingId(item.id);
     try {
       const sessionId = await startTrainingSession(item.id, null);
       if (activeTab === 'couple' && couple) {
@@ -278,327 +326,192 @@ export default function AllFocusPointsScreen({ navigation, route }) {
         });
       }
     } finally {
-      setStarting(false);
+      setStartingId(null);
     }
   }
 
+  const card = (item, isPast) => (
+    <FocusCard
+      key={item.id}
+      item={item}
+      kind={activeTab}
+      past={isPast}
+      live={item.id === liveId}
+      busy={item.id === startingId}
+      disabled={!!startingId}
+      onPractice={handlePractice}
+    />
+  );
+
   return (
-    <SafeAreaView style={s.safe} edges={['top', 'left', 'right']}>
-
-      {/* Header */}
-      <View style={s.header}>
-        <TouchableOpacity style={s.backBtn} onPress={() => navigation.goBack()} activeOpacity={0.7}>
-          <Ionicons name="chevron-back" size={22} color={Colors.black} />
-        </TouchableOpacity>
-        <Text style={s.title}>Focus Points</Text>
-        <View style={s.backBtn} />
-      </View>
-
-      {/* Solo / Couple / Group toggle */}
-      <View style={s.tabRow}>
-        {tabs.map((t) => {
-          const on = activeTab === t.key;
-          const onColor = t.key === 'couple' ? CBLUE : Colors.black;
-          return (
+    <View style={s.page}>
+      <SafeAreaView style={s.page} edges={['top', 'left', 'right']}>
+        <View style={s.top}>
+          <TouchableOpacity
+            style={s.back}
+            onPress={() => navigation.goBack()}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel="Back"
+          >
+            <Ionicons name="chevron-back" size={19} color={INK} />
+          </TouchableOpacity>
+          <Text style={s.h1} numberOfLines={1}>Focus points</Text>
+          {showDanceFilter && (
             <TouchableOpacity
-              key={t.key}
-              style={[s.tab, on && { backgroundColor: onColor }]}
-              activeOpacity={0.8}
-              onPress={() => setTab(t.key)}
+              ref={styleBtnRef}
+              style={s.style}
+              onPress={openStyles}
+              activeOpacity={0.7}
+              accessibilityRole="button"
+              accessibilityLabel={`${styleLabel}. Change style`}
             >
-              <Text style={[s.tabText, on && s.tabTextOn]}>{t.label}</Text>
+              <Text style={s.styleT}>{styleLabel}</Text>
+              <Ionicons name="chevron-down" size={12} color={INK} />
             </TouchableOpacity>
-          );
-        })}
-      </View>
+          )}
+        </View>
 
-      {/* Latin / Ballroom secondary filter (dual-style dancers only) */}
-      {showDanceFilter && !loading && (
-        <View style={s.filterRow}>
-          {[
-            { key: 'all', label: 'All' },
-            { key: 'latin', label: 'Latin' },
-            { key: 'ballroom', label: 'Ballroom' },
-          ].map((opt) => {
-            const on = filter === opt.key;
+        <View style={s.tabs}>
+          {tabs.map((t) => {
+            const on = activeTab === t.key;
             return (
               <TouchableOpacity
-                key={opt.key}
-                style={[s.filterPill, on && s.filterPillOn]}
-                activeOpacity={0.75}
-                onPress={() => setFilter(opt.key)}
+                key={t.key}
+                style={[s.tab, on && s.tabOn]}
+                activeOpacity={0.7}
+                onPress={() => setTab(t.key)}
+                accessibilityRole="tab"
+                accessibilityState={{ selected: on }}
               >
-                <Text style={[s.filterPillText, on && s.filterPillTextOn]}>{opt.label}</Text>
+                <Text style={[s.tabT, on && s.tabTOn]}>{t.label}</Text>
               </TouchableOpacity>
             );
           })}
+          {!loading && <Text style={s.count}>{list.length} active</Text>}
         </View>
-      )}
 
-      {/* Active / Past toggle — lets a student revisit and keep training focus
-          points they've graduated from (and gives them something to train while
-          a new class waits on validation). Solo only. */}
-      {showViewToggle && !loading && (
-        <View style={s.filterRow}>
-          {[
-            { key: 'active', label: 'Active' },
-            { key: 'past', label: 'Past' },
-          ].map((opt) => {
-            const on = view === opt.key;
-            return (
-              <TouchableOpacity
-                key={opt.key}
-                style={[s.filterPill, on && s.filterPillOn]}
-                activeOpacity={0.75}
-                onPress={() => setView(opt.key)}
-              >
-                <Text style={[s.filterPillText, on && s.filterPillTextOn]}>{opt.label}</Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-      )}
+        {loading ? (
+          <FeedSkeleton />
+        ) : (
+          <MaskedView
+            style={s.page}
+            maskElement={
+              <View style={s.page}>
+                <LinearGradient colors={['transparent', '#000']} style={{ height: EDGE_FADE }} />
+                <View style={s.maskFill} />
+                <LinearGradient colors={['#000', 'rgba(0,0,0,0.5)', 'transparent']} locations={[0, 0.55, 1]} style={{ height: 34 }} />
+              </View>
+            }
+          >
+            <ScrollView
+              ref={scrollRef}
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={[s.feed, { paddingBottom: insets.bottom + 30 }]}
+            >
+              <Marker label="Active now" count={list.length} />
+              {list.length
+                ? list.map((item) => card(item, false))
+                : <Text style={s.none}>{EMPTY[activeTab]}</Text>}
 
-      {loading || (pastView && pastLoading) ? (
-        <GenericListSkeleton rows={6} showHeader={false} showTitle={false} />
-      ) : list.length === 0 ? (
-        <View style={s.center}>
-          <Text style={s.emptyTitle}>{emptyCopy.title}</Text>
-          <Text style={s.emptyBody}>{emptyCopy.body}</Text>
-        </View>
-      ) : (
-        <ScrollView
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={s.list}
-        >
-          <Text style={s.countLabel}>{countLabel}</Text>
-          {list.map((item) => (
-            <FocusCard
-              key={item.id}
-              item={item}
-              tab={activeTab}
-              accent={accent}
-              starting={starting}
-              onPractice={handlePractice}
-            />
-          ))}
-        </ScrollView>
-      )}
-    </SafeAreaView>
+              {pastList.length > 0 && (
+                <Marker label="Past" count={pastList.length} onLayout={(e) => setPastAt(e.nativeEvent.layout.y)} />
+              )}
+              {pastList.map((item) => card(item, true))}
+            </ScrollView>
+          </MaskedView>
+        )}
+      </SafeAreaView>
+
+      <StyleMenu
+        at={styleMenu}
+        options={STYLE_OPTIONS}
+        value={filter}
+        onSelect={setFilter}
+        onClose={() => setStyleMenu(null)}
+      />
+    </View>
   );
 }
 
-// ─── Card styles ──────────────────────────────────────────────────────────────
-// Dark "hero" card — same brown→black gradient + gold border treatment
-// used across the coach UI. <HeroCardGradient/> paints the background; the
-// container only needs the border/clipping.
+// ─── Card (the Train page's focus card, in a list) ────────────────────────────
 const c = StyleSheet.create({
-  card: {
-    borderRadius: 18,
-    paddingHorizontal: 18,
-    paddingTop: 14,
-    paddingBottom: 16,
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(240,194,74,0.28)',
-    overflow: 'hidden',
+  card: { borderRadius: 20, paddingVertical: 16, paddingHorizontal: 17, gap: 11 },
+  cardPast: {
+    backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: 'rgba(10,10,10,0.08)',
+    paddingVertical: 14, paddingHorizontal: 16, gap: 8,
   },
 
-  topRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  tierGroup: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  tierDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-  },
-  tierLabel: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 10,
-    color: GOLD,
-    letterSpacing: 1.2,
-    textTransform: 'uppercase',
-  },
-  progressWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  progressText: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 10.5,
-    color: 'rgba(255,255,255,0.72)',
-    letterSpacing: 0.3,
-  },
+  cb: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  tag: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+  dot: { width: 6, height: 6, borderRadius: 3 },
+  tagT: { fontFamily: Fonts.semiBold, fontSize: 9.5, letterSpacing: 1.33, textTransform: 'uppercase' },
+  src: { flex: 1, minWidth: 0, textAlign: 'right', fontFamily: Fonts.regular, fontSize: 10.5, color: 'rgba(255,255,255,0.62)' },
+  srcPast: { color: 'rgba(10,10,10,0.68)' },
 
-  name: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 18,
-    color: '#FFFFFF',
-    letterSpacing: -0.4,
-    lineHeight: 23,
-    marginBottom: 8,
-  },
+  name: { fontFamily: Fonts.bold, fontSize: 24, letterSpacing: -0.91, lineHeight: 25.5, color: '#FFFFFF' },
+  namePast: { fontSize: 19, letterSpacing: -0.72, lineHeight: 21, color: INK },
+  cue: { fontFamily: Fonts.regular, fontSize: 13, lineHeight: 18.5, color: 'rgba(255,255,255,0.72)' },
+  cuePast: { fontSize: 12.5, lineHeight: 17.75, color: INK_65 },
 
-  subtitle: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 13,
-    color: 'rgba(255,255,255,0.78)',
-    lineHeight: 19,
-    marginBottom: 2,
-  },
+  foot: { flexDirection: 'row', alignItems: 'center', gap: 11 },
+  footEnd: { justifyContent: 'flex-end' },
+  tk: { flex: 1, minWidth: 0, flexDirection: 'row', gap: 4 },
+  seg: { flex: 1, height: 4, borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.22)' },
+  segOn: { backgroundColor: GOLD },
+  count: { fontFamily: Fonts.regular, fontSize: 11, color: 'rgba(255,255,255,0.75)', fontVariant: ['tabular-nums'] },
 
-  classBlock: {
-    marginTop: 12,
+  go: {
+    height: 36, paddingHorizontal: 17, borderRadius: 999, backgroundColor: GOLD,
+    flexDirection: 'row', alignItems: 'center', gap: 7,
   },
-  classDivider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: 'rgba(255,255,255,0.12)',
-    marginBottom: 10,
+  goDone: { backgroundColor: 'transparent', borderWidth: 1, borderColor: 'rgba(255,255,255,0.3)' },
+  goPast: {
+    height: 32, paddingHorizontal: 14, backgroundColor: 'transparent',
+    borderWidth: 1, borderColor: 'rgba(10,10,10,0.16)',
   },
-  classRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginBottom: 4,
-  },
-  classMeta: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 10.5,
-    color: GOLD,
-    letterSpacing: 0.3,
-  },
-  classSummary: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 11.5,
-    color: 'rgba(255,255,255,0.65)',
-    lineHeight: 16,
-    marginLeft: 17,
-  },
-
-  practiceBtn: {
-    marginTop: 14,
-    height: 40,
-    borderRadius: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-  },
-  practiceText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 13,
-    letterSpacing: 0.2,
-  },
+  goIdle: { opacity: 0.5 },
+  goT: { fontFamily: Fonts.semiBold, fontSize: 13.5, letterSpacing: -0.1 },
+  goTPast: { fontSize: 12.5 },
+  spin: { width: 11, height: 11, transform: [{ scale: 0.6 }] },
 });
 
-// ─── Screen styles ────────────────────────────────────────────────────────────
+// ─── Screen ───────────────────────────────────────────────────────────────────
 const s = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: Colors.white },
+  page: { flex: 1, backgroundColor: PAGE },
 
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: Spacing.side,
-    paddingTop: 10,
-    paddingBottom: 10,
+  top: { flexDirection: 'row', alignItems: 'center', gap: 11, paddingTop: 6, paddingHorizontal: SIDE },
+  back: {
+    width: 36, height: 36, borderRadius: 11, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center',
+    shadowColor: INK, shadowOpacity: 0.07, shadowOffset: { width: 0, height: 1 }, shadowRadius: 2, elevation: 1,
   },
-  backBtn: {
-    width: 36,
-    height: 36,
-    alignItems: 'center',
-    justifyContent: 'center',
+  h1: { flex: 1, minWidth: 0, fontFamily: Fonts.bold, fontSize: 26, letterSpacing: -1.04, color: INK },
+  style: {
+    height: 32, paddingHorizontal: 12, borderRadius: 999, backgroundColor: '#FFFFFF',
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    shadowColor: INK, shadowOpacity: 0.07, shadowOffset: { width: 0, height: 1 }, shadowRadius: 2, elevation: 1,
   },
-  title: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 16,
-    color: Colors.black,
-    letterSpacing: -0.3,
-  },
+  styleT: { fontFamily: Fonts.semiBold, fontSize: 12.5, letterSpacing: -0.1, color: INK },
 
-  tabRow: {
-    flexDirection: 'row',
-    gap: 8,
-    paddingHorizontal: Spacing.side,
-    paddingTop: 2,
-    paddingBottom: 12,
+  tabs: {
+    flexDirection: 'row', alignItems: 'flex-end', gap: 22, marginTop: 16, marginHorizontal: SIDE,
+    borderBottomWidth: 1, borderBottomColor: LINE,
   },
-  tab: {
-    flex: 1,
-    paddingVertical: 9,
-    borderRadius: 12,
-    backgroundColor: '#F0F0F0',
-    alignItems: 'center',
-  },
-  tabText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 13,
-    color: Colors.secondary,
-    letterSpacing: 0.2,
-  },
-  tabTextOn: {
-    color: '#FFFFFF',
-  },
+  tab: { paddingBottom: 9, marginBottom: -1, borderBottomWidth: 2, borderBottomColor: 'transparent' },
+  tabOn: { borderBottomColor: GOLD },
+  tabT: { fontFamily: Fonts.semiBold, fontSize: 15, letterSpacing: -0.3, color: INK_65 },
+  tabTOn: { color: INK },
+  count: { marginLeft: 'auto', paddingBottom: 11, fontFamily: Fonts.regular, fontSize: 11.5, color: INK_65 },
 
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 8, paddingHorizontal: 40 },
-  emptyTitle: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 16,
-    color: Colors.black,
-    textAlign: 'center',
-  },
-  emptyBody: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 13,
-    color: Colors.secondary,
-    textAlign: 'center',
-  },
+  maskFill: { flex: 1, backgroundColor: '#000' },
+  feed: { paddingHorizontal: SIDE, gap: 10 },
+  mk: { flexDirection: 'row', alignItems: 'center', gap: 9, paddingTop: 20, paddingBottom: 2, paddingHorizontal: 2 },
+  mkT: { fontFamily: Fonts.semiBold, fontSize: 9.5, letterSpacing: 1.6, textTransform: 'uppercase', color: INK_62 },
+  mkLine: { flex: 1, height: 1, backgroundColor: LINE },
+  mkN: { fontFamily: Fonts.bold, fontSize: 12, color: INK, fontVariant: ['tabular-nums'] },
+  none: { marginTop: 4, marginHorizontal: 2, fontFamily: Fonts.regular, fontSize: 13.5, lineHeight: 19, color: INK_62 },
 
-  list: {
-    paddingHorizontal: Spacing.side,
-    paddingBottom: 40,
-  },
-  countLabel: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 11,
-    color: Colors.secondary,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-    marginBottom: 12,
-    marginTop: 2,
-  },
-  filterRow: {
-    flexDirection: 'row',
-    gap: 8,
-    paddingHorizontal: Spacing.side,
-    paddingTop: 4,
-    paddingBottom: 12,
-  },
-  filterPill: {
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-    borderRadius: 999,
-    backgroundColor: '#F0F0F0',
-  },
-  filterPillOn: {
-    backgroundColor: Colors.black,
-  },
-  filterPillText: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 12,
-    color: Colors.secondary,
-    letterSpacing: 0.2,
-  },
-  filterPillTextOn: {
-    color: '#FFFFFF',
-  },
+  skel: { paddingHorizontal: SIDE, paddingTop: 22 },
+  skelMk: { marginBottom: 12, backgroundColor: 'rgba(10,10,10,0.08)' },
+  skelCard: { marginBottom: 10, backgroundColor: 'rgba(10,10,10,0.07)' },
 });

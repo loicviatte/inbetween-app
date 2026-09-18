@@ -1,24 +1,18 @@
-import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
   ScrollView,
-  TextInput,
   Animated,
   Modal,
   Pressable,
   Alert,
   AppState,
-  ActivityIndicator,
 } from 'react-native';
-import { Image } from 'expo-image';
 import { SafeAreaView, SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
-import HeroCardGradient from '../../components/HeroCardGradient';
-import { LinearGradient } from 'expo-linear-gradient';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import Svg, { Circle } from 'react-native-svg';
 import {
   AudioModule,
   RecordingPresets,
@@ -27,14 +21,20 @@ import {
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Notifications from 'expo-notifications';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Colors, Fonts, Spacing } from '../../theme';
+import { Fonts, Spacing } from '../../theme';
 import { useCoachData } from '../../context/CoachDataContext';
+import { isAwaitingVerification, guardStudent } from '../../utils/studentLock';
 import { useDjiSync } from '../../context/DjiSyncContext';
-import { getStudentFocusPoints, getStudentQuestions, getStudentOpenQuestions, getStudentRecentActivity, getStartClassRoster, markQuestionCovered, linkCoveredQuestionsToClass, getCoachStudentDetailBundle } from '../../storage/coachStorage';
-import { getLessonReadiness } from '../../storage/storage';
+import { getStudentFocusPoints, getStudentQuestions, getStartClassRoster, markQuestionCovered, linkCoveredQuestionsToClass, getCoachStudentDetailBundle } from '../../storage/coachStorage';
 import { getMyCouples, getCoupleReadiness, getCoupleFocusPoints, getCoupleActivity } from '../../storage/coupleStorage';
-import QuestionDetailSheet from '../../components/QuestionDetailSheet';
+import QuestionSheet from '../../components/coach/QuestionSheet';
 import MicCueSheet from '../../components/MicCueSheet';
+import { Pulse, Bone, FadeIn } from '../../components/GroupSwitchSkeleton';
+import {
+  L, lessonStyles, dayLabel, sincePhrase, askedLabel, Avatar, PairAvatars, TopBar, Hero, HeroStrong, HeroAlert,
+  SectionHead, Card, TierChip, CheckRow, QuestionRow, CardLabel, TimelineRow, PickRow, Percent, Tabs, StartFoot, RunningFoot,
+  Popup, PopupStrong, PopupButton, VerdictPills, Empty,
+} from '../../components/coach/LessonUI';
 import {
   getActiveCoachClass,
   setActiveCoachClass,
@@ -275,148 +275,23 @@ async function mapWithConcurrency(items, limit, fn) {
   return results;
 }
 
-// ── Palette ────────────────────────────────────────────────────────────────
-const C = {
-  bg: '#FAFAFA',
-  surface: '#F0F0F0',
-  card: '#FFFFFF',
-  dark: '#141414',
-  orange: '#E8A838',
-  green: '#4AAF52',
-  red: '#D44545',
-  gray: '#999',
-  lightGray: '#E5E5E5',
-  text: '#0E0E0E',
-};
-
-const FEELING_EMOJI = { Hard: '😤', Struggled: '😰', Okay: '😐', Good: '🙂', Great: '🔥' };
-
-// ── Helpers ────────────────────────────────────────────────────────────────
-function initials(name) {
-  if (!name) return '?';
-  return name.split(' ').map(w => w[0]).filter(Boolean).join('').slice(0, 2).toUpperCase();
-}
-
-function relativeShort(date) {
-  if (!date) return '';
-  const d = new Date(date);
-  const now = new Date();
-  const days = Math.floor((now - d) / 86400000);
-  if (days === 0) return 'Today';
-  if (days === 1) return 'Yesterday';
-  if (days < 7) return `${days}d ago`;
-  if (days < 30) return `${Math.floor(days / 7)}w ago`;
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-}
-
-function gaugeColor(v) {
-  return v > 70 ? C.green : v >= 40 ? C.orange : C.red;
-}
-
-// ── Mini gauge ─────────────────────────────────────────────────────────────
-function MiniGauge({ value, label }) {
-  const size = 50;
-  const r = 20;
-  const sw = 3.5;
-  const circumference = 2 * Math.PI * r;
-  const arc = circumference * 0.75;
-  const offset = arc * (1 - (value || 0) / 100);
-  const color = gaugeColor(value);
-
-  return (
-    <View style={{ alignItems: 'center' }}>
-      <View style={{ width: size, height: size }}>
-        <Svg width={size} height={size}>
-          <Circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="rgba(255,255,255,0.1)"
-            strokeWidth={sw} strokeDasharray={`${arc} ${circumference}`} strokeLinecap="round"
-            transform={`rotate(135 ${size / 2} ${size / 2})`} />
-          <Circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={color}
-            strokeWidth={sw} strokeDasharray={`${arc} ${circumference}`} strokeDashoffset={offset}
-            strokeLinecap="round" transform={`rotate(135 ${size / 2} ${size / 2})`} />
-        </Svg>
-        <View style={[StyleSheet.absoluteFillObject, { alignItems: 'center', justifyContent: 'center' }]}>
-          <Text style={g.gaugeVal}>{value || 0}%</Text>
-        </View>
-      </View>
-      <Text style={g.gaugeLabel}>{label}</Text>
-    </View>
-  );
-}
+// Consent states in which a student may not be recorded. The database refuses
+// these too (refuse_unconsented_student); checking here stops the mic opening.
+const CONSENT_BLOCKED = ['pending', 'withdrawn'];
 
 // ════════════════════════════════════════════════════════════════════════════
 // ── Main Component ─────────────────────────────────────────────────────────
 // ════════════════════════════════════════════════════════════════════════════
-// ─── StartClass landing — private student card ──────────────────────────────
-//
-// `st` is a roster entry from getStartClassRoster() with: id, name, photoUrl,
-// lastPrivateClassDate, lastPrivateDurationMin, readiness (0-100), briefings
-// (focus point summaries), status.
-const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-
-function PrivateCard({ st, onPress }) {
-  const isSilent = st.status === 'silent';
-  const ringColor = isSilent ? '#E84545' : '#E8B530';
-  const avBg = isSilent ? '#F7D8D8' : '#4E6A5C';
-  const avTextColor = isSilent ? '#E84545' : '#FFFFFF';
-  const initial = (st.name || 'S')[0]?.toUpperCase() || 'S';
-
-  // "Last private · Apr 19 · 50 min" or "Last private · Apr 19", or fallback.
-  const lastPrivate = st.lastPrivateClassDate ? new Date(st.lastPrivateClassDate) : null;
-  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  let metaLine;
-  if (lastPrivate) {
-    const datePart = `${months[lastPrivate.getMonth()]} ${lastPrivate.getDate()}`;
-    metaLine = `Last private · ${datePart}`;
-    if (st.lastPrivateDurationMin) metaLine += ` · ${st.lastPrivateDurationMin} min`;
-  } else {
-    metaLine = 'No private together yet';
-  }
-
-  return (
-    <TouchableOpacity style={sc.card} onPress={onPress} activeOpacity={0.85}>
-      <View style={[sc.avRing, { borderColor: ringColor }]}>
-        {st.photoUrl ? (
-          <Image source={{ uri: st.photoUrl }} style={sc.avPhoto} />
-        ) : (
-          <View style={[sc.avFallback, { backgroundColor: avBg }]}>
-            <Text style={[sc.avText, { color: avTextColor }]}>{initial}</Text>
-          </View>
-        )}
-      </View>
-      <View style={{ flex: 1, minWidth: 0 }}>
-        <Text style={sc.cardName} numberOfLines={1}>{st.name}</Text>
-        <Text style={sc.cardMeta} numberOfLines={1}>{metaLine}</Text>
-      </View>
-      <View style={sc.right}>
-        <View style={sc.readyWrap}>
-          <Text style={sc.readyN}>{st.readiness}<Text style={sc.readyPct}>%</Text></Text>
-        </View>
-        <Ionicons name="chevron-forward" size={16} color="rgba(10,10,10,0.4)" />
-      </View>
-    </TouchableOpacity>
-  );
-}
-
 export default function StartClassScreen({ navigation }) {
   const { students, getOrFetch } = useCoachData();
+  const insets = useSafeAreaInsets();
   // Lets us refresh the DJI awaiting-audio count the moment a local class ends,
   // so the sync pill / setup banner appears immediately instead of only on the
   // next app foreground.
   const { refreshPending: refreshDjiUploads } = useDjiSync() ?? {};
 
   const [view, setView] = useState('select');
-  const [pickMode, setPickMode] = useState('solo'); // 'solo' | 'couple' — landing list toggle
-  const modeSlide = useRef(new Animated.Value(0)).current; // 0 = solo, 1 = couple (sliding pill)
-  const [toggleW, setToggleW] = useState(0);
-  const selectMode = (m) => {
-    setPickMode(m);
-    Animated.spring(modeSlide, {
-      toValue: m === 'couple' ? 1 : 0,
-      useNativeDriver: true,
-      friction: 9,
-      tension: 90,
-    }).start();
-  };
+  const [pickMode, setPickMode] = useState('solo'); // 'solo' | 'couple' — landing list tabs
   const [selectedStudent, setSelectedStudent] = useState(null);
   const [selectedCouple, setSelectedCouple] = useState(null); // couple class context
   // Picked Latin/Ballroom style for the current private briefing. Read by
@@ -443,7 +318,6 @@ export default function StartClassScreen({ navigation }) {
     })();
     return () => { alive = false; };
   }, []);
-  const [searchQuery, setSearchQuery] = useState('');
   // Per-student readiness + focus briefings, loaded for the select view.
   const [roster, setRoster] = useState([]);
   const [rosterLoading, setRosterLoading] = useState(false);
@@ -511,7 +385,7 @@ export default function StartClassScreen({ navigation }) {
   //   - The class_recordings row is marked local_recording_mode = true and
   //     starts with admin_review_status = 'pending'.
   //   - After the class, the coach plugs the mic via USB-C and uploads
-  //     the WAV file through a separate flow (LocalUpload section, below).
+  //     the WAV file when they next sync the mic.
   //   - Phone audio session stays untouched → Spotify on a BT speaker
   //     plays uninterrupted throughout the class.
   // Gated by email — only viatteloic@gmail.com for the beta. See
@@ -557,6 +431,9 @@ export default function StartClassScreen({ navigation }) {
   // chunk URI twice into audioUrisRef and double-trigger finalize-class
   // (idempotent server-side but messy locally).
   const stoppingRef = useRef(false);
+  // Start is async (a consent re-read, then the recording rows): a second tap
+  // before the first finishes would start a second recorder and orphan one.
+  const startingRef = useRef(false);
   const CHUNK_MS = 3 * 60 * 1000; // 3 minutes
   // New server-side pipeline (feature-flagged per user). When enabled, each
   // chunk is uploaded to Supabase Storage during the class and a
@@ -578,10 +455,10 @@ export default function StartClassScreen({ navigation }) {
   // no refs that could go stale (which sent back to the roster mid-recording).
   useEffect(() => {
     const unsub = navigation.addListener('beforeRemove', (e) => {
+      if (exitingRef.current) return;
       if (view !== 'select' && !classStartedAt) {
         e.preventDefault();
         setView('select');
-        setSearchQuery('');
         setSelectedCouple(null);
       }
     });
@@ -594,11 +471,12 @@ export default function StartClassScreen({ navigation }) {
   // student list mid-recording and can start a SECOND class. Not recording →
   // return to the roster as before.
   function backFromBriefing() {
+    setEndConfirmOpen(false);
+    setHighlightChecks(false);
     if (classStartedAt) {
       navigation.goBack();
     } else {
       setView('select');
-      setSearchQuery('');
       setSelectedCouple(null);
     }
   }
@@ -768,7 +646,7 @@ export default function StartClassScreen({ navigation }) {
         Notifications.scheduleNotificationAsync({
           content: {
             title: '🎙️ Microphone disconnected',
-            body: `Your mic disconnected mid-class${fallback}. Open InBetween to keep going or stop the class.`,
+            body: `Your mic disconnected mid-lesson${fallback}. Open InBetween to keep going or end the lesson.`,
             sound: 'default',
             interruptionLevel: 'timeSensitive',
             badge: 1,
@@ -779,10 +657,10 @@ export default function StartClassScreen({ navigation }) {
 
       Alert.alert(
         '🎙️ Microphone disconnected',
-        `Your microphone disconnected mid-class${fallback}. The recording is continuing on the next available source.`,
+        `Your microphone disconnected mid-lesson${fallback}. The recording is continuing on the next available source.`,
         [
           { text: 'Keep recording', style: 'cancel' },
-          { text: 'Stop class', style: 'destructive', onPress: () => stopClass() },
+          { text: 'End the lesson', style: 'destructive', onPress: () => stopClass() },
         ],
       );
     });
@@ -802,11 +680,24 @@ export default function StartClassScreen({ navigation }) {
   // success banner. Without this, popToTop fires on a stale navigation
   // ref and triggers a React warning / potential crash.
   const popToTopTimerRef = useRef(null);
+  // Set when the class is done and we're leaving on purpose (see the
+  // beforeRemove guard, which otherwise sends every exit back to the roster).
+  const exitingRef = useRef(false);
+
+  // Home after a class: the coach lands on their Home tab, not on the picker
+  // they started from.
+  function goHomeAfterClass() {
+    exitingRef.current = true;
+    try {
+      navigation.navigate('CoachMainTabs', { screen: 'DASHBOARD' });
+    } catch {
+      try { navigation.popToTop(); } catch {}
+    }
+  }
 
   // End-of-class debrief modal
   const [debriefOpen, setDebriefOpen] = useState(false);
   const [debriefDurationMs, setDebriefDurationMs] = useState(0);
-  const [debriefNote, setDebriefNote] = useState('');
   const [validatedFpIds, setValidatedFpIds] = useState([]);
 
   useEffect(() => {
@@ -888,11 +779,11 @@ export default function StartClassScreen({ navigation }) {
       if (interruptAlertShownRef.current) return;
       interruptAlertShownRef.current = true;
       Alert.alert(
-        'Enregistrement interrompu',
-        "L'enregistrement audio a été coupé (probablement parce que l'application a été fermée ou suspendue trop longtemps). Veux-tu arrêter le cours et utiliser ce qui a été capturé ?",
+        'Recording interrupted',
+        'The audio stopped — the app was probably closed or suspended for too long. End the lesson and keep what was captured?',
         [
-          { text: 'Continuer le cours', style: 'cancel' },
-          { text: 'Arrêter le cours', style: 'destructive', onPress: () => stopClass() },
+          { text: 'Keep the lesson going', style: 'cancel' },
+          { text: 'End the lesson', style: 'destructive', onPress: () => stopClass() },
         ],
       );
     };
@@ -1461,12 +1352,43 @@ export default function StartClassScreen({ navigation }) {
     } catch { return; }
     Alert.alert(
       'Lock-screen widget unavailable',
-      "Recording will continue normally even if you lock your phone. To see a Live Activity on your lock screen showing the class is recording, enable Live Activities for InBetween: Settings → InBetween → Live Activities.",
+      "Recording will continue normally even if you lock your phone. To see a Live Activity on your lock screen showing the lesson is recording, enable Live Activities for InBetween: Settings → InBetween → Live Activities.",
       [{ text: 'Got it', style: 'default' }],
     );
   }
 
+  // Who in this private or couple class can't be recorded yet, re-read from
+  // their rows (the roster's copy can be minutes old). [title, message] or null.
+  async function recordingBlock() {
+    const people = view === 'private-briefing' && selectedStudent?.id ? [selectedStudent]
+      : view === 'couple-briefing' && selectedCouple ? [selectedCouple.dancerA, selectedCouple.dancerB].filter((d) => d?.id)
+      : [];
+    if (!people.length) return null;
+    const { data } = await supabase.from('users').select('id, consent_status, age_check').in('id', people.map((p) => p.id));
+    for (const p of people) {
+      const row = (data || []).find((r) => r.id === p.id);
+      if (!row) continue;
+      if (row.age_check === 'minor_pending') {
+        return ['Waiting for verification',
+          `You marked ${p.name || 'this student'} as under 18. Recording works once they confirm they’re 18 or over, or a parent gives permission.`];
+      }
+      if (CONSENT_BLOCKED.includes(row.consent_status)) {
+        return ['Waiting for a parent', `${p.name || 'This student'} is under 18. Recording works as soon as their parent gives permission.`];
+      }
+    }
+    return null;
+  }
+
   async function startClassNow() {
+    if (startingRef.current || classStartedAt) return;
+    startingRef.current = true;
+    const block = await recordingBlock().catch(() => null);
+    if (block) {
+      startingRef.current = false;
+      setAudioModalOpen(false);
+      Alert.alert(block[0], block[1]);
+      return;
+    }
     setAudioModalOpen(false);
 
     // Start the chrono + active-class store IMMEDIATELY — before the slow async
@@ -1515,6 +1437,7 @@ export default function StartClassScreen({ navigation }) {
     // Hoisted so the audio-recording block below can see it. Defaults to
     // false (legacy real-time recording path) if the user fetch fails.
     let localMode = false;
+    let createdRecordingId = null;
     try {
       const { data: { user } } = await supabase.auth.getUser();
       // Resolve local mode from the freshly-fetched user so we don't race
@@ -1543,6 +1466,7 @@ export default function StartClassScreen({ navigation }) {
           .single();
         if (insertErr) throw insertErr;
         const recordingId = rec.id;
+        createdRecordingId = recordingId;
         await supabase
           .from('class_recordings')
           .update({ audio_folder: `${user.id}/${recordingId}/` })
@@ -1564,7 +1488,7 @@ export default function StartClassScreen({ navigation }) {
         } else if (!isPrivate && Array.isArray(students) && students.length > 0) {
           const { error: csErr } = await supabase
             .from('class_recording_students')
-            .insert(students.map((s) => ({ recording_id: recordingId, student_id: s.id })));
+            .insert(students.filter((s) => !CONSENT_BLOCKED.includes(s.consent_status)).map((s) => ({ recording_id: recordingId, student_id: s.id })));
           if (csErr) throw csErr;
         }
         newPipelineRef.current = true;
@@ -1572,6 +1496,23 @@ export default function StartClassScreen({ navigation }) {
         userIdRef.current = user.id;
       }
     } catch (err) {
+      // The database refused a dancer (no parent permission yet): stop here —
+      // never fall back to recording on the phone for someone who can't be recorded.
+      if (/parent must approve/i.test(err?.message || '')) {
+        if (createdRecordingId) {
+          supabase.from('class_recordings').update({ status: 'discarded' }).eq('id', createdRecordingId).then(() => {}, () => {});
+        }
+        clearActiveCoachClass();
+        setClassStartedAt(null);
+        setChronoMs(0);
+        chronoMsRef.current = 0;
+        newPipelineRef.current = false;
+        recordingIdRef.current = null;
+        userIdRef.current = null;
+        startingRef.current = false;
+        Alert.alert('Waiting for a parent', 'Someone in this lesson is under 18 and can’t be recorded until their parent gives permission.');
+        return;
+      }
       console.warn('[StartClass] new pipeline init failed, falling back to legacy:', err);
       // Reset so we definitely don't try to use partial state.
       newPipelineRef.current = false;
@@ -1776,11 +1717,11 @@ export default function StartClassScreen({ navigation }) {
     interruptAlertShownRef.current = false;
 
     setDebriefDurationMs(finalDurationMs);
-    setDebriefNote('');
     setValidatedFpIds([]);
     setClassStartedAt(null);
     setChronoMs(0);
     chronoMsRef.current = 0;
+    startingRef.current = false;
 
     // Cumulative BT mic airtime: every 4h trigger a reminder both in-app
     // (banner inside the debrief sheet) and as a system notification.
@@ -1794,7 +1735,7 @@ export default function StartClassScreen({ navigation }) {
         Notifications.scheduleNotificationAsync({
           content: {
             title: '🔋 Time to charge your mic',
-            body: "You've used your Bluetooth mic for 4h. Charge it before your next class.",
+            body: "You've used your Bluetooth mic for 4h. Charge it before your next lesson.",
             sound: 'default',
             interruptionLevel: 'active',
           },
@@ -2036,7 +1977,7 @@ export default function StartClassScreen({ navigation }) {
       popToTopTimerRef.current = setTimeout(() => {
         popToTopTimerRef.current = null;
         setClassRecorded(false);
-        try { navigation.popToTop(); } catch {}
+        goHomeAfterClass();
       }, 2500);
       return;
     }
@@ -2064,10 +2005,10 @@ export default function StartClassScreen({ navigation }) {
       popToTopTimerRef.current = setTimeout(() => {
         popToTopTimerRef.current = null;
         setClassRecorded(false);
-        try { navigation.popToTop(); } catch {}
+        goHomeAfterClass();
       }, 2500);
     } else {
-      navigation.popToTop();
+      goHomeAfterClass();
     }
   }
 
@@ -2114,10 +2055,12 @@ export default function StartClassScreen({ navigation }) {
   const [openQuestions, setOpenQuestions] = useState([]);
   const [viewingQuestion, setViewingQuestion] = useState(null);
   const [lastClass, setLastClass] = useState(null);
+  const [activity, setActivity] = useState([]); // bundle activity: practice sessions + classes
   const [detailLoading, setDetailLoading] = useState(false);
   // Couple detail (mirrors the solo briefing layout, driven by couple data).
   const [coupleReadinessDetail, setCoupleReadinessDetail] = useState(null);
   const [coupleFps, setCoupleFps] = useState([]);
+  const [coupleActivity, setCoupleActivity] = useState([]);
   // Readiness pulled from the student's previous private (focuses + tiers).
   // Coach uses this as a "check during the lesson" list and a post-lesson
   // verdict capture (good / not yet).
@@ -2125,10 +2068,13 @@ export default function StartClassScreen({ navigation }) {
   const [readinessVerdicts, setReadinessVerdicts] = useState({}); // { [fpId]: 'good' | 'not_yet' }
   const [questionVerdicts, setQuestionVerdicts] = useState({}); // { [qId]: 'covered' | 'not_yet' }
   const [confirmingNotYet, setConfirmingNotYet] = useState(null); // { focusPointId, name } | null
+  // Ending with checks left untouched: ask once, and point at the card meanwhile.
+  const [endConfirmOpen, setEndConfirmOpen] = useState(false);
+  const [highlightChecks, setHighlightChecks] = useState(false);
 
   // Group data
   const [groupFPs, setGroupFPs] = useState([]);
-  const [groupStats, setGroupStats] = useState({ avgSessions: 0, totalQuestions: 0 });
+  const [groupStats, setGroupStats] = useState({ avgSessions: 0, totalSessions: 0, totalQuestions: 0 });
   const [attentionStudents, setAttentionStudents] = useState([]);
   const [groupLoading, setGroupLoading] = useState(false);
 
@@ -2150,6 +2096,7 @@ export default function StartClassScreen({ navigation }) {
     setQuestions([]);
     setOpenQuestions([]);
     setLastClass(null);
+    setActivity([]);
     setReadinessVerdicts({});
     setQuestionVerdicts({});
     setDetailLoading(true);
@@ -2166,6 +2113,7 @@ export default function StartClassScreen({ navigation }) {
       setQuestions(b?.questions || []);
       setOpenQuestions(b?.openQuestions || []);
       const activity = b?.activity || [];
+      setActivity(activity);
       const lastCls = activity.find(
         (ev) => ev.type === 'class' && ev.withCurrentCoach && ev.classSummary
       );
@@ -2179,6 +2127,7 @@ export default function StartClassScreen({ navigation }) {
         }
         setLastClass({
           ...lastCls,
+          focusCount: (lastCls.focusPoints || []).length,
           focusPoints: (lastCls.focusPoints || []).slice(0, 3).map((fp) => ({
             ...fp,
             trainedCount: trainCounts[fp.id] || 0,
@@ -2218,6 +2167,7 @@ export default function StartClassScreen({ navigation }) {
   // one first (so readiness/debrief are scoped to it); otherwise open directly
   // on the single style this coach coaches them in.
   const pickStudent = useCallback((student) => {
+    if (isAwaitingVerification(student)) return guardStudent(student, () => {});
     const styles = student?.coachStyles || [];
     if (styles.includes('latin') && styles.includes('ballroom')) {
       setStylePicker(student);
@@ -2229,6 +2179,7 @@ export default function StartClassScreen({ navigation }) {
   // "Latin or Ballroom?" picker — shown when the coach taps a student they teach
   // both styles. The choice scopes the briefing readiness AND the debrief focuses.
   function renderStylePicker() {
+    const pick = (category) => { const st = stylePicker; setStylePicker(null); loadStudentDetail(st, category); };
     return (
       <Modal
         visible={!!stylePicker}
@@ -2237,37 +2188,20 @@ export default function StartClassScreen({ navigation }) {
         onRequestClose={() => setStylePicker(null)}
       >
         {stylePicker && (
-          <Pressable style={notYet.backdrop} onPress={() => setStylePicker(null)}>
-            <Pressable style={notYet.card} onPress={() => { /* swallow */ }}>
-              <HeroCardGradient />
-              <View style={notYet.iconWrap}>
-                <Ionicons name="albums-outline" size={22} color="#F6D27A" />
-              </View>
-              <Text style={notYet.title}>Latin or Ballroom?</Text>
-              <Text style={notYet.body}>
-                <Text>You coach </Text>
-                <Text style={notYet.bodyAccent}>{stylePicker.name}</Text>
-                <Text> in both — which class are you starting?</Text>
-              </Text>
-              <TouchableOpacity
-                style={notYet.primaryBtn}
-                activeOpacity={0.85}
-                onPress={() => { const st = stylePicker; setStylePicker(null); loadStudentDetail(st, 'latin'); }}
-              >
-                <Text style={notYet.primaryBtnText}>Latin</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[notYet.primaryBtn, { marginTop: 8 }]}
-                activeOpacity={0.85}
-                onPress={() => { const st = stylePicker; setStylePicker(null); loadStudentDetail(st, 'ballroom'); }}
-              >
-                <Text style={notYet.primaryBtnText}>Ballroom</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={notYet.secondaryBtn} activeOpacity={0.7} onPress={() => setStylePicker(null)}>
-                <Text style={notYet.secondaryBtnText}>Cancel</Text>
-              </TouchableOpacity>
-            </Pressable>
-          </Pressable>
+          <Popup
+            icon="albums-outline"
+            title="Latin or Ballroom?"
+            onDismiss={() => setStylePicker(null)}
+            actions={(
+              <>
+                <PopupButton label="Latin" tone="dark" onPress={() => pick('latin')} />
+                <PopupButton label="Ballroom" tone="dark" onPress={() => pick('ballroom')} />
+                <PopupButton label="Cancel" tone="ghost" onPress={() => setStylePicker(null)} />
+              </>
+            )}
+          >
+            You coach <PopupStrong>{stylePicker.name}</PopupStrong> in both. Which lesson is this?
+          </Popup>
         )}
       </Modal>
     );
@@ -2278,6 +2212,11 @@ export default function StartClassScreen({ navigation }) {
   // or "questions" data, so those sections simply don't render.)
   const loadCoupleDetail = useCallback(async (couple) => {
     setSelectedCouple(couple);
+    setCoupleReadinessDetail(null);
+    setCoupleFps([]);
+    setCoupleActivity([]);
+    setReadinessVerdicts({});
+    setQuestionVerdicts({});
     setDetailLoading(true);
     setView('couple-briefing');
     try {
@@ -2298,8 +2237,7 @@ export default function StartClassScreen({ navigation }) {
       const enriched = (fps || []).map((fp) => ({ ...fp, weekCount: weekByName[fp.name] || 0 }));
       setCoupleReadinessDetail(readiness);
       setCoupleFps(enriched);
-      setReadinessVerdicts({});
-      setQuestionVerdicts({});
+      setCoupleActivity(activity || []);
     } catch {}
     setDetailLoading(false);
   }, []);
@@ -2343,7 +2281,7 @@ export default function StartClassScreen({ navigation }) {
       const totalStudents = students.length || 1;
       const avgSessions = Math.round(totalSessions / totalStudents);
       const totalQuestions = allQs.reduce((a, qs) => a + (qs?.length || 0), 0);
-      setGroupStats({ avgSessions, totalQuestions });
+      setGroupStats({ avgSessions, totalSessions, totalQuestions });
 
       // Students needing attention — sorted: silent first, then attention
       const att = students
@@ -2371,32 +2309,6 @@ export default function StartClassScreen({ navigation }) {
     setGroupLoading(false);
   }, [students]);
 
-  // Collapsing hero for private/group briefing views
-  const HERO_FULL = 236;
-  const HERO_COLLAPSED = 92;
-  const pbScrollY = useRef(new Animated.Value(0)).current;
-  const heroAnimHeight = pbScrollY.interpolate({
-    inputRange: [0, HERO_FULL - HERO_COLLAPSED],
-    outputRange: [HERO_FULL, HERO_COLLAPSED],
-    extrapolate: 'clamp',
-  });
-  const heroDetailsOpacity = pbScrollY.interpolate({
-    inputRange: [0, 60],
-    outputRange: [1, 0],
-    extrapolate: 'clamp',
-  });
-  const gbScrollY = useRef(new Animated.Value(0)).current;
-  const gbHeroHeight = gbScrollY.interpolate({
-    inputRange: [0, HERO_FULL - HERO_COLLAPSED],
-    outputRange: [HERO_FULL, HERO_COLLAPSED],
-    extrapolate: 'clamp',
-  });
-  const gbDetailsOpacity = gbScrollY.interpolate({
-    inputRange: [0, 60],
-    outputRange: [1, 0],
-    extrapolate: 'clamp',
-  });
-
   function formatChrono(ms) {
     const total = Math.floor(ms / 1000);
     const h = Math.floor(total / 3600);
@@ -2415,61 +2327,6 @@ export default function StartClassScreen({ navigation }) {
     }
   }
 
-  function renderBottomBar() {
-    if (classStartedAt) {
-      const isBT = !!audioRoute?.isBluetooth;
-      const routeName = audioRoute?.name || 'iPhone mic';
-      return (
-        <View style={s.bottomBar}>
-          <View style={s.runningRow}>
-            <View style={s.runningDot} />
-            <Text style={s.runningTime}>{formatChrono(chronoMs)}</Text>
-            {/* Audio-route badge is meaningless in local-recording mode —
-                the phone holds no audio session so audioRoute would always
-                be null and the fallback "iPhone mic" label would mislead
-                the coach into thinking the phone is capturing audio. The
-                DJI mic state is fully independent and surfaced via the
-                separate REC/STOP confirmation modals. */}
-            {!isLocalMode && (
-              <View style={s.audioBadge}>
-                <View style={[s.audioBadgeDot, { backgroundColor: isBT ? '#4AAF52' : '#D44545' }]} />
-                <Text style={s.audioBadgeText} numberOfLines={1}>{routeName}</Text>
-              </View>
-            )}
-            <TouchableOpacity
-              style={s.stopBtn}
-              activeOpacity={0.88}
-              onPress={() => {
-                // Local-recording mode: gate stopClass behind a "press STOP
-                // on your DJI mic" confirmation. Pressing STOP on the mic
-                // closes the WAV file's header (so its duration metadata is
-                // valid for matching). Without the prompt the coach can end
-                // the class in the app while the mic is still recording,
-                // leaving an open file on the device until the next press.
-                if (isLocalMode) setRecStopConfirmOpen(true);
-                else stopClass();
-              }}
-            >
-              <Ionicons name="stop" size={14} color="#fff" />
-              <Text style={s.stopBtnText}>Stop</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      );
-    }
-    return (
-      <View style={s.bottomBar}>
-        <TouchableOpacity
-          style={s.startBtn}
-          activeOpacity={0.88}
-          onPress={openAudioModal}
-        >
-          <Text style={s.startBtnText}>Start</Text>
-        </TouchableOpacity>
-      </View>
-    );
-  }
-
   function renderDebriefModal() {
     // Only past_candidate focus points need coach validation at class end.
     const list =
@@ -2481,22 +2338,25 @@ export default function StartClassScreen({ navigation }) {
               name: fp.name,
               weekCount: fp.weekCount || 0,
             }))
-        : groupFPs
-            .filter((fp) => (fp.pastCandidateCount || 0) > 0)
-            .map((fp) => ({
-              id: fp.name,
-              name: fp.name,
-              weekCount: fp.practiced || 0,
-            }));
+        : view === 'group-briefing'
+          ? groupFPs
+              .filter((fp) => (fp.pastCandidateCount || 0) > 0)
+              .map((fp) => ({
+                id: fp.name,
+                name: fp.name,
+                weekCount: fp.practiced || 0,
+              }))
+          // A couple debrief validates couple focuses through "How did it go?"
+          // only; it has no past_candidate list of its own.
+          : [];
 
     const totalMin = Math.max(1, Math.round(debriefDurationMs / 60000));
     const validatedCount = validatedFpIds.length;
 
     // Open questions to debrief — both pending (coach hadn't decided yet)
     // and dismissed (coach committed to addressing them in this class).
-    // Tapping a row opens the detail popup; the inline "Answered" pill
-    // toggles a verbal-resolution mark. Both are optional — questions
-    // don't gate Done.
+    // Tapping a row opens the detail popup; the Answer pill marks it answered
+    // in person. Both are optional — questions don't gate Done.
     const questionsToAddress = view === 'private-briefing' ? (openQuestions || []) : [];
     const coveredCount = Object.values(questionVerdicts).filter(v => v === 'covered').length;
 
@@ -2510,6 +2370,17 @@ export default function StartClassScreen({ navigation }) {
         : (view === 'private-briefing' && studentReadiness)
           ? (studentReadiness.focuses || [])
           : [];
+    const keptCount = carryoverFocuses.filter((f) => readinessVerdicts[f.focusPointId] === 'not_yet').length;
+
+    const who = view === 'private-briefing' ? selectedStudent?.name
+      : view === 'couple-briefing' ? selectedCouple?.name
+      : 'Group lesson';
+    const figures = [
+      carryoverFocuses.length > 0 && { value: carryoverFocuses.length - keptCount, label: 'to retire' },
+      carryoverFocuses.length > 0 && { value: keptCount, label: 'kept' },
+      list.length > 0 && { value: `${validatedCount}/${list.length}`, label: 'validated' },
+      questionsToAddress.length > 0 && { value: `${coveredCount}/${questionsToAddress.length}`, label: 'answered' },
+    ].filter(Boolean).slice(0, 3);
 
     return (
       <Modal
@@ -2524,93 +2395,49 @@ export default function StartClassScreen({ navigation }) {
             with a notch / dynamic island and the title bleeds into the
             status bar. */}
         <SafeAreaProvider>
-          <SafeAreaView style={db.screen} edges={['top']}>
-            <View style={db.topBar}>
-              <View style={db.headerIcon}>
-                <Ionicons name="checkmark" size={20} color={C.green} />
-              </View>
-              <View style={{ flex: 1, minWidth: 0 }}>
-                <Text style={db.headerTitle}>Class ended</Text>
-                <Text style={db.headerSub}>Wrap up with a quick debrief</Text>
-              </View>
-            </View>
+          <SafeAreaView style={lessonStyles.page} edges={['top']}>
+            <TopBar title="Lesson ended" sub={who ? `${who} · ${totalMin} min` : `${totalMin} min`} />
 
-          <ScrollView
-            style={{ flex: 1 }}
-            showsVerticalScrollIndicator={false}
-            keyboardShouldPersistTaps="handled"
-            contentContainerStyle={{ paddingBottom: 24 }}
-          >
-            <View style={db.durationBar}>
-              <Ionicons name="time-outline" size={16} color="#F6D27A" />
-              <Text style={db.durationText}>
-                Duration{' '}
-                <Text style={db.durationDim}>
-                  · {totalMin} min
-                  {list.length > 0 ? ` · ${validatedCount}/${list.length} focus` : ''}
-                  {questionsToAddress.length > 0 ? ` · ${coveredCount}/${questionsToAddress.length} questions` : ''}
-                </Text>
-              </Text>
-            </View>
+            <ScrollView
+              style={{ flex: 1 }}
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={[lessonStyles.scroll, { paddingBottom: 110 + insets.bottom }]}
+            >
+              <Hero
+                big={totalMin}
+                unit="min"
+                title={who || 'Lesson'}
+                label="Wrap up"
+                figures={figures.length > 0 ? figures : null}
+              >
+                {carryoverFocuses.length > 0
+                  ? <>Everything you leave unmarked is <HeroStrong>retired when you tap Done</HeroStrong>. Mark a focus <HeroStrong>Not yet</HeroStrong> to keep it on the plan.</>
+                  : <>Nothing to validate from a previous lesson. Tap Done to send the recording off.</>}
+              </Hero>
 
-            <Text style={db.secLabel}>Class note</Text>
-            <View style={db.noteArea}>
-              <TextInput
-                style={db.noteInput}
-                placeholder="What did you cover? Any breakthroughs or blockers?"
-                placeholderTextColor="#CCC"
-                value={debriefNote}
-                onChangeText={setDebriefNote}
-                multiline
-                textAlignVertical="top"
-              />
-              <Text style={db.noteHint}>Optional — visible to the student after the class.</Text>
-            </View>
-
-            {/* Readiness verdicts — carryover focuses to validate. Solo and
-                 couple alike: good → archive, not yet → held (15-min target). */}
-            {carryoverFocuses.length > 0 && (
-              <>
-                <Text style={db.secLabel}>How did it go?</Text>
-                <Text style={db.verdictHint}>
-                  Tap “Not yet” to keep training a focus. Anything you leave
-                  unmarked is retired when you tap Done.
-                </Text>
-                <View style={db.verdictList}>
-                  {carryoverFocuses.map((f) => {
-                    const verdict = readinessVerdicts[f.focusPointId];
-                    return (
-                      <View key={f.focusPointId} style={db.verdictRow}>
-                        <Text style={db.verdictName} numberOfLines={1}>{f.name}</Text>
-                        <View style={db.verdictBtns}>
-                          <TouchableOpacity
-                            style={[db.verdictBtn, verdict === 'good' && db.verdictBtnGood]}
-                            activeOpacity={0.75}
-                            onPress={() =>
+              {/* Readiness verdicts — carryover focuses to validate. Solo and
+                  couple alike: good → archive, not yet → held (15-min target). */}
+              {carryoverFocuses.length > 0 && (
+                <>
+                  <SectionHead title="How did it go?" right={plural(carryoverFocuses.length, 'focus point')} />
+                  <Card>
+                    {carryoverFocuses.map((f, i) => {
+                      const verdict = readinessVerdicts[f.focusPointId];
+                      return (
+                        <View key={f.focusPointId} style={[ls.vRow, i > 0 && ls.rowLine]}>
+                          <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
+                            <Text style={ls.vName} numberOfLines={2}>{f.name}</Text>
+                            {!!f.tier && <View style={{ flexDirection: 'row' }}><TierChip tier={f.tier} /></View>}
+                          </View>
+                          <VerdictPills
+                            value={verdict}
+                            onGood={() =>
                               setReadinessVerdicts((prev) => ({
                                 ...prev,
                                 [f.focusPointId]: prev[f.focusPointId] === 'good' ? null : 'good',
                               }))
                             }
-                          >
-                            <Ionicons
-                              name="checkmark"
-                              size={13}
-                              color={verdict === 'good' ? '#fff' : C.green}
-                            />
-                            <Text
-                              style={[
-                                db.verdictBtnText,
-                                { color: verdict === 'good' ? '#fff' : C.green },
-                              ]}
-                            >
-                              Good
-                            </Text>
-                          </TouchableOpacity>
-                          <TouchableOpacity
-                            style={[db.verdictBtn, verdict === 'not_yet' && db.verdictBtnNotYet]}
-                            activeOpacity={0.75}
-                            onPress={() => {
+                            onNotYet={() => {
                               // Already "not yet"? toggle off without prompt.
                               if (verdict === 'not_yet') {
                                 setReadinessVerdicts((prev) => ({ ...prev, [f.focusPointId]: null }));
@@ -2621,146 +2448,74 @@ export default function StartClassScreen({ navigation }) {
                               // class instead of being archived.
                               setConfirmingNotYet({ focusPointId: f.focusPointId, name: f.name });
                             }}
-                          >
-                            <Text
-                              style={[
-                                db.verdictBtnText,
-                                { color: verdict === 'not_yet' ? '#fff' : C.orange },
-                              ]}
-                            >
-                              Not yet
-                            </Text>
-                          </TouchableOpacity>
-                        </View>
-                      </View>
-                    );
-                  })}
-                </View>
-              </>
-            )}
-
-            {list.length > 0 && (
-              <>
-                <Text style={db.secLabel}>Validate focus points covered</Text>
-                <View style={db.fpList}>
-                  {list.map((fp) => {
-                    const selected = validatedFpIds.includes(fp.id);
-                    return (
-                      <TouchableOpacity
-                        key={fp.id}
-                        style={[db.fpItem, selected && db.fpItemSelected]}
-                        activeOpacity={0.75}
-                        onPress={() => toggleValidateFp(fp.id)}
-                      >
-                        <View style={[db.fpCheck, selected && db.fpCheckSelected]}>
-                          {selected && <Ionicons name="checkmark" size={14} color="#fff" />}
-                        </View>
-                        <View style={{ flex: 1, minWidth: 0 }}>
-                          <Text
-                            style={[db.fpName, selected && { color: C.green }]}
-                            numberOfLines={1}
-                          >
-                            {fp.name}
-                          </Text>
-                          <Text style={db.fpMeta}>
-                            {fp.weekCount > 0
-                              ? `${fp.weekCount}x practiced this week`
-                              : 'No practice this week'}
-                          </Text>
-                        </View>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-              </>
-            )}
-
-            {/* Questions debrief — tap row to read the full question +
-                reply in the popup. The inline "Answered" pill toggles a
-                verbal-resolution mark (optional, doesn't gate Done). */}
-            {questionsToAddress.length > 0 && (
-              <>
-                <Text style={db.secLabel}>Questions addressed</Text>
-                <View style={db.verdictList}>
-                  {questionsToAddress.map((q) => {
-                    const verdict = questionVerdicts[q.id];
-                    const isInClass = q.status === 'dismissed';
-                    const isAnswered = verdict === 'covered';
-                    return (
-                      <TouchableOpacity
-                        key={q.id}
-                        style={db.verdictRow}
-                        activeOpacity={0.75}
-                        onPress={() => setViewingQuestion(q)}
-                      >
-                        <View style={{ flex: 1, minWidth: 0 }}>
-                          <Text style={db.verdictName} numberOfLines={2}>{q.message}</Text>
-                          {isInClass && (
-                            <Text style={db.verdictMeta}>Flagged for this class</Text>
-                          )}
-                        </View>
-                        <TouchableOpacity
-                          style={[db.verdictBtn, isAnswered && db.verdictBtnGood]}
-                          activeOpacity={0.75}
-                          onPress={(e) => {
-                            e.stopPropagation();
-                            setQuestionVerdicts((prev) => ({
-                              ...prev,
-                              [q.id]: prev[q.id] === 'covered' ? null : 'covered',
-                            }));
-                          }}
-                        >
-                          <Ionicons
-                            name="checkmark"
-                            size={13}
-                            color={isAnswered ? '#fff' : C.green}
                           />
-                          <Text
-                            style={[
-                              db.verdictBtnText,
-                              { color: isAnswered ? '#fff' : C.green },
-                            ]}
-                          >
-                            Answered
-                          </Text>
-                        </TouchableOpacity>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-              </>
-            )}
+                        </View>
+                      );
+                    })}
+                  </Card>
+                </>
+              )}
 
-            {audioUris.length > 0 && (
-              <View style={db.recBanner}>
-                <Ionicons name="mic" size={14} color={C.orange} />
-                <Text style={db.recBannerText}>
-                  {audioUris.length === 1
-                    ? 'Recording ready, will be transcribed on Done'
-                    : `${audioUris.length} segments captured, will be transcribed on Done`}
-                </Text>
-              </View>
-            )}
+              {list.length > 0 && (
+                <>
+                  <SectionHead title="Validate what you covered" right={`${validatedCount} of ${list.length}`} />
+                  <Card>
+                    {list.map((fp, i) => (
+                      <CheckRow
+                        key={fp.id}
+                        first={i === 0}
+                        name={fp.name}
+                        meta={fp.weekCount > 0 ? `${plural(fp.weekCount, 'session')} this week` : 'no practice this week'}
+                        done={validatedFpIds.includes(fp.id)}
+                        onPress={() => toggleValidateFp(fp.id)}
+                      />
+                    ))}
+                  </Card>
+                </>
+              )}
 
-            {chargeReminderInDebrief && (
-              <View style={db.recBanner}>
-                <Ionicons name="battery-charging" size={14} color={C.orange} />
-                <Text style={db.recBannerText}>
-                  Don't forget to charge your mic for next session
-                </Text>
-              </View>
-            )}
-          </ScrollView>
+              {questionsToAddress.length > 0 && (
+                <>
+                  <SectionHead title="Questions" right={`${coveredCount} of ${questionsToAddress.length} answered`} />
+                  <Card>
+                    {questionsToAddress.map((q, i) => (
+                      <QuestionRow
+                        key={q.id}
+                        first={i === 0}
+                        text={q.message}
+                        meta={q.status === 'dismissed' ? 'Kept for this lesson' : askedLabel(q.created_at)}
+                        answered={questionVerdicts[q.id] === 'covered'}
+                        onPress={() => setViewingQuestion(q)}
+                        onAnswer={() => toggleAnswered(q.id)}
+                      />
+                    ))}
+                  </Card>
+                </>
+              )}
 
-            <View style={db.bottomBar}>
-              <TouchableOpacity
-                style={db.btnDone}
-                activeOpacity={0.88}
-                onPress={finishDebrief}
-              >
-                <Text style={db.btnDoneText}>Done</Text>
-              </TouchableOpacity>
-            </View>
+              {(audioUris.length > 0 || chargeReminderInDebrief) && (
+                <Card style={{ marginTop: 18 }}>
+                  {audioUris.length > 0 && (
+                    <View style={ls.noteRow}>
+                      <Ionicons name="mic" size={15} color={L.GOLD_INK} />
+                      <Text style={ls.noteText}>
+                        {audioUris.length === 1
+                          ? 'Recording ready. It’s transcribed when you tap Done.'
+                          : `${audioUris.length} parts recorded. They’re transcribed when you tap Done.`}
+                      </Text>
+                    </View>
+                  )}
+                  {chargeReminderInDebrief && (
+                    <View style={[ls.noteRow, audioUris.length > 0 && ls.rowLine]}>
+                      <Ionicons name="battery-charging" size={15} color={L.GOLD_INK} />
+                      <Text style={ls.noteText}>Charge your mic before the next lesson.</Text>
+                    </View>
+                  )}
+                </Card>
+              )}
+            </ScrollView>
+
+            <StartFoot label="Done" icon={null} bottom={insets.bottom} onPress={finishDebrief} />
 
             {/* "Not yet" confirmation — clicking Not yet on a focus carries
                 it over into the next class instead of archiving it. */}
@@ -2771,58 +2526,44 @@ export default function StartClassScreen({ navigation }) {
               onRequestClose={() => setConfirmingNotYet(null)}
             >
               {confirmingNotYet && (
-                <Pressable style={notYet.backdrop} onPress={() => setConfirmingNotYet(null)}>
-                  <Pressable style={notYet.card} onPress={() => { /* swallow */ }}>
-                    <HeroCardGradient />
-                    <View style={notYet.iconWrap}>
-                      <Ionicons name="refresh" size={22} color="#F6D27A" />
-                    </View>
-                    <Text style={notYet.title}>Keep training this?</Text>
-                    <Text style={notYet.body}>
-                      <Text style={notYet.bodyAccent}>{confirmingNotYet.name}</Text>
-                      <Text> will stay on your student's plan and carry over into your next class.</Text>
-                    </Text>
-                    <TouchableOpacity
-                      style={notYet.primaryBtn}
-                      activeOpacity={0.85}
-                      onPress={() => {
-                        setReadinessVerdicts((prev) => ({
-                          ...prev,
-                          [confirmingNotYet.focusPointId]: 'not_yet',
-                        }));
-                        setConfirmingNotYet(null);
-                      }}
-                    >
-                      <Text style={notYet.primaryBtnText}>Yes, keep training</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={notYet.secondaryBtn}
-                      activeOpacity={0.7}
-                      onPress={() => setConfirmingNotYet(null)}
-                    >
-                      <Text style={notYet.secondaryBtnText}>Cancel</Text>
-                    </TouchableOpacity>
-                  </Pressable>
-                </Pressable>
+                <Popup
+                  icon="refresh"
+                  title="Keep training this?"
+                  onDismiss={() => setConfirmingNotYet(null)}
+                  actions={(
+                    <>
+                      <PopupButton
+                        label="Yes, keep training"
+                        onPress={() => {
+                          setReadinessVerdicts((prev) => ({
+                            ...prev,
+                            [confirmingNotYet.focusPointId]: 'not_yet',
+                          }));
+                          setConfirmingNotYet(null);
+                        }}
+                      />
+                      <PopupButton label="Cancel" tone="ghost" onPress={() => setConfirmingNotYet(null)} />
+                    </>
+                  )}
+                >
+                  <PopupStrong>{confirmingNotYet.name}</PopupStrong> stays on the plan and carries over into your next lesson.
+                </Popup>
               )}
             </Modal>
 
-            {/* Question detail popup — also rendered at the briefing
-                level, but Modals are global so duplicating is fine. */}
-            <Modal
-              visible={!!viewingQuestion}
-              transparent
-              animationType="fade"
-              onRequestClose={() => setViewingQuestion(null)}
-            >
-              {viewingQuestion && (
-                <QuestionDetailSheet
-                  question={viewingQuestion}
-                  role="coach"
-                  onClose={() => setViewingQuestion(null)}
-                />
-              )}
-            </Modal>
+            {/* The question, with its context — the briefing's own sheet stands
+                down while the debrief is open, so only this one presents. */}
+              <QuestionSheet
+                visible={!!viewingQuestion}
+                question={viewingQuestion}
+                studentId={viewingQuestion?.student_id || selectedStudent?.id}
+                studentName={selectedStudent?.name}
+                focusPoints={focusPoints}
+                inPerson
+                answered={questionVerdicts[viewingQuestion?.id] === 'covered'}
+                onAnswered={() => viewingQuestion && toggleAnswered(viewingQuestion.id)}
+                onClose={() => setViewingQuestion(null)}
+              />
           </SafeAreaView>
         </SafeAreaProvider>
       </Modal>
@@ -2830,9 +2571,11 @@ export default function StartClassScreen({ navigation }) {
   }
 
   function renderAudioModal() {
-    const soundsGood = inputLevel > SOUND_GOOD_DBFS;
     const externals = availableInputs.filter(isExternalMic);
     const phoneMic = availableInputs.find(isPhoneMic);
+    const waiting = view === 'private-briefing' && selectedStudent?.age_check === 'minor_pending' ? 'Waiting for verification'
+      : view === 'private-briefing' && CONSENT_BLOCKED.includes(selectedStudent?.consent_status) ? 'Waiting for parent approval'
+      : null;
     return (
       <Modal
         visible={audioModalOpen}
@@ -2840,131 +2583,99 @@ export default function StartClassScreen({ navigation }) {
         animationType="slide"
         onRequestClose={closeAudioModal}
       >
-        <Pressable style={ad.overlay} onPress={closeAudioModal}>
-          <Pressable style={ad.sheet} onPress={(e) => e.stopPropagation()}>
-            <View style={ad.handle} />
-            <View style={ad.iconWrap}>
-              <Ionicons name="mic" size={24} color={micPermGranted === false ? C.red : C.orange} />
-            </View>
-            <Text style={ad.title}>Choose your mic</Text>
-            <Text style={ad.subtitle}>
+        <Pressable style={au.overlay} onPress={closeAudioModal}>
+          <Pressable style={[au.sheet, { paddingBottom: 18 + insets.bottom }]} onPress={(e) => e.stopPropagation()}>
+            <View style={au.handle} />
+            <Text style={au.eyebrow}>Before you start</Text>
+            <Text style={au.title}>Choose your mic</Text>
+            <Text style={au.sub}>
               {micPermGranted === false
-                ? 'Microphone access denied. Enable it in Settings to record classes.'
-                : 'Pick the audio source for this class. Speak to check the level.'}
+                ? 'Microphone access is off. Turn it on in Settings to record lessons.'
+                : 'Pick what records this lesson, then say a few words to check the level.'}
             </Text>
 
             {micPermGranted !== false && externals.length === 0 && (
-              <View style={ad.searching}>
-                <View style={ad.searchingCoreWrap}>
-                  <Animated.View
-                    style={[
-                      ad.searchingRing,
-                      {
-                        transform: [{ scale: searchRing1.interpolate({ inputRange: [0, 1], outputRange: [1, 2.4] }) }],
-                        opacity: searchRing1.interpolate({ inputRange: [0, 0.05, 1], outputRange: [0, 0.55, 0] }),
-                      },
-                    ]}
-                  />
-                  <Animated.View
-                    style={[
-                      ad.searchingRing,
-                      {
-                        transform: [{ scale: searchRing2.interpolate({ inputRange: [0, 1], outputRange: [1, 2.4] }) }],
-                        opacity: searchRing2.interpolate({ inputRange: [0, 0.05, 1], outputRange: [0, 0.55, 0] }),
-                      },
-                    ]}
-                  />
-                  <View style={ad.searchingCore}>
-                    <Ionicons name="bluetooth" size={18} color={C.orange} />
+              <View style={au.searching}>
+                <View style={au.coreWrap}>
+                  {[searchRing1, searchRing2].map((ring, i) => (
+                    <Animated.View
+                      key={i}
+                      style={[
+                        au.ring,
+                        {
+                          transform: [{ scale: ring.interpolate({ inputRange: [0, 1], outputRange: [1, 2.4] }) }],
+                          opacity: ring.interpolate({ inputRange: [0, 0.05, 1], outputRange: [0, 0.55, 0] }),
+                        },
+                      ]}
+                    />
+                  ))}
+                  <View style={au.core}>
+                    <Ionicons name="bluetooth" size={18} color={L.GOLD} />
                   </View>
                 </View>
-                <Text style={ad.searchingTitle}>Connect a Bluetooth mic</Text>
-                <Text style={ad.searchingSub}>Searching for nearby devices…</Text>
+                <Text style={au.searchTitle}>Connect a Bluetooth mic</Text>
+                <Text style={au.searchSub}>Looking for nearby devices…</Text>
               </View>
             )}
 
             {micPermGranted !== false && externals.length > 0 && (
-              <View style={ad.chips}>
-                {externals.map((input) => {
+              <Card style={{ marginTop: 16 }}>
+                {externals.map((input, i) => {
                   const selected = input.uid === selectedInputUid;
                   return (
-                    <View
-                      key={input.uid}
-                      style={[
-                        ad.chip,
-                        selected && ad.chipSelected,
-                        selected && sustainedSoundsGood && ad.chipSelectedGood,
-                      ]}
-                    >
-                      <TouchableOpacity
-                        style={ad.chipRow}
-                        activeOpacity={0.85}
-                        onPress={() => pickInput(input.uid)}
-                      >
-                        <View
-                          style={[
-                            ad.chipIcon,
-                            selected && ad.chipIconSelected,
-                            selected && sustainedSoundsGood && ad.chipIconSelectedGood,
-                          ]}
-                        >
+                    <View key={input.uid} style={i > 0 && ls.rowLine}>
+                      <TouchableOpacity style={au.inputRow} activeOpacity={0.8} onPress={() => pickInput(input.uid)}
+                        accessibilityRole="radio" accessibilityState={{ checked: selected }}>
+                        <View style={[au.inputIcon, selected && au.inputIconOn]}>
                           <Ionicons
                             name={input.isBluetooth ? 'bluetooth' : input.type === 'wired' ? 'headset' : 'mic'}
                             size={16}
-                            color={selected ? C.text : C.gray}
+                            color={selected ? L.GOLD : L.INK_62}
                           />
                         </View>
                         <View style={{ flex: 1, minWidth: 0 }}>
-                          <Text style={ad.chipName}>{input.name}</Text>
-                          <Text style={ad.chipMeta}>
+                          <Text style={au.inputName} numberOfLines={1}>{input.name}</Text>
+                          <Text style={au.inputMeta}>
                             {input.type === 'bluetooth' ? 'Bluetooth' : input.type === 'wired' ? 'Wired' : input.type}
                           </Text>
                         </View>
-                        {selected && (
-                          <View
-                            style={[
-                              ad.chipDot,
-                              { backgroundColor: sustainedSoundsGood ? C.green : C.gray },
-                            ]}
-                          />
-                        )}
+                        <View style={[au.radio, selected && au.radioOn]}>
+                          {selected && <View style={au.radioDot} />}
+                        </View>
                       </TouchableOpacity>
                       {selected && (
-                        <View style={ad.waveBlock}>
-                          <View style={ad.waveBars}>
-                            {waveBars.map((anim, i) => (
+                        <View style={au.wave}>
+                          <View style={au.waveBars}>
+                            {waveBars.map((anim, k) => (
                               <Animated.View
-                                key={i}
+                                key={k}
                                 style={[
-                                  ad.waveBar,
-                                  {
-                                    backgroundColor: sustainedSoundsGood ? C.green : C.orange,
-                                    transform: [{ scaleY: anim }],
-                                  },
+                                  au.waveBar,
+                                  { backgroundColor: sustainedSoundsGood ? L.GREEN : L.GOLD, transform: [{ scaleY: anim }] },
                                 ]}
                               />
                             ))}
                           </View>
-                          <Text style={[ad.waveLabel, sustainedSoundsGood && { color: C.green }]}>
-                            {sustainedSoundsGood ? '● Sounds good' : '○ Listening…'}
+                          <Text style={[au.waveLabel, sustainedSoundsGood && { color: '#3F6B3E' }]}>
+                            {sustainedSoundsGood ? 'Sounds good' : 'Listening…'}
                           </Text>
                         </View>
                       )}
                     </View>
                   );
                 })}
-              </View>
+              </Card>
             )}
 
-            <View style={ad.actions}>
-              <TouchableOpacity
-                style={ad.btnStart}
-                activeOpacity={0.88}
-                onPress={() => handleStartTap(phoneMic)}
-              >
-                <Text style={ad.btnStartText}>Start class</Text>
-              </TouchableOpacity>
-            </View>
+            <TouchableOpacity
+              style={[au.go, !!waiting && { opacity: 0.45 }]}
+              activeOpacity={0.88}
+              onPress={() => handleStartTap(phoneMic)}
+              accessibilityRole="button"
+            >
+              {!waiting && <Ionicons name="play" size={17} color={L.INK} />}
+              <Text style={au.goT}>{waiting || 'Start lesson'}</Text>
+            </TouchableOpacity>
           </Pressable>
           {renderNoMicPrompt()}
           {renderRecordingConsentPrompt()}
@@ -2973,7 +2684,13 @@ export default function StartClassScreen({ navigation }) {
     );
   }
 
-  function handleStartTap(phoneMic) {
+  async function handleStartTap(phoneMic) {
+    if (startingRef.current || classStartedAt) return;
+    const block = await recordingBlock().catch(() => null);
+    if (block) {
+      Alert.alert(block[0], block[1]);
+      return;
+    }
     // First class ever for this coach → consent gate before anything else.
     if (!consentGiven) {
       pendingPhoneMicRef.current = phoneMic ?? null;
@@ -3028,68 +2745,39 @@ export default function StartClassScreen({ navigation }) {
     if (!consentOpen) return null;
     // Non-dismissible: the coach must explicitly accept or cancel.
     return (
-      <Pressable style={ad.popupOverlay}>
-        <Pressable style={ad.popupCard} onPress={(e) => e.stopPropagation()}>
-          <View style={ad.popupIconWrap}>
-            <Ionicons name="mic" size={22} color={C.orange} />
-          </View>
-          <Text style={ad.popupTitle}>Before you record</Text>
-          <Text style={ad.popupBody}>
-            You're responsible for getting everyone's agreement before you record them,
-            including a parent or guardian for anyone under 18. InBetween stores the audio
-            and transcript securely and uses them only to generate focus points.
-          </Text>
-          <View style={ad.popupActions}>
-            <TouchableOpacity
-              style={ad.popupBtnGhost}
-              activeOpacity={0.8}
-              onPress={() => setConsentOpen(false)}
-            >
-              <Text style={ad.popupBtnGhostText}>Cancel</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={ad.popupBtnPrimary}
-              activeOpacity={0.85}
-              onPress={acceptRecordingConsent}
-            >
-              <Text style={ad.popupBtnPrimaryText}>I have consent</Text>
-            </TouchableOpacity>
-          </View>
-        </Pressable>
-      </Pressable>
+      <Popup
+        icon="mic"
+        title="Before you record"
+        actions={(
+          <>
+            <PopupButton label="I have their consent" onPress={acceptRecordingConsent} />
+            <PopupButton label="Cancel" tone="ghost" onPress={() => setConsentOpen(false)} />
+          </>
+        )}
+      >
+        You're responsible for getting everyone's agreement before you record them,
+        including a parent or guardian for anyone under 18. InBetween stores the audio
+        and transcript securely and uses them only to generate focus points.
+      </Popup>
     );
   }
 
   function renderNoMicPrompt() {
     if (!noMicPromptOpen) return null;
     return (
-      <Pressable style={ad.popupOverlay} onPress={dismissNoMicPrompt}>
-        <Pressable style={ad.popupCard} onPress={(e) => e.stopPropagation()}>
-          <View style={ad.popupIconWrap}>
-            <Ionicons name="mic-off" size={22} color={C.orange} />
-          </View>
-          <Text style={ad.popupTitle}>No microphone selected</Text>
-          <Text style={ad.popupBody}>
-            A Bluetooth microphone is recommended for the best transcription quality.
-          </Text>
-          <View style={ad.popupActions}>
-            <TouchableOpacity
-              style={ad.popupBtnGhost}
-              activeOpacity={0.8}
-              onPress={confirmUsePhoneMic}
-            >
-              <Text style={ad.popupBtnGhostText}>Use phone's mic</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={ad.popupBtnPrimary}
-              activeOpacity={0.85}
-              onPress={dismissNoMicPrompt}
-            >
-              <Text style={ad.popupBtnPrimaryText}>Connect</Text>
-            </TouchableOpacity>
-          </View>
-        </Pressable>
-      </Pressable>
+      <Popup
+        icon="mic-off"
+        title="No mic selected"
+        onDismiss={dismissNoMicPrompt}
+        actions={(
+          <>
+            <PopupButton label="Connect a mic" onPress={dismissNoMicPrompt} />
+            <PopupButton label="Use the phone’s mic" tone="ghost" onPress={confirmUsePhoneMic} />
+          </>
+        )}
+      >
+        A Bluetooth mic gives the clearest transcript, so the focus points come out right.
+      </Popup>
     );
   }
 
@@ -3129,1044 +2817,661 @@ export default function StartClassScreen({ navigation }) {
     );
   }
 
-  const filteredStudents = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    if (!q) return students;
-    return students.filter(s => (s.name || '').toLowerCase().includes(q));
-  }, [students, searchQuery]);
+  // ── Start a lesson (docs/design/start-lesson.html) ─────────────────────
+  // One page per lesson: the dark readiness hero, what to check during the
+  // lesson, the activity since the last private. The foot holds Start, and once
+  // the lesson runs, the timer with End lesson in its place — the rest of the
+  // page stays as it was.
 
-  // ── CLASS RECORDED SUCCESS SCREEN ─────────────────────────────────────
-  if (classRecorded) {
+  // During the lesson a check marks the focus as seen ("Good"); the debrief opens
+  // with it ticked. Not-yet stays a debrief decision (it asks for confirmation).
+  function toggleCheck(focusPointId) {
+    setReadinessVerdicts((prev) => ({
+      ...prev,
+      [focusPointId]: prev[focusPointId] === 'good' ? null : 'good',
+    }));
+  }
+  function toggleAnswered(questionId) {
+    setQuestionVerdicts((prev) => ({
+      ...prev,
+      [questionId]: prev[questionId] === 'covered' ? null : 'covered',
+    }));
+  }
+
+  // What's still untouched in "Check during this lesson".
+  function pendingChecks() {
+    const checks = view === 'couple-briefing'
+      ? (coupleReadinessDetail?.focuses || [])
+      : view === 'private-briefing' ? (studentReadiness?.focuses || []) : [];
+    const focus = checks.filter((f) => !readinessVerdicts[f.focusPointId]).length;
+    const questions = view === 'private-briefing'
+      ? (openQuestions || []).filter((q) => questionVerdicts[q.id] !== 'covered').length
+      : 0;
+    return { focus, questions, total: focus + questions };
+  }
+
+  function endLesson(fromPopup) {
+    setEndConfirmOpen(false);
+    setHighlightChecks(false);
+    // Local recording: first get the coach to press STOP on the mic, so the
+    // file's header closes and its duration can be matched. Either way a modal
+    // opens, so let the popup finish dismissing — iOS won't present a second
+    // modal while the first is still animating out.
+    const end = () => {
+      if (isLocalMode) setRecStopConfirmOpen(true);
+      else stopClass();
+    };
+    if (fromPopup) setTimeout(end, 350);
+    else end();
+  }
+
+  function renderFoot() {
+    if (classStartedAt) {
+      return (
+        <RunningFoot
+          time={formatChrono(chronoMs)}
+          source={isLocalMode ? 'Recording on your mic' : `Recording · ${audioRoute?.name || 'iPhone mic'}`}
+          bottom={insets.bottom}
+          onEnd={() => {
+            if (pendingChecks().total > 0) {
+              setHighlightChecks(true);
+              setEndConfirmOpen(true);
+              return;
+            }
+            endLesson(false);
+          }}
+        />
+      );
+    }
+    return <StartFoot bottom={insets.bottom} onPress={openAudioModal} />;
+  }
+
+  // "You haven't ticked everything" — asked once, on End. The card it talks
+  // about is ringed in gold behind the popup so the coach sees what's meant.
+  function renderEndConfirm() {
+    const { focus, questions, total } = pendingChecks();
     return (
-      <SafeAreaView style={[s.safe, { alignItems: 'center', justifyContent: 'center' }]} edges={['top']}>
-        <View style={cr.wrap}>
-          <View style={cr.iconWrap}>
-            <Ionicons name="mic" size={32} color={C.orange} />
-          </View>
-          <Text style={cr.title}>Class recorded</Text>
-          <Text style={cr.sub}>
-            We're processing the transcript in the background.{'\n'}
-            You'll get a notification when the focus points are ready to review.
-          </Text>
-        </View>
-      </SafeAreaView>
+      <Modal
+        visible={endConfirmOpen && total > 0}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setEndConfirmOpen(false)}
+      >
+        <Popup
+          icon="ellipse-outline"
+          title="Not everything is ticked"
+          onDismiss={() => setEndConfirmOpen(false)}
+          actions={(
+            <>
+              <PopupButton label="End the lesson anyway" onPress={() => endLesson(true)} />
+              <PopupButton label="Keep the lesson going" tone="ghost" onPress={() => setEndConfirmOpen(false)} />
+            </>
+          )}
+        >
+          <PopupStrong>
+            {[focus > 0 && plural(focus, 'focus point'), questions > 0 && plural(questions, 'question')]
+              .filter(Boolean).join(' and ')}
+          </PopupStrong>
+          {total === 1 ? ' is' : ' are'} still untouched under “Check during this lesson”. You can end anyway — you get to validate everything in the debrief.
+        </Popup>
+      </Modal>
     );
   }
 
-  // ── VIEW 1: Start class landing — readiness roster + group card ────────
-  if (view === 'select') {
-    const totalStudents = students.length;
+  function renderLessonModals() {
     return (
-      <View style={{ flex: 1 }}>
-        <LinearGradient
-          colors={['#F7F6F3', '#F4EFDC', '#F9DF9B']}
-          locations={[0, 0.55, 1]}
-          start={{ x: 0.1, y: 0 }}
-          end={{ x: 0.95, y: 1 }}
-          style={StyleSheet.absoluteFillObject}
-        />
-        <SafeAreaView style={{ flex: 1 }} edges={['top']}>
-          <View style={sc.topBar}>
-            <TouchableOpacity
-              style={sc.iconBtn}
-              onPress={() => navigation.goBack()}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="close" size={18} color="#0A0A0A" />
-            </TouchableOpacity>
-            <View style={{ flex: 1, alignItems: 'center' }}>
-              <Text style={sc.topLabel}>NEW CLASS</Text>
-            </View>
-            <View style={{ width: 40 }} />
-          </View>
+      <>
+        {renderAudioModal()}
+        {renderDebriefModal()}
+        {renderEndConfirm()}
+        {renderRecStartConfirmPrompt()}
+        {renderRecStopConfirmPrompt()}
+          <QuestionSheet
+            visible={!!viewingQuestion && !debriefOpen}
+            question={viewingQuestion}
+            studentId={viewingQuestion?.student_id || selectedStudent?.id}
+            studentName={selectedStudent?.name}
+            focusPoints={focusPoints}
+            inPerson
+            answered={questionVerdicts[viewingQuestion?.id] === 'covered'}
+            onAnswered={() => viewingQuestion && toggleAnswered(viewingQuestion.id)}
+            onClose={() => setViewingQuestion(null)}
+          />
+      </>
+    );
+  }
 
-          <ScrollView
-            contentContainerStyle={sc.scroll}
-            showsVerticalScrollIndicator={false}
-          >
-            <Text style={sc.heading}>Start a class</Text>
-            <Text style={sc.subtitle}>
-              Pick a student to see what they've worked on lately.
-            </Text>
-
-            {/* Solo / Couple toggle — sliding pill */}
-            <View
-              style={sc.modeToggle}
-              onLayout={(e) => setToggleW(e.nativeEvent.layout.width)}
-            >
-              {toggleW > 0 && (
-                <Animated.View
-                  style={[
-                    sc.modeThumb,
-                    {
-                      width: (toggleW - 10) / 2,
-                      transform: [{
-                        translateX: modeSlide.interpolate({
-                          inputRange: [0, 1],
-                          outputRange: [0, (toggleW - 10) / 2],
-                        }),
-                      }],
-                    },
-                  ]}
-                />
-              )}
-              <TouchableOpacity
-                style={sc.modeTab}
-                onPress={() => selectMode('solo')}
-                activeOpacity={0.85}
-              >
-                <View style={[sc.modeDot, { backgroundColor: '#E8B530' }]} />
-                <Text style={[sc.modeTabTxt, pickMode === 'solo' && sc.modeTabTxtOn]}>Solo</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={sc.modeTab}
-                onPress={() => selectMode('couple')}
-                activeOpacity={0.85}
-              >
-                <View style={[sc.modeDot, { backgroundColor: '#2E4670' }]} />
-                <Text style={[sc.modeTabTxt, pickMode === 'couple' && sc.modeTabTxtOn]}>Couple</Text>
-              </TouchableOpacity>
-            </View>
-
-            {pickMode === 'solo' ? (
-              <>
-            <View style={sc.eyebrowRow}>
-              <View style={sc.eyebrowAccent} />
-              <Text style={sc.eyebrowText}>PRIVATE WITH...</Text>
-              <View style={sc.eyebrowRule} />
-              <Text style={sc.eyebrowRight}>Sorted by readiness</Text>
-            </View>
-
-            {rosterLoading && roster.length === 0 ? (
-              <View style={sc.loadingWrap}>
-                <ActivityIndicator color="#E8B530" />
+  // Bones while a briefing has nothing to show yet (no cached bundle).
+  function renderBriefingBones() {
+    return (
+      <Pulse>
+        <View style={ls.boneHero}>
+          <Bone w={120} h={40} r={8} style={ls.boneDark} />
+          <Bone w="100%" h={8} r={4} style={ls.boneDark} />
+          <Bone w="86%" h={12} style={ls.boneDark} />
+          <Bone w="64%" h={12} style={ls.boneDark} />
+        </View>
+        <Bone w={150} h={10} style={{ marginTop: 26, marginBottom: 12 }} />
+        <View style={ls.boneCard}>
+          {[0, 1, 2].map((i) => (
+            <View key={i} style={ls.boneRow}>
+              <Bone w={23} h={23} r={12} />
+              <View style={{ flex: 1, gap: 6 }}>
+                <Bone w="70%" h={12} />
+                <Bone w="40%" h={9} />
               </View>
-            ) : roster.length === 0 ? (
-              <Text style={sc.emptyText}>
-                No students yet — share your invite code to connect students.
-              </Text>
-            ) : (
-              roster.map((st) => (
-                <PrivateCard
-                  key={st.id}
-                  st={st}
-                  onPress={() => pickStudent(students.find(x => x.id === st.id) || st)}
-                />
-              ))
-            )}
-              </>
-            ) : (
-              <>
-            <View style={sc.eyebrowRow}>
-              <View style={[sc.eyebrowAccent, { backgroundColor: '#2E4670' }]} />
-              <Text style={[sc.eyebrowText, { color: '#2E4670' }]}>COUPLES</Text>
-              <View style={sc.eyebrowRule} />
             </View>
+          ))}
+        </View>
+      </Pulse>
+    );
+  }
 
-            {couples.length === 0 ? (
-              <Text style={sc.emptyText}>
-                No couples yet — pair two students from their profiles.
-              </Text>
-            ) : (
-              couples.map((c) => {
-                const lp = c.lastPrivateClassDate ? new Date(c.lastPrivateClassDate) : null;
-                const meta = lp
-                  ? `Last private · ${MONTHS[lp.getMonth()]} ${lp.getDate()}`
-                  : 'No couple private yet';
-                return (
-                <TouchableOpacity
-                  key={c.coupleId}
-                  style={sc.card}
-                  activeOpacity={0.85}
-                  onPress={() => loadCoupleDetail(c)}
-                >
-                  <View style={sc.coupleAvWrap}>
-                    {[c.dancerA, c.dancerB].map((d, i) => (
-                      <View key={i} style={[sc.coupleAv, i === 1 && sc.coupleAv2]}>
-                        {d?.avatarUrl ? (
-                          <Image source={{ uri: d.avatarUrl }} style={sc.coupleAvPhoto} />
-                        ) : (
-                          <Text style={sc.coupleAvText}>{(d?.name || '?')[0]?.toUpperCase()}</Text>
-                        )}
-                      </View>
-                    ))}
-                  </View>
-                  <View style={{ flex: 1, minWidth: 0 }}>
-                    <Text style={sc.cardName} numberOfLines={1}>{c.name}</Text>
-                    <Text style={sc.cardMeta} numberOfLines={1}>{meta}</Text>
-                  </View>
-                  <View style={sc.right}>
-                    {c.readiness != null && (
-                      <View style={sc.readyWrap}>
-                        <Text style={sc.readyN}>{c.readiness}<Text style={sc.readyPct}>%</Text></Text>
-                      </View>
-                    )}
-                    <Ionicons name="chevron-forward" size={16} color="rgba(10,10,10,0.4)" />
-                  </View>
-                </TouchableOpacity>
-                );
-              })
-            )}
-              </>
-            )}
+  // Practice since the last private (or the last 7 days without one).
+  function practiceSince(rows, since) {
+    const from = since ? new Date(since).getTime() : Date.now() - 7 * 86400000;
+    const list = rows.filter((r) => new Date(r.date).getTime() >= from);
+    return { list, minutes: list.reduce((a, r) => a + (r.minutes || 0), 0) };
+  }
 
-            <View style={sc.orRow}>
-              <View style={sc.eyebrowAccent} />
-              <Text style={sc.eyebrowText}>OR</Text>
-              <View style={sc.eyebrowRule} />
-            </View>
+  const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
-            <TouchableOpacity
-              style={sc.groupCard}
-              activeOpacity={0.88}
-              onPress={loadGroupData}
-            >
-              <View style={sc.groupIconBtn}>
-                <Ionicons name="people" size={20} color="#E8B530" />
-              </View>
-              <View style={{ flex: 1, minWidth: 0 }}>
-                <Text style={sc.groupTitle}>Group class</Text>
-                <Text style={sc.groupSub}>
-                  {totalStudents} student{totalStudents === 1 ? '' : 's'} · auto-included
-                </Text>
-              </View>
-              <View style={sc.groupAvatars}>
-                {students.slice(0, 2).map((st, i) => {
-                  const isSilent = st.status === 'silent';
-                  const initial = (st.name || 'S')[0]?.toUpperCase() || 'S';
-                  return (
-                    <View
-                      key={st.id}
-                      style={[
-                        sc.groupAv,
-                        i === 0 && { marginLeft: 0 },
-                        isSilent
-                          ? { backgroundColor: '#F7D8D8' }
-                          : { backgroundColor: '#4E6A5C' },
-                      ]}
-                    >
-                      {st.photoUrl ? (
-                        <Image source={{ uri: st.photoUrl }} style={sc.groupAvPhoto} />
-                      ) : (
-                        <Text
-                          style={[
-                            sc.groupAvText,
-                            isSilent && { color: '#E84545' },
-                          ]}
-                        >
-                          {initial}
-                        </Text>
-                      )}
-                    </View>
-                  );
-                })}
-              </View>
-            </TouchableOpacity>
-          </ScrollView>
-          {renderStylePicker()}
-        </SafeAreaView>
+  function renderPracticeTimeline(list, kind, lesson) {
+    const shown = list.slice(0, 5);
+    const rest = list.slice(5);
+    const rows = shown.map((r) => ({
+      key: r.id,
+      label: dayLabel(r.date),
+      title: r.focusName || 'Free practice',
+      detail: `${r.minutes ? `${r.minutes} min · ` : ''}${kind} session`,
+    }));
+    if (rest.length > 0) {
+      const restMin = rest.reduce((a, r) => a + (r.minutes || 0), 0);
+      rows.push({
+        key: 'earlier',
+        label: 'Earlier',
+        title: `${plural(rest.length, 'more session')}`,
+        detail: restMin ? `${restMin} min` : null,
+      });
+    }
+    if (rows.length === 0 && !lesson) {
+      return <Empty>Nothing logged yet.</Empty>;
+    }
+    return (
+      <View>
+        {rows.map((r, i) => (
+          <TimelineRow key={r.key} first={i === 0} last={!lesson && i === rows.length - 1}
+            label={r.label} title={r.title} detail={r.detail} />
+        ))}
+        {!!lesson && (
+          <TimelineRow first={rows.length === 0} lesson {...lesson} />
+        )}
       </View>
     );
   }
 
-  // ── VIEW 2: Student picker ─────────────────────────────────────────────
-  if (view === 'student-pick') {
+  // ── Lesson recorded ────────────────────────────────────────────────────
+  if (classRecorded) {
     return (
-      <SafeAreaView style={s.safe} edges={['top']}>
-        <View style={s.headerRow}>
-          <TouchableOpacity onPress={() => setView('select')} style={s.backBtn} activeOpacity={0.7}>
-            <Ionicons name="chevron-back" size={22} color={C.text} />
-          </TouchableOpacity>
-          <View style={{ flex: 1 }}>
-            <Text style={s.headerLabel}>PRIVATE LESSON</Text>
-            <Text style={s.headerTitle}>Select student</Text>
-          </View>
+      <SafeAreaView style={[lessonStyles.page, ls.center]} edges={['top']}>
+        <View style={ls.doneIcon}>
+          <Ionicons name="checkmark" size={30} color={L.GOLD} />
         </View>
+        <Text style={ls.doneTitle}>Lesson recorded</Text>
+        <Text style={ls.doneBody}>
+          {isLocalMode
+            ? 'Sync your mic when you can: the audio is matched to this lesson and its focus points follow.'
+            : 'The transcript is processing. You’ll get a notification when the focus points are ready to review.'}
+        </Text>
+      </SafeAreaView>
+    );
+  }
 
-        {/* Search */}
-        <View style={s.searchWrap}>
-          <Ionicons name="search" size={18} color={C.gray} />
-          <TextInput
-            style={s.searchInput}
-            placeholder="Search students..."
-            placeholderTextColor={C.gray}
-            value={searchQuery}
-            onChangeText={setSearchQuery}
+  // ── Who is this lesson with? ───────────────────────────────────────────
+  if (view === 'select') {
+    const totalStudents = students.length;
+    return (
+      <SafeAreaView style={lessonStyles.page} edges={['top']}>
+        <TopBar icon="close" backLabel="Close" onBack={() => navigation.goBack()}
+          title="Start a lesson" sub="Pick who you’re teaching" />
+        <ScrollView
+          contentContainerStyle={[lessonStyles.scroll, { paddingBottom: 32 + insets.bottom }]}
+          showsVerticalScrollIndicator={false}
+        >
+          <Tabs
+            items={[['solo', 'Solo'], ['couple', 'Couple']]}
+            value={pickMode}
+            onChange={setPickMode}
+            right={pickMode === 'solo' && roster.length > 1 ? 'By readiness' : null}
           />
-        </View>
 
-        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingHorizontal: Spacing.side, paddingBottom: 40 }}>
-          {filteredStudents.map((st) => {
-            const stuckCount = st.activeFocuses - st.fpSincePrivate;
-            return (
-              <TouchableOpacity
-                key={st.id}
-                style={s.studentRow}
-                activeOpacity={0.7}
-                onPress={() => pickStudent(st)}
-              >
-                <View style={s.studentAvatar}>
-                  <Text style={s.studentAvatarText}>{initials(st.name)}</Text>
+          <SectionHead title={pickMode === 'solo' ? 'Private lesson with' : 'Couple lesson with'} />
+          {pickMode === 'solo' ? (
+            rosterLoading && roster.length === 0 ? (
+              <Pulse>
+                <View style={ls.boneCard}>
+                  {[0, 1, 2, 3].map((i) => (
+                    <View key={i} style={ls.boneRow}>
+                      <Bone w={40} h={40} r={20} />
+                      <View style={{ flex: 1, gap: 6 }}>
+                        <Bone w="55%" h={12} />
+                        <Bone w="38%" h={9} />
+                      </View>
+                      <Bone w={34} h={16} />
+                    </View>
+                  ))}
                 </View>
-                <View style={{ flex: 1, minWidth: 0 }}>
-                  <Text style={s.studentName}>{st.name}</Text>
-                  <Text style={s.studentMeta}>{st.danceStyle || 'Dance'}{st.daysSincePractice != null ? ` · ${st.daysSincePractice}d ago` : ''}</Text>
+              </Pulse>
+            ) : roster.length === 0 ? (
+              <Card><Empty>No students yet. Share your invite code from Links to connect them.</Empty></Card>
+            ) : (
+              <Card>
+                {roster.map((st, i) => {
+                  const reviewing = !!st.age_review_pending;
+                  const waitLabel = reviewing ? 'Tap to review their age'
+                    : st.age_check === 'minor_pending' ? 'Awaiting verification'
+                    : CONSENT_BLOCKED.includes(st.consent_status) ? 'Awaiting parent approval' : null;
+                  const lp = st.lastPrivateClassDate;
+                  const meta = waitLabel || (lp
+                    ? `Last private · ${dayLabel(lp)}${st.lastPrivateDurationMin ? ` · ${st.lastPrivateDurationMin} min` : ''}`
+                    : 'No private together yet');
+                  return (
+                    <PickRow
+                      key={st.id}
+                      first={i === 0}
+                      dim={!!waitLabel && !reviewing}
+                      avatar={(
+                        <View>
+                          <Avatar name={st.name} photoUrl={st.photoUrl} size={40} />
+                          {st.status === 'silent' && <View style={ls.silentDot} />}
+                        </View>
+                      )}
+                      name={st.name}
+                      meta={meta}
+                      metaTone={reviewing ? 'gold' : null}
+                      right={<Percent value={st.readiness} />}
+                      onPress={() => pickStudent(students.find((x) => x.id === st.id) || st)}
+                    />
+                  );
+                })}
+              </Card>
+            )
+          ) : couples.length === 0 ? (
+            <Card><Empty>No couples yet. Two of your students pair up from their profiles.</Empty></Card>
+          ) : (
+            <Card>
+              {couples.map((c, i) => {
+                const dancers = [c.dancerA, c.dancerB];
+                const waitLabel = dancers.some((d) => d?.age_check === 'minor_pending') ? 'Awaiting verification'
+                  : dancers.some((d) => CONSENT_BLOCKED.includes(d?.consent_status)) ? 'Awaiting parent approval' : null;
+                const meta = waitLabel || (c.lastPrivateClassDate
+                  ? `Last couple private · ${dayLabel(c.lastPrivateClassDate)}`
+                  : 'No couple private yet');
+                return (
+                  <PickRow
+                    key={c.coupleId}
+                    first={i === 0}
+                    dim={!!waitLabel}
+                    avatar={<PairAvatars a={c.dancerA} b={c.dancerB} size={36} />}
+                    name={c.name}
+                    meta={meta}
+                    right={<Percent value={c.readiness} />}
+                    onPress={() => loadCoupleDetail(c)}
+                  />
+                );
+              })}
+            </Card>
+          )}
+
+          <SectionHead title="Or" />
+          <Card>
+            <PickRow
+              first
+              avatar={(
+                <View style={ls.groupIcon}>
+                  <Ionicons name="people" size={18} color={L.GOLD} />
                 </View>
-                {st.status === 'silent' && (
-                  <View style={s.stuckBadge}>
-                    <Text style={s.stuckBadgeText}>Silent</Text>
-                  </View>
-                )}
-                <Ionicons name="chevron-forward" size={16} color={C.gray} />
-              </TouchableOpacity>
-            );
-          })}
+              )}
+              name="Group lesson"
+              meta={`${plural(totalStudents, 'student')} · everyone is included`}
+              onPress={loadGroupData}
+            />
+          </Card>
         </ScrollView>
         {renderStylePicker()}
       </SafeAreaView>
     );
   }
 
-  // ── VIEW 3: Private briefing ───────────────────────────────────────────
+  // ── Private lesson ─────────────────────────────────────────────────────
   if (view === 'private-briefing' && selectedStudent) {
     const st = selectedStudent;
-    const stuckPoints = focusPoints.filter(fp => fp.weekCount === 0);
-    const trainedPoints = focusPoints.filter(fp => (fp.weekCount || 0) > 0);
-    // Hero stats use the "since last private class with FPs" window
-    // (same as the readiness ring) so the 3 numbers stay consistent with the
-    // "X% ready" subtitle. Falls back to the 7-day window if readiness is
-    // null (new student / unprocessed class).
-    const readinessFocuses = studentReadiness?.focuses || [];
-    const sessionsCount = studentReadiness
-      ? readinessFocuses.reduce((a, f) => a + (f.done || 0), 0)
-      : focusPoints.reduce((a, fp) => a + (fp.weekCount || 0), 0);
-    const focusTrained = studentReadiness
-      ? readinessFocuses.filter(f => (f.done || 0) > 0).length
-      : trainedPoints.length;
-    const alertLabel = st.status === 'silent'
-      ? 'No practice since last class'
-      : st.status === 'attention'
-      ? 'Watch engagement'
-      : 'On track';
-    const alertColor = st.status === 'silent' ? C.red : st.status === 'attention' ? C.orange : C.green;
-    const seenLabel = st.daysSincePractice == null
-      ? '—'
-      : st.daysSincePractice === 0
-      ? 'Seen today'
-      : st.daysSincePractice === 1
-      ? 'Seen yesterday'
-      : `Seen ${st.daysSincePractice}d ago`;
+    const readiness = studentReadiness;
+    const checks = readiness?.focuses || [];
+    const first = (st.name || '').trim().split(/\s+/)[0] || 'They';
+    const since = readiness?.lastClassDate || lastClass?.date || null;
+    const training = activity
+      .filter((ev) => ev.type === 'training')
+      .map((ev) => ({ id: ev.id, date: ev.date, minutes: ev.durationMin || 0, focusName: ev.focusName }));
+    const { list: sessions, minutes } = practiceSince(training, since);
+    const sinceText = sincePhrase(since);
+    const touched = checks.filter((f) => (f.done || 0) > 0).length;
+    const untouched = checks.find((f) => f.tier === 'critical' && !f.done) || checks.find((f) => !f.done);
+    const waitLabel = st.age_check === 'minor_pending' ? 'Awaiting verification'
+      : CONSENT_BLOCKED.includes(st.consent_status) ? 'Awaiting parent approval' : null;
+    const nothingYet = detailLoading && !readiness && focusPoints.length === 0 && activity.length === 0;
+    // Drops away on its own once the coach has ticked everything off.
+    const showHighlight = highlightChecks && pendingChecks().total > 0;
+    const checkCount = [
+      checks.length > 0 && `${checks.length} focus`,
+      openQuestions.length > 0 && plural(openQuestions.length, 'question'),
+    ].filter(Boolean).join(' · ');
 
     return (
-      <SafeAreaView style={s.safe} edges={['top']}>
-        <View style={{ flex: 1 }}>
-        <Animated.ScrollView
-          style={{ flex: 1 }}
-          contentContainerStyle={{ paddingTop: HERO_FULL + 76, paddingBottom: 200 }}
-          scrollEventThrottle={16}
-          onScroll={Animated.event(
-            [{ nativeEvent: { contentOffset: { y: pbScrollY } } }],
-            { useNativeDriver: false }
-          )}
-        >
-          {/* AI Debrief */}
-          {(trainedPoints.length > 0 || stuckPoints.length > 0) && (
-            <View style={pb.debriefWrap}>
-              <View style={pb.debriefEyebrow}>
-                <View style={pb.debriefEyebrowIcon}>
-                  <Ionicons name="flash" size={10} color={C.orange} />
-                </View>
-                <Text style={pb.debriefEyebrowText}>AI Debrief</Text>
-              </View>
-              <Text style={pb.debriefBody}>
-                {focusTrained > 0 ? (
-                  <Text>
-                    {st.name.split(' ')[0]} completed{' '}
-                    <Text style={pb.debriefStrong}>{sessionsCount} solo session{sessionsCount > 1 ? 's' : ''}</Text>
-                    {' '}and practiced {focusTrained} of {focusPoints.length} assigned focus points.
-                  </Text>
-                ) : (
-                  <Text>No focus points practiced since the last class. </Text>
-                )}
-                {stuckPoints.length > 0 && (
-                  <Text>
-                    {' '}
-                    <Text style={pb.debriefEm}>"{stuckPoints[0].name}"</Text> has had zero practice despite being flagged.
-                  </Text>
-                )}
-              </Text>
-            </View>
-          )}
-
-          {/* Carryover from last private — what to check during this lesson */}
-          {(!!studentReadiness && (studentReadiness.focuses || []).length > 0) || openQuestions.length > 0 ? (
-            <View style={pb.checkCard}>
-              <View style={pb.checkHeader}>
-                <View style={pb.checkBadge}>
-                  <Text style={pb.checkBadgeText}>CHECK DURING THIS LESSON</Text>
-                </View>
-                {!!studentReadiness && (
-                  <Text style={pb.checkPct}>{studentReadiness.percent}%</Text>
-                )}
-              </View>
-              {!!studentReadiness && (studentReadiness.focuses || []).length > 0 && (
-                <>
-                  <Text style={pb.checkHint}>
-                    Carryover from {st.name.split(' ')[0]}'s last private. Validate each at the end.
-                  </Text>
-                  <View style={pb.checkRows}>
-                    {studentReadiness.focuses.map((f) => {
-                      const tierColor =
-                        f.tier === 'critical' ? C.red : f.tier === 'important' ? C.orange : C.gray;
-                      return (
-                        <View key={f.focusPointId} style={pb.checkRow}>
-                          <View style={[pb.checkDot, { backgroundColor: tierColor }]} />
-                          <Text style={pb.checkName} numberOfLines={1}>{f.name}</Text>
-                          <Text style={[pb.checkTier, { color: tierColor }]}>{f.tier}</Text>
-                          <View style={pb.checkProgress}>
-                            <Text style={pb.checkProgressText}>
-                              {f.done}<Text style={pb.checkProgressOf}>/{f.target}</Text>
-                            </Text>
-                          </View>
-                        </View>
-                      );
-                    })}
-                  </View>
-                </>
-              )}
-
-              {openQuestions.length > 0 && (
-                <>
-                  <Text style={pb.checkSubLabel}>QUESTIONS · {openQuestions.length}</Text>
-                  <View style={pb.checkRows}>
-                    {openQuestions.map((q) => {
-                      const isInClass = q.status === 'dismissed';
-                      return (
-                        <TouchableOpacity
-                          key={q.id}
-                          style={pb.checkRow}
-                          activeOpacity={0.7}
-                          onPress={() => setViewingQuestion(q)}
-                        >
-                          <View style={[pb.checkDot, { backgroundColor: isInClass ? '#F6D27A' : 'rgba(255,255,255,0.45)' }]} />
-                          <Text style={pb.checkName} numberOfLines={2}>{q.message}</Text>
-                          <Text style={[pb.checkTier, { color: isInClass ? '#F6D27A' : 'rgba(255,255,255,0.55)' }]}>
-                            {isInClass ? 'in class' : 'open'}
-                          </Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
-                </>
-              )}
-            </View>
-          ) : null}
-
-          {/* Last class with you */}
-          {lastClass && (
-            <View style={pb.recapCard}>
-              <View style={pb.recapHeader}>
-                <View style={pb.recapBadge}>
-                  <Text style={pb.recapBadgeText}>LAST CLASS WITH YOU</Text>
-                </View>
-                <Text style={pb.recapDate}>{relativeShort(lastClass.date)}</Text>
-              </View>
-              <Text style={pb.recapTitle}>
-                {lastClass.title || lastClass.dance || 'Private lesson'}
-              </Text>
-              {!!lastClass.classSummary && (
-                <Text style={pb.recapSummary}>{lastClass.classSummary}</Text>
-              )}
-              {lastClass.focusPoints && lastClass.focusPoints.length > 0 && (
-                <View style={pb.recapFPs}>
-                  <Text style={pb.recapFPLabel}>Focus points</Text>
-                  {lastClass.focusPoints.map((fp, i) => (
-                    <View key={fp.id || i} style={pb.recapFPRow}>
-                      <View
-                        style={[
-                          pb.recapFPDot,
-                          { backgroundColor: fp.trainedCount > 0 ? C.green : C.red },
-                        ]}
-                      />
-                      <Text style={pb.recapFPName} numberOfLines={1}>{fp.name}</Text>
-                      <View
-                        style={[
-                          pb.recapFPCount,
-                          {
-                            backgroundColor:
-                              fp.trainedCount > 0 ? 'rgba(74,175,82,0.08)' : 'rgba(212,69,69,0.08)',
-                          },
-                        ]}
-                      >
-                        <Text
-                          style={[
-                            pb.recapFPCountText,
-                            { color: fp.trainedCount > 0 ? C.green : C.red },
-                          ]}
-                        >
-                          {fp.trainedCount}x
-                        </Text>
-                      </View>
-                    </View>
-                  ))}
-                </View>
-              )}
-            </View>
-          )}
-
-          {/* Focus points trained */}
-          {trainedPoints.length > 0 && (
-            <>
-              <Text style={pb.secLabel}>Focus points trained this week</Text>
-              <View style={pb.focusWrap}>
-                {trainedPoints.map((fp) => {
-                  const metaParts = [];
-                  if (fp.totalDurationMin > 0) metaParts.push(`${fp.totalDurationMin} min`);
-                  if (fp.weekCount > 1) metaParts.push(`${fp.weekCount} sessions`);
-                  return (
-                    <View key={fp.id} style={pb.fpRow}>
-                      <View style={pb.fpStatus}>
-                        <Ionicons name="checkmark" size={14} color={C.green} />
-                      </View>
-                      <View style={{ flex: 1, minWidth: 0 }}>
-                        <Text style={pb.fpName} numberOfLines={1}>{fp.name}</Text>
-                        {metaParts.length > 0 && (
-                          <Text style={pb.fpMeta}>{metaParts.join(' · ')}</Text>
-                        )}
-                      </View>
-                      {!!fp.lastFeeling && (
-                        <Text style={pb.fpFeeling}>
-                          {FEELING_EMOJI[fp.lastFeeling] || fp.lastFeeling}
-                        </Text>
-                      )}
-                      <View style={pb.fpBadge}>
-                        <Text style={pb.fpBadgeText}>{fp.weekCount}x</Text>
-                      </View>
-                    </View>
-                  );
-                })}
-              </View>
-            </>
-          )}
-
-        </Animated.ScrollView>
-
-        {/* Backdrop masking content as it scrolls up behind the hero */}
-        <Animated.View
-          pointerEvents="none"
-          style={[
-            pb.stickyBackdrop,
-            { height: Animated.add(heroAnimHeight, 70) },
-          ]}
+      <SafeAreaView style={lessonStyles.page} edges={['top']}>
+        <TopBar
+          onBack={backFromBriefing}
+          title={st.name}
+          sub={briefingCategoryRef.current ? (briefingCategoryRef.current === 'latin' ? 'Latin' : 'Ballroom') : null}
+          right={<Avatar name={st.name} photoUrl={st.photoUrl} size={36} />}
         />
-
-        {/* Floating back arrow */}
-        <TouchableOpacity
-          onPress={backFromBriefing}
-          style={pb.floatingBack}
-          activeOpacity={0.7}
-          hitSlop={12}
+        <ScrollView
+          contentContainerStyle={[lessonStyles.scroll, { paddingBottom: 110 + insets.bottom }]}
+          showsVerticalScrollIndicator={false}
         >
-          <Ionicons name="chevron-back" size={22} color={C.text} />
-        </TouchableOpacity>
-
-        {/* Sticky collapsing hero */}
-        <Animated.View
-          pointerEvents="box-none"
-          style={[pb.stickyHero, { height: heroAnimHeight }]}
-        >
-          <View style={pb.heroTop}>
-            <View style={pb.heroAvatarWrap}>
-              <Svg width={56} height={56} style={StyleSheet.absoluteFill}>
-                <Circle cx={28} cy={28} r={25} fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth={3} />
-                <Circle cx={28} cy={28} r={25} fill="none" stroke={C.orange}
-                  strokeWidth={3}
-                  strokeDasharray={`${2 * Math.PI * 25 * ((studentReadiness?.percent || 0) / 100)} ${2 * Math.PI * 25}`}
-                  strokeLinecap="round" transform="rotate(-90 28 28)" />
-              </Svg>
-              <View style={pb.heroAvatarInner}>
-                {st.photoUrl ? (
-                  <Image source={{ uri: st.photoUrl }} style={pb.heroAvatarImg} />
+          {nothingYet ? renderBriefingBones() : (
+            <FadeIn>
+              <Hero
+                big={readiness?.percent ?? null}
+                title={st.name}
+                label={waitLabel || (readiness ? 'Ready for this lesson' : 'No carryover from a private yet')}
+                gauge={readiness ? readiness.percent : null}
+                figures={[
+                  { value: sessions.length, label: sessions.length === 1 ? 'session' : 'sessions' },
+                  { value: minutes, unit: 'min', label: 'practised' },
+                  { value: openQuestions.length, label: openQuestions.length === 1 ? 'question' : 'questions' },
+                ]}
+              >
+                {sessions.length > 0 ? (
+                  <>
+                    Practised <HeroStrong>{minutes > 0 ? `${minutes} min in ` : ''}{plural(sessions.length, 'session')}</HeroStrong> {sinceText}
+                    {checks.length > 0
+                      ? <> and touched <HeroStrong>{touched} of {checks.length}</HeroStrong> focus points.</>
+                      : '.'}
+                    {!!untouched && (untouched.tier === 'critical'
+                      ? <> <HeroAlert>“{untouched.name}”</HeroAlert>, flagged critical, has had no practice.</>
+                      : <> <HeroAlert>“{untouched.name}”</HeroAlert> hasn’t been practised yet.</>)}
+                  </>
+                ) : checks.length > 0 ? (
+                  <>
+                    No solo practice {sinceText}: <HeroAlert>none of the {checks.length} focus points</HeroAlert> from the last private has been worked on.
+                  </>
                 ) : (
-                  <Text style={pb.heroAvatarText}>{initials(st.name)[0]}</Text>
+                  <>No solo practice {sinceText}.</>
                 )}
-              </View>
-            </View>
-            <View style={{ flex: 1, minWidth: 0 }}>
-              <Text style={pb.heroName} numberOfLines={1}>{st.name}</Text>
-              <Text style={pb.heroSub}>
-                {studentReadiness?.percent != null
-                  ? <><Text style={pb.heroSubStrong}>{studentReadiness.percent}%</Text> ready for this lesson</>
-                  : <>Trained <Text style={pb.heroSubStrong}>{sessionsCount}x</Text> since last private lesson</>}
-              </Text>
-            </View>
-          </View>
+              </Hero>
 
-          <Animated.View style={{ opacity: heroDetailsOpacity }} pointerEvents="none">
-            <View style={pb.statsRow}>
-              <View style={pb.stat}>
-                <Text style={pb.statVal}>{sessionsCount}</Text>
-                <Text style={pb.statLabel}>Sessions</Text>
-              </View>
-              <View style={pb.statDivider} />
-              <View style={pb.stat}>
-                <Text style={pb.statVal}>{focusTrained}</Text>
-                <Text style={pb.statLabel}>Focus trained</Text>
-              </View>
-              <View style={pb.statDivider} />
-              <View style={pb.stat}>
-                <Text style={pb.statVal}>{questions.length}</Text>
-                <Text style={pb.statLabel}>Questions</Text>
-              </View>
-            </View>
+              <SectionHead title="Check during this lesson" right={checkCount || null} />
+              {checks.length === 0 && openQuestions.length === 0 ? (
+                <Card>
+                  <Empty>Nothing carried over from {first}’s last private, and no questions waiting.</Empty>
+                </Card>
+              ) : (
+                <Card style={showHighlight && ls.cardHighlight}>
+                  {checks.map((f, i) => {
+                    const verdict = readinessVerdicts[f.focusPointId];
+                    return (
+                      <CheckRow
+                        key={f.focusPointId}
+                        first={i === 0}
+                        name={f.name}
+                        tier={f.tier}
+                        meta={f.done ? `${f.done} of ${f.target} sessions done` : 'no practice yet'}
+                        done={verdict === 'good'}
+                        verdict={verdict}
+                        disabled={!classStartedAt}
+                        onPress={() => toggleCheck(f.focusPointId)}
+                      />
+                    );
+                  })}
+                  {checks.length > 0 && openQuestions.length > 0 && <CardLabel>Questions</CardLabel>}
+                  {openQuestions.map((q, i) => (
+                    <QuestionRow
+                      key={q.id}
+                      first={i === 0}
+                      text={q.message}
+                      meta={q.status === 'dismissed' ? 'Kept for this lesson' : askedLabel(q.created_at)}
+                      answered={questionVerdicts[q.id] === 'covered'}
+                      onPress={() => setViewingQuestion(q)}
+                      onAnswer={() => toggleAnswered(q.id)}
+                      disabled={!classStartedAt}
+                    />
+                  ))}
+                </Card>
+              )}
 
-            <View style={pb.alert}>
-              <View style={[pb.alertDot, { backgroundColor: alertColor }]} />
-              <Text style={pb.alertText}>{alertLabel}</Text>
-              <Text style={pb.alertTime}>{seenLabel}</Text>
-            </View>
-          </Animated.View>
-        </Animated.View>
-        </View>
-
-        {renderBottomBar()}
-        {renderAudioModal()}
-        {renderDebriefModal()}
-        {renderRecStartConfirmPrompt()}
-        {renderRecStopConfirmPrompt()}
-
-        <Modal
-          visible={!!viewingQuestion}
-          transparent
-          animationType="fade"
-          onRequestClose={() => setViewingQuestion(null)}
-        >
-          {viewingQuestion && (
-            <QuestionDetailSheet
-              question={viewingQuestion}
-              role="coach"
-              onClose={() => setViewingQuestion(null)}
-            />
+              <SectionHead
+                title="Activity"
+                right={sessions.length > 0 ? `${plural(sessions.length, 'session')} · ${minutes} min ${sinceText}` : null}
+              />
+              {renderPracticeTimeline(sessions, 'solo', lastClass ? {
+                label: `${dayLabel(lastClass.date)} · last private with you`,
+                title: lastClass.title || lastClass.dance || 'Private lesson',
+                detail: lastClass.focusCount ? `${plural(lastClass.focusCount, 'focus point')} set` : null,
+                onPress: lastClass.id ? () => navigation.navigate('CoachClassDetail', { classId: lastClass.id }) : null,
+              } : null)}
+            </FadeIn>
           )}
-        </Modal>
+        </ScrollView>
+
+        {renderFoot()}
+        {renderLessonModals()}
       </SafeAreaView>
     );
   }
 
-  // ── VIEW 4: Group briefing ─────────────────────────────────────────────
-  // ── Couple briefing — record a couple lesson (reuses the shared
-  // start/stop bottom bar + debrief; startClassNow/finishDebrief branch on
-  // view === 'couple-briefing' + selectedCouple). ──────────────────────────
+  // ── Couple lesson ──────────────────────────────────────────────────────
+  // Same page as a private; couples have no questions or class recap.
   if (view === 'couple-briefing' && selectedCouple) {
     const c = selectedCouple;
     const readiness = coupleReadinessDetail;
-    const readinessFocuses = readiness?.focuses || [];
-    const sessionsCount = readinessFocuses.reduce((a, f) => a + (f.done || 0), 0);
-    const focusTrained = readinessFocuses.filter((f) => (f.done || 0) > 0).length;
-    const trainedPoints = (coupleFps || []).filter((fp) => (fp.weekCount || 0) > 0);
-    const stuckPoints = (coupleFps || []).filter((fp) => (fp.weekCount || 0) === 0);
-    const totalFps = (coupleFps || []).length;
-    const alertLabel = readiness == null
-      ? 'No couple private yet'
-      : readiness.percent >= 100 ? 'Ready for this lesson' : 'Carryover to review';
-    const alertColor = readiness == null ? C.gray : readiness.percent >= 100 ? C.green : C.orange;
-    const seenLabel = readiness?.lastClassDate ? relativeShort(readiness.lastClassDate) : '—';
-    const dancers = [c.dancerA, c.dancerB];
+    const checks = readiness?.focuses || [];
+    const since = readiness?.lastClassDate || null;
+    const training = coupleActivity.map((ev) => ({
+      id: ev.id, date: ev.completedAt, minutes: ev.durationMinutes || 0, focusName: ev.focusName,
+    }));
+    const { list: sessions, minutes } = practiceSince(training, since);
+    const sinceText = sincePhrase(since);
+    const touched = checks.filter((f) => (f.done || 0) > 0).length;
+    const untouched = checks.find((f) => f.tier === 'critical' && !f.done) || checks.find((f) => !f.done);
+    const nothingYet = detailLoading && !readiness && coupleFps.length === 0;
+    const showHighlight = highlightChecks && pendingChecks().total > 0;
 
     return (
-      <SafeAreaView style={s.safe} edges={['top']}>
-        <View style={{ flex: 1 }}>
-        <Animated.ScrollView
-          style={{ flex: 1 }}
-          contentContainerStyle={{ paddingTop: HERO_FULL + 76, paddingBottom: 200 }}
-          scrollEventThrottle={16}
-          onScroll={Animated.event(
-            [{ nativeEvent: { contentOffset: { y: pbScrollY } } }],
-            { useNativeDriver: false }
-          )}
-        >
-          {/* AI Debrief */}
-          {(trainedPoints.length > 0 || stuckPoints.length > 0) && (
-            <View style={pb.debriefWrap}>
-              <View style={pb.debriefEyebrow}>
-                <View style={pb.debriefEyebrowIcon}>
-                  <Ionicons name="flash" size={10} color={C.orange} />
-                </View>
-                <Text style={pb.debriefEyebrowText}>AI Debrief</Text>
-              </View>
-              <Text style={pb.debriefBody}>
-                {focusTrained > 0 ? (
-                  <Text>
-                    {c.name} completed{' '}
-                    <Text style={pb.debriefStrong}>{sessionsCount} couple session{sessionsCount > 1 ? 's' : ''}</Text>
-                    {' '}and practiced {focusTrained} of {readinessFocuses.length} carryover focus points.
-                  </Text>
-                ) : (
-                  <Text>No couple focus points practiced since the last lesson. </Text>
-                )}
-                {stuckPoints.length > 0 && (
-                  <Text>
-                    {' '}
-                    <Text style={pb.debriefEm}>"{stuckPoints[0].name}"</Text> has had zero practice despite being flagged.
-                  </Text>
-                )}
-              </Text>
-            </View>
-          )}
-
-          {/* Carryover from last couple private — what to check this lesson */}
-          {!!readiness && readinessFocuses.length > 0 ? (
-            <View style={pb.checkCard}>
-              <View style={pb.checkHeader}>
-                <View style={pb.checkBadge}>
-                  <Text style={pb.checkBadgeText}>CHECK DURING THIS LESSON</Text>
-                </View>
-                <Text style={pb.checkPct}>{readiness.percent}%</Text>
-              </View>
-              <Text style={pb.checkHint}>
-                Carryover from the couple's last private. Validate each at the end.
-              </Text>
-              <View style={pb.checkRows}>
-                {readinessFocuses.map((f) => {
-                  const tierColor =
-                    f.tier === 'critical' ? C.red : f.tier === 'important' ? C.orange : C.gray;
-                  return (
-                    <View key={f.focusPointId} style={pb.checkRow}>
-                      <View style={[pb.checkDot, { backgroundColor: tierColor }]} />
-                      <Text style={pb.checkName} numberOfLines={1}>{f.name}</Text>
-                      <Text style={[pb.checkTier, { color: tierColor }]}>{f.tier}</Text>
-                      <View style={pb.checkProgress}>
-                        <Text style={pb.checkProgressText}>
-                          {f.done}<Text style={pb.checkProgressOf}>/{f.target}</Text>
-                        </Text>
-                      </View>
-                    </View>
-                  );
-                })}
-              </View>
-            </View>
-          ) : null}
-
-          {/* Focus points trained this week */}
-          {trainedPoints.length > 0 && (
-            <>
-              <Text style={pb.secLabel}>Focus points trained this week</Text>
-              <View style={pb.focusWrap}>
-                {trainedPoints.map((fp) => (
-                  <View key={fp.id} style={pb.fpRow}>
-                    <View style={pb.fpStatus}>
-                      <Ionicons name="checkmark" size={14} color={C.green} />
-                    </View>
-                    <View style={{ flex: 1, minWidth: 0 }}>
-                      <Text style={pb.fpName} numberOfLines={1}>{fp.name}</Text>
-                    </View>
-                    <View style={pb.fpBadge}>
-                      <Text style={pb.fpBadgeText}>{fp.weekCount}x</Text>
-                    </View>
-                  </View>
-                ))}
-              </View>
-            </>
-          )}
-        </Animated.ScrollView>
-
-        {/* Backdrop masking content as it scrolls up behind the hero */}
-        <Animated.View
-          pointerEvents="none"
-          style={[pb.stickyBackdrop, { height: Animated.add(heroAnimHeight, 70) }]}
+      <SafeAreaView style={lessonStyles.page} edges={['top']}>
+        <TopBar
+          onBack={backFromBriefing}
+          title={c.name}
+          sub="Couple lesson"
+          right={<PairAvatars a={c.dancerA} b={c.dancerB} size={32} ring={L.PAGE} />}
         />
-
-        {/* Floating back arrow */}
-        <TouchableOpacity
-          onPress={backFromBriefing}
-          style={pb.floatingBack}
-          activeOpacity={0.7}
-          hitSlop={12}
+        <ScrollView
+          contentContainerStyle={[lessonStyles.scroll, { paddingBottom: 110 + insets.bottom }]}
+          showsVerticalScrollIndicator={false}
         >
-          <Ionicons name="chevron-back" size={22} color={C.text} />
-        </TouchableOpacity>
+          {nothingYet ? renderBriefingBones() : (
+            <FadeIn>
+              <Hero
+                big={readiness?.percent ?? null}
+                title={c.name}
+                label={readiness ? 'Ready for this lesson' : 'No couple private yet'}
+                gauge={readiness ? readiness.percent : null}
+                figures={[
+                  { value: sessions.length, label: sessions.length === 1 ? 'session' : 'sessions' },
+                  { value: minutes, unit: 'min', label: 'practised' },
+                  { value: coupleFps.length, label: 'focus points' },
+                ]}
+              >
+                {sessions.length > 0 ? (
+                  <>
+                    Practised together <HeroStrong>{minutes > 0 ? `${minutes} min in ` : ''}{plural(sessions.length, 'session')}</HeroStrong> {sinceText}
+                    {checks.length > 0
+                      ? <> and touched <HeroStrong>{touched} of {checks.length}</HeroStrong> focus points.</>
+                      : '.'}
+                    {!!untouched && (untouched.tier === 'critical'
+                      ? <> <HeroAlert>“{untouched.name}”</HeroAlert>, flagged critical, has had no practice.</>
+                      : <> <HeroAlert>“{untouched.name}”</HeroAlert> hasn’t been practised yet.</>)}
+                  </>
+                ) : checks.length > 0 ? (
+                  <>
+                    No couple practice {sinceText}: <HeroAlert>none of the {checks.length} focus points</HeroAlert> from the last couple private has been worked on.
+                  </>
+                ) : (
+                  <>No couple practice {sinceText}.</>
+                )}
+              </Hero>
 
-        {/* Sticky collapsing hero — pair avatars + couple readiness */}
-        <Animated.View
-          pointerEvents="box-none"
-          style={[pb.stickyHero, { height: heroAnimHeight }]}
-        >
-          <View style={pb.heroTop}>
-            <View style={sc.cbHeroPair}>
-              {dancers.map((d, i) => (
-                <View key={i} style={[sc.cbHeroAv, i === 1 && { marginLeft: -16 }]}>
-                  {d?.avatarUrl ? (
-                    <Image source={{ uri: d.avatarUrl }} style={sc.cbHeroAvImg} />
-                  ) : (
-                    <Text style={sc.cbHeroAvTxt}>{(d?.name || '?')[0]?.toUpperCase()}</Text>
-                  )}
-                </View>
-              ))}
-            </View>
-            <View style={{ flex: 1, minWidth: 0 }}>
-              <Text style={pb.heroName} numberOfLines={1}>{c.name}</Text>
-              <Text style={pb.heroSub}>
-                {readiness?.percent != null
-                  ? <><Text style={pb.heroSubStrong}>{readiness.percent}%</Text> ready for this lesson</>
-                  : <>No couple private logged yet</>}
-              </Text>
-            </View>
-          </View>
+              <SectionHead title="Check during this lesson" right={checks.length > 0 ? `${checks.length} focus` : null} />
+              {checks.length === 0 ? (
+                <Card><Empty>Nothing carried over from a couple private yet.</Empty></Card>
+              ) : (
+                <Card style={showHighlight && ls.cardHighlight}>
+                  {checks.map((f, i) => {
+                    const verdict = readinessVerdicts[f.focusPointId];
+                    return (
+                      <CheckRow
+                        key={f.focusPointId}
+                        first={i === 0}
+                        name={f.name}
+                        tier={f.tier}
+                        meta={f.done ? `${f.done} of ${f.target} sessions done` : 'no practice yet'}
+                        done={verdict === 'good'}
+                        verdict={verdict}
+                        disabled={!classStartedAt}
+                        onPress={() => toggleCheck(f.focusPointId)}
+                      />
+                    );
+                  })}
+                </Card>
+              )}
 
-          <Animated.View style={{ opacity: heroDetailsOpacity }} pointerEvents="none">
-            <View style={pb.statsRow}>
-              <View style={pb.stat}>
-                <Text style={pb.statVal}>{sessionsCount}</Text>
-                <Text style={pb.statLabel}>Sessions</Text>
-              </View>
-              <View style={pb.statDivider} />
-              <View style={pb.stat}>
-                <Text style={pb.statVal}>{focusTrained}</Text>
-                <Text style={pb.statLabel}>Focus trained</Text>
-              </View>
-              <View style={pb.statDivider} />
-              <View style={pb.stat}>
-                <Text style={pb.statVal}>{totalFps}</Text>
-                <Text style={pb.statLabel}>Focuses</Text>
-              </View>
-            </View>
+              <SectionHead
+                title="Activity"
+                right={sessions.length > 0 ? `${plural(sessions.length, 'session')} · ${minutes} min ${sinceText}` : null}
+              />
+              {renderPracticeTimeline(sessions, 'couple', since ? {
+                label: `${dayLabel(since)} · last couple private`,
+                title: 'Couple private',
+                detail: checks.length ? `${plural(checks.length, 'focus point')} set` : null,
+              } : null)}
+            </FadeIn>
+          )}
+        </ScrollView>
 
-            <View style={pb.alert}>
-              <View style={[pb.alertDot, { backgroundColor: alertColor }]} />
-              <Text style={pb.alertText}>{alertLabel}</Text>
-              <Text style={pb.alertTime}>{seenLabel}</Text>
-            </View>
-          </Animated.View>
-        </Animated.View>
-        </View>
-
-        {renderBottomBar()}
-        {renderAudioModal()}
-        {renderDebriefModal()}
-        {renderRecStartConfirmPrompt()}
-        {renderRecStopConfirmPrompt()}
+        {renderFoot()}
+        {renderLessonModals()}
       </SafeAreaView>
     );
   }
 
+  // ── Group lesson ────────────────────────────────────────────────────────
   if (view === 'group-briefing') {
     const totalStudents = students.length;
+    const onTrack = students.filter((x) => x.status === 'on_track').length;
+    const onTrackPct = totalStudents > 0 ? Math.round((onTrack / totalStudents) * 100) : null;
     const topFocus = groupFPs[0] || null;
-    const underPracticed = [...groupFPs]
-      .sort((a, b) => a.practiced - b.practiced)[0];
-    const firstTwoAvatars = students.slice(0, 2);
-    const remaining = Math.max(0, totalStudents - 2);
+    const underPracticed = [...groupFPs].sort((a, b) => a.practiced - b.practiced)[0];
+    const weekSessions = groupStats.totalSessions;
+    const nothingYet = groupLoading && groupFPs.length === 0;
 
     return (
-      <SafeAreaView style={s.safe} edges={['top']}>
-        <View style={{ flex: 1 }}>
-          <Animated.ScrollView
-            style={{ flex: 1 }}
-            contentContainerStyle={{ paddingTop: HERO_FULL + 76, paddingBottom: 200 }}
-            scrollEventThrottle={16}
-            onScroll={Animated.event(
-              [{ nativeEvent: { contentOffset: { y: gbScrollY } } }],
-              { useNativeDriver: false }
-            )}
-          >
-            {/* AI Group Debrief */}
-            {groupFPs.length > 0 && (
-              <View style={pb.debriefWrap}>
-                <View style={pb.debriefEyebrow}>
-                  <View style={pb.debriefEyebrowIcon}>
-                    <Ionicons name="flash" size={10} color={C.orange} />
-                  </View>
-                  <Text style={pb.debriefEyebrowText}>AI Group Debrief</Text>
-                </View>
-                <Text style={pb.debriefBody}>
-                  The group logged{' '}
-                  <Text style={pb.debriefStrong}>
-                    {groupStats.avgSessions * Math.max(1, totalStudents)} sessions
-                  </Text>{' '}
-                  collectively this week.
-                  {topFocus && (
-                    <>
-                      {' '}
-                      <Text style={pb.debriefStrong}>{topFocus.name}</Text> was the most
-                      practiced focus ({topFocus.practiced} of {totalStudents} students).
-                    </>
-                  )}
-                  {underPracticed && underPracticed !== topFocus && underPracticed.practiced < totalStudents / 2 && (
-                    <>
-                      {' '}
-                      <Text style={pb.debriefEm}>"{underPracticed.name}"</Text> was only worked on by {underPracticed.practiced} — it might need a group drill.
-                    </>
-                  )}
-                </Text>
-              </View>
-            )}
+      <SafeAreaView style={lessonStyles.page} edges={['top']}>
+        <TopBar onBack={backFromBriefing} title="Group lesson" sub={plural(totalStudents, 'student')} />
+        <ScrollView
+          contentContainerStyle={[lessonStyles.scroll, { paddingBottom: 110 + insets.bottom }]}
+          showsVerticalScrollIndicator={false}
+        >
+          {nothingYet ? renderBriefingBones() : (
+            <FadeIn>
+              <Hero
+                big={onTrackPct}
+                title="Group lesson"
+                label="On track this week"
+                gauge={onTrackPct}
+                figures={[
+                  { value: totalStudents, label: totalStudents === 1 ? 'student' : 'students' },
+                  { value: groupStats.avgSessions, label: 'avg sessions' },
+                  { value: groupStats.totalQuestions, label: groupStats.totalQuestions === 1 ? 'question' : 'questions' },
+                ]}
+              >
+                {groupFPs.length === 0 ? (
+                  <>No shared focus points yet: they appear once your students have lessons logged.</>
+                ) : (
+                  <>
+                    The group logged <HeroStrong>{plural(weekSessions, 'session')}</HeroStrong> this week.
+                    {!!topFocus && (
+                      <> <HeroStrong>{topFocus.name}</HeroStrong> was practised most ({topFocus.practiced} of {totalStudents}).</>
+                    )}
+                    {!!underPracticed && underPracticed !== topFocus && underPracticed.practiced < totalStudents / 2 && (
+                      <> <HeroAlert>“{underPracticed.name}”</HeroAlert> only by {underPracticed.practiced}: worth a group drill.</>
+                    )}
+                  </>
+                )}
+              </Hero>
 
-            {/* Most common focus points */}
-            {groupFPs.length > 0 && (
-              <>
-                <Text style={pb.secLabel}>Most common focus points</Text>
-                <View style={pb.focusWrap}>
+              <SectionHead title="Most common focus points" right={groupFPs.length > 0 ? 'practised this week' : null} />
+              {groupFPs.length === 0 ? (
+                <Card><Empty>Nothing shared across the group yet.</Empty></Card>
+              ) : (
+                <Card>
                   {groupFPs.slice(0, 6).map((fp, i) => {
                     const ratio = totalStudents > 0 ? fp.practiced / totalStudents : 0;
-                    const barColor =
-                      ratio >= 0.6 ? C.green : ratio >= 0.4 ? C.orange : C.red;
                     return (
-                      <View key={fp.name} style={gb.fpItem}>
-                        <Text style={gb.fpRank}>{i + 1}</Text>
-                        <View style={{ flex: 1, minWidth: 0 }}>
-                          <Text style={gb.fpName} numberOfLines={1}>{fp.name}</Text>
-                          <Text style={gb.fpStudents}>
-                            {fp.practiced} of {totalStudents} student{totalStudents > 1 ? 's' : ''} practiced
-                          </Text>
-                          <View style={gb.fpBarTrack}>
-                            <View
-                              style={[
-                                gb.fpBarFill,
-                                { width: `${Math.max(3, ratio * 100)}%`, backgroundColor: barColor },
-                              ]}
-                            />
+                      <View key={fp.name} style={[ls.fpRow, i > 0 && ls.rowLine]}>
+                        <Text style={ls.fpRank}>{i + 1}</Text>
+                        <View style={{ flex: 1, minWidth: 0, gap: 6 }}>
+                          <View style={ls.fpHead}>
+                            <Text style={ls.fpName} numberOfLines={1}>{fp.name}</Text>
+                            <Text style={ls.fpCount}>{fp.practiced}/{totalStudents}</Text>
+                          </View>
+                          <View style={ls.fpTrack}>
+                            <View style={[ls.fpFill, { width: `${Math.max(3, ratio * 100)}%` }]} />
                           </View>
                         </View>
                       </View>
                     );
                   })}
-                </View>
-              </>
-            )}
+                </Card>
+              )}
 
-            {/* Need attention */}
-            {attentionStudents.length > 0 && (
-              <>
-                <Text style={pb.secLabel}>Need attention</Text>
-                <View style={pb.focusWrap}>
-                  {attentionStudents.map((st) => {
-                    const isHigh = st.severity === 'high';
-                    const color = isHigh ? C.red : C.orange;
-                    return (
-                      <View key={st.id} style={gb.attRow}>
-                        {st.photoUrl ? (
-                          <Image source={{ uri: st.photoUrl }} style={gb.attAvatar} />
-                        ) : (
-                          <View style={[gb.attAvatar, { backgroundColor: color, alignItems: 'center', justifyContent: 'center' }]}>
-                            <Text style={gb.attAvatarText}>{initials(st.name)[0]}</Text>
+              {attentionStudents.length > 0 && (
+                <>
+                  <SectionHead title="Need attention" right={plural(attentionStudents.length, 'student')} />
+                  <Card>
+                    {attentionStudents.map((a, i) => {
+                      const high = a.severity === 'high';
+                      return (
+                        <View key={a.id} style={[ls.attRow, i > 0 && ls.rowLine]}>
+                          <Avatar name={a.name} photoUrl={a.photoUrl} size={36} />
+                          <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
+                            <Text style={ls.attName} numberOfLines={1}>{a.name}</Text>
+                            <Text style={ls.attReason} numberOfLines={1}>{a.reason}</Text>
                           </View>
-                        )}
-                        <View style={{ flex: 1, minWidth: 0 }}>
-                          <Text style={gb.attName} numberOfLines={1}>{st.name}</Text>
-                          <Text style={gb.attReason}>{st.reason}</Text>
+                          <View style={[ls.attChip, high && ls.attChipHigh]}>
+                            <Text style={[ls.attChipT, high && { color: L.RED }]}>{high ? 'Silent' : 'Watch'}</Text>
+                          </View>
                         </View>
-                        <View
-                          style={[
-                            gb.attBadge,
-                            {
-                              backgroundColor: isHigh ? 'rgba(212,69,69,0.08)' : 'rgba(232,168,56,0.10)',
-                            },
-                          ]}
-                        >
-                          <Text style={[gb.attBadgeText, { color }]}>
-                            {isHigh ? 'High risk' : 'Watch'}
-                          </Text>
-                        </View>
-                      </View>
-                    );
-                  })}
-                </View>
-              </>
-            )}
-          </Animated.ScrollView>
+                      );
+                    })}
+                  </Card>
+                </>
+              )}
+            </FadeIn>
+          )}
+        </ScrollView>
 
-          {/* Backdrop */}
-          <Animated.View
-            pointerEvents="none"
-            style={[pb.stickyBackdrop, { height: Animated.add(gbHeroHeight, 70) }]}
-          />
-
-          {/* Floating back arrow */}
-          <TouchableOpacity
-            onPress={backFromBriefing}
-            style={pb.floatingBack}
-            activeOpacity={0.7}
-            hitSlop={12}
-          >
-            <Ionicons name="chevron-back" size={22} color={C.text} />
-          </TouchableOpacity>
-
-          {/* Sticky collapsing hero */}
-          <Animated.View
-            pointerEvents="box-none"
-            style={[pb.stickyHero, { height: gbHeroHeight }]}
-          >
-            <View style={pb.heroTop}>
-              <View style={gb.heroAvatars}>
-                {firstTwoAvatars.map((st, i) => (
-                  <View
-                    key={st.id}
-                    style={[
-                      gb.heroAv,
-                      { marginLeft: i === 0 ? 0 : -10, zIndex: 3 - i },
-                    ]}
-                  >
-                    {st.photoUrl ? (
-                      <Image source={{ uri: st.photoUrl }} style={gb.heroAvImg} />
-                    ) : (
-                      <Text style={gb.heroAvText}>{initials(st.name)[0]}</Text>
-                    )}
-                  </View>
-                ))}
-                {remaining > 0 && (
-                  <View style={[gb.heroAv, gb.heroAvMore, { marginLeft: -10, zIndex: 1 }]}>
-                    <Text style={gb.heroAvText}>+{remaining}</Text>
-                  </View>
-                )}
-              </View>
-              <View style={{ flex: 1, minWidth: 0 }}>
-                <Text style={pb.heroName} numberOfLines={1}>Group class</Text>
-                <Text style={pb.heroSub}>
-                  <Text style={pb.heroSubStrong}>{totalStudents}</Text> student{totalStudents > 1 ? 's' : ''} · {groupFPs.length} shared focuses
-                </Text>
-              </View>
-            </View>
-
-            <Animated.View style={{ opacity: gbDetailsOpacity }} pointerEvents="none">
-              <View style={pb.statsRow}>
-                <View style={pb.stat}>
-                  <Text style={pb.statVal}>{totalStudents}</Text>
-                  <Text style={pb.statLabel}>Students</Text>
-                </View>
-                <View style={pb.statDivider} />
-                <View style={pb.stat}>
-                  <Text style={pb.statVal}>{groupStats.avgSessions}</Text>
-                  <Text style={pb.statLabel}>Avg sessions</Text>
-                </View>
-                <View style={pb.statDivider} />
-                <View style={pb.stat}>
-                  <Text style={pb.statVal}>{groupStats.totalQuestions}</Text>
-                  <Text style={pb.statLabel}>Questions</Text>
-                </View>
-              </View>
-
-              <View style={pb.alert}>
-                <View
-                  style={[
-                    pb.alertDot,
-                    { backgroundColor: attentionStudents.length > 0 ? C.red : C.green },
-                  ]}
-                />
-                <Text style={pb.alertText}>
-                  {attentionStudents.length > 0
-                    ? `${attentionStudents.length} student${attentionStudents.length > 1 ? 's' : ''} need attention`
-                    : 'Group on track'}
-                </Text>
-              </View>
-            </Animated.View>
-          </Animated.View>
-        </View>
-
-        {renderBottomBar()}
-        {renderAudioModal()}
-        {renderDebriefModal()}
-        {renderRecStartConfirmPrompt()}
-        {renderRecStopConfirmPrompt()}
+        {renderFoot()}
+        {renderLessonModals()}
       </SafeAreaView>
     );
   }
@@ -4174,2438 +3479,74 @@ export default function StartClassScreen({ navigation }) {
   return null;
 }
 
-// ── Private briefing styles ────────────────────────────────────────────────
-const pb = StyleSheet.create({
-  hero: {
-    backgroundColor: '#0E0E0E',
-    borderRadius: 22,
-    padding: 22,
-    marginHorizontal: Spacing.side,
-    marginBottom: 20,
-  },
-  stickyBackdrop: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    backgroundColor: C.bg,
-    zIndex: 5,
-  },
-  floatingBack: {
-    position: 'absolute',
-    top: 14,
-    left: Spacing.side,
-    width: 36,
-    height: 36,
-    borderRadius: 12,
-    backgroundColor: C.surface,
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 15,
-  },
-  stickyHero: {
-    position: 'absolute',
-    top: 62,
-    left: Spacing.side,
-    right: Spacing.side,
-    backgroundColor: '#0E0E0E',
-    borderRadius: 22,
-    paddingHorizontal: 22,
-    paddingTop: 20,
-    paddingBottom: 14,
-    overflow: 'hidden',
-    zIndex: 10,
-    shadowColor: '#000',
-    shadowOpacity: 0.12,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 4,
-  },
-  heroTop: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-    marginBottom: 20,
-  },
-  heroAvatarWrap: {
-    width: 56,
-    height: 56,
-  },
-  heroAvatarInner: {
-    position: 'absolute',
-    top: 8,
-    left: 8,
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'rgba(232,168,56,0.18)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  heroAvatarText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 17,
-    color: '#E8A838',
-  },
-  heroAvatarImg: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-  },
-  heroName: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 20,
-    color: '#fff',
-    letterSpacing: -0.3,
-    marginBottom: 3,
-  },
-  heroSub: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 13,
-    color: 'rgba(255,255,255,0.5)',
-  },
-  heroSubStrong: {
-    fontFamily: Fonts.jakartaExtraBold,
-    color: '#fff',
-  },
-  statsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 14,
-    paddingHorizontal: 4,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(255,255,255,0.08)',
-  },
-  stat: {
-    flex: 1,
-    alignItems: 'center',
-  },
-  statVal: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 28,
-    color: '#fff',
-    letterSpacing: -0.5,
-    lineHeight: 32,
-  },
-  statLabel: {
-    fontFamily: Fonts.jakartaSemiBold,
-    fontSize: 10.5,
-    color: 'rgba(255,255,255,0.45)',
-    letterSpacing: 0.3,
-    marginTop: 4,
-  },
-  statDivider: {
-    width: StyleSheet.hairlineWidth,
-    alignSelf: 'stretch',
-    backgroundColor: 'rgba(255,255,255,0.08)',
-  },
-  alert: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginTop: 14,
-  },
-  alertDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  alertText: {
-    flex: 1,
-    fontFamily: Fonts.jakartaSemiBold,
-    fontSize: 12.5,
-    color: 'rgba(255,255,255,0.75)',
-  },
-  alertTime: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 11,
-    color: 'rgba(255,255,255,0.45)',
-  },
+// ── Start a lesson styles (the rest lives in components/coach/LessonUI) ─────
+const ls = StyleSheet.create({
+  center: { alignItems: 'center', justifyContent: 'center', paddingHorizontal: 36 },
+  doneIcon: { width: 64, height: 64, borderRadius: 20, backgroundColor: L.INK, alignItems: 'center', justifyContent: 'center', marginBottom: 18 },
+  doneTitle: { fontFamily: Fonts.bold, fontSize: 24, letterSpacing: -0.8, color: L.INK, textAlign: 'center' },
+  doneBody: { fontFamily: Fonts.regular, fontSize: 14, lineHeight: 21, color: 'rgba(10,10,10,0.68)', textAlign: 'center', marginTop: 8, maxWidth: 300 },
 
-  debriefWrap: {
-    marginHorizontal: Spacing.side,
-    marginBottom: 22,
-  },
-  debriefEyebrow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginBottom: 10,
-  },
-  debriefEyebrowIcon: {
-    width: 18,
-    height: 18,
-    borderRadius: 5,
-    backgroundColor: 'rgba(232,168,56,0.12)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  debriefEyebrowText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 11,
-    color: '#E8A838',
-    letterSpacing: 0.4,
-    textTransform: 'uppercase',
-  },
-  debriefBody: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 14,
-    color: '#0E0E0E',
-    lineHeight: 22,
-  },
-  debriefStrong: {
-    fontFamily: Fonts.jakartaExtraBold,
-  },
-  debriefEm: {
-    fontFamily: Fonts.jakartaBold,
-    fontStyle: 'italic',
-    color: '#D44545',
-  },
-  reco: {
-    flexDirection: 'row',
-    gap: 12,
-    marginTop: 14,
-    paddingVertical: 12,
-    paddingRight: 12,
-  },
-  recoBar: {
-    width: 3,
-    borderRadius: 2,
-    backgroundColor: '#E8A838',
-  },
-  recoLabel: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 10,
-    color: '#E8A838',
-    letterSpacing: 0.4,
-    textTransform: 'uppercase',
-    marginBottom: 4,
-  },
-  recoText: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 13,
-    color: '#0E0E0E',
-    lineHeight: 19,
-  },
+  rowLine: { borderTopWidth: 1, borderTopColor: 'rgba(10,10,10,0.07)' },
+  cardHighlight: { borderColor: L.GOLD, borderWidth: 1.5, backgroundColor: '#FFFDF4' },
+  silentDot: { position: 'absolute', right: -1, top: -1, width: 11, height: 11, borderRadius: 6, backgroundColor: L.RED_DOT, borderWidth: 2, borderColor: '#FFFFFF' },
+  groupIcon: { width: 40, height: 40, borderRadius: 12, backgroundColor: L.INK, alignItems: 'center', justifyContent: 'center' },
 
-  secLabel: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 11,
-    color: '#999',
-    letterSpacing: 0.5,
-    textTransform: 'uppercase',
-    marginHorizontal: Spacing.side,
-    marginBottom: 10,
-    marginTop: 4,
-  },
-  questionsWrap: {
-    marginHorizontal: Spacing.side,
-    marginBottom: 22,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 14,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: '#E5E5E5',
-  },
-  qRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 14,
-    paddingTop: 10,
-    paddingBottom: 10,
-  },
-  qRowBorder: {
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#E5E5E5',
-  },
-  qNum: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 12,
-    color: '#E8A838',
-    letterSpacing: 0.5,
-    minWidth: 22,
-    marginTop: 2,
-  },
-  qText: {
-    flex: 1,
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 13.5,
-    color: '#0E0E0E',
-    lineHeight: 20,
-  },
+  boneHero: { marginTop: 14, borderRadius: 19, backgroundColor: L.INK, padding: 17, gap: 13 },
+  boneDark: { backgroundColor: 'rgba(255,255,255,0.14)' },
+  boneCard: { backgroundColor: '#FFFFFF', borderRadius: 17, borderWidth: 1, borderColor: 'rgba(10,10,10,0.06)', overflow: 'hidden' },
+  boneRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 13, paddingHorizontal: 15 },
 
-  focusWrap: {
-    marginHorizontal: Spacing.side,
-    marginBottom: 22,
-    gap: 8,
-  },
-  fpRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 14,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    borderWidth: 1,
-    borderColor: '#E5E5E5',
-  },
-  fpStatus: {
-    width: 28,
-    height: 28,
-    borderRadius: 9,
-    backgroundColor: 'rgba(74,175,82,0.12)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  fpName: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 14,
-    color: '#0E0E0E',
-  },
-  fpMeta: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 11,
-    color: '#999',
-    marginTop: 2,
-  },
-  fpBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 9,
-    backgroundColor: 'rgba(74,175,82,0.1)',
-  },
-  fpBadgeText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 12,
-    color: '#4AAF52',
-  },
-  fpFeeling: {
-    fontSize: 18,
-    marginRight: 2,
-  },
+  fpRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, paddingHorizontal: 15 },
+  fpRank: { width: 16, fontFamily: Fonts.bold, fontSize: 13, color: L.GOLD_INK, fontVariant: ['tabular-nums'] },
+  fpHead: { flexDirection: 'row', alignItems: 'baseline', gap: 10 },
+  fpName: { flex: 1, fontFamily: Fonts.semiBold, fontSize: 14, letterSpacing: -0.25, color: L.INK },
+  fpCount: { fontFamily: Fonts.bold, fontSize: 12.5, color: L.INK_62, fontVariant: ['tabular-nums'] },
+  fpTrack: { height: 5, borderRadius: 3, backgroundColor: 'rgba(10,10,10,0.08)', overflow: 'hidden' },
+  fpFill: { height: 5, borderRadius: 3, backgroundColor: L.GOLD },
 
-  // Last class recap card
-  recapCard: {
-    marginHorizontal: Spacing.side,
-    marginBottom: 22,
-    backgroundColor: '#F0F0F0',
-    borderRadius: 16,
-    padding: 16,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(0,0,0,0.05)',
-  },
-  recapHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 10,
-  },
-  recapBadge: {
-    backgroundColor: 'rgba(232,168,56,0.14)',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 6,
-  },
-  recapBadgeText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 9,
-    letterSpacing: 0.8,
-    color: '#E8A838',
-  },
-  recapDate: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 10.5,
-    color: '#999',
-  },
-  recapTitle: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 15,
-    color: '#0E0E0E',
-    letterSpacing: -0.2,
-    marginBottom: 6,
-  },
-  recapSummary: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 12.5,
-    color: '#666',
-    lineHeight: 19,
-    marginBottom: 12,
-  },
-  recapFPs: {
-    gap: 6,
-  },
-  recapFPLabel: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 10,
-    color: '#999',
-    letterSpacing: 0.5,
-    textTransform: 'uppercase',
-    marginBottom: 4,
-  },
-  recapFPRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
-  recapFPDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-  },
-  recapFPName: {
-    flex: 1,
-    fontFamily: Fonts.jakartaSemiBold,
-    fontSize: 13,
-    color: '#0E0E0E',
-  },
-  recapFPCount: {
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 8,
-  },
-  recapFPCountText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 11,
-  },
+  attRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, paddingHorizontal: 15 },
+  attName: { fontFamily: Fonts.semiBold, fontSize: 14, letterSpacing: -0.25, color: L.INK },
+  attReason: { fontFamily: Fonts.regular, fontSize: 11, color: L.INK_62 },
+  attChip: { paddingHorizontal: 7, paddingVertical: 3, borderRadius: 5, backgroundColor: L.CREAM },
+  attChipHigh: { backgroundColor: 'rgba(168,65,47,0.1)' },
+  attChipT: { fontFamily: Fonts.bold, fontSize: 9, letterSpacing: 0.8, textTransform: 'uppercase', color: L.GOLD_INK },
 
-  // Check-during-lesson card (readiness carryover)
-  // Dark brown card matching the student-side lesson readiness panel
-  // (ProfileScreen → ready.card). Same #1F1810 + gold border treatment so
-  // coach and student see the same visual language for "what's left".
-  checkCard: {
-    marginHorizontal: Spacing.side,
-    marginBottom: 22,
-    backgroundColor: '#1F1810',
-    borderRadius: 20,
-    padding: 18,
-    paddingBottom: 6,
-    borderWidth: 1,
-    borderColor: 'rgba(240,194,74,0.28)',
-    overflow: 'hidden',
-    shadowColor: '#0A0A0A',
-    shadowOffset: { width: 0, height: 14 },
-    shadowOpacity: 0.5,
-    shadowRadius: 22,
-    elevation: 8,
-  },
-  checkHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 10,
-  },
-  checkBadge: {
-    backgroundColor: 'rgba(240,194,74,0.14)',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 6,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(240,194,74,0.30)',
-  },
-  checkBadgeText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 9,
-    letterSpacing: 0.8,
-    color: '#F6D27A',
-  },
-  checkPct: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 18,
-    color: '#FFFFFF',
-    letterSpacing: -0.4,
-  },
-  checkHint: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 12,
-    color: 'rgba(255,255,255,0.55)',
-    lineHeight: 17,
-    marginBottom: 14,
-  },
-  // Sub-section label between focus rows and questions inside the
-  // brown "Check during this lesson" card.
-  checkSubLabel: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 10,
-    color: '#F6D27A',
-    letterSpacing: 1.2,
-    textTransform: 'uppercase',
-    marginTop: 14,
-    marginBottom: 4,
-    paddingTop: 12,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: 'rgba(255,255,255,0.10)',
-  },
-  checkRows: {
-    marginHorizontal: -18,
-  },
-  checkRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 18,
-    paddingVertical: 12,
-    borderTopWidth: 0.5,
-    borderTopColor: 'rgba(255,255,255,0.10)',
-  },
-  checkDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-  },
-  checkName: {
-    flex: 1,
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 13.5,
-    color: '#FFFFFF',
-    letterSpacing: -0.05,
-  },
-  checkTier: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 9.5,
-    letterSpacing: 0.6,
-    textTransform: 'uppercase',
-  },
-  checkProgress: {
-    minWidth: 36,
-    alignItems: 'flex-end',
-  },
-  checkProgressText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 13,
-    color: '#F6D27A',
-    letterSpacing: -0.2,
-  },
-  checkProgressOf: {
-    fontFamily: Fonts.jakartaSemiBold,
-    fontSize: 11,
-    color: 'rgba(246,210,122,0.5)',
-  },
+  vRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, paddingHorizontal: 15 },
+  vName: { fontFamily: Fonts.semiBold, fontSize: 14, letterSpacing: -0.25, lineHeight: 18, color: L.INK },
+
+  noteRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12, paddingHorizontal: 15 },
+  noteText: { flex: 1, fontFamily: Fonts.regular, fontSize: 12.5, lineHeight: 17, color: 'rgba(10,10,10,0.72)' },
 });
 
-// ── Group briefing styles ──────────────────────────────────────────────────
-const gb = StyleSheet.create({
-  heroAvatars: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    width: 78,
-  },
-  heroAv: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: 'rgba(232,168,56,0.25)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 2,
-    borderColor: '#0E0E0E',
-    overflow: 'hidden',
-  },
-  heroAvMore: {
-    backgroundColor: 'rgba(255,255,255,0.14)',
-  },
-  heroAvImg: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-  },
-  heroAvText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 13,
-    color: '#fff',
-  },
-  fpItem: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 14,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 14,
-    paddingHorizontal: 14,
-    paddingVertical: 14,
-    borderWidth: 1,
-    borderColor: '#E5E5E5',
-  },
-  fpRank: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 15,
-    color: '#999',
-    minWidth: 20,
-    letterSpacing: -0.3,
-    marginTop: 1,
-  },
-  fpName: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 14,
-    color: '#0E0E0E',
-    marginBottom: 3,
-  },
-  fpStudents: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 11.5,
-    color: '#999',
-    marginBottom: 8,
-  },
-  fpBarTrack: {
-    height: 5,
-    borderRadius: 3,
-    backgroundColor: '#F0F0F0',
-    overflow: 'hidden',
-  },
-  fpBarFill: {
-    height: 5,
-    borderRadius: 3,
-  },
-  attRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 14,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    borderWidth: 1,
-    borderColor: '#E5E5E5',
-  },
-  attAvatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    overflow: 'hidden',
-  },
-  attAvatarText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 14,
-    color: '#fff',
-  },
-  attName: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 14,
-    color: '#0E0E0E',
-  },
-  attReason: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 11.5,
-    color: '#999',
-    marginTop: 2,
-  },
-  attBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 9,
-  },
-  attBadgeText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 11,
-  },
-});
+// ── Choose your mic ─────────────────────────────────────────────────────────
+const au = StyleSheet.create({
+  overlay: { flex: 1, backgroundColor: 'rgba(10,10,10,0.45)', justifyContent: 'flex-end' },
+  sheet: { backgroundColor: L.PAGE, borderTopLeftRadius: 26, borderTopRightRadius: 26, paddingHorizontal: Spacing.side, paddingTop: 10 },
+  handle: { alignSelf: 'center', width: 36, height: 4, borderRadius: 2, backgroundColor: 'rgba(10,10,10,0.16)', marginBottom: 16 },
+  eyebrow: { fontFamily: Fonts.semiBold, fontSize: 9.5, letterSpacing: 1.6, textTransform: 'uppercase', color: L.GOLD_INK },
+  title: { fontFamily: Fonts.bold, fontSize: 24, letterSpacing: -0.8, color: L.INK, marginTop: 6 },
+  sub: { fontFamily: Fonts.regular, fontSize: 13.5, lineHeight: 20, color: 'rgba(10,10,10,0.68)', marginTop: 4 },
 
-// ── Gauge styles ───────────────────────────────────────────────────────────
-const g = StyleSheet.create({
-  gaugeVal: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 13,
-    color: '#fff',
-  },
-  gaugeLabel: {
-    fontFamily: Fonts.jakartaSemiBold,
-    fontSize: 9,
-    color: 'rgba(255,255,255,0.45)',
-    textTransform: 'uppercase',
-    letterSpacing: 0.3,
-    marginTop: 4,
-  },
-});
+  searching: { marginTop: 16, alignItems: 'center', paddingVertical: 24, borderRadius: 17, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: 'rgba(10,10,10,0.06)' },
+  coreWrap: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', marginBottom: 14 },
+  core: { width: 44, height: 44, borderRadius: 13, backgroundColor: L.INK, alignItems: 'center', justifyContent: 'center' },
+  ring: { position: 'absolute', width: 44, height: 44, borderRadius: 22, borderWidth: 2, borderColor: L.GOLD },
+  searchTitle: { fontFamily: Fonts.semiBold, fontSize: 14.5, letterSpacing: -0.3, color: L.INK },
+  searchSub: { fontFamily: Fonts.regular, fontSize: 11.5, color: L.INK_62, marginTop: 3 },
 
-// ── Main styles ────────────────────────────────────────────────────────────
-const s = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: C.bg },
+  inputRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, paddingHorizontal: 15 },
+  inputIcon: { width: 34, height: 34, borderRadius: 10, backgroundColor: 'rgba(10,10,10,0.06)', alignItems: 'center', justifyContent: 'center' },
+  inputIconOn: { backgroundColor: L.INK },
+  inputName: { fontFamily: Fonts.semiBold, fontSize: 14, letterSpacing: -0.25, color: L.INK },
+  inputMeta: { fontFamily: Fonts.regular, fontSize: 11, color: L.INK_62, marginTop: 1 },
+  radio: { width: 20, height: 20, borderRadius: 10, borderWidth: 1.5, borderColor: 'rgba(10,10,10,0.22)', alignItems: 'center', justifyContent: 'center' },
+  radioOn: { borderColor: L.INK },
+  radioDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: L.INK },
+  wave: { paddingHorizontal: 15, paddingBottom: 13, gap: 8 },
+  waveBars: { flexDirection: 'row', alignItems: 'center', gap: 3, height: 36 },
+  waveBar: { flex: 1, height: 32, borderRadius: 999, minWidth: 0 },
+  waveLabel: { fontFamily: Fonts.semiBold, fontSize: 11, color: L.GOLD_INK },
 
-  // Header
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingHorizontal: Spacing.side,
-    paddingTop: 12,
-    paddingBottom: 16,
-  },
-  backBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 12,
-    backgroundColor: C.surface,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  headerLabel: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 11,
-    color: C.orange,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  headerTitle: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 22,
-    color: C.text,
-    letterSpacing: -0.3,
-  },
-
-  // Select view (Start a class)
-  selectScroll: {
-    paddingHorizontal: 24,
-    paddingTop: 16,
-    paddingBottom: 40,
-  },
-  selectBack: {
-    width: 36,
-    height: 36,
-    borderRadius: 12,
-    backgroundColor: '#F0F0F0',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 24,
-  },
-  selectLabel: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 13,
-    color: '#999',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    marginBottom: 6,
-  },
-  selectHeading: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 30,
-    color: C.text,
-    letterSpacing: -0.5,
-    lineHeight: 33,
-    marginBottom: 28,
-  },
-  selectIconRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 16,
-  },
-  selectContextBar: {
-    flexDirection: 'row',
-    gap: 8,
-    flexWrap: 'wrap',
-  },
-  selectDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-  },
-
-  // Private (dark) card
-  selectPrivate: {
-    backgroundColor: '#0E0E0E',
-    borderRadius: 24,
-    paddingHorizontal: 22,
-    paddingVertical: 24,
-    marginBottom: 14,
-  },
-  selectIconDark: {
-    width: 48,
-    height: 48,
-    borderRadius: 16,
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  selectArrowDark: {
-    width: 36,
-    height: 36,
-    borderRadius: 12,
-    backgroundColor: 'rgba(255,255,255,0.06)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  selectPrivateTitle: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 22,
-    color: '#fff',
-    letterSpacing: -0.3,
-    marginBottom: 4,
-  },
-  selectPrivateSub: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 13,
-    color: 'rgba(255,255,255,0.4)',
-    marginBottom: 18,
-  },
-  selectTagDark: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-    borderRadius: 10,
-    backgroundColor: 'rgba(255,255,255,0.06)',
-  },
-  selectTagDarkText: {
-    fontFamily: Fonts.jakartaSemiBold,
-    fontSize: 12,
-    color: 'rgba(255,255,255,0.5)',
-  },
-  selectTagStrongDark: {
-    fontFamily: Fonts.jakartaExtraBold,
-    color: '#fff',
-  },
-
-  // Group (light) card
-  selectGroup: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 24,
-    paddingHorizontal: 22,
-    paddingVertical: 24,
-    borderWidth: 1,
-    borderColor: '#E5E5E5',
-  },
-  selectIconLight: {
-    width: 48,
-    height: 48,
-    borderRadius: 16,
-    backgroundColor: '#F0F0F0',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  selectArrowLight: {
-    width: 36,
-    height: 36,
-    borderRadius: 12,
-    backgroundColor: '#F0F0F0',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  selectGroupTitle: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 22,
-    color: C.text,
-    letterSpacing: -0.3,
-    marginBottom: 4,
-  },
-  selectGroupSub: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 13,
-    color: '#999',
-    marginBottom: 18,
-  },
-  selectTagLight: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-    borderRadius: 10,
-    backgroundColor: '#F0F0F0',
-  },
-  selectTagLightText: {
-    fontFamily: Fonts.jakartaSemiBold,
-    fontSize: 12,
-    color: '#999',
-  },
-  selectTagStrongLight: {
-    fontFamily: Fonts.jakartaExtraBold,
-    color: C.text,
-  },
-
-  // Content
-  content: { paddingHorizontal: Spacing.side },
-  pageTitle: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 28,
-    color: C.text,
-    letterSpacing: -0.5,
-    marginBottom: 4,
-  },
-  pageSub: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 14,
-    color: C.gray,
-    marginBottom: 32,
-  },
-
-  // Type cards
-  typeCardDark: {
-    backgroundColor: C.dark,
-    borderRadius: 22,
-    padding: 24,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 18,
-    marginBottom: 14,
-  },
-  typeIconDark: {
-    width: 56,
-    height: 56,
-    borderRadius: 18,
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  typeCardDarkTitle: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 18,
-    color: '#fff',
-    letterSpacing: -0.3,
-  },
-  typeCardDarkSub: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 13,
-    color: 'rgba(255,255,255,0.45)',
-    marginTop: 3,
-    lineHeight: 18,
-  },
-  typeCardLight: {
-    backgroundColor: C.card,
-    borderRadius: 22,
-    padding: 24,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 18,
-    borderWidth: 1,
-    borderColor: C.lightGray,
-  },
-  typeIconLight: {
-    width: 56,
-    height: 56,
-    borderRadius: 18,
-    backgroundColor: C.surface,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  typeCardLightTitle: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 18,
-    color: C.text,
-    letterSpacing: -0.3,
-  },
-  typeCardLightSub: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 13,
-    color: C.gray,
-    marginTop: 3,
-    lineHeight: 18,
-  },
-
-  // Search
-  searchWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    backgroundColor: C.surface,
-    borderRadius: 14,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    marginHorizontal: Spacing.side,
-    marginBottom: 16,
-  },
-  searchInput: {
-    flex: 1,
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 14,
-    color: C.text,
-    padding: 0,
-  },
-
-  // Student list
-  studentRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: C.lightGray,
-  },
-  studentAvatar: {
-    width: 48,
-    height: 48,
-    borderRadius: 16,
-    backgroundColor: C.surface,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  studentAvatarText: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 15,
-    color: C.text,
-  },
-  studentName: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 15,
-    color: C.text,
-  },
-  studentMeta: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 12,
-    color: C.gray,
-    marginTop: 2,
-  },
-  stuckBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 10,
-    backgroundColor: 'rgba(212,69,69,0.08)',
-  },
-  stuckBadgeText: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 11,
-    color: C.red,
-  },
-
-  // Hero card (dark)
-  heroCard: {
-    backgroundColor: C.dark,
-    borderRadius: 22,
-    padding: 22,
-    marginHorizontal: Spacing.side,
-    marginBottom: 20,
-  },
-  heroTop: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-    marginBottom: 18,
-  },
-  heroAvatarWrap: {
-    width: 52,
-    height: 52,
-  },
-  heroAvatarInner: {
-    position: 'absolute',
-    top: 6,
-    left: 6,
-    width: 40,
-    height: 40,
-    borderRadius: 14,
-    backgroundColor: C.orange,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  heroAvatarText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 16,
-    color: '#fff',
-  },
-  heroName: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 20,
-    color: '#fff',
-    letterSpacing: -0.3,
-  },
-  heroStyle: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 13,
-    color: 'rgba(255,255,255,0.45)',
-  },
-  gaugeRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-  },
-  activityPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: 'rgba(255,255,255,0.06)',
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    marginTop: 16,
-  },
-  activityPillText: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 12,
-    color: 'rgba(255,255,255,0.5)',
-  },
-
-  // Sections
-  section: {
-    paddingHorizontal: Spacing.side,
-    marginBottom: 20,
-  },
-  sectionLabel: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 11,
-    color: C.gray,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    marginBottom: 10,
-  },
-
-  // Questions
-  questionsCard: {
-    backgroundColor: C.card,
-    borderRadius: 16,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(232,168,56,0.2)',
-  },
-  questionRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 10,
-  },
-  questionBorder: {
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: C.lightGray,
-    marginTop: 12,
-  },
-  questionIcon: {
-    width: 22,
-    height: 22,
-    borderRadius: 7,
-    backgroundColor: 'rgba(232,168,56,0.1)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 1,
-  },
-  questionMark: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 12,
-    color: C.orange,
-  },
-  questionText: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 13,
-    color: C.text,
-    lineHeight: 19,
-    flex: 1,
-  },
-
-  // Focus points
-  fpCard: {
-    backgroundColor: C.card,
-    borderRadius: 14,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    marginBottom: 8,
-  },
-  fpDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  fpName: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 14,
-    color: C.text,
-    flex: 1,
-  },
-  fpMeta: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 11,
-    color: C.gray,
-    marginTop: 2,
-  },
-  fpBadge: {
-    paddingHorizontal: 9,
-    paddingVertical: 3,
-    borderRadius: 8,
-  },
-  fpBadgeText: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 12,
-  },
-  rankBadge: {
-    width: 28,
-    height: 28,
-    borderRadius: 9,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  rankNum: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 12,
-  },
-
-  // AI Recommendation
-  aiCard: {
-    backgroundColor: 'rgba(232,168,56,0.06)',
-    borderRadius: 16,
-    padding: 16,
-    borderWidth: 1,
-    borderStyle: 'dashed',
-    borderColor: 'rgba(232,168,56,0.25)',
-  },
-  aiHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 8,
-  },
-  aiHeaderText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 10,
-    color: C.orange,
-    letterSpacing: 0.5,
-  },
-  aiBody: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 13,
-    color: C.text,
-    lineHeight: 20,
-  },
-
-  // Group briefing hero
-  groupHeroLabel: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 11,
-    color: 'rgba(255,255,255,0.35)',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    marginBottom: 6,
-  },
-  groupHeroTitle: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 26,
-    color: '#fff',
-    letterSpacing: -0.5,
-    lineHeight: 32,
-  },
-  groupHeroSub: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 13,
-    color: 'rgba(255,255,255,0.45)',
-    marginTop: 8,
-  },
-  groupStatsRow: {
-    flexDirection: 'row',
-    gap: 10,
-    marginTop: 18,
-  },
-  groupStatBox: {
-    flex: 1,
-    borderRadius: 12,
-    padding: 12,
-    alignItems: 'center',
-  },
-  groupStatNum: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 20,
-  },
-  groupStatLabel: {
-    fontFamily: Fonts.jakartaSemiBold,
-    fontSize: 10,
-    color: 'rgba(255,255,255,0.4)',
-    marginTop: 2,
-  },
-
-  // Bottom bar
-  bottomBar: {
-    paddingHorizontal: Spacing.side,
-    paddingTop: 12,
-    paddingBottom: 32,
-    borderTopWidth: 1,
-    borderTopColor: C.lightGray,
-    backgroundColor: 'rgba(255,255,255,0.95)',
-  },
-  startBtn: {
-    backgroundColor: C.orange,
-    borderRadius: 16,
-    paddingVertical: 16,
-    alignItems: 'center',
-  },
-  startBtnText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 16,
-    color: C.text,
-    letterSpacing: 1,
-  },
-  runningRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    backgroundColor: '#0E0E0E',
-    borderRadius: 16,
-    paddingVertical: 14,
-    paddingHorizontal: 18,
-  },
-  runningDot: {
-    width: 9,
-    height: 9,
-    borderRadius: 5,
-    backgroundColor: '#D44545',
-  },
-  runningTime: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 20,
-    color: '#fff',
-    letterSpacing: 0.5,
-    fontVariant: ['tabular-nums'],
-  },
-  audioBadge: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    borderRadius: 999,
-  },
-  audioBadgeDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-  },
-  audioBadgeText: {
-    flex: 1,
-    fontFamily: Fonts.jakartaSemiBold,
-    fontSize: 11.5,
-    color: 'rgba(255,255,255,0.78)',
-    letterSpacing: 0.2,
-  },
-  stopBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    // Pushed to the right edge of the running row. In local-recording mode the
-    // audio-route badge (which normally fills the space) is hidden, so without
-    // this the Stop button sits glued to the timer digits.
-    marginLeft: 'auto',
-    backgroundColor: '#D44545',
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-  },
-  stopBtnText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 13,
-    color: '#fff',
-    letterSpacing: 0.5,
-  },
-});
-
-// ── Audio device modal styles ──────────────────────────────────────────────
-const ad = StyleSheet.create({
-  overlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-    justifyContent: 'flex-end',
-  },
-  sheet: {
-    backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    paddingHorizontal: 24,
-    paddingTop: 12,
-    paddingBottom: 40,
-  },
-  handle: {
-    width: 36,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: '#DDD',
-    alignSelf: 'center',
-    marginBottom: 20,
-  },
-  iconWrap: {
-    width: 56,
-    height: 56,
-    borderRadius: 18,
-    backgroundColor: 'rgba(232,168,56,0.10)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    alignSelf: 'center',
-    marginBottom: 16,
-  },
-  title: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 20,
-    color: '#0E0E0E',
-    textAlign: 'center',
-    letterSpacing: -0.3,
-  },
-  subtitle: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 13,
-    color: '#999',
-    textAlign: 'center',
-    marginTop: 4,
-    marginBottom: 24,
-  },
-  routeBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-    padding: 16,
-    borderRadius: 16,
-    backgroundColor: '#F8F8F8',
-    marginBottom: 4,
-  },
-  routeBtnIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: 'rgba(232,168,56,0.10)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  routeBtnLabel: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 14,
-    color: '#0E0E0E',
-  },
-  routeBtnSub: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 11,
-    color: '#999',
-    marginTop: 1,
-  },
-  chips: {
-    gap: 8,
-    marginBottom: 4,
-  },
-  chip: {
-    borderRadius: 14,
-    backgroundColor: '#F5F5F5',
-    borderWidth: 1.5,
-    borderColor: 'transparent',
-    overflow: 'hidden',
-  },
-  chipSelected: {
-    backgroundColor: '#FFF8E6',
-    borderColor: '#E8A838',
-  },
-  chipSelectedGood: {
-    backgroundColor: '#EEF8EE',
-    borderColor: '#4AAF52',
-  },
-  chipIconSelectedGood: {
-    backgroundColor: '#4AAF52',
-  },
-  chipRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingVertical: 14,
-    paddingHorizontal: 14,
-  },
-  waveBlock: {
-    paddingHorizontal: 14,
-    paddingBottom: 14,
-    paddingTop: 4,
-    gap: 8,
-  },
-  waveBars: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    height: 36,
-  },
-  waveBar: {
-    flex: 1,
-    height: 32,
-    borderRadius: 999,
-    minWidth: 0,
-  },
-  waveLabel: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 11,
-    color: '#888',
-    letterSpacing: 0.4,
-  },
-  searching: {
-    alignItems: 'center',
-    paddingVertical: 24,
-    paddingHorizontal: 14,
-    backgroundColor: '#F5F5F5',
-    borderRadius: 14,
-  },
-  searchingCoreWrap: {
-    width: 44,
-    height: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 14,
-  },
-  searchingCore: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
-    backgroundColor: 'rgba(232,168,56,0.12)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  searchingRing: {
-    position: 'absolute',
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    borderWidth: 2,
-    borderColor: '#E8A838',
-  },
-  searchingTitle: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 14,
-    color: '#0E0E0E',
-    letterSpacing: -0.2,
-  },
-  searchingSub: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 11.5,
-    color: '#888',
-    marginTop: 4,
-  },
-  popupOverlay: {
-    position: 'absolute',
-    top: 0, left: 0, right: 0, bottom: 0,
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 28,
-    zIndex: 999,
-  },
-  popupCard: {
-    width: '100%',
-    maxWidth: 360,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 22,
-    padding: 22,
-    alignItems: 'center',
-  },
-  popupIconWrap: {
-    width: 52,
-    height: 52,
-    borderRadius: 16,
-    backgroundColor: 'rgba(232,168,56,0.12)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 14,
-  },
-  popupTitle: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 17,
-    color: '#0E0E0E',
-    textAlign: 'center',
-    letterSpacing: -0.2,
-  },
-  popupBody: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 13,
-    color: '#666',
-    textAlign: 'center',
-    marginTop: 6,
-    marginBottom: 18,
-    lineHeight: 18,
-  },
-  popupActions: {
-    flexDirection: 'row',
-    gap: 8,
-    width: '100%',
-  },
-  popupBtnGhost: {
-    flex: 1,
-    backgroundColor: '#F2F2F2',
-    borderRadius: 12,
-    paddingVertical: 14,
-    alignItems: 'center',
-  },
-  popupBtnGhostText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 13,
-    color: '#666',
-  },
-  popupBtnPrimary: {
-    flex: 1,
-    backgroundColor: '#E8A838',
-    borderRadius: 12,
-    paddingVertical: 14,
-    alignItems: 'center',
-  },
-  popupBtnPrimaryText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 13,
-    color: '#0E0E0E',
-    letterSpacing: 0.4,
-  },
-  chipIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    backgroundColor: '#FFFFFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  chipIconSelected: {
-    backgroundColor: '#E8A838',
-  },
-  chipName: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 14,
-    color: '#0E0E0E',
-    letterSpacing: -0.2,
-  },
-  chipMeta: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 11,
-    color: '#888',
-    marginTop: 2,
-  },
-  chipDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    marginLeft: 8,
-  },
-  actions: {
-    marginTop: 20,
-    gap: 8,
-  },
-  btnStart: {
-    backgroundColor: '#E8A838',
-    borderRadius: 16,
-    paddingVertical: 18,
-    alignItems: 'center',
-  },
-  btnStartText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 16,
-    color: '#0E0E0E',
-    letterSpacing: 1,
-    textTransform: 'uppercase',
-  },
-
-});
-
-// ── End-of-class debrief sheet styles ──────────────────────────────────────
-const db = StyleSheet.create({
-  // Full-screen container — no longer a bottom sheet. The debrief earns
-  // its own view because the coach is doing real work (validating focus
-  // points + questions + writing a class note), not just dismissing.
-  screen: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
-  },
-  topBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-    paddingHorizontal: 24,
-    paddingTop: 16,
-    paddingBottom: 14,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: 'rgba(13,13,18,0.08)',
-  },
-  // Sticky action bar at the bottom — Done is always reachable, Save for
-  // later sits underneath as a secondary out.
-  bottomBar: {
-    paddingHorizontal: 24,
-    paddingTop: 12,
-    paddingBottom: 16,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: 'rgba(13,13,18,0.08)',
-    backgroundColor: '#FFFFFF',
-    gap: 6,
-  },
-  // Legacy aliases — retained until the old overlay/sheet path is fully
-  // removed elsewhere (e.g. group debrief which still uses Modal sheet).
-  overlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-    justifyContent: 'flex-end',
-  },
-  sheet: {
-    backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    paddingBottom: 40,
-    maxHeight: '92%',
-  },
-  handle: {
-    width: 36,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: '#DDD',
-    alignSelf: 'center',
-    marginTop: 12,
-  },
-  header: {
-    paddingHorizontal: 24,
-    paddingTop: 20,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-    marginBottom: 6,
-  },
-  headerIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 16,
-    backgroundColor: 'rgba(74,175,82,0.08)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  headerTitle: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 22,
-    color: '#0E0E0E',
-    letterSpacing: -0.3,
-  },
-  headerSub: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 13,
-    color: '#999',
-    marginTop: 2,
-  },
-  // Brown duration card — same family as "Check during this lesson" on
-  // the briefing screen so the visual language carries through into the
-  // debrief.
-  durationBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    marginHorizontal: 24,
-    marginTop: 16,
-    paddingHorizontal: 16,
-    paddingVertical: 13,
-    backgroundColor: '#1F1810',
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: 'rgba(240,194,74,0.28)',
-  },
-  durationText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 13,
-    color: '#FFFFFF',
-  },
-  durationDim: {
-    fontFamily: Fonts.jakartaMedium,
-    color: 'rgba(255,255,255,0.55)',
-  },
-  // Gold uppercase eyebrow — matches the section labels used in the
-  // student readiness card and the coach action-needed pillars.
-  secLabel: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 10,
-    color: '#F6D27A',
-    textTransform: 'uppercase',
-    letterSpacing: 1.2,
-    marginHorizontal: 24,
-    marginTop: 24,
-    marginBottom: 10,
-  },
-  noteArea: {
-    marginHorizontal: 24,
-  },
-  noteInput: {
-    minHeight: 88,
-    padding: 16,
-    borderRadius: 14,
-    borderWidth: 1.5,
-    borderColor: '#E5E5E5',
-    backgroundColor: '#FFFFFF',
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 14,
-    color: '#0E0E0E',
-    lineHeight: 20,
-  },
-  noteHint: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 11,
-    color: '#CCC',
-    marginTop: 6,
-    paddingLeft: 2,
-  },
-  verdictHint: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 11,
-    color: '#8A8A8A',
-    marginHorizontal: 24,
-    marginTop: -2,
-    marginBottom: 10,
-    lineHeight: 15,
-  },
-  // Focus point validation list — dark brown cards matching the rest of
-  // the debrief surface.
-  fpList: {
-    marginHorizontal: 24,
-    gap: 8,
-  },
-  fpItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderRadius: 14,
-    backgroundColor: '#1F1810',
-    borderWidth: 1,
-    borderColor: 'rgba(240,194,74,0.28)',
-  },
-  fpItemSelected: {
-    backgroundColor: '#1F1810',
-    borderColor: 'rgba(76,175,80,0.45)',
-  },
-  fpCheck: {
-    width: 26,
-    height: 26,
-    borderRadius: 10,
-    borderWidth: 1.5,
-    borderColor: 'rgba(255,255,255,0.25)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  fpCheckSelected: {
-    borderColor: '#4AAF52',
-    backgroundColor: '#4AAF52',
-  },
-  fpName: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 14,
-    color: '#FFFFFF',
-  },
-  fpMeta: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 11,
-    color: 'rgba(255,255,255,0.55)',
-    marginTop: 2,
-  },
-
-  // Verdict rows (Good / Not yet + Covered / Not yet) — same dark card
-  // pattern as focus items, with translucent buttons that stay readable
-  // on the brown surface until the coach picks one.
-  verdictList: {
-    gap: 8,
-    marginHorizontal: 24,
-    marginBottom: 6,
-  },
-  verdictRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#1F1810',
-    borderRadius: 14,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    gap: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(240,194,74,0.28)',
-  },
-  verdictName: {
-    flex: 1,
-    fontFamily: Fonts.jakartaSemiBold,
-    fontSize: 13,
-    color: '#FFFFFF',
-    lineHeight: 18,
-  },
-  verdictMeta: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 9.5,
-    color: '#F6D27A',
-    letterSpacing: 0.8,
-    textTransform: 'uppercase',
-    marginTop: 4,
-  },
-  verdictBtns: {
-    flexDirection: 'row',
-    gap: 6,
-  },
-  verdictBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderRadius: 10,
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(255,255,255,0.14)',
-  },
-  verdictBtnGood: {
-    backgroundColor: '#4AAF52',
-    borderColor: '#4AAF52',
-  },
-  verdictBtnNotYet: {
-    backgroundColor: '#E8A838',
-    borderColor: '#E8A838',
-  },
-  verdictBtnText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 11.5,
-    letterSpacing: 0.2,
-  },
-
-  actions: {
-    marginHorizontal: 24,
-    marginTop: 24,
-    gap: 8,
-  },
-  btnDone: {
-    backgroundColor: '#4AAF52',
-    borderRadius: 16,
-    paddingVertical: 18,
-    alignItems: 'center',
-  },
-  btnDoneDisabled: {
-    backgroundColor: 'rgba(13,13,18,0.08)',
-  },
-  btnDoneText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 16,
-    color: '#FFFFFF',
-    letterSpacing: 1,
-    textTransform: 'uppercase',
-  },
-  btnDoneTextDisabled: {
-    color: 'rgba(13,13,18,0.40)',
-    letterSpacing: 0.5,
-    fontSize: 13,
-  },
-  btnLater: {
-    alignItems: 'center',
-    paddingVertical: 12,
-  },
-  btnLaterText: {
-    fontFamily: Fonts.jakartaSemiBold,
-    fontSize: 13,
-    color: '#999',
-  },
-  recBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginHorizontal: 24,
-    marginTop: 16,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    backgroundColor: 'rgba(232,168,56,0.08)',
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(232,168,56,0.2)',
-  },
-  recBannerText: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 12,
-    color: '#E8A838',
-    flex: 1,
-  },
-});
-
-// "Not yet" confirmation popup — same dark hero card pattern as
-// ApproveConfirmSheet so the gesture feels consistent across the app.
-const notYet = StyleSheet.create({
-  backdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    justifyContent: 'center',
-    paddingHorizontal: 28,
-  },
-  card: {
-    borderRadius: 22,
-    paddingHorizontal: 24,
-    paddingTop: 22,
-    paddingBottom: 14,
-    borderWidth: 1,
-    borderColor: 'rgba(240,194,74,0.28)',
-    overflow: 'hidden',
-  },
-  iconWrap: {
-    alignSelf: 'center',
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(240,194,74,0.14)',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(240,194,74,0.30)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 16,
-  },
-  title: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 20,
-    color: '#FFFFFF',
-    letterSpacing: -0.5,
-    textAlign: 'center',
-    marginBottom: 8,
-  },
-  body: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 13.5,
-    color: 'rgba(255,255,255,0.78)',
-    lineHeight: 20,
-    textAlign: 'center',
-    marginBottom: 22,
-  },
-  bodyAccent: {
-    fontFamily: Fonts.jakartaBold,
-    color: '#F6D27A',
-  },
-  primaryBtn: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#FFFFFF',
-    borderRadius: 14,
-    paddingVertical: 13,
-    marginBottom: 4,
-  },
-  primaryBtnText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 14,
-    color: '#0A0A0A',
-    letterSpacing: 0.2,
-  },
-  secondaryBtn: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 14,
-  },
-  secondaryBtnText: {
-    fontFamily: Fonts.jakartaSemiBold,
-    fontSize: 13.5,
-    color: 'rgba(255,255,255,0.65)',
-    letterSpacing: 0.1,
-  },
-});
-
-const cr = StyleSheet.create({
-  wrap: {
-    alignItems: 'center',
-    paddingHorizontal: 40,
-  },
-  iconWrap: {
-    width: 72,
-    height: 72,
-    borderRadius: 24,
-    backgroundColor: 'rgba(232,168,56,0.1)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 24,
-  },
-  title: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 24,
-    color: '#0E0E0E',
-    letterSpacing: -0.3,
-    marginBottom: 12,
-    textAlign: 'center',
-  },
-  sub: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 14,
-    color: '#999',
-    textAlign: 'center',
-    lineHeight: 22,
-  },
-});
-
-// ─── StartClass landing styles (the redesign) ───────────────────────────────
-const sc = StyleSheet.create({
-  topBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 18,
-    paddingTop: 6,
-    paddingBottom: 4,
-    height: 52,
-  },
-  iconBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: '#FFFFFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOpacity: 0.05,
-    shadowOffset: { width: 0, height: 1 },
-    shadowRadius: 4,
-    elevation: 1,
-  },
-  topLabel: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 11,
-    color: 'rgba(10,10,10,0.55)',
-    letterSpacing: 1.6,
-  },
-
-  scroll: {
-    paddingHorizontal: 22,
-    paddingBottom: 60,
-  },
-
-  heading: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 36,
-    color: '#0A0A0A',
-    letterSpacing: -1,
-    lineHeight: 40,
-    marginTop: 16,
-  },
-  subtitle: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 14,
-    color: 'rgba(10,10,10,0.55)',
-    lineHeight: 20,
-    marginTop: 8,
-    marginBottom: 26,
-  },
-
-  // Section eyebrow row: "PRIVATE WITH..." + "Sorted by readiness"
-  eyebrowRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 12,
-  },
-  eyebrowAccent: {
-    width: 16,
-    height: 1.5,
-    backgroundColor: '#E8B530',
-    borderRadius: 1,
-  },
-  eyebrowText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 11,
-    color: '#E8B530',
-    letterSpacing: 1.6,
-  },
-  eyebrowRule: {
-    flex: 1,
-    height: 1,
-    backgroundColor: 'rgba(10,10,10,0.09)',
-  },
-  eyebrowRight: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 11.5,
-    color: 'rgba(10,10,10,0.55)',
-    letterSpacing: 0.1,
-  },
-
-  // Per-student card
-  card: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    backgroundColor: 'rgba(255,255,255,0.85)',
-    borderRadius: 16,
-    paddingHorizontal: 14,
-    paddingVertical: 11,
-    borderWidth: 1,
-    borderColor: 'rgba(232,181,48,0.30)',
-    marginBottom: 10,
-  },
-  cardHead: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  avRing: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    borderWidth: 2,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#FFFFFF',
-  },
-  avPhoto: { width: 38, height: 38, borderRadius: 19 },
-  avFallback: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  avText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 15,
-  },
-  cardName: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 17,
-    color: '#0A0A0A',
-    letterSpacing: -0.3,
-  },
-  cardMeta: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 12.5,
-    color: 'rgba(10,10,10,0.5)',
-    marginTop: 2,
-  },
-  readyWrap: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    flexShrink: 0,
-  },
-  readyN: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 19,
-    color: '#0A0A0A',
-    letterSpacing: -0.5,
-  },
-  readyPct: {
-    fontFamily: Fonts.jakartaSemiBold,
-    fontSize: 11.5,
-    color: 'rgba(10,10,10,0.45)',
-  },
-  readyLbl: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 9.5,
-    color: 'rgba(10,10,10,0.55)',
-    letterSpacing: 1.4,
-    marginTop: 1,
-  },
-  right: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    flexShrink: 0,
-  },
-
-  // Solo / Couple toggle
-  modeToggle: {
-    flexDirection: 'row',
-    backgroundColor: 'rgba(255,255,255,0.55)',
-    borderRadius: 999,
-    padding: 5,
-    borderWidth: 1,
-    borderColor: 'rgba(10,10,10,0.06)',
-    marginTop: 2,
-    marginBottom: 20,
-  },
-  modeTab: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 11,
-    borderRadius: 999,
-  },
-  modeThumb: {
-    position: 'absolute',
-    top: 5,
-    bottom: 5,
-    left: 5,
-    borderRadius: 999,
-    backgroundColor: '#0A0A0A',
-    shadowColor: '#000',
-    shadowOpacity: 0.12,
-    shadowOffset: { width: 0, height: 3 },
-    shadowRadius: 8,
-    elevation: 2,
-  },
-
-  // Couple row — two dancers' avatars overlapping. Height matches the solo
-  // avatar (avRing, 46) so couple + solo cards are exactly the same height.
-  coupleAvWrap: {
-    height: 46,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  coupleAv: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    borderWidth: 2,
-    borderColor: '#FFFFFF',
-    backgroundColor: '#4E6A5C',
-    overflow: 'hidden',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  coupleAv2: {
-    marginLeft: -12,
-  },
-  coupleAvPhoto: {
-    width: '100%',
-    height: '100%',
-  },
-  coupleAvText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 13,
-    color: '#FFFFFF',
-  },
-
-  // Couple briefing hero — pair avatars
-  cbHeroPair: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  cbHeroAv: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    borderWidth: 2.5,
-    borderColor: '#FFFFFF',
-    backgroundColor: '#4E6A5C',
-    overflow: 'hidden',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  cbHeroAvImg: {
-    width: '100%',
-    height: '100%',
-  },
-  cbHeroAvTxt: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 17,
-    color: '#FFFFFF',
-  },
-  modeDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 3.5,
-  },
-  modeTabTxt: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 15,
-    color: 'rgba(10,10,10,0.5)',
-    letterSpacing: 0.2,
-  },
-  modeTabTxtOn: {
-    color: '#FFFFFF',
-  },
-
-  cardDivider: {
-    height: 1,
-    backgroundColor: 'rgba(10,10,10,0.08)',
-    marginTop: 12,
-    marginBottom: 8,
-  },
-
-  // Focus-point row inside the card
-  fpRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingVertical: 6,
-  },
-  fpBullet: {
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    borderWidth: 1.5,
-    borderColor: '#E8B530',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  fpBulletInner: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: '#E8B530',
-  },
-  fpName: {
-    flex: 1,
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 14.5,
-    color: '#0A0A0A',
-    letterSpacing: -0.2,
-  },
-  fpSince: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 13,
-    color: '#3D9F4E',
-    letterSpacing: -0.1,
-  },
-  fpSinceTarget: {
-    fontFamily: Fonts.jakartaSemiBold,
-    fontSize: 11,
-    color: 'rgba(61,159,78,0.5)',
-  },
-  fpStale: {
-    fontFamily: Fonts.jakartaSemiBold,
-    fontSize: 12.5,
-    color: '#E84545',
-    letterSpacing: 0.1,
-  },
-
-  loadingWrap: {
-    paddingVertical: 30,
-    alignItems: 'center',
-  },
-  emptyText: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 13,
-    color: 'rgba(10,10,10,0.55)',
-    textAlign: 'center',
-    paddingVertical: 22,
-  },
-
-  // OR divider
-  orRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginTop: 12,
-    marginBottom: 12,
-  },
-
-  // Group class card (dark)
-  cbTitle: { flex: 1, textAlign: 'center', fontFamily: Fonts.jakartaBold, fontSize: 17, color: '#0E0E0E' },
-  cbHero: { alignItems: 'center', paddingTop: 24, paddingHorizontal: 28 },
-  cbIcon: { width: 60, height: 60, borderRadius: 30, backgroundColor: 'rgba(46,70,112,0.12)', alignItems: 'center', justifyContent: 'center', marginBottom: 14 },
-  cbName: { fontFamily: Fonts.jakartaExtraBold, fontSize: 26, color: '#0E0E0E', letterSpacing: -0.6 },
-  cbSub: { fontFamily: Fonts.jakartaSemiBold, fontSize: 15, color: '#444', marginTop: 6 },
-  cbStyles: { fontFamily: Fonts.jakartaRegular, fontSize: 13, color: '#8A8A8A', marginTop: 4 },
-  cbHint: { fontFamily: Fonts.jakartaRegular, fontSize: 13.5, color: '#6B6B6B', textAlign: 'center', lineHeight: 19, marginTop: 18 },
-  groupCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-    backgroundColor: '#0F0C0A',
-    borderRadius: 18,
-    paddingHorizontal: 14,
-    paddingVertical: 14,
-    borderWidth: 1,
-    borderColor: 'rgba(232,181,48,0.40)',
-  },
-  groupIconBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
-    backgroundColor: 'rgba(232,181,48,0.16)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  groupTitle: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 17,
-    color: '#FFFFFF',
-    letterSpacing: -0.3,
-  },
-  groupSub: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 12.5,
-    color: 'rgba(255,255,255,0.55)',
-    marginTop: 2,
-  },
-  groupAvatars: {
-    flexDirection: 'row',
-    paddingLeft: 10,
-  },
-  groupAv: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1.5,
-    borderColor: '#0F0C0A',
-    marginLeft: -8,
-  },
-  groupAvPhoto: {
-    width: 25,
-    height: 25,
-    borderRadius: 12.5,
-  },
-  groupAvText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 11,
-    color: '#FFFFFF',
-  },
+  go: { marginTop: 18, height: 58, borderRadius: 999, backgroundColor: L.GOLD, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 11 },
+  goT: { fontFamily: Fonts.bold, fontSize: 19, letterSpacing: -0.4, color: L.INK },
 });

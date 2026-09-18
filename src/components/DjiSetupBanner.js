@@ -593,7 +593,7 @@ function renderStep(step, foundCount) {
                   Plug in after each class and new ones sync automatically.
                 </>
               ) : (
-                <>Plug your mic in after each class to sync your recordings — automatically.</>
+                <>Plug your mic in after each lesson to sync your recordings — automatically.</>
               )}
             </Text>
           </View>
@@ -731,7 +731,7 @@ const s = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  pillLbl: { fontFamily: Fonts.jakartaExtraBold, fontSize: 10, letterSpacing: 1.4, color: '#fff' },
+  pillLbl: { fontFamily: Fonts.semiBold, fontSize: 10, letterSpacing: 1.4, color: '#fff' },
 
   // ─── Full-screen flow ───────────────────────────────────────────────
   stage: { flex: 1, backgroundColor: STAGE },
@@ -758,7 +758,7 @@ const s = StyleSheet.create({
   },
   progressTrack: { flex: 1, height: 2, borderRadius: 2, backgroundColor: 'rgba(255,255,255,0.06)', overflow: 'hidden' },
   progressFill: { height: '100%', borderRadius: 2, backgroundColor: GOLD_400 },
-  stepCount: { fontFamily: Fonts.jakartaExtraBold, fontSize: 9, letterSpacing: 2, color: 'rgba(255,255,255,0.4)' },
+  stepCount: { fontFamily: Fonts.semiBold, fontSize: 9, letterSpacing: 2, color: 'rgba(255,255,255,0.4)' },
   stepCountDone: { color: GOLD_300 },
 
   hero: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 22 },
@@ -767,7 +767,7 @@ const s = StyleSheet.create({
   // Copy
   copy: { alignItems: 'center', maxWidth: 300, marginTop: 30 },
   eyebrow: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 9.5,
     letterSpacing: 3,
     color: 'rgba(232,181,48,0.85)',
@@ -775,17 +775,17 @@ const s = StyleSheet.create({
     textAlign: 'center',
   },
   eyebrowErr: { color: RED_HI },
-  h2: { fontFamily: Fonts.ttDemiBold, fontSize: 30, color: '#fff', letterSpacing: -0.8, textAlign: 'center', marginBottom: 12 },
+  h2: { fontFamily: Fonts.semiBold, fontSize: 30, color: '#fff', letterSpacing: -0.8, textAlign: 'center', marginBottom: 12 },
   p: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 14,
     color: 'rgba(255,255,255,0.5)',
     textAlign: 'center',
     lineHeight: 21,
   },
-  strong: { fontFamily: Fonts.jakartaMedium, color: 'rgba(255,255,255,0.9)' },
+  strong: { fontFamily: Fonts.medium, color: 'rgba(255,255,255,0.9)' },
   tinyNote: { flexDirection: 'row', alignItems: 'center', gap: 7, marginTop: 16 },
-  tinyNoteTxt: { fontFamily: Fonts.jakartaExtraBold, fontSize: 10, letterSpacing: 1, color: 'rgba(255,255,255,0.55)' },
+  tinyNoteTxt: { fontFamily: Fonts.semiBold, fontSize: 10, letterSpacing: 1, color: 'rgba(255,255,255,0.55)' },
 
   // Mic hero
   micStage: { width: 300, height: 300, alignItems: 'center', justifyContent: 'center', position: 'relative' },
@@ -871,7 +871,7 @@ const s = StyleSheet.create({
     overflow: 'hidden',
   },
   introLogoImg: { width: '70%', height: '70%' },
-  introLabel: { fontFamily: Fonts.jakartaExtraBold, fontSize: 9, letterSpacing: 1.8, color: 'rgba(255,255,255,0.55)' },
+  introLabel: { fontFamily: Fonts.semiBold, fontSize: 9, letterSpacing: 1.8, color: 'rgba(255,255,255,0.55)' },
   introFlow: { flex: 1, height: 40, justifyContent: 'center', marginTop: -18, position: 'relative' },
   introDash: { height: 1.5, backgroundColor: 'rgba(232,181,48,0.3)', borderRadius: 1 },
   introFile: {
@@ -890,11 +890,11 @@ const s = StyleSheet.create({
   // Files step
   tapGuide: { width: '100%', maxWidth: 300, gap: 15, marginTop: 20 },
   tapStep: { gap: 8 },
-  tapCap: { fontFamily: Fonts.jakartaMedium, fontSize: 13, color: 'rgba(255,255,255,0.7)', lineHeight: 19 },
-  tapN: { fontFamily: Fonts.jakartaExtraBold, color: GOLD_300 },
-  tapEm: { fontFamily: Fonts.jakartaExtraBold, color: '#fff' },
+  tapCap: { fontFamily: Fonts.medium, fontSize: 13, color: 'rgba(255,255,255,0.7)', lineHeight: 19 },
+  tapN: { fontFamily: Fonts.semiBold, color: GOLD_300 },
+  tapEm: { fontFamily: Fonts.semiBold, color: '#fff' },
   filesHint: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 9.5,
     letterSpacing: 0.8,
     color: 'rgba(255,255,255,0.4)',
@@ -914,10 +914,10 @@ const s = StyleSheet.create({
     paddingHorizontal: 12,
     gap: 8,
   },
-  navBack: { fontFamily: Fonts.jakartaMedium, fontSize: 12, color: '#007AFF' },
-  navTitle: { flex: 1, textAlign: 'center', fontFamily: Fonts.jakartaExtraBold, fontSize: 12, color: '#000' },
+  navBack: { fontFamily: Fonts.medium, fontSize: 12, color: '#007AFF' },
+  navTitle: { flex: 1, textAlign: 'center', fontFamily: Fonts.semiBold, fontSize: 12, color: '#000' },
   navOpen: { backgroundColor: '#007AFF', borderRadius: 13, paddingVertical: 4, paddingHorizontal: 13 },
-  navOpenTxt: { fontFamily: Fonts.jakartaExtraBold, fontSize: 11, letterSpacing: 0.4, color: '#fff' },
+  navOpenTxt: { fontFamily: Fonts.semiBold, fontSize: 11, letterSpacing: 0.4, color: '#fff' },
 
   // Success
   doneHero: { width: 240, height: 240, alignItems: 'center', justifyContent: 'center' },
@@ -945,7 +945,7 @@ const s = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  backTxt: { fontFamily: Fonts.jakartaExtraBold, fontSize: 11, letterSpacing: 1.4, color: 'rgba(255,255,255,0.55)' },
+  backTxt: { fontFamily: Fonts.semiBold, fontSize: 11, letterSpacing: 1.4, color: 'rgba(255,255,255,0.55)' },
   primaryWrap: { flex: 1 },
   primary: {
     flexDirection: 'row',
@@ -956,5 +956,5 @@ const s = StyleSheet.create({
     borderRadius: 14,
   },
   primaryLight: { backgroundColor: '#fff' },
-  primaryTxt: { fontFamily: Fonts.jakartaExtraBold, fontSize: 13, letterSpacing: 1 },
+  primaryTxt: { fontFamily: Fonts.semiBold, fontSize: 13, letterSpacing: 1 },
 });

@@ -193,14 +193,14 @@ const s = StyleSheet.create({
     shadowColor: '#E85555', shadowOpacity: 0.9, shadowRadius: 5, shadowOffset: { width: 0, height: 0 },
   },
   eyebrow: {
-    fontFamily: Fonts.travelsMedium,
+    fontFamily: Fonts.medium,
     fontSize: 10,
     color: '#F6A0A0',
     letterSpacing: 1.6,
     textTransform: 'uppercase',
   },
   title: {
-    fontFamily: Fonts.ttDemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 21,
     color: '#FFFFFF',
     letterSpacing: -0.4,
@@ -208,12 +208,12 @@ const s = StyleSheet.create({
     marginBottom: 7,
   },
   bodyText: {
-    fontFamily: Fonts.travelsRegular,
+    fontFamily: Fonts.regular,
     fontSize: 12.5,
     lineHeight: 17.5,
     color: 'rgba(255,255,255,0.55)',
   },
-  bodyStrong: { color: 'rgba(255,255,255,0.9)', fontFamily: Fonts.travelsMedium },
+  bodyStrong: { color: 'rgba(255,255,255,0.9)', fontFamily: Fonts.medium },
   actions: {
     flexDirection: 'row',
     gap: 9,
@@ -227,7 +227,7 @@ const s = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   cancelText: {
-    fontFamily: Fonts.travelsMedium,
+    fontFamily: Fonts.medium,
     fontSize: 11,
     color: 'rgba(255,255,255,0.55)',
     letterSpacing: 1,
@@ -239,7 +239,7 @@ const s = StyleSheet.create({
     paddingVertical: 15,
   },
   primaryText: {
-    fontFamily: Fonts.ttBold,
+    fontFamily: Fonts.bold,
     fontSize: 12.5,
     color: '#0A0A0A',
     letterSpacing: 0.6,

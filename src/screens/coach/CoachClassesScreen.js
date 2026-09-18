@@ -1,649 +1,584 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  SectionList,
-  ScrollView,
-  TextInput,
-  KeyboardAvoidingView,
-  Platform,
-  Dimensions,
-} from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Pressable, Animated, useWindowDimensions } from 'react-native';
 import { Image } from 'expo-image';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { LinearGradient } from 'expo-linear-gradient';
+import MaskedView from '@react-native-masked-view/masked-view';
 import { useFocusEffect } from '@react-navigation/native';
-import { Colors, Fonts, Spacing } from '../../theme';
-import CoachNotesSkeleton from '../../components/CoachNotesSkeleton';
+import { Fonts, Spacing } from '../../theme';
 import { useCoachData } from '../../context/CoachDataContext';
+import { useCoachTabView } from '../../context/CoachTabView';
 import { getMyClasses } from '../../storage/coachStorage';
+import { categoryFromDances } from '../../utils/danceCategory';
+import { useTabBarSpace } from '../../components/CustomTabBar';
+import PullLogo from '../../components/PullLogo';
+import usePullDown, { PULL_REST } from '../../components/usePullDown';
+import useSlideSwap from '../../components/useSlideSwap';
+import { Pulse, Bone, FadeIn } from '../../components/GroupSwitchSkeleton';
 
-const SCREEN_W = Dimensions.get('window').width;
+// ─── Coach ▸ Class (docs/design/coach-classes.html) ─────────────────────────
+// Every class logged, month by month, filtered All / Group / Private. The
+// header's calendar button turns it into a month grid with the day's classes
+// under it; its notes button shows the coach's notes. "Classes ▾" narrows it
+// all to a style for a coach who teaches both. + starts a class (or a note).
 
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-const MONTH_FULL = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const INK = '#0A0A0A';
+const INK_62 = 'rgba(10,10,10,0.62)';
+const LINE = 'rgba(10,10,10,0.12)';
+const PAGE = '#F2F0EB';
+const GOLD = '#E8B530';
+const GOLD_INK = '#8A6414';
+const NAVY = '#22314D';
+const EDGE_FADE = 14;
 
-function getDateGroup(isoDate) {
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const d = new Date(isoDate);
-  const itemDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  const diffDays = Math.round((today - itemDay) / 86400000);
-  if (diffDays === 0) return 'Today';
-  if (diffDays === 1) return 'Yesterday';
-  if (diffDays < 7) return DAY_NAMES[d.getDay()];
-  if (diffDays < 30) return 'Last 30 days';
-  if (d.getFullYear() === now.getFullYear()) return MONTH_FULL[d.getMonth()];
-  return String(d.getFullYear());
+const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const DOW = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+const KINDS = [['all', 'All'], ['group', 'Group'], ['private', 'Private']];
+
+// ─── Class facts ─────────────────────────────────────────────────────────────
+
+const isGroup = (c) => c.lesson_type === 'group' || c.lesson_type === 'public';
+const kindLabel = (c) => (isGroup(c) ? 'Group' : c.lesson_type === 'couple' ? 'Couple' : 'Private');
+const isProcessing = (c) => ['processing', 'pending', 'extracted'].includes(c.status);
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+function titleOf(c) {
+  return c.title || c.ai_primary_focus || (isProcessing(c) ? 'Processing lesson…' : 'Untitled lesson');
 }
 
-function relativeDate(iso) {
-  const ts = new Date(iso).getTime();
-  const days = Math.floor((Date.now() - ts) / 86400000);
-  if (days === 0) return 'Today';
-  if (days === 1) return 'Yesterday';
-  if (days < 7) return `${days} days ago`;
-  const d = new Date(ts);
-  return `${MONTHS[d.getMonth()]} ${d.getDate()}`;
-}
-
-function groupByDate(items, dateField = 'updated_at') {
-  const map = new Map();
-  for (const item of items) {
-    const key = getDateGroup(item[dateField] || item.created_at);
-    if (!map.has(key)) map.set(key, []);
-    map.get(key).push(item);
+// `dance` is "Rumba", "Cha Cha, Rumba" or a JSON list.
+function dancesOf(c) {
+  const raw = (c.dance || '').trim();
+  if (!raw) return [];
+  if (raw.startsWith('[')) {
+    try { return JSON.parse(raw).map((d) => String(d).trim()).filter(Boolean); } catch { return []; }
   }
-  return Array.from(map.entries()).map(([title, data]) => ({ title, data }));
+  return raw.split(',').map((d) => d.trim()).filter(Boolean);
 }
 
-// ─── Class card ──────────────────────────────────────────────────────────────
+// Latin or Ballroom: the dances when the class names them, otherwise the one
+// style its students are coached in here. null (unknown) shows under both.
+function styleOf(c, stylesByStudent) {
+  const fromDances = categoryFromDances(dancesOf(c));
+  if (fromDances) return fromDances;
+  const styles = new Set();
+  for (const s of c.students || []) for (const st of stylesByStudent[s.id] || []) styles.add(st);
+  return styles.size === 1 ? [...styles][0] : null;
+}
 
-function ClassCard({ item, onPress }) {
-  const isPrivate = item.lesson_type === 'private' || item.lesson_type == null;
-  const accent = isPrivate ? '#2E4670' : '#E8B530';
-  const accentBg = isPrivate ? 'rgba(46,70,112,0.12)' : 'rgba(232,181,48,0.16)';
-  const accentBorder = isPrivate ? 'rgba(46,70,112,0.30)' : 'rgba(232,181,48,0.30)';
-  const accentText = isPrivate ? '#2E4670' : '#7A5A10';
+const sameDay = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 
-  const title =
-    item.title ||
-    item.ai_primary_focus ||
-    (item.practice_point_1 || '').split(' ').slice(0, 6).join(' ') ||
-    'Untitled class';
+function initialsOf(name) {
+  const w = (name || '').trim().split(/\s+/).filter(Boolean);
+  return ((w[0]?.[0] || '?') + (w[1]?.[0] || '')).toUpperCase();
+}
 
-  const isProcessing =
-    item.status === 'processing' || item.status === 'pending' || item.status === 'extracted';
+// ─── Pieces ──────────────────────────────────────────────────────────────────
 
+function Who({ people, goldIds }) {
+  if (!people.length) return null;
+  const shown = people.slice(0, 2);
+  const extra = people.length - shown.length;
   return (
-    <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.78}>
-      <View style={[styles.cardAccent, { backgroundColor: accent }]} />
-      <View style={styles.cardBody}>
-        <View style={styles.cardHeader}>
-          <Text style={styles.cardDate}>{relativeDate(item.created_at)}</Text>
-          <View style={[styles.badge, { backgroundColor: accentBg, borderColor: accentBorder }]}>
-            <Text style={[styles.badgeText, { color: accentText }]}>
-              {isPrivate ? 'Private' : 'Group'}
-            </Text>
-          </View>
+    <View style={st.who}>
+      {shown.map((p) => (
+        <View key={p.id} style={st.whoAv}>
+          {p.photoUrl ? (
+            <Image source={{ uri: p.photoUrl }} style={StyleSheet.absoluteFill} />
+          ) : goldIds.has(p.id) ? (
+            <LinearGradient colors={['#F6D27A', GOLD]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={st.whoFill}>
+              <Text style={[st.whoT, { color: INK }]}>{initialsOf(p.name)}</Text>
+            </LinearGradient>
+          ) : (
+            <Text style={st.whoT}>{initialsOf(p.name)}</Text>
+          )}
         </View>
-        <Text style={styles.cardTitle} numberOfLines={2}>
-          {title}
-        </Text>
-        {item.class_summary ? (
-          <Text style={styles.cardPreview} numberOfLines={2}>
-            {item.class_summary}
-          </Text>
-        ) : isProcessing ? (
-          <Text style={styles.cardPending}>Processing class…</Text>
-        ) : null}
-        {isPrivate && item.student?.name ? (
-          <View style={styles.studentRow}>
-            {item.student.photoUrl ? (
-              <Image source={{ uri: item.student.photoUrl }} style={styles.studentAvatar} />
-            ) : (
-              <View style={[styles.studentAvatar, styles.studentAvatarFallback]}>
-                <Text style={styles.studentAvatarText}>
-                  {item.student.name?.[0]?.toUpperCase() || 'S'}
-                </Text>
-              </View>
-            )}
-            <Text style={styles.studentName} numberOfLines={1}>
-              {item.student.name}
-            </Text>
-          </View>
-        ) : null}
-      </View>
-    </TouchableOpacity>
-  );
-}
-
-// ─── Note card ───────────────────────────────────────────────────────────────
-
-function NoteCard({ item, onPress }) {
-  const linked = item.linkedStudent;
-  const linkedClass = item.linkedClass;
-  const hasVideo = item.video_clips?.length > 0;
-
-  return (
-    <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.75}>
-      <View style={[styles.cardAccent, { backgroundColor: linked ? Colors.orange : '#5788E6' }]} />
-      <View style={styles.cardBody}>
-        <View style={styles.cardHeader}>
-          <Text style={styles.cardDate}>{relativeDate(item.updated_at || item.created_at)}</Text>
-          <View style={styles.badgeRow}>
-            {hasVideo && (
-              <View style={[styles.badge, { backgroundColor: 'rgba(87,136,230,0.12)', borderColor: 'rgba(87,136,230,0.30)' }]}>
-                <Text style={[styles.badgeText, { color: '#3F62A8' }]}>
-                  {item.video_clips.length} clip{item.video_clips.length > 1 ? 's' : ''}
-                </Text>
-              </View>
-            )}
-            {linkedClass && (
-              <View style={[styles.badge, { backgroundColor: 'rgba(76,175,80,0.12)', borderColor: 'rgba(76,175,80,0.30)' }]}>
-                <Text style={[styles.badgeText, { color: '#2F6B33' }]}>Class</Text>
-              </View>
-            )}
-            {linked && (
-              <View style={styles.linkedChip}>
-                {linked.photoUrl ? (
-                  <Image source={{ uri: linked.photoUrl }} style={styles.linkedAvatar} />
-                ) : (
-                  <View style={[styles.linkedAvatar, styles.linkedAvatarFallback]}>
-                    <Text style={styles.linkedAvatarText}>
-                      {linked.name?.[0]?.toUpperCase() || 'S'}
-                    </Text>
-                  </View>
-                )}
-                <Text style={styles.linkedChipText} numberOfLines={1}>
-                  {linked.name}
-                </Text>
-              </View>
-            )}
-          </View>
+      ))}
+      {extra > 0 && (
+        <View style={[st.whoAv, st.whoMore]}>
+          <Text style={[st.whoT, { fontSize: 8 }]}>+{extra}</Text>
         </View>
-        {item.title ? (
-          <Text style={styles.cardTitle} numberOfLines={1}>{item.title}</Text>
-        ) : (
-          <Text style={[styles.cardTitle, { color: Colors.secondary, fontFamily: Fonts.jakartaRegular }]}>
-            Untitled
-          </Text>
-        )}
-        {item.content ? (
-          <Text style={styles.cardPreview} numberOfLines={2}>{item.content}</Text>
-        ) : null}
-      </View>
-    </TouchableOpacity>
-  );
-}
-
-// ─── Empty states ────────────────────────────────────────────────────────────
-
-function EmptyState({ icon, title, subtitle }) {
-  return (
-    <View style={styles.empty}>
-      <View style={styles.emptyIconWrap}>
-        <Ionicons name={icon} size={28} color="#ACADB9" />
-      </View>
-      <Text style={styles.emptyTitle}>{title}</Text>
-      <Text style={styles.emptySub}>{subtitle}</Text>
+      )}
     </View>
   );
 }
 
-// ─── Main screen ─────────────────────────────────────────────────────────────
+function ClassRow({ c, first, goldIds, onPress }) {
+  const d = new Date(c.created_at);
+  const priv = !isGroup(c);
+  const n = c.students?.length || 0;
+  const meta = [
+    isProcessing(c) ? 'Processing' : null,
+    c.durationMin != null ? `${c.durationMin} min` : null,
+    n ? `${n} student${n === 1 ? '' : 's'}` : null,
+  ].filter(Boolean);
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [st.cl, !first && st.clLine, pressed && { backgroundColor: '#FBFAF7' }]}
+      accessibilityRole="button"
+      accessibilityLabel={`${kindLabel(c)} lesson, ${MONTHS[d.getMonth()]} ${d.getDate()}: ${titleOf(c)}`}
+    >
+      <View style={[st.dt, priv && st.dtPriv]}>
+        <Text style={[st.dtD, priv && { color: NAVY }]}>{d.getDate()}</Text>
+        <Text style={st.dtM}>{MONTHS[d.getMonth()].slice(0, 3)}</Text>
+      </View>
+      <View style={st.bd}>
+        <Text style={st.clT} numberOfLines={2}>{titleOf(c)}</Text>
+        <View style={st.mt}>
+          <Text style={[st.tp, priv && { color: NAVY }]}>{kindLabel(c)}</Text>
+          {meta.map((m) => (
+            <React.Fragment key={m}>
+              <View style={st.mtDot} />
+              <Text style={st.mtT} numberOfLines={1}>{m}</Text>
+            </React.Fragment>
+          ))}
+        </View>
+      </View>
+      <Who people={c.students || []} goldIds={goldIds} />
+    </Pressable>
+  );
+}
+
+function Rows({ list, goldIds, onOpen }) {
+  return (
+    <View style={st.rows}>
+      {list.map((c, i) => <ClassRow key={c.id} c={c} first={i === 0} goldIds={goldIds} onPress={() => onOpen(c)} />)}
+    </View>
+  );
+}
+
+function NoteCard({ note, onPress }) {
+  const d = new Date(note.updated_at || note.created_at);
+  const now = new Date();
+  const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+  const when = sameDay(d, now) ? 'Today' : sameDay(d, yesterday) ? 'Yesterday'
+    : `${DAYS[d.getDay()]} ${d.getDate()} ${MONTHS[d.getMonth()].slice(0, 3)}${d.getFullYear() !== now.getFullYear() ? ` ${d.getFullYear()}` : ''}`;
+  const clips = note.video_clips?.length || 0;
+  const link = [note.linkedStudent?.name, note.linkedClass?.title].filter(Boolean).join(' · ');
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [st.note, pressed && { borderColor: 'rgba(10,10,10,0.24)' }]}
+      accessibilityRole="button"
+    >
+      <Text style={st.noteWhen}>{when}{clips ? ` · ${clips} clip${clips === 1 ? '' : 's'}` : ''}</Text>
+      <Text style={[st.noteT, !note.title && { color: 'rgba(10,10,10,0.4)' }]} numberOfLines={2}>{note.title || 'Untitled note'}</Text>
+      {!!note.content && <Text style={st.noteB} numberOfLines={2}>{note.content}</Text>}
+      {!!link && (
+        <View style={st.noteLink}>
+          <Ionicons name="link" size={12} color="rgba(10,10,10,0.4)" />
+          <Text style={st.noteLinkT} numberOfLines={1}>{link}</Text>
+        </View>
+      )}
+    </Pressable>
+  );
+}
+
+// "This week", "Earlier in September", "August", "December 2025".
+function noteGroupOf(iso) {
+  const d = new Date(iso);
+  const now = new Date();
+  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - ((now.getDay() + 6) % 7));
+  if (d >= monday) return 'This week';
+  if (d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth()) return `Earlier in ${MONTHS[d.getMonth()]}`;
+  return d.getFullYear() === now.getFullYear() ? MONTHS[d.getMonth()] : `${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
+}
+
+function Empty({ text }) {
+  return <Text style={st.empty}>{text}</Text>;
+}
+
+function ListBones() {
+  return (
+    <View>
+      {[3, 2].map((count, s) => (
+        <View key={s}>
+          <Pulse style={st.mk}>
+            <Bone w={70} h={9} r={4} />
+            <Bone w={52} h={9} r={4} />
+          </Pulse>
+          <View style={st.rows}>
+            {Array.from({ length: count }).map((_, i) => (
+              <View key={i} style={[st.cl, i > 0 && st.clLine]}>
+                <Pulse style={st.boneRow}>
+                  <Bone w={44} h={44} r={13} />
+                  <View style={{ flex: 1, gap: 8 }}>
+                    <Bone w={i % 2 ? '58%' : '76%'} h={12} r={4} />
+                    <Bone w="50%" h={9} r={4} />
+                  </View>
+                  <Bone w={23} h={23} r={11.5} />
+                </Pulse>
+              </View>
+            ))}
+          </View>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+// ─── Screen ──────────────────────────────────────────────────────────────────
 
 export default function CoachClassesScreen({ navigation }) {
-  const { notes, students, initialLoading: notesLoading, refresh } = useCoachData();
-  const [activeTab, setActiveTab] = useState('CLASS');
+  const { notes, students, refresh } = useCoachData();
+  const { classesView: view, classesStyle: style } = useCoachTabView();
+  const tabBarSpace = useTabBarSpace();
+  const { width } = useWindowDimensions();
+
   const [classes, setClasses] = useState([]);
-  const [classesLoading, setClassesLoading] = useState(true);
-  const [search, setSearch] = useState('');
-  const [refreshing, setRefreshing] = useState(false);
-  const scrollRef = useRef(null);
+  const [loaded, setLoaded] = useState(false);
+  const [kind, setKind] = useState('all');
 
-  useFocusEffect(
-    useCallback(() => {
-      let active = true;
-      async function load() {
-        try {
-          const list = await getMyClasses();
-          if (active) setClasses(list);
-        } catch {
-          if (active) setClasses([]);
-        }
-        if (active) setClassesLoading(false);
+  // Fresh on every visit: a class recorded elsewhere shows up when the coach comes back.
+  const load = useCallback(async () => {
+    try { setClasses(await getMyClasses()); } catch {}
+    setLoaded(true);
+  }, []);
+  useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  const pull = usePullDown(() => Promise.all([load(), refresh()]));
+
+  // The style each student is coached in here, and who's on track (gold initials).
+  const stylesByStudent = useMemo(() => Object.fromEntries(students.map((s) => [s.id, s.coachStyles || []])), [students]);
+  const goldIds = useMemo(() => new Set(students.filter((s) => s.status === 'on_track').map((s) => s.id)), [students]);
+
+  const inStyle = useMemo(() => (
+    style === 'all' ? classes : classes.filter((c) => {
+      const cat = styleOf(c, stylesByStudent);
+      return cat == null || cat === style;
+    })
+  ), [classes, style, stylesByStudent]);
+  const filtered = useMemo(() => (
+    kind === 'all' ? inStyle : inStyle.filter((c) => (kind === 'group') === isGroup(c))
+  ), [inStyle, kind]);
+
+  // The calendar and the notes take the list's place at once, as in the
+  // student's Lessons; All / Group / Private slide like the other tabs' toggles.
+  const shownView = view;
+  const [shownKind, kindSlide] = useSlideSwap(kind, KINDS.map(([k]) => k));
+  const shownList = shownKind === kind ? filtered
+    : (shownKind === 'all' ? inStyle : inStyle.filter((c) => (shownKind === 'group') === isGroup(c)));
+
+  // ── List: month by month ──
+  const months = useMemo(() => {
+    const out = [];
+    const thisYear = new Date().getFullYear();
+    for (const c of shownList) {
+      const d = new Date(c.created_at);
+      const key = `${d.getFullYear()}-${d.getMonth()}`;
+      if (!out.length || out[out.length - 1].key !== key) {
+        out.push({ key, label: MONTHS[d.getMonth()] + (d.getFullYear() !== thisYear ? ` ${d.getFullYear()}` : ''), list: [] });
       }
-      load();
-      return () => {
-        active = false;
-      };
-    }, []),
-  );
-
-  function switchTab(tab) {
-    setActiveTab(tab);
-    scrollRef.current?.scrollTo({ x: tab === 'NOTES' ? SCREEN_W : 0, animated: true });
-  }
-
-  async function handleRefresh() {
-    setRefreshing(true);
-    try {
-      await Promise.all([
-        getMyClasses().then(setClasses).catch(() => {}),
-        refresh(),
-      ]);
-    } catch {}
-    setRefreshing(false);
-  }
-
-  function handleAdd() {
-    if (activeTab === 'NOTES') {
-      navigation.navigate('CoachNoteDetail', {});
-    } else {
-      navigation.navigate('StartClass');
+      out[out.length - 1].list.push(c);
     }
-  }
+    return out;
+  }, [shownList]);
 
-  const q = search.trim().toLowerCase();
-  const filteredClasses = q
-    ? classes.filter(c =>
-        (c.title || '').toLowerCase().includes(q) ||
-        (c.ai_primary_focus || '').toLowerCase().includes(q) ||
-        (c.class_summary || '').toLowerCase().includes(q) ||
-        (c.dance || '').toLowerCase().includes(q) ||
-        (c.student?.name || '').toLowerCase().includes(q),
-      )
-    : classes;
-  const filteredNotes = q
-    ? notes.filter(n =>
-        (n.title || '').toLowerCase().includes(q) ||
-        (n.content || '').toLowerCase().includes(q) ||
-        (n.linkedStudent?.name || '').toLowerCase().includes(q),
-      )
-    : notes;
+  // ── Calendar ──
+  const now = new Date();
+  const [month, setMonth] = useState({ y: now.getFullYear(), m: now.getMonth() });
+  const [day, setDay] = useState(null);
+  const earliest = useMemo(() => {
+    const last = classes[classes.length - 1]; // newest first
+    const d = last ? new Date(last.created_at) : now;
+    return { y: d.getFullYear(), m: d.getMonth() };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [classes]);
+  const monthIndex = (x) => x.y * 12 + x.m;
+  const canPrev = monthIndex(month) > monthIndex(earliest);
+  const canNext = monthIndex(month) < monthIndex({ y: now.getFullYear(), m: now.getMonth() });
+  const stepMonth = (by) => {
+    const i = monthIndex(month) + by;
+    setMonth({ y: Math.floor(i / 12), m: i % 12 });
+    setDay(null);
+  };
+  const monthClasses = useMemo(() => filtered.filter((c) => {
+    const d = new Date(c.created_at);
+    return d.getFullYear() === month.y && d.getMonth() === month.m;
+  }), [filtered, month]);
+  const byDay = useMemo(() => {
+    const map = {};
+    for (const c of monthClasses) {
+      const n = new Date(c.created_at).getDate();
+      const e = (map[n] ||= { group: false, private: false });
+      e[isGroup(c) ? 'group' : 'private'] = true;
+    }
+    return map;
+  }, [monthClasses]);
+  const dayClasses = day == null ? monthClasses : monthClasses.filter((c) => new Date(c.created_at).getDate() === day);
+  const cellW = Math.floor((width - Spacing.side * 2 - 6 * 4) / 7);
+  const lead = (new Date(month.y, month.m, 1).getDay() + 6) % 7;
+  const daysIn = new Date(month.y, month.m + 1, 0).getDate();
+  const isThisMonth = month.y === now.getFullYear() && month.m === now.getMonth();
 
-  const groupedClasses = groupByDate(filteredClasses, 'created_at');
-  const groupedNotes = groupByDate(filteredNotes, 'updated_at');
+  // ── Notes ──
+  const noteGroups = useMemo(() => {
+    const out = [];
+    for (const n of notes) {
+      const label = noteGroupOf(n.updated_at || n.created_at);
+      if (!out.length || out[out.length - 1].label !== label) out.push({ label, list: [] });
+      out[out.length - 1].list.push(n);
+    }
+    return out;
+  }, [notes]);
 
-  const linkedNotesCount = notes.filter(n => n.linkedClass || n.linkedStudent).length;
+  // Back to the top whenever what's listed changes.
+  const scrollRef = useRef(null);
+  useEffect(() => { scrollRef.current?.scrollTo({ y: 0, animated: false }); }, [shownView, shownKind, style, month, day]);
 
-  // Show skeleton if EITHER source is still loading — otherwise the screen
-  // flashes a half-empty state (e.g. notes done, classes still fetching).
-  if (notesLoading || classesLoading) return <CoachNotesSkeleton />;
+  const openClass = (c) => navigation.navigate('CoachClassDetail', { classId: c.id });
+  const onAdd = () => (view === 'notes' ? navigation.navigate('CoachNoteDetail', {}) : navigation.navigate('StartClass'));
+
+  const count = shownView === 'notes' ? `${notes.length} note${notes.length === 1 ? '' : 's'}`
+    : shownView === 'cal' ? `${plural(monthClasses.length, 'lesson')} in ${MONTHS[month.m]}`
+    : plural(filtered.length, 'lesson');
 
   return (
-    <View style={styles.safe}>
-      {/* Top tab toggle (Class / Notes) */}
-      <View style={styles.tabRow}>
-        {['CLASS', 'NOTES'].map(tab => (
-          <TouchableOpacity
-            key={tab}
-            style={[styles.tabPill, activeTab === tab && styles.tabPillActive]}
-            onPress={() => switchTab(tab)}
-            activeOpacity={0.7}
-          >
-            <Text style={[styles.tabPillText, activeTab === tab && styles.tabPillTextActive]}>
-              {tab}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-
-      {/* Horizontal pager between Class and Notes */}
-      <ScrollView
-        ref={scrollRef}
-        horizontal
-        pagingEnabled
-        showsHorizontalScrollIndicator={false}
-        scrollEventThrottle={16}
-        onMomentumScrollEnd={(e) => {
-          const page = Math.round(e.nativeEvent.contentOffset.x / SCREEN_W);
-          setActiveTab(page === 0 ? 'CLASS' : 'NOTES');
-        }}
-        style={{ flex: 1 }}
-      >
-        {/* CLASS page */}
-        <View style={{ width: SCREEN_W, flex: 1 }}>
-          <SectionList
-            sections={groupedClasses}
-            keyExtractor={(item) => item.id}
-            style={{ flex: 1 }}
-            contentContainerStyle={styles.listContent}
-            renderSectionHeader={({ section: { title } }) => (
-              <View style={styles.sectionHeader}>
-                <Text style={[styles.sectionHeaderText, { color: '#E8B530' }]}>{title}</Text>
+    <View style={st.page}>
+      <Animated.View pointerEvents="none" style={[st.pullLogo, { opacity: pull.logoOpacity }]}>
+        <PullLogo ref={pull.logoRef} refreshing={pull.refreshing} />
+      </Animated.View>
+      <Animated.View style={{ flex: 1, transform: [{ translateY: pull.pullY }] }}>
+        <View style={{ flex: 1 }}>
+          {/* Fixed: the filters (or the notes line) and, in the calendar, the month.
+              Pulling this part down refreshes. */}
+          <View style={st.fixed} {...pull.panHandlers}>
+            {shownView === 'notes' ? (
+              <View style={st.tabs}>
+                <View style={[st.tab, st.tabOn]}><Text style={[st.tabT, st.tabTOn]}>Notes</Text></View>
+                <Text style={st.count}>{count}</Text>
+              </View>
+            ) : (
+              <View style={st.tabs}>
+                {KINDS.map(([k, label]) => (
+                  <TouchableOpacity key={k} style={[st.tab, kind === k && st.tabOn]} onPress={() => setKind(k)} activeOpacity={0.7}
+                    accessibilityRole="tab" accessibilityState={{ selected: kind === k }}>
+                    <Text style={[st.tabT, kind === k && st.tabTOn]}>{label}</Text>
+                  </TouchableOpacity>
+                ))}
+                <Text style={st.count}>{count}</Text>
               </View>
             )}
-            renderItem={({ item }) => (
-              <ClassCard
-                item={item}
-                onPress={() => navigation.navigate('CoachClassDetail', { classId: item.id })}
-              />
-            )}
-            ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
-            showsVerticalScrollIndicator={false}
-            refreshing={refreshing}
-            onRefresh={handleRefresh}
-            stickySectionHeadersEnabled={false}
-            ListEmptyComponent={
-              !classesLoading ? (
-                <EmptyState
-                  icon="school-outline"
-                  title="No classes yet"
-                  subtitle="Tap the plus button to start recording a class."
-                />
-              ) : null
-            }
-          />
-        </View>
 
-        {/* NOTES page */}
-        <View style={{ width: SCREEN_W, flex: 1 }}>
-          <SectionList
-            sections={groupedNotes}
-            keyExtractor={(item) => item.id}
-            style={{ flex: 1 }}
-            contentContainerStyle={styles.listContent}
-            renderSectionHeader={({ section: { title } }) => (
-              <View style={styles.sectionHeader}>
-                <Text style={[styles.sectionHeaderText, { color: '#5788E6' }]}>{title}</Text>
+            {shownView === 'cal' && (
+              <View>
+                <View style={st.mh}>
+                  <Text style={st.mhT}>{MONTHS[month.m]} <Text style={st.mhY}>{month.y}</Text></Text>
+                  <TouchableOpacity style={[st.mhBtn, !canPrev && { opacity: 0.35 }]} disabled={!canPrev} onPress={() => stepMonth(-1)} accessibilityLabel="Previous month">
+                    <Ionicons name="chevron-back" size={14} color={INK} />
+                  </TouchableOpacity>
+                  <TouchableOpacity style={[st.mhBtn, !canNext && { opacity: 0.35 }]} disabled={!canNext} onPress={() => stepMonth(1)} accessibilityLabel="Next month">
+                    <Ionicons name="chevron-forward" size={14} color={INK} />
+                  </TouchableOpacity>
+                </View>
+                <View style={st.dow}>
+                  {DOW.map((d, i) => <Text key={i} style={[st.dowT, { width: cellW }]}>{d}</Text>)}
+                </View>
+                <View style={st.grid}>
+                  {Array.from({ length: lead }).map((_, i) => <View key={`b${i}`} style={{ width: cellW, height: 40 }} />)}
+                  {Array.from({ length: daysIn }).map((_, i) => {
+                    const n = i + 1;
+                    const has = byDay[n];
+                    const on = day === n;
+                    const today = isThisMonth && n === now.getDate();
+                    return (
+                      <TouchableOpacity
+                        key={n}
+                        disabled={!has}
+                        onPress={() => setDay(on ? null : n)}
+                        activeOpacity={0.75}
+                        style={[st.cell, { width: cellW }, has && st.cellHas, on && st.cellOn]}
+                        accessibilityLabel={has ? `${MONTHS[month.m]} ${n}` : undefined}
+                      >
+                        <Text style={[st.cellT, has && st.cellTHas, on && { color: '#FFFFFF' }, today && st.cellToday]}>{n}</Text>
+                        <View style={st.cellDots}>
+                          {has?.group && <View style={[st.cellDot, { backgroundColor: GOLD }]} />}
+                          {has?.private && <View style={[st.cellDot, { backgroundColor: on ? '#FFFFFF' : NAVY }]} />}
+                          {!has && <View style={st.cellDot} />}
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+                <View style={st.key}>
+                  <View style={st.keyItem}><View style={[st.cellDot, { backgroundColor: GOLD }]} /><Text style={st.keyT}>Group</Text></View>
+                  <View style={st.keyItem}><View style={[st.cellDot, { backgroundColor: NAVY }]} /><Text style={st.keyT}>Private</Text></View>
+                  {day != null && (
+                    <TouchableOpacity style={{ marginLeft: 'auto' }} onPress={() => setDay(null)} hitSlop={8}>
+                      <Text style={st.keyBtn}>Show whole month</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
               </View>
             )}
-            renderItem={({ item }) => (
-              <NoteCard
-                item={item}
-                onPress={() => navigation.navigate('CoachNoteDetail', { noteId: item.id })}
-              />
-            )}
-            ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
-            showsVerticalScrollIndicator={false}
-            refreshing={refreshing}
-            onRefresh={handleRefresh}
-            stickySectionHeadersEnabled={false}
-            ListEmptyComponent={
-              <EmptyState
-                icon="create-outline"
-                title="No notes yet"
-                subtitle="Tap the plus button to create your first note."
-              />
-            }
-          />
-        </View>
-      </ScrollView>
-
-      {/* Bottom search + add bar */}
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} keyboardVerticalOffset={90}>
-        <View style={styles.bottomBar}>
-          <View style={styles.searchWrap}>
-            <Ionicons name="search" size={18} color={Colors.activeFocus} />
-            <TextInput
-              style={styles.searchInput}
-              value={search}
-              onChangeText={setSearch}
-              placeholder={activeTab === 'NOTES' ? 'Search notes…' : 'Search classes…'}
-              placeholderTextColor="#ACADB9"
-              clearButtonMode="while-editing"
-            />
           </View>
-          <TouchableOpacity
-            style={styles.addBtn}
-            onPress={handleAdd}
-            activeOpacity={0.85}
+
+          <MaskedView
+            style={{ flex: 1 }}
+            maskElement={
+              <View style={{ flex: 1 }}>
+                <LinearGradient colors={['transparent', '#000']} style={{ height: EDGE_FADE }} />
+                <View style={{ flex: 1, backgroundColor: '#000' }} />
+                <LinearGradient colors={['#000', 'rgba(0,0,0,0.5)', 'transparent']} locations={[0, 0.55, 1]} style={{ height: tabBarSpace + 34 }} />
+              </View>
+            }
           >
-            <Text style={styles.addBtnText}>{activeTab === 'NOTES' ? 'NEW' : 'CLASS'}</Text>
-            <View style={styles.addBtnCircle}>
-              <Ionicons name="add" size={22} color="#fff" />
-            </View>
-          </TouchableOpacity>
+            <ScrollView
+              ref={scrollRef}
+              style={{ flex: 1 }}
+              contentContainerStyle={[st.scroll, { paddingBottom: tabBarSpace + 96 }]}
+              showsVerticalScrollIndicator={false}
+            >
+              {shownView === 'notes' ? (
+                noteGroups.length === 0 ? (
+                  <Empty text="No notes yet. Tap + to write your first one." />
+                ) : (
+                  <FadeIn>
+                    {noteGroups.map((g) => (
+                      <View key={g.label}>
+                        <View style={st.ng}>
+                          <Text style={st.ngT}>{g.label}</Text>
+                          <View style={st.ngRule} />
+                        </View>
+                        {g.list.map((n) => (
+                          <NoteCard key={n.id} note={n} onPress={() => navigation.navigate('CoachNoteDetail', { noteId: n.id })} />
+                        ))}
+                      </View>
+                    ))}
+                  </FadeIn>
+                )
+              ) : !loaded ? (
+                <ListBones />
+              ) : shownView === 'cal' ? (
+                <View style={{ paddingTop: 12 }}>
+                  {dayClasses.length === 0 ? (
+                    <Empty text={day != null ? `Nothing logged on ${MONTHS[month.m]} ${day}.` : `Nothing logged in ${MONTHS[month.m]}.`} />
+                  ) : (
+                    <Rows list={dayClasses} goldIds={goldIds} onOpen={openClass} />
+                  )}
+                </View>
+              ) : (
+                <Animated.View style={kindSlide}>
+                  {months.length === 0 ? (
+                    <Empty text={classes.length === 0 ? 'No lessons yet. Tap + to start recording one.' : 'No lesson matches this filter.'} />
+                  ) : (
+                    <FadeIn>
+                      {months.map((mo) => (
+                        <View key={mo.key}>
+                          <View style={st.mk}>
+                            <Text style={st.mkT}>{mo.label}</Text>
+                            <Text style={st.mkN}>{plural(mo.list.length, 'lesson')}</Text>
+                          </View>
+                          <Rows list={mo.list} goldIds={goldIds} onOpen={openClass} />
+                        </View>
+                      ))}
+                    </FadeIn>
+                  )}
+                </Animated.View>
+              )}
+            </ScrollView>
+          </MaskedView>
         </View>
-      </KeyboardAvoidingView>
+      </Animated.View>
+
+      <TouchableOpacity
+        style={[st.add, { bottom: tabBarSpace + 14 }]}
+        onPress={onAdd}
+        activeOpacity={0.85}
+        accessibilityRole="button"
+        accessibilityLabel={view === 'notes' ? 'Add a note' : 'Start a lesson'}
+      >
+        <Ionicons name="add" size={28} color={INK} />
+      </TouchableOpacity>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: Colors.background },
+const st = StyleSheet.create({
+  page: { flex: 1, backgroundColor: PAGE },
+  pullLogo: { position: 'absolute', top: (PULL_REST - 27) / 2, left: 0, right: 0, alignItems: 'center' },
+  fixed: { paddingHorizontal: Spacing.side },
+  scroll: { paddingHorizontal: Spacing.side },
 
-  // Top toggle
-  tabRow: {
-    flexDirection: 'row',
-    paddingHorizontal: Spacing.side,
-    paddingTop: 4,
-    paddingBottom: 12,
-    gap: 8,
-  },
-  tabPill: {
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 999,
-    backgroundColor: 'rgba(255,255,255,0.55)',
-    borderWidth: 1,
-    borderColor: 'rgba(10,10,10,0.09)',
-  },
-  tabPillActive: {
-    backgroundColor: '#0A0A0A',
-    borderColor: '#0A0A0A',
-  },
-  tabPillText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 11,
-    color: 'rgba(10,10,10,0.72)',
-    letterSpacing: 0.9,
-    textTransform: 'uppercase',
-  },
-  tabPillTextActive: {
-    color: '#F7F6F3',
-  },
+  // All · Group · Private, and the count
+  tabs: { flexDirection: 'row', alignItems: 'flex-end', gap: 22, marginTop: 6, borderBottomWidth: 1, borderBottomColor: LINE },
+  tab: { paddingBottom: 9, marginBottom: -1, borderBottomWidth: 2, borderBottomColor: 'transparent' },
+  tabOn: { borderBottomColor: GOLD },
+  tabT: { fontFamily: Fonts.semiBold, fontSize: 15, letterSpacing: -0.3, color: 'rgba(10,10,10,0.6)' },
+  tabTOn: { color: INK },
+  count: { marginLeft: 'auto', paddingBottom: 11, fontFamily: Fonts.regular, fontSize: 11.5, color: INK_62 },
 
-  // List
-  listContent: {
-    paddingHorizontal: Spacing.side,
-    paddingTop: 4,
-    paddingBottom: 16,
+  // Month label over a card of rows
+  mk: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', paddingTop: 18, paddingBottom: 8, paddingHorizontal: 2 },
+  mkT: { fontFamily: Fonts.semiBold, fontSize: 9.5, letterSpacing: 1.6, textTransform: 'uppercase', color: INK_62 },
+  mkN: { fontFamily: Fonts.medium, fontSize: 11, color: INK_62 },
+  rows: {
+    backgroundColor: '#FFFFFF', borderRadius: 18, overflow: 'hidden',
+    borderWidth: 1, borderColor: 'rgba(10,10,10,0.06)',
   },
-  sectionHeader: { paddingTop: 18, paddingBottom: 6 },
-  sectionHeaderText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 11,
-    letterSpacing: 0.6,
-    textTransform: 'uppercase',
-  },
+  cl: { flexDirection: 'row', alignItems: 'center', gap: 13, paddingVertical: 13, paddingHorizontal: 15 },
+  clLine: { borderTopWidth: 1, borderTopColor: 'rgba(10,10,10,0.07)' },
+  boneRow: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 13 },
+  dt: { width: 44, height: 44, borderRadius: 13, backgroundColor: '#FCEFC9', alignItems: 'center', justifyContent: 'center', gap: 2 },
+  dtPriv: { backgroundColor: 'rgba(34,49,77,0.08)' },
+  dtD: { fontFamily: Fonts.bold, fontSize: 19, letterSpacing: -0.95, lineHeight: 20, color: GOLD_INK, fontVariant: ['tabular-nums'] },
+  dtM: { fontFamily: Fonts.bold, fontSize: 8, letterSpacing: 0.7, textTransform: 'uppercase', color: INK_62 },
+  bd: { flex: 1, minWidth: 0, gap: 4 },
+  clT: { fontFamily: Fonts.semiBold, fontSize: 14.5, letterSpacing: -0.3, lineHeight: 19, color: INK },
+  mt: { flexDirection: 'row', alignItems: 'center', gap: 7, minWidth: 0 },
+  tp: { fontFamily: Fonts.bold, fontSize: 8.5, letterSpacing: 0.85, textTransform: 'uppercase', color: GOLD_INK },
+  mtDot: { width: 3, height: 3, borderRadius: 1.5, backgroundColor: 'rgba(10,10,10,0.22)' },
+  mtT: { flexShrink: 1, fontFamily: Fonts.regular, fontSize: 11, color: INK_62 },
+  who: { flexDirection: 'row', gap: 3 },
+  whoAv: { width: 23, height: 23, borderRadius: 11.5, overflow: 'hidden', backgroundColor: '#F4F2EC', alignItems: 'center', justifyContent: 'center' },
+  whoFill: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
+  whoMore: { backgroundColor: 'transparent', borderWidth: 1, borderColor: 'rgba(10,10,10,0.16)' },
+  whoT: { fontFamily: Fonts.bold, fontSize: 9, color: 'rgba(10,10,10,0.62)' },
 
-  // Card (shared between class + note)
-  card: {
-    flexDirection: 'row',
-    backgroundColor: '#fff',
-    borderRadius: 14,
-    overflow: 'hidden',
-    borderWidth: 0.5,
-    borderColor: 'rgba(13,13,18,0.08)',
-    shadowColor: '#000',
-    shadowOpacity: 0.04,
-    shadowOffset: { width: 0, height: 2 },
-    shadowRadius: 8,
-    elevation: 1,
+  // Calendar
+  mh: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingTop: 14 },
+  mhT: { flex: 1, fontFamily: Fonts.bold, fontSize: 20, letterSpacing: -0.6, lineHeight: 22, color: INK },
+  mhY: { fontFamily: Fonts.medium, color: 'rgba(10,10,10,0.42)' },
+  mhBtn: {
+    width: 30, height: 30, borderRadius: 9, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center',
+    shadowColor: INK, shadowOpacity: 0.07, shadowOffset: { width: 0, height: 1 }, shadowRadius: 2, elevation: 1,
   },
-  cardAccent: { width: 4 },
-  cardBody: {
-    flex: 1,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-  },
-  cardHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 5,
-    gap: 8,
-  },
-  cardDate: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 11,
-    color: Colors.secondary,
-    flexShrink: 0,
-  },
-  badge: {
-    paddingHorizontal: 9,
-    paddingVertical: 3.5,
-    borderRadius: 999,
-    borderWidth: 1,
-    flexShrink: 0,
-  },
-  badgeText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 9.5,
-    letterSpacing: 0.8,
-    textTransform: 'uppercase',
-  },
-  badgeRow: { flexDirection: 'row', alignItems: 'center', gap: 6, flexShrink: 1 },
-  cardTitle: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 15,
-    color: Colors.black,
-    marginBottom: 3,
-  },
-  cardPreview: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 13,
-    color: Colors.secondary,
-    lineHeight: 18,
-  },
-  cardPending: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 12,
-    color: Colors.orange,
-  },
+  dow: { flexDirection: 'row', gap: 4, paddingTop: 13, paddingBottom: 6 },
+  dowT: { textAlign: 'center', fontFamily: Fonts.semiBold, fontSize: 9, letterSpacing: 1.26, color: 'rgba(10,10,10,0.6)' },
+  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 4 },
+  cell: { height: 40, borderRadius: 11, alignItems: 'center', justifyContent: 'center', gap: 4 },
+  cellHas: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: 'rgba(10,10,10,0.09)' },
+  cellOn: { backgroundColor: INK, borderColor: INK },
+  cellT: { fontFamily: Fonts.medium, fontSize: 12.5, lineHeight: 14, color: 'rgba(10,10,10,0.42)', fontVariant: ['tabular-nums'] },
+  cellTHas: { fontFamily: Fonts.semiBold, color: INK },
+  cellToday: { textDecorationLine: 'underline', textDecorationColor: GOLD },
+  cellDots: { flexDirection: 'row', gap: 3, height: 5 },
+  cellDot: { width: 5, height: 5, borderRadius: 2.5 },
+  key: { flexDirection: 'row', alignItems: 'center', gap: 14, paddingTop: 11, paddingBottom: 9, paddingHorizontal: 2, borderBottomWidth: 1, borderBottomColor: LINE },
+  keyItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  keyT: { fontFamily: Fonts.regular, fontSize: 10.5, color: INK_62 },
+  keyBtn: { fontFamily: Fonts.semiBold, fontSize: 11, color: GOLD_INK },
 
-  // Linked student chip on the note card
-  linkedChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    backgroundColor: 'rgba(255,157,0,0.10)',
-    borderRadius: 999,
-    paddingLeft: 2,
-    paddingRight: 9,
-    paddingVertical: 2,
-    maxWidth: 160,
+  // Notes
+  ng: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingTop: 18, paddingBottom: 9 },
+  ngT: { fontFamily: Fonts.semiBold, fontSize: 9.5, letterSpacing: 1.6, textTransform: 'uppercase', color: INK_62 },
+  ngRule: { flex: 1, height: 1, backgroundColor: LINE },
+  note: {
+    gap: 5, backgroundColor: '#FFFFFF', borderRadius: 16, paddingVertical: 14, paddingHorizontal: 16, marginBottom: 8,
+    borderWidth: 1, borderColor: 'rgba(10,10,10,0.06)',
   },
-  linkedAvatar: { width: 18, height: 18, borderRadius: 9, backgroundColor: '#F0F0F0' },
-  linkedAvatarFallback: { alignItems: 'center', justifyContent: 'center' },
-  linkedAvatarText: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 9,
-    color: Colors.black,
-  },
-  linkedChipText: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 11,
-    color: Colors.orange,
-    flexShrink: 1,
-  },
+  noteWhen: { fontFamily: Fonts.regular, fontSize: 11, color: INK_62 },
+  noteT: { fontFamily: Fonts.bold, fontSize: 16.5, letterSpacing: -0.4, lineHeight: 20, color: INK },
+  noteB: { fontFamily: Fonts.regular, fontSize: 13, lineHeight: 19, color: INK_62 },
+  noteLink: { flexDirection: 'row', alignItems: 'center', gap: 7, paddingTop: 3 },
+  noteLinkT: { flexShrink: 1, fontFamily: Fonts.semiBold, fontSize: 11, color: INK },
 
-  // Student row on private class card
-  studentRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: 8,
-  },
-  studentAvatar: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: '#F0F0F0',
-  },
-  studentAvatarFallback: { alignItems: 'center', justifyContent: 'center' },
-  studentAvatarText: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 10,
-    color: Colors.black,
-  },
-  studentName: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 12,
-    color: Colors.black,
-    flexShrink: 1,
-  },
+  empty: { paddingTop: 20, fontFamily: Fonts.regular, fontSize: 13, lineHeight: 19, color: INK_62 },
 
-  // Empty states
-  empty: {
-    marginTop: 50,
-    alignItems: 'center',
-    paddingHorizontal: 32,
-  },
-  emptyIconWrap: {
-    width: 56, height: 56, borderRadius: 28,
-    backgroundColor: '#F5F5F5',
-    alignItems: 'center', justifyContent: 'center',
-    marginBottom: 12,
-  },
-  emptyTitle: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 16,
-    color: Colors.black,
-    marginBottom: 4,
-  },
-  emptySub: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 13,
-    color: Colors.secondary,
-    textAlign: 'center',
-    lineHeight: 19,
-  },
-
-  // Bottom search + add bar
-  bottomBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: Spacing.side,
-    paddingVertical: 10,
-    gap: 10,
-    borderTopWidth: 0.5,
-    borderTopColor: 'rgba(13,13,18,0.08)',
-    backgroundColor: Colors.background,
-  },
-  searchWrap: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    height: 50,
-    backgroundColor: 'rgba(46,46,46,0.04)',
-    borderRadius: 18,
-    paddingHorizontal: 16,
-    gap: 10,
-  },
-  searchInput: {
-    flex: 1,
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 14,
-    color: Colors.black,
-    padding: 0,
-  },
-  addBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    height: 50,
-    borderRadius: 22,
-    backgroundColor: '#141414',
-    paddingLeft: 16,
-    paddingRight: 5,
-    gap: 8,
-  },
-  addBtnText: {
-    fontFamily: Fonts.monument,
-    fontSize: 14,
-    color: '#fff',
-    letterSpacing: 0.6,
-  },
-  addBtnCircle: {
-    width: 40, height: 40,
-    borderRadius: 20,
-    backgroundColor: '#E8A838',
+  add: {
+    position: 'absolute', right: Spacing.side, width: 56, height: 56, borderRadius: 28, backgroundColor: GOLD,
     alignItems: 'center', justifyContent: 'center',
   },
 });

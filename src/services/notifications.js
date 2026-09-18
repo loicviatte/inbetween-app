@@ -1,7 +1,14 @@
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import { Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from './supabase/client';
+
+// This phone's Expo token, kept so logging out can take back exactly this
+// phone — and leave the account's other phones receiving.
+const TOKEN_KEY = '@push_token';
+let deviceToken = null;
+AsyncStorage.getItem(TOKEN_KEY).then((t) => { if (t && !deviceToken) deviceToken = t; }).catch(() => {});
 
 // How notifications appear when app is in foreground
 Notifications.setNotificationHandler({
@@ -45,34 +52,37 @@ export async function registerPushToken(userId) {
     projectId: 'e6845c91-600b-42a1-86ab-a74041006225',
   });
   const token = tokenData.data;
+  deviceToken = token;
+  AsyncStorage.setItem(TOKEN_KEY, token).catch(() => {});
 
-  // Save token to Supabase
-  const { error } = await supabase
-    .from('users')
-    .update({ push_token: token })
-    .eq('id', userId);
-
+  // One row per phone, so every phone signed in to the account is pushed (a
+  // coach and whoever follows on the same account). users.push_token is still
+  // written for the send-push of apps that predate per-device tokens.
+  const [device, legacy] = await Promise.all([
+    supabase.rpc('register_push_token', { p_token: token, p_platform: Platform.OS }),
+    supabase.from('users').update({ push_token: token }).eq('id', userId),
+  ]);
+  const error = device.error || legacy.error;
   if (error) console.error('[Push] Failed to save token:', error.message);
   else console.log('[Push] Token registered:', token);
 
   return token;
 }
 
-// Null the stored push token for a user. Call on logout so a shared device
-// stops receiving pushes tied to the ended session, and so a rotated/dead
-// token doesn't linger. Fire-and-forget from the caller: it issues the write
-// with the still-valid session before sign-out drops it.
+// On logout: this phone stops receiving the account's pushes; its other phones
+// keep theirs. Await it before signing out — it needs the session — it gives up
+// after 2.5s so a phone offline can still log out.
 export async function clearPushToken(userId) {
-  if (!userId) return;
-  try {
-    const { error } = await supabase
-      .from('users')
-      .update({ push_token: null })
-      .eq('id', userId);
+  const token = deviceToken || (await AsyncStorage.getItem(TOKEN_KEY).catch(() => null));
+  if (!userId || !token) return;
+  const work = Promise.all([
+    supabase.rpc('unregister_push_token', { p_token: token }),
+    supabase.from('users').update({ push_token: null }).eq('id', userId).eq('push_token', token),
+  ]).then(([device, legacy]) => {
+    const error = device.error || legacy.error;
     if (error) console.warn('[Push] clearPushToken failed:', error.message);
-  } catch (err) {
-    console.warn('[Push] clearPushToken error:', err?.message ?? err);
-  }
+  }).catch((err) => console.warn('[Push] clearPushToken error:', err?.message ?? err));
+  await Promise.race([work, new Promise((resolve) => setTimeout(resolve, 2500))]);
 }
 
 // Listen for notification taps (app in background/killed)

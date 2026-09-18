@@ -433,7 +433,7 @@ function CompleteScreen({ summary, imported, unmatched, pendingReview = 0 }) {
     pendingReview > 0
       ? ` ${pendingReview} held for review before ${pendingReview === 1 ? 'it goes' : 'they go'} live.`
       : unmatched > 0
-        ? ` ${unmatched} couldn't be matched to a class — saved for review.`
+        ? ` ${unmatched} couldn't be matched to a lesson — saved for review.`
         : ' Ready when you are to tag them.';
   return (
     <>
@@ -613,7 +613,7 @@ const s = StyleSheet.create({
     justifyContent: 'center',
   },
   ctx: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 9.5,
     letterSpacing: 2,
     color: 'rgba(255,255,255,0.35)',
@@ -684,7 +684,7 @@ const s = StyleSheet.create({
   eyebrowDotErr: { backgroundColor: RED_SOFT },
   eyebrowDotOk: { backgroundColor: GREEN },
   eyebrow: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 9.5,
     letterSpacing: 3,
     color: GOLD_500,
@@ -692,7 +692,7 @@ const s = StyleSheet.create({
   eyebrowErr: { color: RED_SOFT },
   eyebrowOk: { color: GREEN },
   h2: {
-    fontFamily: Fonts.ttDemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 30,
     color: '#fff',
     letterSpacing: -0.6,
@@ -700,7 +700,7 @@ const s = StyleSheet.create({
     marginBottom: 12,
   },
   p: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13.5,
     lineHeight: 21,
     color: 'rgba(255,255,255,0.5)',
@@ -710,7 +710,7 @@ const s = StyleSheet.create({
   // ─── Grant-access instructions ──────────────────────────────────────
   grantWrap: { alignItems: 'center', maxWidth: 320, paddingHorizontal: 4 },
   grantTitle: {
-    fontFamily: Fonts.ttDemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 26,
     color: '#fff',
     letterSpacing: -0.5,
@@ -719,7 +719,7 @@ const s = StyleSheet.create({
     marginBottom: 40,
   },
   grantIntro: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13.5,
     color: 'rgba(255,255,255,0.5)',
     textAlign: 'center',
@@ -728,17 +728,17 @@ const s = StyleSheet.create({
   grantSteps: { alignSelf: 'stretch', gap: 14 },
   grantStep: { alignItems: 'center', gap: 8 },
   grantStepText: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 14,
     color: 'rgba(255,255,255,0.85)',
     lineHeight: 20,
     textAlign: 'center',
     alignSelf: 'stretch',
   },
-  grantStepNum: { fontFamily: Fonts.jakartaExtraBold, color: GOLD_500 },
-  grantStrong: { fontFamily: Fonts.jakartaExtraBold, color: GOLD_500 },
+  grantStepNum: { fontFamily: Fonts.semiBold, color: GOLD_500 },
+  grantStrong: { fontFamily: Fonts.semiBold, color: GOLD_500 },
   grantHint: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 12,
     color: 'rgba(255,255,255,0.42)',
     lineHeight: 16,
@@ -747,14 +747,14 @@ const s = StyleSheet.create({
 
   progressStack: { marginTop: 26, alignItems: 'center', width: '100%', maxWidth: 300 },
   progressEyebrow: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 9.5,
     letterSpacing: 3,
     color: GOLD_500,
     marginBottom: 6,
   },
   bigNum: {
-    fontFamily: Fonts.ttDemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 62,
     color: '#fff',
     letterSpacing: -2,
@@ -778,7 +778,7 @@ const s = StyleSheet.create({
   thinBarFill: { height: '100%', borderRadius: 999, backgroundColor: GOLD_500 },
   detailsRow: { flexDirection: 'row', justifyContent: 'space-between', alignSelf: 'stretch' },
   detailsText: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 10,
     letterSpacing: 1,
     color: 'rgba(255,255,255,0.4)',
@@ -800,11 +800,11 @@ const s = StyleSheet.create({
   },
   fileChipName: {
     flex: 1,
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 11,
     color: 'rgba(255,255,255,0.6)',
   },
-  fileChipSize: { fontFamily: Fonts.jakartaMedium, fontSize: 11, color: 'rgba(255,255,255,0.35)' },
+  fileChipSize: { fontFamily: Fonts.medium, fontSize: 11, color: 'rgba(255,255,255,0.35)' },
 
   summaryGrid: {
     flexDirection: 'row',
@@ -824,9 +824,9 @@ const s = StyleSheet.create({
     borderRightWidth: 0.5,
     borderColor: 'rgba(255,255,255,0.08)',
   },
-  summaryN: { fontFamily: Fonts.ttDemiBold, fontSize: 19, color: '#fff', letterSpacing: -0.4 },
+  summaryN: { fontFamily: Fonts.semiBold, fontSize: 19, color: '#fff', letterSpacing: -0.4 },
   summaryL: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 8.5,
     letterSpacing: 2,
     color: 'rgba(255,255,255,0.4)',
@@ -846,13 +846,13 @@ const s = StyleSheet.create({
     borderColor: 'rgba(212,69,69,0.28)',
   },
   errDetailText: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 11.5,
     lineHeight: 17,
     color: RED_SOFT,
   },
   errCode: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 9,
     letterSpacing: 1.2,
     color: 'rgba(255,140,140,0.6)',
@@ -860,7 +860,7 @@ const s = StyleSheet.create({
   },
 
   ghostLink: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 11,
     letterSpacing: 2,
     color: 'rgba(255,255,255,0.4)',
@@ -868,7 +868,7 @@ const s = StyleSheet.create({
     textAlign: 'center',
   },
   helperLink: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 12.5,
     color: GOLD_500,
     textDecorationLine: 'underline',
@@ -876,7 +876,7 @@ const s = StyleSheet.create({
     paddingVertical: 12,
   },
   micQuestion: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 13.5,
     color: 'rgba(255,255,255,0.72)',
     textAlign: 'center',
@@ -892,7 +892,7 @@ const s = StyleSheet.create({
     alignItems: 'center',
   },
   doneBtnText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 13,
     letterSpacing: 2,
     color: '#fff',
@@ -908,7 +908,7 @@ const s = StyleSheet.create({
     justifyContent: 'center',
   },
   retryBtnText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 13,
     letterSpacing: 1.5,
     color: '#0A0A0A',

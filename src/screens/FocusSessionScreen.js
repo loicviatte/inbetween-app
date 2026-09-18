@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback, memo } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -14,7 +14,6 @@ import {
   KeyboardAvoidingView,
   Platform,
   useWindowDimensions,
-  PanResponder,
   LayoutAnimation,
   UIManager,
   Alert,
@@ -28,7 +27,6 @@ import {
   AudioModule,
   RecordingPresets,
   setAudioModeAsync,
-  createAudioPlayer,
   useAudioRecorder,
 } from 'expo-audio';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -42,7 +40,6 @@ import Svg, {
   Stop,
   Circle as SvgCircle,
   Path as SvgPath,
-  G as SvgG,
   Text as SvgText,
 } from 'react-native-svg';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -64,6 +61,7 @@ import {
   clearActiveSession,
   getSessionTimeLeft,
 } from '../storage/activeSession';
+import { dayLabel, longDate } from '../utils/dates';
 import {
   startFocusPoint as laStartFocusPoint,
   updateFocusPoint as laUpdateFocusPoint,
@@ -94,7 +92,6 @@ async function transcribeAudio(uri) {
 }
 
 const DURATIONS = [5, 10, 15, 20, 25, 30, 45, 60, 90];
-const TICK_SOUND = require('../../assets/metronome_tick.wav');
 
 const FEELINGS = [
   { emoji: '😤', label: 'Hard' },
@@ -109,20 +106,6 @@ function formatTime(seconds) {
   const s = (seconds % 60).toString().padStart(2, '0');
   return `${m}:${s}`;
 }
-
-// WDSF competition tempos — BPM = bars/min × beats/bar
-const DANCES = [
-  { id: 'chacha',    name: 'Cha Cha',    bpm: 120, beats: 4, category: 'L' }, // 30 bars/min × 4
-  { id: 'samba',     name: 'Samba',      bpm: 100, beats: 2, category: 'L' }, // 50 bars/min × 2
-  { id: 'rumba',     name: 'Rumba',      bpm: 100, beats: 4, category: 'L' }, // 25 bars/min × 4
-  { id: 'paso',      name: 'Paso Doble', bpm: 124, beats: 2, category: 'L' }, // 62 bars/min × 2
-  { id: 'jive',      name: 'Jive',       bpm: 176, beats: 4, category: 'L' }, // 44 bars/min × 4
-  { id: 'waltz',     name: 'Waltz',      bpm: 90,  beats: 3, category: 'S' }, // 30 bars/min × 3
-  { id: 'tango',     name: 'Tango',      bpm: 132, beats: 4, category: 'S' }, // 33 bars/min × 4
-  { id: 'vwaltz',    name: 'V.Waltz',    bpm: 180, beats: 3, category: 'S' }, // 60 bars/min × 3
-  { id: 'foxtrot',   name: 'Foxtrot',    bpm: 120, beats: 4, category: 'S' }, // 30 bars/min × 4
-  { id: 'quickstep', name: 'Quickstep',  bpm: 200, beats: 4, category: 'S' }, // 50 bars/min × 4
-];
 
 // ─── Session Skeleton Bones (renders INSIDE the focus card) ──────────────────
 
@@ -164,11 +147,7 @@ function SessionSkeletonBones() {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function formatDate(iso) {
-  if (!iso) return '';
-  const d = new Date(iso);
-  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
-}
+const formatDate = (iso) => (iso ? dayLabel(iso) : '');
 
 // ─── Class Input Detail Modal ─────────────────────────────────────────────────
 
@@ -276,236 +255,6 @@ function FocusPager({ focusPoint }) {
     </View>
   );
 }
-
-// ─── Metronome ────────────────────────────────────────────────────────────────
-
-const M_ITEM_H = 38;
-const BPM_VALUES = Array.from({ length: 181 }, (_, i) => 40 + i); // 40–220 step 1
-
-const MetronomeStrip = memo(function MetronomeStrip({ onRunningChange, onBeat, focusDances }) {
-  const defaultBpmIdx = BPM_VALUES.indexOf(120);
-  const [bpmIdx, setBpmIdx]   = useState(defaultBpmIdx);
-  const [danceIdx, setDanceIdx] = useState(0);
-  const [hasScrolledDance, setHasScrolledDance] = useState(false);
-  const [running, setRunning]  = useState(false);
-  const [currentBeat, setCurrentBeat] = useState(0); // 0-based, 0 = downbeat
-
-  // Resolve which dance to pick when BPM matches multiple dances
-  // Priority: dance linked to the focus point > random pick
-  const focusDanceNames = (Array.isArray(focusDances) ? focusDances : []).map(d => (d || '').toLowerCase());
-
-  const bpmRef   = useRef(BPM_VALUES[defaultBpmIdx]);
-  const beatsRef = useRef(DANCES[0].beats); // beats per bar
-  const beatRef  = useRef(0);               // current beat counter
-  const pulseAnim = useRef(new Animated.Value(1)).current;
-  const schedulerRef    = useRef(null);
-  const tickTimeoutsRef = useRef([]);
-  const nextTickAtRef   = useRef(0);
-  const soundPoolRef    = useRef([]);
-  const poolIdxRef      = useRef(0);
-  const danceScrollRef  = useRef(null);
-  const bpmScrollRef    = useRef(null);
-  const bpmScrollIsAuto = useRef(false);
-
-  useEffect(() => { bpmRef.current = BPM_VALUES[bpmIdx]; }, [bpmIdx]);
-
-  useEffect(() => {
-    setAudioModeAsync({ playsInSilentMode: true }).catch(() => {});
-    // 6 players: 0-2 = accent (downbeat), 3-5 = soft (off-beats)
-    soundPoolRef.current = [0, 1, 2, 3, 4, 5].map(() => createAudioPlayer(TICK_SOUND));
-    return () => {
-      stopMetro();
-      soundPoolRef.current.forEach(p => { try { p.remove(); } catch {} });
-      soundPoolRef.current = [];
-    };
-  }, []);
-
-  function playTick(isDownbeat) {
-    const pool = soundPoolRef.current;
-    if (!pool.length) return;
-    // Accent pool: 0-2, soft pool: 3-5
-    const baseIdx = isDownbeat ? 0 : 3;
-    const idx = baseIdx + (poolIdxRef.current % 3);
-    const player = pool[idx];
-    try {
-      player.volume = isDownbeat ? 1.0 : 0.35;
-      player.seekTo(0).catch(() => {});
-      player.play();
-    } catch {}
-    poolIdxRef.current = (poolIdxRef.current + 1) % 3;
-  }
-
-  function fireBeat(beatNum) {
-    const isDownbeat = beatNum === 0;
-    pulseAnim.setValue(isDownbeat ? 1.5 : 1.2);
-    Animated.timing(pulseAnim, { toValue: 1, duration: 180, useNativeDriver: true }).start();
-    setCurrentBeat(beatNum);
-    if (isDownbeat) onBeat?.();
-    playTick(isDownbeat);
-  }
-
-  function startMetro(overrideBpm) {
-    const initialBpm = overrideBpm ?? bpmRef.current;
-    beatRef.current = 0;
-    fireBeat(0);
-    beatRef.current = 1;
-    nextTickAtRef.current = Date.now() + (60000 / initialBpm);
-
-    function scheduler() {
-      const intervalMs = 60000 / bpmRef.current;
-      const now = Date.now();
-      while (nextTickAtRef.current < now + 300) {
-        const delay = Math.max(0, nextTickAtRef.current - now);
-        const capturedBeat = beatRef.current;
-        const id = setTimeout(() => {
-          fireBeat(capturedBeat);
-        }, delay);
-        tickTimeoutsRef.current.push(id);
-        beatRef.current = (beatRef.current + 1) % beatsRef.current;
-        nextTickAtRef.current += intervalMs;
-      }
-      if (tickTimeoutsRef.current.length > 40)
-        tickTimeoutsRef.current = tickTimeoutsRef.current.slice(-20);
-    }
-    schedulerRef.current = setInterval(scheduler, 50);
-    setRunning(true); onRunningChange?.(true);
-  }
-
-  function stopMetro() {
-    if (schedulerRef.current) clearInterval(schedulerRef.current);
-    schedulerRef.current = null;
-    tickTimeoutsRef.current.forEach(id => clearTimeout(id));
-    tickTimeoutsRef.current = [];
-    pulseAnim.setValue(1);
-    beatRef.current = 0;
-    setCurrentBeat(0);
-    setRunning(false); onRunningChange?.(false);
-  }
-
-  function toggleMetro() { running ? stopMetro() : startMetro(); }
-
-  function onDanceScrollEnd(e) {
-    const idx = Math.max(0, Math.min(DANCES.length - 1, Math.round(e.nativeEvent.contentOffset.y / M_ITEM_H)));
-    setDanceIdx(idx);
-    if (!hasScrolledDance) setHasScrolledDance(true);
-    setIsCustomBpm(false);
-    const dance = DANCES[idx];
-    beatsRef.current = dance.beats;
-    beatRef.current  = 0;
-    const newBpmIdx = BPM_VALUES.reduce((best, b, i) =>
-      Math.abs(b - dance.bpm) < Math.abs(BPM_VALUES[best] - dance.bpm) ? i : best, 0);
-    setBpmIdx(newBpmIdx);
-    bpmRef.current = BPM_VALUES[newBpmIdx];
-    bpmScrollRef.current?.scrollTo({ y: newBpmIdx * M_ITEM_H, animated: false });
-    if (running) { stopMetro(); setTimeout(() => startMetro(BPM_VALUES[newBpmIdx]), 50); }
-  }
-
-  const [isCustomBpm, setIsCustomBpm] = useState(false);
-
-  function resolveDanceForBpm(bpm) {
-    const matches = DANCES.map((d, i) => ({ ...d, idx: i })).filter(d => d.bpm === bpm);
-    if (matches.length === 0) return null;
-    if (matches.length === 1) return matches[0];
-    // Multiple dances share this BPM — prefer the one linked to focus point
-    const linked = matches.find(d => focusDanceNames.includes(d.name.toLowerCase()));
-    return linked || matches[Math.floor(Math.random() * matches.length)];
-  }
-
-  function onBpmScrollEnd(e) {
-    const idx = Math.max(0, Math.min(BPM_VALUES.length - 1, Math.round(e.nativeEvent.contentOffset.y / M_ITEM_H)));
-    setBpmIdx(idx);
-    bpmRef.current = BPM_VALUES[idx];
-
-    const matched = resolveDanceForBpm(BPM_VALUES[idx]);
-    if (matched) {
-      setDanceIdx(matched.idx);
-      beatsRef.current = matched.beats;
-      beatRef.current = 0;
-      setHasScrolledDance(true);
-      setIsCustomBpm(false);
-      danceScrollRef.current?.scrollTo({ y: matched.idx * M_ITEM_H, animated: false });
-    } else {
-      setIsCustomBpm(true);
-    }
-
-    if (running) { stopMetro(); setTimeout(() => startMetro(BPM_VALUES[idx]), 50); }
-  }
-
-  const beats = DANCES[danceIdx]?.beats ?? 4;
-
-  return (
-    <View style={m.wrap}>
-      {/* Dance scroll */}
-      <ScrollView
-        ref={danceScrollRef}
-        style={m.col}
-        showsVerticalScrollIndicator={false}
-        snapToInterval={M_ITEM_H}
-        decelerationRate="fast"
-        contentOffset={{ x: 0, y: danceIdx * M_ITEM_H }}
-        onMomentumScrollEnd={onDanceScrollEnd}
-        contentContainerStyle={m.scrollContent}
-      >
-        {DANCES.map((d, i) => {
-          const dist = Math.abs(i - danceIdx);
-          const isCenter = dist === 0;
-          const label = isCenter && isCustomBpm
-            ? 'Custom BPM'
-            : (isCenter && !hasScrolledDance)
-              ? 'Scroll to select'
-              : d.name;
-          const isPlaceholder = isCenter && (isCustomBpm || !hasScrolledDance);
-          return (
-            <View key={d.id} style={m.item}>
-              <Text style={[
-                m.danceText,
-                isCenter && m.itemActive,
-                isPlaceholder && m.itemPlaceholder,
-              ]}>{label}</Text>
-            </View>
-          );
-        })}
-      </ScrollView>
-
-      {/* Separator */}
-      <View style={m.sep} />
-
-      {/* BPM scroll */}
-      <ScrollView
-        ref={bpmScrollRef}
-        style={m.colBpm}
-        showsVerticalScrollIndicator={false}
-        snapToInterval={M_ITEM_H}
-        decelerationRate="fast"
-        contentOffset={{ x: 0, y: bpmIdx * M_ITEM_H }}
-        onMomentumScrollEnd={onBpmScrollEnd}
-        contentContainerStyle={m.scrollContent}
-      >
-        {BPM_VALUES.map((b, i) => {
-          const dist = Math.abs(i - bpmIdx);
-          return (
-            <View key={b} style={m.item}>
-              <Text style={[m.bpmText, dist === 0 && m.itemActive]}>{b}</Text>
-            </View>
-          );
-        })}
-      </ScrollView>
-
-      {/* Beat dots + play */}
-      <View style={m.right}>
-        <TouchableOpacity
-          style={[m.playBtn, running && m.playBtnActive]}
-          onPress={toggleMetro}
-          activeOpacity={0.8}
-        >
-          <Animated.View style={running ? { transform: [{ scale: pulseAnim }] } : undefined}>
-            <Text style={[m.playIcon, running && m.playIconActive]}>{running ? '■' : '▶'}</Text>
-          </Animated.View>
-        </TouchableOpacity>
-      </View>
-    </View>
-  );
-});
 
 // ─── Feeling Slider ───────────────────────────────────────────────────────────
 
@@ -642,7 +391,7 @@ function GoldNumber({ value, gradientId, variant = 'gold' }) {
           x="50%"
           y="178"
           fontSize="200"
-          fontFamily={Fonts.ttExtraBold}
+          fontFamily={Fonts.extraBold}
           fontWeight="800"
           fill={`url(#${gradientId})`}
           textAnchor="middle"
@@ -1122,11 +871,6 @@ export default function FocusSessionScreen({ route, navigation }) {
     }).start();
   }
 
-  const [metroOpen, setMetroOpen] = useState(false);
-  const [metroRunning, setMetroRunning] = useState(false);
-  const metroAnim = useRef(new Animated.Value(0)).current;
-  const beatAnim  = useRef(new Animated.Value(0)).current;
-
   const [aiOpen, setAiOpen] = useState(false);
   const aiAnim = useRef(new Animated.Value(0)).current;
   const aiIsAnimatingRef = useRef(false);
@@ -1140,10 +884,6 @@ export default function FocusSessionScreen({ route, navigation }) {
   const [aiTranscribing, setAiTranscribing] = useState(false);
   const aiRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
 
-  function handleBeat() {
-    beatAnim.setValue(1);
-    Animated.timing(beatAnim, { toValue: 0, duration: 200, useNativeDriver: false }).start();
-  }
   const [timeLeft, setTimeLeft] = useState(15 * 60);
   // Partner-view: show the EXACT same in-progress screen as the partner who
   // started it — flip sessionActive on with their timing and mirror the chrono.
@@ -1188,14 +928,17 @@ export default function FocusSessionScreen({ route, navigation }) {
   const overrunNextThresholdRef = useRef(OVERRUN_FIRST_PROMPT_SEC);
   const overrunTriggerSecRef = useRef(OVERRUN_FIRST_PROMPT_SEC);
   const overrunAutoStopTimerRef = useRef(null);
-  const [showFeelingModal, setShowFeelingModal] = useState(false);
+  const [showFeelingModal, setShowFeelingModalState] = useState(false);
+  const showFeelingModalRef = useRef(false);
+  const setShowFeelingModal = (on) => { showFeelingModalRef.current = on; setShowFeelingModalState(on); };
   const [showShortSessionPrompt, setShowShortSessionPrompt] = useState(false);
   const [shortSessionElapsed, setShortSessionElapsed] = useState(0);
-  const [showStopConfirm, setShowStopConfirm] = useState(false);
+  const [showStopConfirm, setShowStopConfirmState] = useState(false);
+  const showStopConfirmRef = useRef(false);
+  const setShowStopConfirm = (on) => { showStopConfirmRef.current = on; setShowStopConfirmState(on); };
   const sessionCompletedRef = useRef(false);
   const stopHoldAnim = useRef(new Animated.Value(0)).current;
   const stopHoldTimerRef = useRef(null);
-  const { width: screenW } = useWindowDimensions();
   const intervalRef = useRef(null);
   const contentFade = useRef(new Animated.Value(0)).current;
 
@@ -1303,7 +1046,8 @@ export default function FocusSessionScreen({ route, navigation }) {
           over >= overrunNextThresholdRef.current &&
           !overrunModalOpenRef.current &&
           !sessionCompletedRef.current &&
-          !showFeelingModal
+          !showFeelingModalRef.current &&
+          !showStopConfirmRef.current
         ) {
           openOverrunModal();
         }
@@ -1474,21 +1218,7 @@ export default function FocusSessionScreen({ route, navigation }) {
     clearActiveSession();
   }
 
-  function closeMetro() {
-    if (!metroOpen) return;
-    setMetroOpen(false);
-    Animated.spring(metroAnim, { toValue: 0, useNativeDriver: false, bounciness: 4, speed: 14 }).start();
-  }
-
-  function toggleMetroPanel() {
-    const toValue = metroOpen ? 0 : 1;
-    if (!metroOpen) setAiOpen(false);
-    setMetroOpen(!metroOpen);
-    Animated.spring(metroAnim, { toValue, useNativeDriver: false, bounciness: 4, speed: 14 }).start();
-  }
-
   function toggleAiPanel() {
-    if (!aiOpen) closeMetro();
     const opening = !aiOpen;
     LayoutAnimation.configureNext({
       duration: 250,
@@ -1519,7 +1249,7 @@ export default function FocusSessionScreen({ route, navigation }) {
       : 'No focus points recorded.';
 
     const classLines = classInputs.slice(0, 8).map(inp => {
-      const date = new Date(inp.created_at).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
+      const date = longDate(inp.created_at);
       const lines = [`--- Class: ${inp.title ?? date} (${date}) ---`];
       if (inp.class_summary) lines.push(`Summary: ${inp.class_summary}`);
       if (inp.practice_point_1) lines.push(`Primary point: ${inp.practice_point_1} (priority ${inp.priority_score_1}/10)`);
@@ -1677,7 +1407,10 @@ I don't have that in your data, but you can send the question to your coach if y
     try {
       const { applyFocusEvent } = await import('../utils/algorithm');
       const { supabase } = await import('../services/supabase/client');
-      const { data: { user } } = await supabase.auth.getUser();
+      // the event belongs to whoever trains this focus point — the child, for a parent
+      const { getUserId } = await import('../storage/storage');
+      const subjectId = await getUserId().catch(() => null);
+      const user = subjectId ? { id: subjectId } : null;
       const msgLower = text.toLowerCase();
       const isConfusion = /\b(don't understand|not sure|confused|what does|what is|how do|i don't get|unclear)\b/.test(msgLower);
       const isConfirmation = /\b(right\??|correct\??|is that|so i should|did i|am i)\b/.test(msgLower);
@@ -1999,7 +1732,7 @@ I don't have that in your data, but you can send the question to your coach if y
                 <View style={styles.subtitleWrap}>
                   <Text style={styles.focusSubtitle}>{focusPoint.subtitle}</Text>
                   {focusPoint?.context ? (
-                    <TouchableOpacity onPress={() => { closeMetro(); toggleContext(); }} activeOpacity={0.7} style={styles.readMoreBtn}>
+                    <TouchableOpacity onPress={toggleContext} activeOpacity={0.7} style={styles.readMoreBtn}>
                       <Text style={styles.readMoreText}>{contextExpanded ? 'Read less ↑' : 'Read more ↓'}</Text>
                     </TouchableOpacity>
                   ) : null}
@@ -2194,7 +1927,7 @@ I don't have that in your data, but you can send the question to your coach if y
                 </>
               ) : (
                 <View style={{ marginTop: 56 }}>
-                  <DurationPicker value={duration} onChange={(d) => { closeMetro(); setDuration(d); setTimeLeft(d * 60); }} />
+                  <DurationPicker value={duration} onChange={(d) => { setDuration(d); setTimeLeft(d * 60); }} />
                 </View>
               )}
             </View>
@@ -2203,22 +1936,6 @@ I don't have that in your data, but you can send the question to your coach if y
 
         {/* CTA — outside KAV, toujours collé en bas */}
         <View style={styles.ctaWrap}>
-          {!sessionDone && (
-            <Animated.View style={[styles.metroPill, {
-              width: metroAnim.interpolate({ inputRange: [0, 1], outputRange: [48, screenW - Spacing.side * 2] }),
-              borderRadius: metroAnim.interpolate({ inputRange: [0, 1], outputRange: [24, 16] }),
-            }]}>
-              <TouchableOpacity onPress={toggleMetroPanel} activeOpacity={0.8} style={styles.metroPillCircle}>
-                <Animated.Text style={[styles.metroPillIcon, metroRunning && {
-                  color: beatAnim.interpolate({ inputRange: [0, 1], outputRange: ['#FFFFFF', Colors.orange] }),
-                }]}>♩</Animated.Text>
-              </TouchableOpacity>
-              <Animated.View style={[styles.metroPillContent, { opacity: metroAnim }]} pointerEvents={metroOpen ? 'auto' : 'none'}>
-                <MetronomeStrip onRunningChange={setMetroRunning} onBeat={handleBeat} focusDances={focusPoint?.dance} />
-              </Animated.View>
-            </Animated.View>
-          )}
-
           {!sessionActive && !sessionDone && (
             <TouchableOpacity style={styles.startBtn} onPress={startSession} activeOpacity={0.88}>
               <Text style={styles.startBtnText}>START SESSION</Text>
@@ -2378,10 +2095,10 @@ const styles = StyleSheet.create({
   },
   backBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   backArrow: { fontSize: 18, color: Colors.activeFocus },
-  backLabel: { fontFamily: Fonts.jakartaMedium, fontSize: 15, color: Colors.activeFocus },
+  backLabel: { fontFamily: Fonts.medium, fontSize: 15, color: Colors.activeFocus },
   slotBadge: {},
   slotBadgeText: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 10,
     color: '#ACADB9',
     textTransform: 'uppercase',
@@ -2397,13 +2114,13 @@ const styles = StyleSheet.create({
     paddingVertical: 18,
   },
   sessionLabel: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 12,
     color: 'rgba(255,255,255,0.45)',
     marginBottom: 6,
   },
   focusName: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.bold,
     fontSize: 24,
     color: Colors.white,
     lineHeight: 30,
@@ -2413,7 +2130,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   focusSubtitle: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     color: '#FFFFFF',
     lineHeight: 19,
@@ -2425,14 +2142,14 @@ const styles = StyleSheet.create({
     paddingRight: 16,
   },
   readMoreText: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 12,
     color: 'rgba(255, 157, 0, 0.7)',
     letterSpacing: 0.3,
   },
   focusContext: {
     marginTop: 10,
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     color: 'rgba(255,255,255,0.75)',
     lineHeight: 20,
@@ -2462,13 +2179,13 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(17,12,17,0.12)',
   },
   drillPillText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 9,
     color: Colors.black,
     letterSpacing: 1.5,
   },
   drillText: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 14,
     color: Colors.black,
     lineHeight: 22,
@@ -2486,7 +2203,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.06)',
   },
   drillChipText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 11.5,
     color: Colors.black,
     letterSpacing: 0.2,
@@ -2506,14 +2223,14 @@ const styles = StyleSheet.create({
     paddingVertical: 24,
   },
   overrunTitle: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 20,
     color: '#0E0E0E',
     letterSpacing: -0.3,
     marginBottom: 10,
   },
   overrunBody: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 13,
     color: '#666',
     lineHeight: 19,
@@ -2527,7 +2244,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   overrunPrimaryText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 14,
     color: '#0E0E0E',
     letterSpacing: 0.3,
@@ -2537,7 +2254,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   overrunSecondaryText: {
-    fontFamily: Fonts.jakartaSemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 13,
     color: '#999',
   },
@@ -2549,24 +2266,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.side,
   },
   timerText: {
-    fontFamily: Fonts.monument,
+    fontFamily: Fonts.extraBold,
     fontSize: 64,
     color: Colors.black,
     letterSpacing: 2,
   },
   overTimeText: {
-    fontFamily: Fonts.monument,
+    fontFamily: Fonts.extraBold,
     fontSize: 22,
     color: Colors.orange,
     letterSpacing: 1,
     marginTop: -8,
-  },
-  timerIdle: { color: 'rgba(17,12,17,0.2)' },
-  timerHint: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 13,
-    color: Colors.secondary,
-    marginTop: 8,
   },
   progressTrack: {
     width: '100%',
@@ -2580,60 +2290,8 @@ const styles = StyleSheet.create({
 
   doneWrap: { alignItems: 'center', gap: 8 },
   doneCheck: { fontSize: 48 },
-  doneTitle: { fontFamily: Fonts.jakartaExtraBold, fontSize: 20, color: Colors.black },
+  doneTitle: { fontFamily: Fonts.semiBold, fontSize: 20, color: Colors.black },
 
-  tools: {
-    marginHorizontal: Spacing.side,
-    backgroundColor: Colors.statCardBg,
-    borderWidth: 0.5,
-    borderColor: Colors.statCardBorder,
-    borderRadius: 14,
-    paddingVertical: 4,
-    marginBottom: 14,
-  },
-  metroPill: {
-    backgroundColor: '#1A1A1A',
-    height: 48,
-    overflow: 'hidden',
-    flexDirection: 'row',
-    alignItems: 'center',
-    position: 'relative',
-  },
-  metroPillCircle: {
-    width: 48,
-    height: 48,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-  },
-  metroPillIcon: {
-    fontSize: 20,
-    color: '#FFFFFF',
-  },
-  metroPulse: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: Colors.orange,
-  },
-  metroPillContent: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  metroPillClose: {
-    position: 'absolute',
-    top: 8,
-    right: 10,
-    width: 28,
-    height: 28,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  metroPillCloseText: {
-    fontSize: 12,
-    color: 'rgba(255,255,255,0.4)',
-  },
   ctaWrap: {
     paddingHorizontal: Spacing.side,
     paddingBottom: 8,
@@ -2645,7 +2303,7 @@ const styles = StyleSheet.create({
     paddingVertical: 17,
     alignItems: 'center',
   },
-  startBtnText: { fontFamily: Fonts.ttExtraBold, fontSize: 15, color: '#000', letterSpacing: 1 },
+  startBtnText: { fontFamily: Fonts.extraBold, fontSize: 15, color: '#000', letterSpacing: 1 },
 
   pauseBtn: {
     borderRadius: 14,
@@ -2668,7 +2326,7 @@ const styles = StyleSheet.create({
     borderRadius: 2,
     backgroundColor: Colors.secondary,
   },
-  pauseBtnText: { fontFamily: Fonts.jakartaMedium, fontSize: 14, color: Colors.secondary },
+  pauseBtnText: { fontFamily: Fonts.medium, fontSize: 14, color: Colors.secondary },
 
   pausedRow: {
     flexDirection: 'row',
@@ -2684,7 +2342,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 8,
   },
-  resumeBtnText: { fontFamily: Fonts.jakartaBold, fontSize: 14, color: '#000' },
+  resumeBtnText: { fontFamily: Fonts.semiBold, fontSize: 14, color: '#000' },
 
   stopBtn: {
     flex: 1,
@@ -2698,19 +2356,11 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(17,12,17,0.15)',
     overflow: 'hidden',
   },
-  stopBtnFill: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    bottom: 0,
-    backgroundColor: Colors.orange,
-    borderRadius: 14,
-  },
-  stopBtnText: { fontFamily: Fonts.jakartaMedium, fontSize: 14, color: Colors.secondary },
+  stopBtnText: { fontFamily: Fonts.medium, fontSize: 14, color: Colors.secondary },
 
   validateBtn: { backgroundColor: Colors.black, borderRadius: 14, paddingVertical: 17, alignItems: 'center', overflow: 'hidden' },
   validateBtnFill: { position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: Colors.orange, borderRadius: 14 },
-  validateBtnText: { fontFamily: Fonts.jakartaExtraBold, fontSize: 15, color: Colors.white, letterSpacing: 1 },
+  validateBtnText: { fontFamily: Fonts.semiBold, fontSize: 15, color: Colors.white, letterSpacing: 1 },
 
   stopConfirmOverlay: {
     flex: 1,
@@ -2726,13 +2376,13 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   stopConfirmTitle: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 17,
     color: Colors.black,
     marginBottom: 8,
   },
   stopConfirmBody: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 14,
     color: 'rgba(17,12,17,0.55)',
     lineHeight: 20,
@@ -2749,7 +2399,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.orange,
   },
   stopConfirmCancelText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 14,
     color: Colors.black,
   },
@@ -2761,15 +2411,12 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(17,12,17,0.15)',
   },
   stopConfirmConfirmText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 14,
     color: Colors.secondary,
   },
 
   // ── AI card (inside focusCard, inherits its padding/bg) ──
-  aiCard: {
-    paddingBottom: 8,
-  },
   aiToggleBtn: {
     position: 'absolute',
     top: 14,
@@ -2785,7 +2432,7 @@ const styles = StyleSheet.create({
   aiToggleIcon: {
     fontSize: 12,
     color: 'rgba(255,255,255,0.55)',
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
   },
   aiCardMessages: {
     flex: 1,
@@ -2797,7 +2444,7 @@ const styles = StyleSheet.create({
     paddingBottom: 4,
   },
   aiCardEmptyText: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     color: 'rgba(255,255,255,0.3)',
     lineHeight: 20,
@@ -2817,7 +2464,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.06)',
   },
   suggestionText: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 13,
     color: 'rgba(255,255,255,0.85)',
     lineHeight: 18,
@@ -2836,7 +2483,7 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
   },
   aiCardBubbleText: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     lineHeight: 20,
   },
@@ -2864,7 +2511,7 @@ const styles = StyleSheet.create({
     borderRadius: 9,
   },
   askCoachBtnText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 11.5,
     color: '#fff',
     letterSpacing: 0.2,
@@ -2874,7 +2521,7 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   askCoachDismissText: {
-    fontFamily: Fonts.jakartaSemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 11.5,
     color: 'rgba(255,255,255,0.45)',
   },
@@ -2886,7 +2533,7 @@ const styles = StyleSheet.create({
     paddingLeft: 4,
   },
   askCoachStatusText: {
-    fontFamily: Fonts.jakartaSemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 11,
     color: 'rgba(255,255,255,0.55)',
   },
@@ -2906,7 +2553,7 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     paddingHorizontal: 14,
     paddingVertical: 0,
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     color: '#FFFFFF',
     textAlignVertical: 'center',
@@ -2938,7 +2585,7 @@ const dp = StyleSheet.create({
     gap: 80,
   },
   labelSmall: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 11,
     color: Colors.secondary,
     letterSpacing: 1.8,
@@ -2946,7 +2593,7 @@ const dp = StyleSheet.create({
     marginBottom: 2,
   },
   labelBig: {
-    fontFamily: Fonts.monument,
+    fontFamily: Fonts.extraBold,
     fontSize: 26,
     color: Colors.black,
     letterSpacing: -0.5,
@@ -2982,14 +2629,14 @@ const dp = StyleSheet.create({
     gap: 4,
   },
   num: {
-    fontFamily: Fonts.monument,
+    fontFamily: Fonts.extraBold,
     fontSize: 32,
     color: Colors.black,
     letterSpacing: 1,
     lineHeight: 40,
   },
   unit: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 12,
     color: Colors.secondary,
     marginTop: 8,
@@ -3002,72 +2649,19 @@ const dp = StyleSheet.create({
 const ln = StyleSheet.create({
   wrap: { marginTop: 12, gap: 2 },
   heading: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 10,
     color: 'rgba(255,255,255,0.35)',
     letterSpacing: 0.5,
     textTransform: 'uppercase',
     marginBottom: 6,
   },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 7,
-    paddingHorizontal: 10,
-    backgroundColor: 'rgba(255,255,255,0.07)',
-    borderRadius: 8,
-    gap: 8,
-    marginBottom: 4,
-  },
-  date: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 11,
-    color: 'rgba(255,255,255,0.35)',
-    minWidth: 44,
-  },
-  text: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 12,
-    color: 'rgba(255,255,255,0.75)',
-    flex: 1,
-  },
-  arrow: {
-    fontSize: 14,
-    color: 'rgba(255,255,255,0.3)',
-  },
-  pageHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 0,
-  },
-  swipeHint: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 10,
-    color: 'rgba(255,255,255,0.25)',
-    letterSpacing: 0.3,
-  },
   coachNoteText: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     color: 'rgba(255,255,255,0.85)',
     lineHeight: 20,
     marginTop: 4,
-  },
-  dots: {
-    flexDirection: 'row',
-    gap: 5,
-    marginTop: 10,
-    justifyContent: 'center',
-  },
-  dot: {
-    width: 5,
-    height: 5,
-    borderRadius: 3,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-  },
-  dotActive: {
-    backgroundColor: 'rgba(255,255,255,0.7)',
   },
 });
 
@@ -3102,7 +2696,7 @@ const modal = StyleSheet.create({
     marginBottom: 20,
   },
   date: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 13,
     color: Colors.secondary,
     letterSpacing: 0.3,
@@ -3116,7 +2710,7 @@ const modal = StyleSheet.create({
 
   section: { marginBottom: 24 },
   sectionLabel: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 11,
     color: Colors.secondary,
     textTransform: 'uppercase',
@@ -3132,7 +2726,7 @@ const modal = StyleSheet.create({
     borderColor: Colors.statCardBorder,
   },
   cardInputLabel: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 11,
     color: Colors.black,
     textTransform: 'uppercase',
@@ -3140,14 +2734,14 @@ const modal = StyleSheet.create({
     marginBottom: 6,
   },
   cardText: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 15,
     color: Colors.black,
     lineHeight: 23,
   },
 
   urgencyRow: { flexDirection: 'row', alignItems: 'center', marginTop: 12, gap: 10 },
-  urgencyLabel: { fontFamily: Fonts.jakartaMedium, fontSize: 11, color: Colors.secondary },
+  urgencyLabel: { fontFamily: Fonts.medium, fontSize: 11, color: Colors.secondary },
   urgencyDots: { flexDirection: 'row', gap: 5 },
   urgencyDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: 'rgba(17,12,17,0.12)' },
 
@@ -3168,126 +2762,12 @@ const modal = StyleSheet.create({
     borderColor: Colors.statCardBorder,
   },
   focusChipText: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 14,
     color: Colors.black,
     flex: 1,
   },
   fpDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.activeLog },
-});
-
-// ─── Metronome styles ─────────────────────────────────────────────────────────
-
-const PILL_H_OPEN = M_ITEM_H * 3 + 20; // 134
-
-const m = StyleSheet.create({
-  wrap: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingRight: 12,
-  },
-  band: {
-    display: 'none',
-  },
-  col: {
-    flex: 2,
-    height: M_ITEM_H * 3,
-  },
-  colBpm: {
-    flex: 1,
-    height: M_ITEM_H * 3,
-  },
-  scrollContent: {
-    paddingVertical: M_ITEM_H,
-  },
-  item: {
-    height: M_ITEM_H,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  danceText: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 13,
-    color: 'rgba(255,255,255,0.4)',
-    letterSpacing: 0.3,
-  },
-  bpmText: {
-    fontFamily: Fonts.monument,
-    fontSize: 18,
-    color: 'rgba(255,255,255,0.4)',
-    letterSpacing: 0.5,
-  },
-  itemActive: {
-    color: '#FFFFFF',
-  },
-  itemPlaceholder: {
-    fontSize: 11,
-    color: 'rgba(255,255,255,0.35)',
-    fontStyle: 'italic',
-  },
-  sep: {
-    width: StyleSheet.hairlineWidth,
-    height: M_ITEM_H * 3,
-    backgroundColor: 'rgba(255,255,255,0.15)',
-    alignSelf: 'center',
-    marginHorizontal: 4,
-  },
-  itemAdjacent: {
-    fontSize: 10,
-    color: 'rgba(255,255,255,0.25)',
-  },
-  itemFar: {
-    color: 'rgba(255,255,255,0)',
-  },
-  right: {
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingRight: 4,
-    marginLeft: 8,
-    flexShrink: 0,
-  },
-  beatDots: {
-    flexDirection: 'row',
-    gap: 4,
-    alignItems: 'center',
-  },
-  dot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-  },
-  dotActive: {
-    backgroundColor: '#FFFFFF',
-  },
-  dotAccent: {
-    backgroundColor: Colors.orange,
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  playBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-  },
-  playBtnActive: {
-    backgroundColor: Colors.orange,
-    shadowColor: Colors.orange,
-    shadowOpacity: 0.6,
-    shadowOffset: { width: 0, height: 3 },
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  playIcon: { fontSize: 13, color: '#FFFFFF' },
-  playIconActive: { color: '#000' },
 });
 
 // ─── Feeling slider styles ────────────────────────────────────────────────────
@@ -3297,13 +2777,13 @@ const sl = StyleSheet.create({
   slider: { width: '100%', height: 40 },
   row: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 4 },
   label: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 11,
     color: 'rgba(17,12,17,0.3)',
   },
   labelOn: {
     color: Colors.orange,
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
   },
 });
 
@@ -3313,9 +2793,6 @@ const fm = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#050505',
-  },
-  content: {
-    alignItems: 'center',
   },
   // ── Cinematic backdrop layers ──────────────────────────────────────────
   cineCanvas: {
@@ -3328,14 +2805,6 @@ const fm = StyleSheet.create({
     right: 0,
     bottom: 0,
     height: '70%',
-  },
-  cineGlowTop: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    top: 0,
-    height: '40%',
-    opacity: 1,
   },
   cineHorizon: {
     position: 'absolute',
@@ -3378,7 +2847,7 @@ const fm = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.18)',
   },
   eyebrowFocus: {
-    fontFamily: Fonts.ttExtraBold,
+    fontFamily: Fonts.extraBold,
     fontSize: 17,
     color: '#FFFFFF',
     letterSpacing: 3.4,
@@ -3386,14 +2855,14 @@ const fm = StyleSheet.create({
     flexShrink: 1,
   },
   eyebrowSessions: {
-    fontFamily: Fonts.ttExtraBold,
+    fontFamily: Fonts.extraBold,
     fontSize: 13,
     color: '#E8B530',
     letterSpacing: 4,
     textAlign: 'center',
   },
   questionText: {
-    fontFamily: Fonts.ttExtraBold,
+    fontFamily: Fonts.extraBold,
     fontSize: 22,
     color: '#FFFFFF',
     textAlign: 'center',
@@ -3472,7 +2941,7 @@ const fm = StyleSheet.create({
     borderColor: 'transparent',
   },
   pillText: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 10,
     color: 'rgba(255,255,255,0.62)',
     letterSpacing: 0,
@@ -3486,7 +2955,7 @@ const fm = StyleSheet.create({
     borderRadius: 14,
     paddingHorizontal: 14,
     paddingVertical: 12,
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     color: '#FFFFFF',
     backgroundColor: 'rgba(255,255,255,0.04)',
@@ -3506,193 +2975,14 @@ const fm = StyleSheet.create({
     elevation: 6,
   },
   ctaText: {
-    fontFamily: Fonts.ttExtraBold,
+    fontFamily: Fonts.extraBold,
     fontSize: 15,
     color: '#0A0A0A',
     letterSpacing: 0.4,
   },
-  skipBtn: {
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  skipText: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 13,
-    color: 'rgba(255,255,255,0.45)',
-  },
-  motivationRow: {
-    flexDirection: 'row',
-    gap: 10,
-    marginTop: 4,
-    width: '100%',
-  },
-  motivationBtn: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: 'rgba(17,12,17,0.1)',
-    borderRadius: 14,
-    paddingVertical: 12,
-    paddingHorizontal: 8,
-    alignItems: 'center',
-    backgroundColor: Colors.statCardBg,
-  },
-  motivationBtnOn: {
-    borderColor: Colors.orange,
-    backgroundColor: 'rgba(232,168,56,0.1)',
-  },
-  motivationEmoji: {
-    fontSize: 24,
-    marginBottom: 4,
-  },
-  motivationLabel: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 11,
-    color: Colors.secondary,
-  },
-  motivationLabelOn: {
-    fontFamily: Fonts.jakartaBold,
-    color: Colors.black,
-  },
 });
 
 // ─── Chat styles ─────────────────────────────────────────────────────────────
-
-const chat = StyleSheet.create({
-  wrap: {
-    flex: 1,
-    backgroundColor: Colors.background,
-  },
-  sessionBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: Spacing.side,
-    paddingVertical: 8,
-    backgroundColor: 'rgba(76,175,80,0.07)',
-    borderBottomWidth: 0.5,
-    borderBottomColor: 'rgba(76,175,80,0.2)',
-  },
-  sessionDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-    backgroundColor: Colors.activeLog,
-  },
-  sessionText: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 12,
-    color: Colors.activeLog,
-  },
-  header: {
-    paddingHorizontal: Spacing.side,
-    paddingTop: 16,
-    paddingBottom: 12,
-    borderBottomWidth: 0.5,
-    borderBottomColor: "rgba(17,12,17,0.08)",
-  },
-  title: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 18,
-    color: Colors.black,
-  },
-  subtitle: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 12,
-    color: Colors.secondary,
-    marginTop: 2,
-  },
-  messageList: {
-    flex: 1,
-  },
-  messageListContent: {
-    padding: Spacing.side,
-    paddingBottom: 16,
-    gap: 10,
-  },
-  emptyState: {
-    paddingTop: 40,
-    paddingHorizontal: 8,
-    alignItems: "center",
-  },
-  emptyText: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 14,
-    color: Colors.secondary,
-    textAlign: "center",
-    lineHeight: 22,
-  },
-  bubble: {
-    maxWidth: "85%",
-    borderRadius: 16,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-  },
-  bubbleUser: {
-    alignSelf: "flex-end",
-    backgroundColor: Colors.black,
-    borderBottomRightRadius: 4,
-  },
-  bubbleBot: {
-    alignSelf: "flex-start",
-    backgroundColor: Colors.statCardBg,
-    borderBottomLeftRadius: 4,
-    borderWidth: 0.5,
-    borderColor: Colors.statCardBorder,
-    minWidth: 60,
-    alignItems: "center",
-  },
-  bubbleText: {
-    fontSize: 14,
-    lineHeight: 21,
-    fontFamily: Fonts.jakartaRegular,
-  },
-  bubbleTextUser: {
-    color: Colors.white,
-  },
-  bubbleTextBot: {
-    color: Colors.black,
-  },
-  inputBar: {
-    flexDirection: "row",
-    alignItems: "flex-end",
-    gap: 10,
-    paddingHorizontal: Spacing.side,
-    paddingVertical: 12,
-    borderTopWidth: 0.5,
-    borderTopColor: "rgba(17,12,17,0.08)",
-  },
-  input: {
-    flex: 1,
-    minHeight: 42,
-    maxHeight: 100,
-    backgroundColor: Colors.statCardBg,
-    borderRadius: 14,
-    paddingHorizontal: 14,
-    paddingTop: 11,
-    paddingBottom: 11,
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 14,
-    color: Colors.black,
-    borderWidth: 0.5,
-    borderColor: Colors.statCardBorder,
-  },
-  sendBtn: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: Colors.black,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  sendBtnDisabled: {
-    opacity: 0.3,
-  },
-  sendBtnIcon: {
-    fontSize: 18,
-    color: Colors.white,
-    fontWeight: "bold",
-  },
-});
 
 // Too-short session prompt — dark hero card with gold accents matching the
 // rest of the app's confirmation modals.
@@ -3725,7 +3015,7 @@ const shortS = StyleSheet.create({
     marginBottom: 16,
   },
   title: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 20,
     color: '#FFFFFF',
     letterSpacing: -0.5,
@@ -3733,7 +3023,7 @@ const shortS = StyleSheet.create({
     marginBottom: 8,
   },
   body: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13.5,
     color: 'rgba(255,255,255,0.78)',
     lineHeight: 20,
@@ -3741,7 +3031,7 @@ const shortS = StyleSheet.create({
     marginBottom: 22,
   },
   bodyAccent: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     color: '#F6D27A',
   },
   primaryBtn: {
@@ -3755,7 +3045,7 @@ const shortS = StyleSheet.create({
     marginBottom: 4,
   },
   primaryBtnText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 14,
     color: '#0A0A0A',
     letterSpacing: 0.2,
@@ -3766,7 +3056,7 @@ const shortS = StyleSheet.create({
     paddingVertical: 14,
   },
   secondaryBtnText: {
-    fontFamily: Fonts.jakartaSemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 13.5,
     color: 'rgba(255,255,255,0.65)',
     letterSpacing: 0.1,

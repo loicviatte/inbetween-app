@@ -573,7 +573,7 @@ export default function LogModal({ visible, onClose, onSubmitted, initialDraft }
               <View style={styles.handle} />
               <View style={styles.headerRow}>
                 <View>
-                  <Text style={styles.headerTitle}>Log a class</Text>
+                  <Text style={styles.headerTitle}>Log a lesson</Text>
                   <Text style={styles.headerStep}>Step {step} of 2</Text>
                 </View>
                 <TouchableOpacity onPress={handleClose} style={styles.closeBtn} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
@@ -594,7 +594,7 @@ export default function LogModal({ visible, onClose, onSubmitted, initialDraft }
               {step === 1 ? (
                 <>
                   {/* ── Class details ─────────────────────────────── */}
-                  <Text style={styles.sectionTitle}>Class details</Text>
+                  <Text style={styles.sectionTitle}>Lesson details</Text>
                   <View style={styles.metaCard}>
 
                     {/* Type */}
@@ -678,11 +678,11 @@ export default function LogModal({ visible, onClose, onSubmitted, initialDraft }
                   </View>
 
                   {/* ── Class Summary ─────────────────────────────── */}
-                  <Text style={styles.sectionTitleBold}>Class Summary</Text>
+                  <Text style={styles.sectionTitleBold}>Lesson summary</Text>
                   <VoiceInput
                     value={class_summary}
                     onChangeText={setClassSummary}
-                    placeholder="What did you work on in this class?"
+                    placeholder="What did you work on in this lesson?"
                   />
 
                   {/* ── Focus 1 ───────────────────────────────────── */}
@@ -804,7 +804,7 @@ export default function LogModal({ visible, onClose, onSubmitted, initialDraft }
                   {/* ── Date ──────────────────────────────────────── */}
                   <View style={styles.dateSeparator} />
                   <TouchableOpacity style={styles.dateBtn} onPress={() => setShowDatePicker(!showDatePicker)} activeOpacity={0.75}>
-                    <Text style={styles.dateBtnLabel}>Class date</Text>
+                    <Text style={styles.dateBtnLabel}>Lesson date</Text>
                     <Text style={styles.dateBtnValue}>{formatDateLabel(classDate)} ▾</Text>
                   </TouchableOpacity>
                   {showDatePicker && (
@@ -898,7 +898,7 @@ export default function LogModal({ visible, onClose, onSubmitted, initialDraft }
                         <Text style={styles.primaryBtnText}>Generating…</Text>
                       </View>
                     ) : (
-                      <Text style={styles.primaryBtnText}>Save class</Text>
+                      <Text style={styles.primaryBtnText}>Save lesson</Text>
                     )}
                   </TouchableOpacity>
 
@@ -970,13 +970,13 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   headerTitle: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 22,
     color: Colors.black,
     letterSpacing: -0.3,
   },
   headerStep: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 12,
     color: Colors.secondary,
     marginTop: 3,
@@ -988,7 +988,7 @@ const styles = StyleSheet.create({
 
   // ── Section title ──────────────────────────────────────
   sectionTitle: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 11,
     color: Colors.secondary,
     textTransform: 'uppercase',
@@ -997,7 +997,7 @@ const styles = StyleSheet.create({
     marginTop: 20,
   },
   sectionTitleBold: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 14,
     color: Colors.black,
     marginBottom: 10,
@@ -1026,18 +1026,18 @@ const styles = StyleSheet.create({
     minHeight: 48,
   },
   metaLabel: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 14,
     color: Colors.black,
     width: 84,
   },
   metaValuePlaceholder: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 13,
     color: '#BDBDBD',
   },
   metaValueSelected: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 13,
     color: Colors.black,
     flexShrink: 1,
@@ -1059,8 +1059,8 @@ const styles = StyleSheet.create({
     borderRadius: 10,
   },
   pillToggleItemActive: { backgroundColor: Colors.white, shadowColor: '#000', shadowOpacity: 0.08, shadowOffset: { width: 0, height: 1 }, shadowRadius: 3, elevation: 2 },
-  pillToggleText:       { fontFamily: Fonts.jakartaMedium, fontSize: 13, color: Colors.secondary },
-  pillToggleTextActive: { fontFamily: Fonts.jakartaBold, color: Colors.black },
+  pillToggleText:       { fontFamily: Fonts.medium, fontSize: 13, color: Colors.secondary },
+  pillToggleTextActive: { fontFamily: Fonts.semiBold, color: Colors.black },
 
   // ── Teacher ────────────────────────────────────────────
   teacherChip: {
@@ -1072,16 +1072,16 @@ const styles = StyleSheet.create({
     paddingVertical: 7,
     gap: 8,
   },
-  teacherChipText:  { fontFamily: Fonts.jakartaBold, fontSize: 13, color: Colors.white },
+  teacherChipText:  { fontFamily: Fonts.semiBold, fontSize: 13, color: Colors.white },
   teacherClear:     { opacity: 0.6 },
-  teacherClearText: { fontSize: 11, color: Colors.white, fontFamily: Fonts.jakartaBold },
+  teacherClearText: { fontSize: 11, color: Colors.white, fontFamily: Fonts.semiBold },
   teacherInputWrap: {
     borderBottomWidth: 1.5,
     borderBottomColor: Colors.black,
     minWidth: 160,
   },
   teacherInput: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 13,
     color: Colors.black,
     paddingVertical: 5,
@@ -1108,7 +1108,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 0.5,
     borderBottomColor: '#F5F5F5',
   },
-  suggestionText: { fontFamily: Fonts.jakartaMedium, fontSize: 14, color: Colors.black },
+  suggestionText: { fontFamily: Fonts.medium, fontSize: 14, color: Colors.black },
 
   // ── Dance selector ─────────────────────────────────────
   danceScroll:        { marginHorizontal: -16 },
@@ -1120,8 +1120,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#F3F3F3',
   },
   dancePillActive:     { backgroundColor: Colors.black },
-  dancePillText:       { fontFamily: Fonts.jakartaMedium, fontSize: 13, color: Colors.secondary },
-  dancePillTextActive: { color: Colors.white, fontFamily: Fonts.jakartaBold },
+  dancePillText:       { fontFamily: Fonts.medium, fontSize: 13, color: Colors.secondary },
+  dancePillTextActive: { color: Colors.white, fontFamily: Fonts.semiBold },
 
   // ── Focus block ────────────────────────────────────────
   focusHeader: {
@@ -1137,13 +1137,13 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   focusBadgeText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 10,
     color: Colors.white,
     letterSpacing: 0.5,
   },
   focusTitle: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 15,
     color: Colors.black,
   },
@@ -1161,18 +1161,12 @@ const styles = StyleSheet.create({
   },
 
   // ── Inputs ─────────────────────────────────────────────
-  inputBlock: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 8,
-    marginBottom: 12,
-  },
   filledInput: {
     flex: 1,
     backgroundColor: Colors.white,
     borderRadius: 14,
     padding: 14,
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 14,
     color: Colors.black,
     textAlignVertical: 'top',
@@ -1181,11 +1175,8 @@ const styles = StyleSheet.create({
     borderColor: '#EFEFEF',
     lineHeight: 21,
   },
-  drillInput: { minHeight: 64, backgroundColor: '#F9F9F9' },
-  micWrap: { paddingTop: 2 },
   micBtn:       { width: 34, height: 34, alignItems: 'center', justifyContent: 'center' },
   micBtnActive: {},
-  micIcon:      { fontSize: 18 },
 
   // ── Urgency ────────────────────────────────────────────
   urgencyRow: {
@@ -1196,13 +1187,13 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   urgencyLabel: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 12,
     color: Colors.secondary,
     letterSpacing: 0.3,
   },
   urgencyBadge: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 12,
     color: Colors.black,
     backgroundColor: '#F3F3F3',
@@ -1210,7 +1201,6 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
     borderRadius: 8,
   },
-  urgencyValue: { fontFamily: Fonts.jakartaMedium, fontSize: 11, color: Colors.secondary, textAlign: 'right', marginTop: -4 },
   sliderWrap:   { marginBottom: 12 },
   slider:       { width: '100%', height: 40 },
 
@@ -1223,7 +1213,7 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   removableLabel: {
-    fontFamily: Fonts.jakartaSemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 13,
     color: Colors.secondary,
   },
@@ -1231,7 +1221,7 @@ const styles = StyleSheet.create({
     marginLeft: 'auto',
   },
   removableX: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 13,
     color: '#E84040',
   },
@@ -1242,7 +1232,7 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   addLinkText: {
-    fontFamily: Fonts.jakartaSemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 14,
     color: Colors.activeLog,
   },
@@ -1260,8 +1250,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 14,
   },
-  dateBtnLabel: { fontFamily: Fonts.jakartaBold, fontSize: 14, color: Colors.black },
-  dateBtnValue: { fontFamily: Fonts.jakartaMedium, fontSize: 14, color: Colors.secondary },
+  dateBtnLabel: { fontFamily: Fonts.semiBold, fontSize: 14, color: Colors.black },
+  dateBtnValue: { fontFamily: Fonts.medium, fontSize: 14, color: Colors.secondary },
   datePicker:   { width: '100%' },
 
   // ── Review ─────────────────────────────────────────────
@@ -1278,7 +1268,7 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   reviewMetaChipText: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 13,
     color: Colors.black,
   },
@@ -1297,14 +1287,14 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   reviewBlockLabel: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 12,
     color: Colors.secondary,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
   reviewBlockText: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 14,
     color: Colors.black,
     lineHeight: 21,
@@ -1316,7 +1306,7 @@ const styles = StyleSheet.create({
     borderTopColor: '#F5F5F5',
   },
   reviewDrillLabel: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 11,
     color: Colors.secondary,
     textTransform: 'uppercase',
@@ -1324,7 +1314,7 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
   reviewDrillText: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     color: Colors.black,
     lineHeight: 19,
@@ -1353,12 +1343,12 @@ const styles = StyleSheet.create({
   },
   primaryBtnText: {
     color: Colors.white,
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 16,
     letterSpacing: 0.3,
   },
   backBtn:     { alignItems: 'center', marginTop: 16 },
-  backBtnText: { fontFamily: Fonts.jakartaMedium, fontSize: 14, color: Colors.secondary },
+  backBtnText: { fontFamily: Fonts.medium, fontSize: 14, color: Colors.secondary },
   error:          { color: '#E84040', fontSize: 13, marginTop: 8 },
-  errorAboveBtn:  { color: '#E84040', fontSize: 13, fontFamily: Fonts.jakartaMedium, textAlign: 'center', marginBottom: 8 },
+  errorAboveBtn:  { color: '#E84040', fontSize: 13, fontFamily: Fonts.medium, textAlign: 'center', marginBottom: 8 },
 });

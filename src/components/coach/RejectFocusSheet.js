@@ -8,17 +8,18 @@ import {
   Platform,
   StyleSheet,
 } from 'react-native';
+import BottomSheet from '../BottomSheet';
 import { Fonts } from '../../theme';
 
 const C = {
   dark: '#141414',
   text: '#0E0E0E',
   gray: '#999',
-  red: '#D44545',
+  red: '#A8412F',
   lightGray: '#E5E5E5',
 };
 
-export default function RejectFocusSheet({ fp, onConfirm, onClose }) {
+export default function RejectFocusSheet({ visible, fp, onConfirm, onClose }) {
   const [reason, setReason] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -32,12 +33,8 @@ export default function RejectFocusSheet({ fp, onConfirm, onClose }) {
   }
 
   return (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      style={s.overlay}
-    >
-      <TouchableOpacity style={s.backdrop} activeOpacity={1} onPress={onClose} />
-      <View style={s.sheet}>
+    <BottomSheet visible={visible} onClose={onClose} avoidKeyboard overlayColor="rgba(10,10,10,0.45)" sheetStyle={s.sheet}>
+      <>
         <View style={s.handle} />
         <Text style={s.title}>Decline focus point</Text>
         <Text style={s.subtitle} numberOfLines={2}>
@@ -71,8 +68,8 @@ export default function RejectFocusSheet({ fp, onConfirm, onClose }) {
             <Text style={s.confirmText}>{submitting ? 'Declining…' : 'Decline'}</Text>
           </TouchableOpacity>
         </View>
-      </View>
-    </KeyboardAvoidingView>
+      </>
+    </BottomSheet>
   );
 }
 
@@ -102,21 +99,21 @@ const s = StyleSheet.create({
     marginBottom: 14,
   },
   title: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 19,
     color: C.text,
     letterSpacing: -0.3,
     marginBottom: 6,
   },
   subtitle: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13.5,
     color: '#5C6370',
     lineHeight: 20,
     marginBottom: 20,
   },
   label: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 10,
     color: C.gray,
     letterSpacing: 1.2,
@@ -124,7 +121,7 @@ const s = StyleSheet.create({
     marginBottom: 8,
   },
   input: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 14,
     color: C.text,
     lineHeight: 20,
@@ -135,7 +132,7 @@ const s = StyleSheet.create({
     marginBottom: 6,
   },
   hint: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 11,
     color: '#B5B5B5',
     marginBottom: 22,
@@ -154,7 +151,7 @@ const s = StyleSheet.create({
     borderColor: C.lightGray,
   },
   cancelText: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 13,
     color: C.text,
     letterSpacing: 0.2,
@@ -168,7 +165,7 @@ const s = StyleSheet.create({
     backgroundColor: C.red,
   },
   confirmText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 13,
     color: '#fff',
     letterSpacing: 0.2,

@@ -8,9 +8,10 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { LinearGradient } from 'expo-linear-gradient';
 import HomeScreen from '../screens/HomeScreen';
 import LogScreen from '../screens/LogScreen';
-import ProfileScreen from '../screens/ProfileScreen';
+import StatsScreen from '../screens/StatsScreen';
 import CustomTabBar from '../components/CustomTabBar';
 import { ProfileProvider } from '../context/ProfileContext';
+import { useAgeLock } from '../components/AgeCheckGate';
 
 const Tab = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
@@ -28,9 +29,13 @@ function MainTabs() {
           style={StyleSheet.absoluteFillObject}
         />
       )}
+      {/* Train's flat page colour continues behind the floating tab bar. */}
+      {activeRoute === 'TRAIN' && (
+        <View style={[StyleSheet.absoluteFillObject, { backgroundColor: '#F2F0EB' }]} />
+      )}
       <Tab.Navigator
         initialRouteName="TRAIN"
-        tabBar={(props) => <CustomTabBar {...props} />}
+        tabBar={(props) => <CustomTabBar {...props} overlay />}
         screenListeners={{
           state: (e) => {
             const r = e.data?.state?.routes?.[e.data.state.index];
@@ -42,19 +47,32 @@ function MainTabs() {
           tabBarStyle: { backgroundColor: 'transparent', borderTopWidth: 0, elevation: 0 },
         }}
       >
-        <Tab.Screen name="PROFILE" component={ProfileScreen} />
+        {/* Routes keep their names (deep links, navigate calls); the tabs read Stats and Lessons. */}
+        <Tab.Screen name="PROFILE" component={StatsScreen} options={{ tabBarLabel: 'STATS' }} />
         <Tab.Screen name="TRAIN" component={HomeScreen} />
-        <Tab.Screen name="LOG" component={LogScreen} />
+        <Tab.Screen name="LOG" component={LogScreen} options={{ tabBarLabel: 'LESSONS' }} />
       </Tab.Navigator>
     </View>
   );
 }
 
 export default function StudentAppNavigator() {
+  // A coach said this student is under 18 and no parent has approved: the app
+  // stays closed behind the lock screen until the account is sorted.
+  const ageLocked = useAgeLock();
+  if (ageLocked) {
+    const AgeCheckScreen = require('../screens/AgeCheckScreen').default;
+    return <AgeCheckScreen />;
+  }
   return (
     <ProfileProvider>
       <Stack.Navigator screenOptions={{ headerShown: false, detachInactiveScreens: false }}>
         <Stack.Screen name="MainTabs" component={MainTabs} />
+        <Stack.Screen
+          name="StatsDetail"
+          getComponent={() => require('../screens/StatsDetailScreen').default}
+          options={{ animation: 'slide_from_right' }}
+        />
         <Stack.Screen
           name="ClassDetail"
           getComponent={() => require('../screens/ClassDetailScreen').default}
@@ -74,6 +92,11 @@ export default function StudentAppNavigator() {
           name="Notifications"
           getComponent={() => require('../screens/NotificationsScreen').default}
           options={{ animation: 'slide_from_left' }}
+        />
+        <Stack.Screen
+          name="NotificationSettings"
+          getComponent={() => require('../screens/NotificationSettingsScreen').default}
+          options={{ animation: 'slide_from_right' }}
         />
         <Stack.Screen
           name="AllFocusPoints"

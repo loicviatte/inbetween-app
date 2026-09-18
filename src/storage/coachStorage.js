@@ -54,7 +54,7 @@ export async function getPendingCoachRequests() {
   const coachId = await getCoachId();
   const { data } = await supabase
     .from('coach_requests')
-    .select('id, student_id, category, created_at, users!coach_requests_student_id_fkey(name, dance_style)')
+    .select('id, student_id, category, created_at, users!coach_requests_student_id_fkey(name, dance_style, consent_status)')
     .eq('coach_id', coachId)
     .eq('status', 'pending')
     .order('created_at', { ascending: false });
@@ -65,47 +65,47 @@ export async function getPendingCoachRequests() {
                           // two requests from the same 2-style student.
     name: r.users?.name || 'Unknown',
     danceStyle: r.users?.dance_style || '',
+    consentStatus: r.users?.consent_status || 'not_required',
     createdAt: r.created_at,
   }));
 }
 
 export async function respondToCoachRequest(requestId, accept) {
-  const coachId = await getCoachId();
-  const status = accept ? 'accepted' : 'declined';
+  // Server-side: the request's status and, on accept, the student's coach
+  // column for its style (a coach can't write the student's row directly).
+  const { error } = await supabase.rpc('coach_respond_request', { p_request: requestId, p_accept: !!accept });
+  if (error) throw new Error(error.message);
+}
 
-  // Update the request status and retrieve category + student_id
-  const { data: req } = await supabase
-    .from('coach_requests')
-    .update({ status })
-    .eq('id', requestId)
-    .eq('coach_id', coachId)
-    .select('student_id, category')
-    .single();
+// ─── Links ▸ Edit ─────────────────────────────────────────────────────────────
 
-  if (!req?.student_id) return;
+// What the edit sheet needs about a linked student: the styles they dance and
+// who holds each style's coach slot.
+export async function getStudentLink(studentId) {
+  const { data } = await supabase
+    .from('users')
+    .select('dance_style, latin_coach_id, ballroom_coach_id')
+    .eq('id', studentId)
+    .maybeSingle();
+  return data || null;
+}
 
-  // Determine which coach column(s) to write.
-  // category === null means general/no-style-split → set both columns.
-  const isLatin    = req.category === 'latin';
-  const isBallroom = req.category === 'ballroom';
-  const isBoth     = !isLatin && !isBallroom; // null or unknown → treat as both
+// The styles this coach coaches a student in. Both off removes the student.
+// Server-side (coach_set_student_link): the coach can't write the student's row.
+export async function setStudentLink(studentId, { latin, ballroom }) {
+  const { data, error } = await supabase.rpc('coach_set_student_link', {
+    p_student: studentId, p_latin: !!latin, p_ballroom: !!ballroom,
+  });
+  if (error) throw new Error(error.message);
+  return data;
+}
 
-  if (accept) {
-    const updates = {};
-    if (isLatin  || isBoth) updates.latin_coach_id    = coachId;
-    if (isBallroom || isBoth) updates.ballroom_coach_id = coachId;
-    await supabase.from('users').update(updates).eq('id', req.student_id);
-  } else {
-    // Clear only the relevant column(s) if they were pointing to this coach
-    if (isLatin || isBoth) {
-      await supabase.from('users').update({ latin_coach_id: null })
-        .eq('id', req.student_id).eq('latin_coach_id', coachId);
-    }
-    if (isBallroom || isBoth) {
-      await supabase.from('users').update({ ballroom_coach_id: null })
-        .eq('id', req.student_id).eq('ballroom_coach_id', coachId);
-    }
-  }
+// A coach moving studio: sets the studio and ends every student and couple link
+// (coach_change_studio). Returns { students, couples } — how many were unlinked.
+export async function changeCoachStudio(studioId) {
+  const { data, error } = await supabase.rpc('coach_change_studio', { p_studio: studioId || null });
+  if (error) throw new Error(error.message);
+  return data;
 }
 
 // ─── Students ─────────────────────────────────────────────────────────────────
@@ -173,8 +173,12 @@ async function _getMyStudentsImpl() {
   // instead of FK embed, which can get silently dropped by RLS).
   const { data: userRows } = await supabase
     .from('users')
-    .select('id, name, dance_style, last_active_date, avatar_url, latin_coach_id, ballroom_coach_id')
+    .select('id, name, dance_style, last_active_date, avatar_url, latin_coach_id, ballroom_coach_id, consent_status, age_check')
     .in('id', wantedIds);
+
+  // Students who asked this coach to look at their age again.
+  const { data: reviewIds } = await supabase.rpc('coach_pending_age_reviews');
+  const reviewPending = new Set((reviewIds || []).map((r) => (typeof r === 'string' ? r : r?.coach_pending_age_reviews)));
 
   const byId = new Map();
   for (const u of userRows || []) {
@@ -245,6 +249,8 @@ async function _getMyStudentsImpl() {
       (questionCountByStudent[m.student_id] || 0) + 1;
   }
   const pendingReviewStudents = new Set((pendingFPs || []).map(v => v.user_id));
+  const pendingFocusCountByStudent = {};
+  for (const v of pendingFPs || []) pendingFocusCountByStudent[v.user_id] = (pendingFocusCountByStudent[v.user_id] || 0) + 1;
 
   const activeFocuses = (allFocuses || []).filter(f => f.status === 'active');
   const activeFocusCountByStudent = {};
@@ -260,6 +266,29 @@ async function _getMyStudentsImpl() {
     if (l.completed_at) {
       lastPracticeByStudent[l.student_id] = l.started_at;
     }
+  }
+
+  // Finished sessions per week over the last six weeks, oldest first — the
+  // small activity bars on the Students roster.
+  // …and minutes practised per week over ten weeks, oldest first — the
+  // group practice chart on Home. A session counts for at most 3 hours.
+  const WEEK = 7 * 86400000;
+  const weeklyByStudent = {};
+  const weeklyMinutesByStudent = {};
+  const nowMs = Date.now();
+  for (const l of allLogs || []) {
+    if (!l.completed_at) continue;
+    const ago = Math.floor((nowMs - new Date(l.completed_at).getTime()) / WEEK);
+    if (ago < 0 || ago > 9) continue;
+    if (ago <= 5) {
+      const w = (weeklyByStudent[l.student_id] ||= [0, 0, 0, 0, 0, 0]);
+      w[5 - ago] += 1;
+    }
+    const mins = l.started_at
+      ? Math.min(180, Math.max(0, (new Date(l.completed_at).getTime() - new Date(l.started_at).getTime()) / 60000))
+      : 0;
+    const m = (weeklyMinutesByStudent[l.student_id] ||= new Array(10).fill(0));
+    m[9 - ago] += mins;
   }
 
   // Build the set of class_input_ids that have non-past FPs per student.
@@ -400,6 +429,15 @@ async function _getMyStudentsImpl() {
           ...(s.ballroom_coach_id === coachId ? ['ballroom'] : []),
         ])],
         photoUrl: s.avatar_url || null,
+        // Whether they can be recorded: a parent's permission, and a coach's
+        // "under 18" still waiting on the student (read by the roster chips and
+        // Start class). They were fetched but never passed on.
+        weeklySessions: weeklyByStudent[s.id] || [0, 0, 0, 0, 0, 0],
+        weeklyMinutes: weeklyMinutesByStudent[s.id] || new Array(10).fill(0),
+        pendingFocusCount: pendingFocusCountByStudent[s.id] || 0,
+        consent_status: s.consent_status || 'not_required',
+        age_check: s.age_check || null,
+        age_review_pending: s.age_check === 'minor_pending' && reviewPending.has(s.id),
         lastActiveDate: lastPracticeIso,
         daysSincePractice,
         lastClassDate: lastClassIso,
@@ -794,6 +832,104 @@ export async function getStudentArchivedFocusPoints(studentId) {
 
 // ─── Coach Actions ────────────────────────────────────────────────────────────
 
+// Everything behind a question a student asked while training: the focus point
+// it came from, how far they've got with it, the lesson it was set in, and what
+// they've done about it since. Questions carry no foreign key — the focus is
+// named in the message ("… [Focus: Staccato footwork]"), so it's matched by name.
+export async function getQuestionContext(studentId, focusName) {
+  if (!studentId || !focusName) return null;
+  const { data: found } = await supabase
+    .from('focus_points')
+    .select('id, name, subtitle, drill, tier, status, train_target, created_at, class_input_id, source_class_input_id')
+    .eq('user_id', studentId)
+    .eq('is_deleted', false)
+    .ilike('name', focusName)
+    .order('created_at', { ascending: false })
+    .limit(1);
+  const focus = found?.[0] || null;
+  if (!focus) return { focus: null, lesson: null, lessonFocuses: [], history: [], done: 0, target: 0 };
+
+  const classId = focus.class_input_id || focus.source_class_input_id || null;
+  const [{ data: logs }, { data: cls }] = await Promise.all([
+    supabase
+      .from('practice_logs')
+      .select('id, started_at, completed_at, duration_minutes')
+      .eq('student_id', studentId)
+      .eq('focus_point_id', focus.id)
+      .not('completed_at', 'is', null)
+      .order('completed_at', { ascending: false })
+      .limit(12),
+    classId
+      ? supabase
+          .from('class_inputs')
+          .select('id, title, dance, lesson_type, class_summary, ai_primary_focus, created_at')
+          .eq('id', classId)
+          .maybeSingle()
+      : Promise.resolve({ data: null }),
+  ]);
+
+  let lesson = cls || null;
+  let lessonFocuses = [];
+  if (lesson) {
+    const [{ data: recs }, { data: fps }] = await Promise.all([
+      supabase.from('class_recordings').select(RECORDING_COLUMNS).eq('class_input_id', lesson.id),
+      supabase
+        .from('focus_points')
+        .select('id, name, tier')
+        .eq('class_input_id', lesson.id)
+        .eq('user_id', studentId)
+        .eq('is_other', false)
+        .eq('is_deleted', false),
+    ]);
+    const min = minutesByClassInput(recs)[lesson.id];
+    lesson = { ...lesson, durationMin: min != null ? Math.max(1, Math.round(min)) : null };
+    lessonFocuses = fps || [];
+  }
+
+  // Same count as the readiness gauge: sessions finished since the lesson that
+  // set the focus point.
+  const since = lesson?.created_at || focus.created_at;
+  const target = focus.train_target || (focus.tier === 'critical' ? 3 : 2);
+  const done = Math.min(
+    target,
+    (logs || []).filter((l) => !since || l.completed_at >= since).length,
+  );
+
+  const history = (logs || []).map((l) => ({
+    id: l.id,
+    date: l.completed_at || l.started_at,
+    minutes: l.duration_minutes || null,
+  }));
+
+  return { focus, lesson, lessonFocuses, history, done, target };
+}
+
+// Every question still waiting on this coach, across their students — what the
+// "N asked" chip counts, and what Action needed ▸ Questions lists.
+export async function getPendingQuestions() {
+  const coachId = await getCoachId();
+  const { data: rows } = await supabase
+    .from('coach_messages')
+    .select('id, student_id, message, status, created_at')
+    .eq('coach_id', coachId)
+    .eq('status', 'pending')
+    .order('created_at', { ascending: true });
+  if (!rows || rows.length === 0) return [];
+  // A separate read rather than an embed: the embed shape goes through the
+  // users policy as a nested EXISTS and has dropped rows on us before.
+  const ids = [...new Set(rows.map((r) => r.student_id))];
+  const { data: people } = await supabase
+    .from('users')
+    .select('id, name, avatar_url')
+    .in('id', ids);
+  const byId = Object.fromEntries((people || []).map((p) => [p.id, p]));
+  return rows.map((r) => ({
+    ...r,
+    studentName: byId[r.student_id]?.name || 'Your student',
+    studentPhotoUrl: byId[r.student_id]?.avatar_url || null,
+  }));
+}
+
 export async function replyToQuestion(messageId, replyText) {
   await supabase
     .from('coach_messages')
@@ -819,7 +955,7 @@ export async function dismissQuestion(messageId) {
 // link is persisted too, so the class detail screen can list every
 // question addressed in that lesson under the summary.
 export async function markQuestionCovered(messageId, classInputId = null) {
-  const update = { status: 'replied', reply: 'Covered in your last class.' };
+  const update = { status: 'replied', reply: 'Covered in your last lesson.' };
   if (classInputId) update.covered_class_input_id = classInputId;
   await supabase
     .from('coach_messages')
@@ -1416,7 +1552,7 @@ export async function getCoachNotes() {
     (classes || []).forEach(c => {
       classMap[c.id] = {
         id: c.id,
-        title: c.title || c.ai_primary_focus || 'Class',
+        title: c.title || c.ai_primary_focus || 'Lesson',
         lessonType: c.lesson_type || null,
         createdAt: c.created_at,
       };
@@ -1456,7 +1592,7 @@ export async function getCoachNoteById(id) {
     if (cls) {
       data.linkedClass = {
         id: cls.id,
-        title: cls.title || cls.ai_primary_focus || 'Class',
+        title: cls.title || cls.ai_primary_focus || 'Lesson',
         lessonType: cls.lesson_type || null,
         createdAt: cls.created_at,
       };
@@ -1514,6 +1650,29 @@ export async function getCoachNotesForStudent(studentId) {
 
 // ─── Coach Classes ───────────────────────────────────────────────────────────
 
+// How long a recorded class ran, from its class_recordings rows: the mic
+// file's length (DJI imports) or the recording's start → end. The longest row
+// wins and a row is capped at 3 h, as the server's lesson_minutes does, so a
+// recording left open for days doesn't read as a marathon. null = unknown.
+const RECORDING_COLUMNS = 'class_input_id, started_at, ended_at, mic_file_duration_sec';
+function recordingMinutes(r) {
+  let min = null;
+  if (r.mic_file_duration_sec > 0) min = r.mic_file_duration_sec / 60;
+  else if (r.started_at && r.ended_at) {
+    const ms = new Date(r.ended_at) - new Date(r.started_at);
+    if (ms > 0) min = ms / 60000;
+  }
+  return min == null ? null : Math.min(180, min);
+}
+function minutesByClassInput(rows) {
+  const out = {};
+  for (const r of rows || []) {
+    const min = recordingMinutes(r);
+    if (min != null) out[r.class_input_id] = Math.max(out[r.class_input_id] || 0, min);
+  }
+  return out;
+}
+
 // Total minutes coached, summed across all class_recordings rows that
 // belong to this coach's class_inputs. Classes with no recording don't
 // contribute. Returns minutes (Number); the UI rounds to hours.
@@ -1528,14 +1687,15 @@ export async function getTotalCoachedMinutes() {
   if (list.length === 0) return 0;
 
   // Real recorded durations, when a class was captured with the recorder.
-  const { data: recordings } = await supabase
-    .from('class_recordings')
-    .select('class_input_id, duration_ms')
-    .in('class_input_id', list.map((c) => c.id));
-  const recMsByClass = {};
-  for (const r of recordings || []) {
-    recMsByClass[r.class_input_id] = (recMsByClass[r.class_input_id] || 0) + (r?.duration_ms || 0);
+  // (It read a duration_ms column that doesn't exist, so the query failed and
+  // every class fell back to the estimate.)
+  const ids = list.map((c) => c.id);
+  const recordings = [];
+  for (let i = 0; i < ids.length; i += 150) {
+    const { data } = await supabase.from('class_recordings').select(RECORDING_COLUMNS).in('class_input_id', ids.slice(i, i + 150));
+    recordings.push(...(data || []));
   }
+  const recMinByClass = minutesByClassInput(recordings);
 
   // Manually-logged classes (no recording, or zero-length) still count toward
   // coached hours — estimated at a typical lesson length per type. Hours were
@@ -1543,8 +1703,8 @@ export async function getTotalCoachedMinutes() {
   const DEFAULT_MIN = { private: 45, couple: 45, group: 60 };
   let totalMin = 0;
   for (const c of list) {
-    const ms = recMsByClass[c.id] || 0;
-    totalMin += ms > 0 ? ms / 60000 : (DEFAULT_MIN[c.lesson_type] ?? 45);
+    const min = recMinByClass[c.id] || 0;
+    totalMin += min > 0 ? min : (DEFAULT_MIN[c.lesson_type] ?? 45);
   }
   return Math.round(totalMin);
 }
@@ -1612,6 +1772,9 @@ export async function getStartClassRoster() {
       readiness: r?.percent ?? 0,
       briefings,
       status: s.status,
+      consent_status: s.consent_status,
+      age_check: s.age_check,
+      age_review_pending: s.age_review_pending,
     };
   }).sort((a, b) => b.readiness - a.readiness);
 
@@ -1623,16 +1786,52 @@ export async function getMyClasses() {
   const coachId = await getCoachId();
   const { data } = await supabase
     .from('class_inputs')
-    .select('id, created_at, title, dance, lesson_type, status, class_summary, ai_primary_focus, ai_secondary_focus, student_id')
+    .select('id, created_at, title, dance, lesson_type, status, class_summary, ai_primary_focus, ai_secondary_focus, student_id, student_ids, couple_id')
     .eq('user_id', coachId)
     .eq('is_deleted', false)
     .order('created_at', { ascending: false });
 
   if (!data || data.length === 0) return [];
+  const ids = data.map((c) => c.id);
+  const coupleIds = [...new Set(data.map((c) => c.couple_id).filter(Boolean))];
 
-  // For private lessons resolve the student name (best effort — RLS lets the
-  // coach read their own students).
-  const studentIds = [...new Set(data.map(c => c.student_id).filter(Boolean))];
+  // Who was in each class (private: the student; group: the recorded
+  // students; couple: both dancers) and how long it ran, when it was recorded.
+  // Ids go in batches so a long history doesn't overflow the request URL.
+  const inBatches = async (table, columns) => {
+    const out = [];
+    for (let i = 0; i < ids.length; i += 150) {
+      const { data: rows } = await supabase.from(table).select(columns).in('class_input_id', ids.slice(i, i + 150));
+      out.push(...(rows || []));
+    }
+    return { data: out };
+  };
+  const [{ data: cisRows }, { data: recRows }, { data: coupleRows }] = await Promise.all([
+    inBatches('class_input_students', 'class_input_id, student_id'),
+    inBatches('class_recordings', RECORDING_COLUMNS),
+    coupleIds.length
+      ? supabase.from('couples').select('id, user_a_id, user_b_id').in('id', coupleIds)
+      : Promise.resolve({ data: [] }),
+  ]);
+
+  const studentsByClass = {};
+  const add = (classId, sid) => {
+    if (!sid) return;
+    const list = (studentsByClass[classId] ||= []);
+    if (!list.includes(sid)) list.push(sid);
+  };
+  const coupleById = Object.fromEntries((coupleRows || []).map((c) => [c.id, c]));
+  for (const c of data) {
+    add(c.id, c.student_id);
+    for (const sid of Array.isArray(c.student_ids) ? c.student_ids : []) add(c.id, sid);
+    const cp = c.couple_id && coupleById[c.couple_id];
+    if (cp) { add(c.id, cp.user_a_id); add(c.id, cp.user_b_id); }
+  }
+  for (const r of cisRows || []) add(r.class_input_id, r.student_id);
+
+  const minutesByClass = minutesByClassInput(recRows);
+
+  const studentIds = [...new Set(Object.values(studentsByClass).flat())];
   let studentMap = {};
   if (studentIds.length > 0) {
     const { data: users } = await supabase
@@ -1644,10 +1843,16 @@ export async function getMyClasses() {
     });
   }
 
-  return data.map(c => ({
-    ...c,
-    student: c.student_id ? studentMap[c.student_id] || null : null,
-  }));
+  return data.map(c => {
+    const students = (studentsByClass[c.id] || []).map((id) => studentMap[id] || { id, name: 'Student', photoUrl: null });
+    const min = minutesByClass[c.id];
+    return {
+      ...c,
+      student: c.student_id ? studentMap[c.student_id] || null : null,
+      students,
+      durationMin: min != null ? Math.max(1, Math.round(min)) : null,
+    };
+  });
 }
 
 // Detailed view of a coach's class: summary, the recorded students with
@@ -1663,12 +1868,14 @@ export async function getCoachClassDetail(classId) {
     .maybeSingle();
   if (!cls) return null;
 
-  // Class recording (if any) — used for the duration stat in the UI header.
-  const { data: recordingRow } = await supabase
+  // Class recording(s), if any — the duration stat in the UI header. (It
+  // selected a duration_ms column that doesn't exist, so no class ever showed
+  // a duration.)
+  const { data: recordingRows } = await supabase
     .from('class_recordings')
-    .select('duration_ms, started_at, ended_at')
-    .eq('class_input_id', classId)
-    .maybeSingle();
+    .select(RECORDING_COLUMNS)
+    .eq('class_input_id', classId);
+  const recordingRow = recordingRows?.[0] || null;
 
   // Recorded students for this class (group classes only — private lessons
   // store the single student in class_inputs.student_id).
@@ -1746,14 +1953,8 @@ export async function getCoachClassDetail(classId) {
     .filter(fp => !fp.is_other && fp.status !== 'past')
     .length;
 
-  // Duration: prefer the recorded duration; fall back to start/end diff.
-  let durationMin = null;
-  if (recordingRow?.duration_ms != null) {
-    durationMin = Math.max(1, Math.round(recordingRow.duration_ms / 60000));
-  } else if (recordingRow?.started_at && recordingRow?.ended_at) {
-    const diff = new Date(recordingRow.ended_at) - new Date(recordingRow.started_at);
-    if (diff > 0) durationMin = Math.max(1, Math.round(diff / 60000));
-  }
+  const recordedMin = minutesByClassInput(recordingRows)[classId];
+  const durationMin = recordedMin != null ? Math.max(1, Math.round(recordedMin)) : null;
 
   // Recorded = the class came in via the audio pipeline (transcript present
   // OR a class_recordings row exists for it).

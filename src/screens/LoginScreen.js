@@ -65,10 +65,18 @@ export default function LoginScreen({ navigation }) {
     setResetting(true);
     setError('');
     setInfo('');
+    // Supabase stays silent for an email with no account, so a typo would
+    // still read "link sent". Ask first; if the check itself fails, send anyway.
+    const { data: exists, error: checkErr } = await supabase.rpc('account_exists_for_email', { p_email: email.trim() });
+    if (!checkErr && exists === false) {
+      setResetting(false);
+      setError(`No account uses ${email.trim()}. Check the spelling, or create an account below.`);
+      return;
+    }
     const { error: err } = await supabase.auth.resetPasswordForEmail(email.trim());
     setResetting(false);
     if (err) setError(err.message);
-    else setInfo(`Reset link sent to ${email.trim()}. Check your inbox.`);
+    else setInfo(`Reset link sent to ${email.trim()}. Check your inbox, and your spam folder too.`);
   }
 
   return (
@@ -161,11 +169,22 @@ export default function LoginScreen({ navigation }) {
 
           <TouchableOpacity
             style={styles.link}
-            onPress={() => navigation.navigate('Register')}
+            // Onboarding is the sign-up now; it sits under this screen, past its welcome.
+            onPress={() => navigation.navigate('Onboarding', { startAt: 'role' })}
             activeOpacity={0.7}
           >
             <Text style={styles.linkText}>
               Don't have an account? <Text style={styles.linkBold}>Create one</Text>
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.link}
+            onPress={() => navigation.navigate('PairChild')}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.linkText}>
+              Under 18? <Text style={styles.linkBold}>I have a code from my parent</Text>
             </Text>
           </TouchableOpacity>
         </ScrollView>
@@ -199,14 +218,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   h1: {
-    fontFamily: Fonts.ttDemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 27,
     lineHeight: 30,
     letterSpacing: -0.8,
     color: Onboard.ink,
   },
   sub: {
-    fontFamily: Fonts.travelsRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13.5,
     lineHeight: 19,
     color: Onboard.ink2,
@@ -215,7 +234,7 @@ const styles = StyleSheet.create({
   fields: { marginTop: 18 },
   fieldGroup: { marginBottom: 12 },
   fieldLabel: {
-    fontFamily: Fonts.travelsMedium,
+    fontFamily: Fonts.medium,
     fontSize: 10.5,
     letterSpacing: 1,
     textTransform: 'uppercase',
@@ -230,7 +249,7 @@ const styles = StyleSheet.create({
     borderRadius: 13,
     paddingHorizontal: 14,
     paddingVertical: 13,
-    fontFamily: Fonts.travelsRegular,
+    fontFamily: Fonts.regular,
     fontSize: 15,
     color: Onboard.ink,
   },
@@ -242,18 +261,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: 2,
   },
   forgotText: {
-    fontFamily: Fonts.travelsMedium,
+    fontFamily: Fonts.medium,
     fontSize: 12.5,
     color: Onboard.goldInk,
   },
   error: {
-    fontFamily: Fonts.travelsRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     color: Onboard.error,
     marginBottom: 12,
   },
   info: {
-    fontFamily: Fonts.travelsMedium,
+    fontFamily: Fonts.medium,
     fontSize: 13,
     color: Onboard.success,
     marginBottom: 12,
@@ -265,7 +284,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   primaryBtnText: {
-    fontFamily: Fonts.ttDemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 15,
     color: '#FFFFFF',
   },
@@ -274,12 +293,12 @@ const styles = StyleSheet.create({
     marginTop: 14,
   },
   linkText: {
-    fontFamily: Fonts.travelsRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     color: Onboard.ink2,
   },
   linkBold: {
-    fontFamily: Fonts.ttDemiBold,
+    fontFamily: Fonts.semiBold,
     color: Onboard.goldInk,
   },
 });

@@ -13,6 +13,7 @@ import {
   FlatList,
   Keyboard,
   Animated,
+  AppState,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -89,7 +90,7 @@ function ClassPickerModal({ visible, onClose, onSelect, currentId }) {
       <View style={picker.overlay}>
         <View style={picker.sheet}>
           <View style={picker.header}>
-            <Text style={picker.title}>Link to class</Text>
+            <Text style={picker.title}>Link to a lesson</Text>
             <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
               <Ionicons name="close" size={20} color={Colors.secondary} />
             </TouchableOpacity>
@@ -113,7 +114,7 @@ function ClassPickerModal({ visible, onClose, onSelect, currentId }) {
                 >
                   <View style={picker.itemLeft}>
                     <Text style={picker.itemDate}>{formatDate(item.created_at)}</Text>
-                    <Text style={picker.itemFocus} numberOfLines={1}>{item.title || 'Class Log'}</Text>
+                    <Text style={picker.itemFocus} numberOfLines={1}>{item.title || 'Lesson'}</Text>
                     {item.practice_point_1 && <Text style={picker.itemText} numberOfLines={1}>{item.practice_point_1}</Text>}
                   </View>
                   {isSelected && <Ionicons name="checkmark" size={18} color={Colors.activeLog} />}
@@ -244,6 +245,17 @@ export default function NoteDetailScreen({ route, navigation }) {
       };
     }, [])
   );
+
+  // Leaving the app (or it being killed from the background) inside the 800 ms
+  // autosave wait would lose the last words: save as it goes to the background.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active' || !hasChanges.current) return;
+      if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
+      persist(stateRef.current);
+    });
+    return () => sub.remove();
+  }, []);
 
   async function pickVideo() {
     if (!ImagePicker) {
@@ -511,12 +523,12 @@ const styles = StyleSheet.create({
   },
   backBtn: { flexDirection: 'row', alignItems: 'center', gap: 2 },
   backLabel: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 17,
     color: Colors.activeFocus,
   },
   deleteText: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 15,
     color: '#FF3B30',
   },
@@ -524,7 +536,7 @@ const styles = StyleSheet.create({
   scrollContent: { paddingBottom: 40 },
 
   dateStamp: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 12,
     color: Colors.secondary,
     textAlign: 'center',
@@ -548,18 +560,18 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   classLinkedText: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     color: Colors.secondary,
     flex: 1,
   },
   classLinkedName: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     color: Colors.activeLog,
   },
 
   titleInput: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 28,
     color: Colors.black,
     paddingHorizontal: Spacing.side,
@@ -600,13 +612,13 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   videoChipLabel: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 13,
     color: Colors.black,
     flexShrink: 1,
   },
   videoChipDuration: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 11,
     color: Colors.secondary,
   },
@@ -619,7 +631,7 @@ const styles = StyleSheet.create({
   },
 
   contentInput: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 16,
     color: Colors.black,
     lineHeight: 27,
@@ -672,7 +684,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(13,13,18,0.08)',
   },
   bottomActionText: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 14,
     color: Colors.secondary,
   },
@@ -706,31 +718,6 @@ const vm = StyleSheet.create({
     width: '100%',
     height: 300,
   },
-  errorBox: {
-    backgroundColor: '#1a1a1a',
-    borderRadius: 16,
-    padding: 24,
-    margin: 32,
-    alignItems: 'center',
-    gap: 16,
-  },
-  errorText: {
-    fontFamily: 'System',
-    fontSize: 15,
-    color: '#ccc',
-    textAlign: 'center',
-  },
-  errorBtn: {
-    paddingHorizontal: 24,
-    paddingVertical: 10,
-    backgroundColor: '#333',
-    borderRadius: 10,
-  },
-  errorBtnText: {
-    fontFamily: 'System',
-    fontSize: 15,
-    color: '#fff',
-  },
 });
 
 // ─── Class picker styles ──────────────────────────────────────────────────────
@@ -758,8 +745,7 @@ const picker = StyleSheet.create({
     borderBottomWidth: 0.5,
     borderBottomColor: 'rgba(13,13,18,0.08)',
   },
-  title: { fontFamily: Fonts.jakartaExtraBold, fontSize: 16, color: Colors.black },
-  close: { fontSize: 18, color: Colors.secondary },
+  title: { fontFamily: Fonts.semiBold, fontSize: 16, color: Colors.black },
   unlinkBtn: {
     marginHorizontal: 20,
     marginTop: 12,
@@ -768,7 +754,7 @@ const picker = StyleSheet.create({
     backgroundColor: 'rgba(255,59,48,0.08)',
     borderRadius: 10,
   },
-  unlinkText: { fontFamily: Fonts.jakartaBold, fontSize: 13, color: '#FF3B30' },
+  unlinkText: { fontFamily: Fonts.semiBold, fontSize: 13, color: '#FF3B30' },
   item: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -779,7 +765,7 @@ const picker = StyleSheet.create({
   },
   itemSelected: { opacity: 1 },
   itemLeft: { flex: 1 },
-  itemDate: { fontFamily: Fonts.jakartaMedium, fontSize: 11, color: Colors.secondary, marginBottom: 2 },
-  itemFocus: { fontFamily: Fonts.jakartaBold, fontSize: 14, color: Colors.activeLog, marginBottom: 2 },
-  itemText: { fontFamily: Fonts.jakartaRegular, fontSize: 13, color: Colors.secondary },
+  itemDate: { fontFamily: Fonts.medium, fontSize: 11, color: Colors.secondary, marginBottom: 2 },
+  itemFocus: { fontFamily: Fonts.semiBold, fontSize: 14, color: Colors.activeLog, marginBottom: 2 },
+  itemText: { fontFamily: Fonts.regular, fontSize: 13, color: Colors.secondary },
 });

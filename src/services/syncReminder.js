@@ -268,7 +268,7 @@ export async function scheduleSnoozeNotification(untilMs, body) {
     await Notifications.scheduleNotificationAsync({
       identifier: SNOOZE_NOTIF_ID,
       content: {
-        title: 'Still waiting for your class audio',
+        title: 'Still waiting for your lesson audio',
         body: body || 'Plug in your DJI mic (USB-C) to import it.',
         data: { type: 'sync_reminder', source: 'snooze' },
       },
@@ -308,8 +308,8 @@ export async function scheduleMorningNotification(body, now = new Date()) {
     await Notifications.scheduleNotificationAsync({
       identifier: MORNING_NOTIF_ID,
       content: {
-        title: 'Your class audio is still waiting',
-        body: body || 'Plug in your DJI mic (USB-C) to import it before today’s classes.',
+        title: 'Your lesson audio is still waiting',
+        body: body || 'Plug in your DJI mic (USB-C) to import it before today’s lessons.',
         data: { type: 'sync_reminder', source: 'morning' },
       },
       trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: at },

@@ -12,6 +12,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { Fonts, Spacing } from '../theme';
 import { supabase } from '../services/supabase/client';
 import { GenericListSkeleton } from '../components/Skeleton';
+import { dateLabel } from '../utils/dates';
 
 const BG = '#0D0D12';
 const CARD_BG = '#18181F';
@@ -337,7 +338,7 @@ function formatDate(iso) {
   const hhmm = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
   if (isToday) return `Today · ${hhmm}`;
   if (isYesterday) return `Yesterday · ${hhmm}`;
-  return `${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} · ${hhmm}`;
+  return `${dateLabel(d)} · ${hhmm}`;
 }
 
 export default function TrainerFocusHistoryScreen({ route, navigation }) {
@@ -617,7 +618,6 @@ function DetailsSnippet({ details }) {
 
 const s = StyleSheet.create({
   safe: { flex: 1, backgroundColor: BG },
-  loadingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -628,7 +628,7 @@ const s = StyleSheet.create({
   },
   headerTitle: {
     flex: 1,
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 17,
     color: WHITE,
     letterSpacing: -0.3,
@@ -660,19 +660,19 @@ const s = StyleSheet.create({
     backgroundColor: BORDER,
   },
   summaryLabel: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 9,
     color: MUTED,
     letterSpacing: 1.1,
   },
   summaryValue: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 17,
     color: WHITE,
     letterSpacing: -0.3,
   },
   subtitle: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 12,
     color: MUTED,
     marginTop: 14,
@@ -686,7 +686,7 @@ const s = StyleSheet.create({
     borderTopColor: BORDER,
   },
   formulaLabel: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 9,
     color: MUTED,
     letterSpacing: 1.1,
@@ -698,35 +698,29 @@ const s = StyleSheet.create({
     alignItems: 'center',
   },
   formulaTerm: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 12,
     color: MUTED,
     letterSpacing: 0.2,
     lineHeight: 20,
   },
   formulaNum: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     color: WHITE,
-  },
-  formulaOp: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 12,
-    color: FAINT,
-    lineHeight: 20,
   },
   formulaCaption: {
     color: FAINT,
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
   },
   sectionLabel: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 10,
     color: MUTED,
     letterSpacing: 1.2,
     marginBottom: 12,
   },
   empty: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 13,
     color: MUTED,
     textAlign: 'center',
@@ -763,7 +757,7 @@ const s = StyleSheet.create({
   },
   eventReason: {
     flex: 1,
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 13.5,
     color: WHITE,
     letterSpacing: -0.1,
@@ -772,22 +766,16 @@ const s = StyleSheet.create({
     alignItems: 'flex-end',
   },
   eventDelta: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 13,
     letterSpacing: 0.1,
   },
   eventBalance: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 10.5,
     color: FAINT,
     letterSpacing: 0.2,
     marginTop: 2,
-  },
-  backfillTag: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 9,
-    color: FAINT,
-    letterSpacing: 1.2,
   },
   breakdownBox: {
     marginTop: 10,
@@ -799,39 +787,35 @@ const s = StyleSheet.create({
     gap: 8,
   },
   breakdownBullet: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 12,
     color: FAINT,
     width: 8,
   },
   breakdownText: {
     flex: 1,
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 11.5,
     color: MUTED,
     lineHeight: 17,
     letterSpacing: 0.1,
   },
   breakdownFootnote: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 10,
     color: FAINT,
     fontStyle: 'italic',
     marginTop: 4,
   },
   eventTime: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 11,
     color: FAINT,
     marginTop: 3,
     letterSpacing: 0.2,
   },
-  eventScoreRow: {
-    marginTop: 8,
-    gap: 6,
-  },
   eventScoreText: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 12,
     color: MUTED,
     letterSpacing: 0.2,
@@ -843,7 +827,7 @@ const s = StyleSheet.create({
     marginTop: 2,
   },
   detailsChip: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 10.5,
     color: MUTED,
     letterSpacing: 0.2,

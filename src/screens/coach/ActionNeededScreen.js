@@ -1,13 +1,12 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
   ScrollView,
+  ActivityIndicator,
   Modal,
-  Animated,
-  Dimensions,
   LayoutAnimation,
   Platform,
   UIManager,
@@ -30,19 +29,22 @@ const EXPAND_ANIMATION = {
     property: LayoutAnimation.Properties.opacity,
   },
 };
+import { Pressable } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { LinearGradient } from 'expo-linear-gradient';
+import MaskedView from '@react-native-masked-view/masked-view';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Fonts, Spacing } from '../../theme';
 import { useCoachData } from '../../context/CoachDataContext';
 import {
   getPendingFocusPoints,
   approveFocusPoint,
-  deletePendingFocusPoint,
   editAndApproveFocusPoint,
   approveAllPendingForStudent,
   rejectPendingFocusPoint,
   getReconcileNeeded,
   applyReconcile,
+  getPendingQuestions,
 } from '../../storage/coachStorage';
 import {
   getPendingCoupleFocusPoints,
@@ -51,40 +53,35 @@ import {
   approveAllPendingCoupleFocusPoints,
 } from '../../storage/coupleStorage';
 import FocusPointEditSheet from '../../components/FocusPointEditSheet';
+import QuestionSheet, { splitFocusTag } from '../../components/coach/QuestionSheet';
+import { dateLabel } from '../../components/coach/LessonUI';
+import { getQuestionContext } from '../../storage/coachStorage';
 import ClassContextSheet from '../../components/coach/ClassContextSheet';
 import ApproveConfirmSheet from '../../components/coach/ApproveConfirmSheet';
 import MergeCompareCard from '../../components/coach/MergeCompareCard';
-import NameMatchCard from '../../components/coach/NameMatchCard';
 import PendingFocusCard from '../../components/coach/PendingFocusCard';
 import RejectFocusSheet from '../../components/coach/RejectFocusSheet';
 import ReconcileFocusSheet from '../../components/coach/ReconcileFocusSheet';
 import { SkeletonBox } from '../../components/Skeleton';
-import { getNotifications, deleteNotification } from '../../storage/notificationsStorage';
 import { supabase } from '../../services/supabase/client';
 
-// ── Palette ────────────────────────────────────────────────────────────────
-const C = {
-  bg: '#FAFAFA',
-  surface: '#F0F0F0',
-  card: '#FFFFFF',
-  dark: '#141414',
-  orange: '#E8A838',
-  green: '#4AAF52',
-  red: '#D44545',
-  gray: '#999',
-  lightGray: '#E5E5E5',
-  text: '#0E0E0E',
-};
-
-function initials(name) {
-  if (!name) return '?';
-  return name.split(' ').map(w => w[0]).filter(Boolean).join('').slice(0, 2).toUpperCase();
+function daysAgoLabel(date) {
+  const n = Math.floor((Date.now() - new Date(date).getTime()) / 86400000);
+  return n <= 0 ? 'today' : n === 1 ? 'yesterday' : `${n} days ago`;
 }
 
+// ── Palette ────────────────────────────────────────────────────────────────
+const INK = '#0A0A0A';
+const INK_62 = 'rgba(10,10,10,0.62)';
+const PAGE = '#F2F0EB';
+const GOLD = '#E8B530';
+const RED = '#A8412F';
+// How far the list dissolves as it passes under the header and off the bottom.
+const EDGE_FADE = 14;
+
 // ════════════════════════════════════════════════════════════════════════════
-export default function ActionNeededScreen({ navigation }) {
+export default function ActionNeededScreen({ navigation, route }) {
   const { students, refresh } = useCoachData();
-  const [activeTab, setActiveTab] = useState('focus');
   const [expandedId, setExpandedId] = useState(null);
 
   // Focus points
@@ -99,8 +96,17 @@ export default function ActionNeededScreen({ navigation }) {
   // Merge requests
   const [mergeRequests, setMergeRequests] = useState([]);
 
-  // Name matching
-  const [nameMatches, setNameMatches] = useState([]);
+  // Questions students asked
+  const [questions, setQuestions] = useState([]);
+  const [activeQuestion, setActiveQuestion] = useState(null);
+  const [questionSheetVisible, setQuestionSheetVisible] = useState(false);
+  const [questionReply, setQuestionReply] = useState('');
+
+  const [comparing, setComparing] = useState(null); // { mr, existing, incoming }
+  // The focus point a question was asked from, opened from the question itself.
+  const [focusPopup, setFocusPopup] = useState(null); // { name, ctx } — ctx null while loading
+  // What the coach got through in this sitting — shown once nothing is left.
+  const [done, setDone] = useState({ approved: 0, answered: 0, merged: 0 });
   const [reconcileGroups, setReconcileGroups] = useState([]);
   const [reconciling, setReconciling] = useState(null);
   const [coachName, setCoachName] = useState('your coach');
@@ -111,10 +117,10 @@ export default function ActionNeededScreen({ navigation }) {
   const loadData = useCallback(async () => {
     setFpLoading(true);
     try {
-      const [fps, coupleFps, notifs, { data: merges }] = await Promise.all([
+      const [fps, coupleFps, qs, { data: merges }] = await Promise.all([
         getPendingFocusPoints(null).catch(() => []),
         getPendingCoupleFocusPoints().catch(() => []),
-        getNotifications().catch(() => []),
+        getPendingQuestions().catch(() => []),
         supabase
           .from('merge_requests')
           .select('id, student_id, focus_a, focus_b, status, created_at')
@@ -123,9 +129,7 @@ export default function ActionNeededScreen({ navigation }) {
       ]);
       setPendingFPs(fps || []);
       setPendingCoupleFPs(coupleFps || []);
-      setNameMatches(
-        (notifs || []).filter(n => n.type === 'name_match_confirm')
-      );
+      setQuestions(qs || []);
 
       // Enrich merge requests with focus point names
       const mrList = merges || [];
@@ -135,8 +139,28 @@ export default function ActionNeededScreen({ navigation }) {
           .from('focus_points')
           .select('id, name, user_id, subtitle, context, dance, drill, tier, category, created_at, class_input_id, source_class_input_id')
           .in('id', fpIds);
+        // What each one has cost the student so far — the card weighs the two
+        // by their practice, so "Merge" doesn't quietly throw sessions away.
+        const { data: logs } = await supabase
+          .from('practice_logs')
+          .select('focus_point_id, duration_minutes, completed_at')
+          .in('focus_point_id', fpIds)
+          .not('completed_at', 'is', null);
+        const practice = {};
+        for (const l of logs || []) {
+          const p = practice[l.focus_point_id] || { count: 0, minutes: 0 };
+          p.count += 1;
+          p.minutes += l.duration_minutes || 0;
+          practice[l.focus_point_id] = p;
+        }
         const fpMap = {};
-        for (const fp of fpRows || []) fpMap[fp.id] = fp;
+        for (const fp of fpRows || []) {
+          fpMap[fp.id] = {
+            ...fp,
+            practiceCount: practice[fp.id]?.count || 0,
+            practiceMinutes: practice[fp.id]?.minutes || 0,
+          };
+        }
         setMergeRequests(mrList.map(m => ({
           ...m,
           focusA: fpMap[m.focus_a] || null,
@@ -170,19 +194,6 @@ export default function ActionNeededScreen({ navigation }) {
     }).catch(() => {});
   }, []);
 
-  // Auto-select the right tab on first landing based on priority:
-  // Names > Merge > Focus. Once the coach manually changes tab, we never
-  // override their choice — the ref locks us in.
-  const didAutoSelectTab = useRef(false);
-  useEffect(() => {
-    if (didAutoSelectTab.current) return;
-    if (fpLoading) return; // wait for the initial load to complete
-    if (nameMatches.length > 0) setActiveTab('name');
-    else if (mergeRequests.length > 0) setActiveTab('merge');
-    else setActiveTab('focus');
-    didAutoSelectTab.current = true;
-  }, [fpLoading, nameMatches.length, mergeRequests.length]);
-
   // Actions. Group focus points are aggregated in the UI (1 card per
   // shared_group_id), so handlers must operate on all underlying rows when
   // an aggregate is passed via `_rows`.
@@ -190,6 +201,7 @@ export default function ActionNeededScreen({ navigation }) {
     try {
       await approveFocusPoint(fpId);
       setPendingFPs(prev => prev.filter(fp => fp.id !== fpId));
+      setDone((d) => ({ ...d, approved: d.approved + 1 }));
       refresh();
     } catch {}
   };
@@ -199,6 +211,7 @@ export default function ActionNeededScreen({ navigation }) {
       await Promise.all(rowIds.map(id => approveFocusPoint(id)));
       const set = new Set(rowIds);
       setPendingFPs(prev => prev.filter(fp => !set.has(fp.id)));
+      setDone((d) => ({ ...d, approved: d.approved + 1 }));
       refresh();
     } catch {}
   };
@@ -299,33 +312,11 @@ export default function ActionNeededScreen({ navigation }) {
     );
   };
 
-  const handleConfirmName = async (notif) => {
-    try {
-      const { student_id, focus_point_ids } = notif.data || {};
-      if (focus_point_ids?.length > 0) {
-        await supabase
-          .from('focus_points')
-          .update({ status: 'pending_coach' })
-          .in('id', focus_point_ids);
-      }
-      await deleteNotification(notif.id);
-      setNameMatches(prev => prev.filter(n => n.id !== notif.id));
-      loadData();
-    } catch {}
-  };
-
-  const handleRejectName = async (notif) => {
-    try {
-      const { focus_point_ids } = notif.data || {};
-      if (focus_point_ids?.length > 0) {
-        await supabase
-          .from('focus_points')
-          .update({ user_id: null, status: 'active' })
-          .in('id', focus_point_ids);
-      }
-      await deleteNotification(notif.id);
-      setNameMatches(prev => prev.filter(n => n.id !== notif.id));
-    } catch {}
+  const openQuestionFocus = (q, focusName) => {
+    setFocusPopup({ name: focusName, ctx: null });
+    getQuestionContext(q.student_id, focusName)
+      .then((ctx) => setFocusPopup((p) => (p && p.name === focusName ? { ...p, ctx } : p)))
+      .catch(() => setFocusPopup((p) => (p ? { ...p, ctx: { focus: null } } : p)));
   };
 
   const handleMerge = async (mr) => {
@@ -351,6 +342,7 @@ export default function ActionNeededScreen({ navigation }) {
       await supabase.from('focus_points').update({ is_deleted: true, status: 'past' }).eq('id', mr.focus_b);
       await supabase.from('merge_requests').update({ status: 'merged', resolved_at: new Date().toISOString(), resolved_by: 'coach' }).eq('id', mr.id);
       setMergeRequests(prev => prev.filter(m => m.id !== mr.id));
+      setDone((d) => ({ ...d, merged: d.merged + 1 }));
       refresh();
     } catch {}
   };
@@ -383,406 +375,295 @@ export default function ActionNeededScreen({ navigation }) {
     } catch {}
   };
 
-  // Count of cards the coach will see — group FPs sharing a shared_group_id
-  // collapse into one card, so the visible "review count" is less than the
-  // underlying row count when group focuses exist.
-  const reviewCount = (() => {
-    const sharedIds = new Set();
-    let solo = 0;
-    for (const fp of pendingFPs) {
-      if (fp.group_fp) sharedIds.add(fp.shared_group_id || `single-${fp.id}`);
-      else solo++;
-    }
-    return sharedIds.size + solo;
-  })();
-  const focusTabCount = reviewCount + pendingCoupleFPs.length;
-  // The Focus tab ALSO surfaces reconciliation cards ("Too many focus points"),
-  // so the tab badge and the overall count include them — but the "X to review"
-  // bulk label below uses focusTabCount (reconciles aren't a review action).
-  const focusTabBadge = focusTabCount + reconcileGroups.length;
+  // ── What's waiting, in the order the coach should meet it ────────────────
+  // Group focus points sharing a shared_group_id are one card listing the
+  // whole group, not one card per student row.
+  const groupAggMap = new Map();
+  for (const fp of pendingFPs) {
+    if (!fp.group_fp) continue;
+    const key = fp.shared_group_id || `single-${fp.id}`;
+    if (!groupAggMap.has(key)) groupAggMap.set(key, { ...fp, _rows: [], _students: [] });
+    const agg = groupAggMap.get(key);
+    agg._rows.push({ id: fp.id, user_id: fp.user_id });
+    const student = studentMap[fp.user_id];
+    if (student) agg._students.push(student);
+  }
+  const groupAggregates = Array.from(groupAggMap.values());
+  const soloFPs = pendingFPs.filter((fp) => !fp.group_fp);
+  const toValidate = soloFPs.length + groupAggregates.length + pendingCoupleFPs.length;
+  const totalCount = toValidate + questions.length + mergeRequests.length + reconcileGroups.length;
+  const allClear = !fpLoading && totalCount === 0;
 
-  const tabs = [
-    { key: 'focus', label: 'Focus points', count: focusTabBadge },
-    { key: 'merge', label: 'Merge', count: mergeRequests.length },
-    { key: 'name', label: 'Names', count: nameMatches.length },
-  ];
+  const expand = (key) => {
+    LayoutAnimation.configureNext(EXPAND_ANIMATION);
+    setExpandedId(expandedId === key ? null : key);
+  };
 
-  const totalCount = focusTabBadge + mergeRequests.length + nameMatches.length;
-
-  // Horizontal pager: sync tab selection <-> swipe gesture, drive a moving underline.
-  const screenWidth = Dimensions.get('window').width;
-  const pagerRef = useRef(null);
-  const horizontalScrollX = useRef(new Animated.Value(0)).current;
-  const tabIndex = Math.max(0, tabs.findIndex(t => t.key === activeTab));
-  const firstMount = useRef(true);
-
-  useEffect(() => {
-    const targetX = tabIndex * screenWidth;
-    if (firstMount.current) {
-      horizontalScrollX.setValue(targetX);
-      pagerRef.current?.scrollTo({ x: targetX, animated: false });
-      firstMount.current = false;
-    } else {
-      pagerRef.current?.scrollTo({ x: targetX, animated: true });
-    }
-  }, [tabIndex, screenWidth]);
+  const Marker = ({ title, count }) => (
+    <View style={s.mk}>
+      <Text style={s.mkT}>{title}</Text>
+      <View style={s.mkLine} />
+      <Text style={s.mkN}>{count}</Text>
+    </View>
+  );
 
   return (
     <SafeAreaView style={s.safe} edges={['top']}>
-      {/* Header */}
-      <View style={s.headerRow}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={s.backBtn} hitSlop={12} activeOpacity={0.7}>
-          <Ionicons name="chevron-back" size={24} color={C.text} />
+      <View style={s.top}>
+        <TouchableOpacity style={s.ib} onPress={() => navigation.goBack()} activeOpacity={0.7}
+          accessibilityRole="button" accessibilityLabel="Back">
+          <Ionicons name="chevron-back" size={18} color={INK} />
         </TouchableOpacity>
-        <Text style={s.headerTitle}>Action needed</Text>
-        {totalCount > 0 && (
-          <View style={s.totalBadge}>
-            <Text style={s.totalBadgeText}>{totalCount}</Text>
+        <Text style={s.h1} numberOfLines={1}>Action needed</Text>
+      </View>
+
+      {!allClear && (
+        <View style={s.count}>
+          <Text style={s.countN}>{fpLoading && totalCount === 0 ? '—' : totalCount}</Text>
+          <Text style={s.countL}>things waiting{'\n'}on you</Text>
+        </View>
+      )}
+
+      <MaskedView
+        style={{ flex: 1 }}
+        maskElement={
+          <View style={{ flex: 1 }}>
+            <LinearGradient colors={['transparent', '#000']} style={{ height: EDGE_FADE }} />
+            <View style={{ flex: 1, backgroundColor: '#000' }} />
+            <LinearGradient colors={['#000', 'rgba(0,0,0,0.5)', 'transparent']} locations={[0, 0.55, 1]} style={{ height: 34 }} />
+          </View>
+        }
+      >
+      <ScrollView contentContainerStyle={s.feed} showsVerticalScrollIndicator={false}>
+        {fpLoading && totalCount === 0 && (
+          <View style={{ gap: 10, paddingTop: 18 }}>
+            {[0, 1].map((i) => (
+              <View key={i} style={s.skel}>
+                <SkeletonBox width="45%" height={10} borderRadius={4} />
+                <SkeletonBox width="80%" height={22} borderRadius={6} style={{ marginTop: 12 }} />
+                <SkeletonBox width="60%" height={12} borderRadius={4} style={{ marginTop: 10 }} />
+                <SkeletonBox width="100%" height={48} borderRadius={24} style={{ marginTop: 16 }} />
+              </View>
+            ))}
           </View>
         )}
-      </View>
 
-      {/* Tabs with moving underline */}
-      <View style={s.tabRow}>
-        {tabs.map(tab => {
-          const isActive = activeTab === tab.key;
-          return (
-            <TouchableOpacity
-              key={tab.key}
-              style={s.tab}
-              onPress={() => { setActiveTab(tab.key); setExpandedId(null); }}
-              activeOpacity={0.7}
-            >
-              <View style={s.tabLabelRow}>
-                <Text style={[s.tabText, isActive && s.tabTextActive]}>{tab.label}</Text>
-                {tab.count > 0 && (
-                  <View style={[s.tabBadge, isActive && s.tabBadgeActive]}>
-                    <Text style={[s.tabBadgeText, isActive && s.tabBadgeTextActive]}>{tab.count}</Text>
-                  </View>
-                )}
-              </View>
-            </TouchableOpacity>
-          );
-        })}
-        <Animated.View
-          pointerEvents="none"
-          style={[
-            s.tabUnderline,
-            {
-              // Underline position via transform (native driver) instead of
-              // animating `left` (layout, JS-thread). Same visual result, but
-              // the swipe-driven slide no longer chokes when cards are
-              // expanding behind the pager.
-              left: 0,
-              transform: [{
-                translateX: horizontalScrollX.interpolate({
-                  inputRange: [0, Math.max(1, screenWidth), Math.max(2, 2 * screenWidth)],
-                  outputRange: [
-                    screenWidth * 0.05,
-                    screenWidth * 0.38333,
-                    screenWidth * 0.71667,
-                  ],
-                  extrapolate: 'clamp',
-                }),
-              }],
-            },
-          ]}
-        />
-      </View>
-
-      {/* Pager — swipe between tabs */}
-      <Animated.ScrollView
-        ref={pagerRef}
-        horizontal
-        pagingEnabled
-        bounces={false}
-        showsHorizontalScrollIndicator={false}
-        scrollEventThrottle={16}
-        onScroll={Animated.event(
-          [{ nativeEvent: { contentOffset: { x: horizontalScrollX } } }],
-          { useNativeDriver: true }
-        )}
-        onMomentumScrollEnd={(e) => {
-          const page = Math.round(e.nativeEvent.contentOffset.x / Math.max(1, screenWidth));
-          const next = tabs[page]?.key;
-          if (next && next !== activeTab) {
-            setActiveTab(next);
-            setExpandedId(null);
-          }
-        }}
-        style={{ flex: 1 }}
-      >
-      {/* ── Page 1: Focus Points ── */}
-      <ScrollView style={{ width: screenWidth }} contentContainerStyle={{ padding: Spacing.side, paddingBottom: 100 }}>
-        <>
-            <Text style={s.tabIntro}>
-              AI-generated focus points from your recent classes. Approve, edit or reject before they auto-publish to your students.
-            </Text>
-
-            {fpLoading && pendingFPs.length === 0 && (
-              <View style={{ gap: 12 }}>
-                {[0, 1, 2].map(i => (
-                  <View key={i} style={s.skeletonCard}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 10 }}>
-                      <SkeletonBox width={32} height={32} borderRadius={16} />
-                      <View style={{ flex: 1, gap: 6 }}>
-                        <SkeletonBox width="55%" height={14} borderRadius={4} />
-                        <SkeletonBox width="35%" height={11} borderRadius={4} />
-                      </View>
-                      <SkeletonBox width={44} height={18} borderRadius={6} />
-                    </View>
-                    <SkeletonBox width="90%" height={12} borderRadius={4} style={{ marginBottom: 6 }} />
-                    <SkeletonBox width="75%" height={12} borderRadius={4} />
-                  </View>
-                ))}
-              </View>
-            )}
-
-            {/* Bulk actions */}
-            {(pendingFPs.length > 0 || pendingCoupleFPs.length > 0) && (
-              <View style={s.bulkRow}>
-                <Text style={s.bulkLabel}>{focusTabCount} to review</Text>
-                <TouchableOpacity style={s.bulkBtn} onPress={handleApproveAll} activeOpacity={0.8}>
-                  <Text style={s.bulkBtnText}>Approve all</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-
-            {reconcileGroups.length > 0 && (
-              <>
-                <Text style={s.sectionHeader}>Too many focus points · {reconcileGroups.length}</Text>
-                {reconcileGroups.map((g) => {
-                  const st = studentMap[g.userId];
-                  const total = 1 + g.candidates.length;
-                  return (
-                    <TouchableOpacity
-                      key={`${g.userId}:${g.category || 'all'}`}
-                      activeOpacity={0.8}
-                      onPress={() => setReconciling(g)}
-                      style={{ flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: C.card, borderWidth: 1, borderColor: C.lightGray, borderRadius: 14, padding: 14, marginBottom: 8 }}
-                    >
-                      <Ionicons name="alert-circle" size={20} color={C.orange} />
-                      <View style={{ flex: 1 }}>
-                        <Text style={{ fontFamily: Fonts.jakartaExtraBold, fontSize: 15, color: C.text }} numberOfLines={1}>{st?.name || 'Student'}</Text>
-                        <Text style={{ fontFamily: Fonts.travelsRegular, fontSize: 12.5, color: C.gray, marginTop: 2 }}>{g.category ? `${g.category === 'latin' ? 'Latin' : 'Ballroom'} · ` : ''}{total} focus points · keep 3</Text>
-                      </View>
-                      <Ionicons name="chevron-forward" size={18} color={C.gray} />
-                    </TouchableOpacity>
-                  );
-                })}
-              </>
-            )}
-
-            {(() => {
-              // Aggregate group FPs by shared_group_id so each group focus
-              // shows as one card listing all affected students (instead of
-              // N duplicate cards, one per student row in the DB).
-              const groupAggMap = new Map();
-              for (const fp of pendingFPs) {
-                if (!fp.group_fp) continue;
-                const key = fp.shared_group_id || `single-${fp.id}`;
-                if (!groupAggMap.has(key)) {
-                  groupAggMap.set(key, { ...fp, _rows: [], _students: [] });
-                }
-                const agg = groupAggMap.get(key);
-                agg._rows.push({ id: fp.id, user_id: fp.user_id });
-                const student = studentMap[fp.user_id];
-                if (student) agg._students.push(student);
-              }
-              const groupAggregates = Array.from(groupAggMap.values());
-              const soloFPs = pendingFPs.filter(fp => !fp.group_fp);
-
-              const renderSoloCard = (fp) => {
-                const isExpanded = expandedId === `fp-${fp.id}`;
-                const student = studentMap[fp.user_id];
-                return (
-                  <PendingFocusCard
-                    key={fp.id}
-                    fp={fp}
-                    isExpanded={isExpanded}
-                    onToggle={() => {
-                      LayoutAnimation.configureNext(EXPAND_ANIMATION);
-                      setExpandedId(isExpanded ? null : `fp-${fp.id}`);
-                    }}
-                    studentName={student?.name || 'Student'}
-                    onApprove={() => openApproveForSolo(fp)}
-                    onEdit={setEditingFp}
-                    onDelete={handleReject}
-                    onShowContext={setContextFp}
-                  />
-                );
-              };
-
-              const renderGroupCard = (agg) => {
-                const cardKey = agg.shared_group_id || agg.id;
-                const isExpanded = expandedId === `group-${cardKey}`;
-                const rowIds = agg._rows.map(r => r.id);
-                return (
-                  <PendingFocusCard
-                    key={cardKey}
-                    fp={agg}
-                    isExpanded={isExpanded}
-                    onToggle={() => {
-                      LayoutAnimation.configureNext(EXPAND_ANIMATION);
-                      setExpandedId(isExpanded ? null : `group-${cardKey}`);
-                    }}
-                    onApprove={() => openApproveForGroup(agg)}
-                    onEdit={() => setEditingFp(agg)}
-                    onDelete={() => handleReject(agg)}
-                    onShowContext={setContextFp}
-                  />
-                );
-              };
-
+        {/* ── Focus points to validate ── */}
+        {toValidate > 0 && (
+          <>
+            <Marker title="To validate" count={toValidate} />
+            {groupAggregates.map((agg) => {
+              const key = agg.shared_group_id || agg.id;
               return (
-                <>
-                  {groupAggregates.length > 0 && (
-                    <>
-                      <Text style={s.sectionHeader}>Group focus points · {groupAggregates.length}</Text>
-                      {groupAggregates.map(renderGroupCard)}
-                    </>
-                  )}
-                  {soloFPs.length > 0 && (
-                    <>
-                      <Text style={[s.sectionHeader, groupAggregates.length > 0 && s.sectionHeaderSpaced]}>
-                        Solo focus points · {soloFPs.length}
-                      </Text>
-                      {soloFPs.map(renderSoloCard)}
-                    </>
-                  )}
-                  {pendingCoupleFPs.length > 0 && (
-                    <>
-                      <Text style={[s.sectionHeader, (groupAggregates.length > 0 || soloFPs.length > 0) && s.sectionHeaderSpaced]}>
-                        Couple focus points · {pendingCoupleFPs.length}
-                      </Text>
-                      {pendingCoupleFPs.map((fp) => (
-                        <View key={fp.id} style={cpl.card}>
-                          <View style={cpl.head}>
-                            <View style={cpl.couplePill}>
-                              <Ionicons name="heart" size={10} color="#2E4670" />
-                              <Text style={cpl.couplePillText} numberOfLines={1}>{fp.coupleName}</Text>
-                            </View>
-                            {!!fp.tier && <Text style={cpl.tier}>{fp.tier}</Text>}
-                          </View>
-                          <Text style={cpl.name} numberOfLines={2}>{fp.name}</Text>
-                          {!!fp.subtitle && <Text style={cpl.sub} numberOfLines={2}>{fp.subtitle}</Text>}
-                          <View style={cpl.actions}>
-                            <TouchableOpacity style={cpl.declineBtn} onPress={() => handleRejectCouple(fp)} activeOpacity={0.8}>
-                              <Text style={cpl.declineText}>Decline</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity style={cpl.approveBtn} onPress={() => handleApproveCouple(fp)} activeOpacity={0.85}>
-                              <Ionicons name="checkmark" size={15} color="#fff" />
-                              <Text style={cpl.approveText}>Approve</Text>
-                            </TouchableOpacity>
-                          </View>
-                        </View>
-                      ))}
-                    </>
-                  )}
-                </>
-              );
-            })()}
-
-            {pendingFPs.length === 0 && pendingCoupleFPs.length === 0 && !fpLoading && (
-              <View style={s.emptyState}>
-                <Ionicons name="checkmark-circle" size={40} color={C.green} />
-                <Text style={s.emptyTitle}>All clear</Text>
-                <Text style={s.emptySub}>No pending focus points to review.</Text>
-              </View>
-            )}
-        </>
-      </ScrollView>
-
-      {/* ── Page 2: Merge Requests ── */}
-      <ScrollView style={{ width: screenWidth }} contentContainerStyle={{ padding: Spacing.side, paddingBottom: 100 }}>
-        <>
-            <Text style={s.tabIntro}>
-              AI detected similar focus points that could be merged into one to keep things clean for your students.
-            </Text>
-
-            {mergeRequests.map(mr => {
-              const student = studentMap[mr.student_id];
-              return (
-                <MergeCompareCard
-                  key={mr.id}
-                  mr={mr}
-                  studentName={student?.name}
-                  onMerge={() => handleMerge(mr)}
-                  onKeepBoth={() => handleRejectMerge(mr)}
+                <PendingFocusCard
+                  key={`g-${key}`}
+                  fp={agg}
+                  isExpanded={expandedId === `group-${key}`}
+                  onToggle={() => expand(`group-${key}`)}
+                  studentName={agg._students.length === 1 ? agg._students[0].name : `${agg._students.length} students`}
+                  onApprove={() => openApproveForGroup(agg)}
+                  onEdit={() => setEditingFp(agg)}
+                  onDelete={() => handleReject(agg)}
+                  onShowContext={setContextFp}
                 />
               );
             })}
-
-            {mergeRequests.length === 0 && (
-              <View style={s.emptyState}>
-                <Ionicons name="checkmark-circle" size={40} color={C.green} />
-                <Text style={s.emptyTitle}>No merges</Text>
-                <Text style={s.emptySub}>No merge suggestions right now.</Text>
-              </View>
-            )}
-        </>
-      </ScrollView>
-
-      {/* ── Page 3: Name Matching ── */}
-      <ScrollView style={{ width: screenWidth }} contentContainerStyle={{ padding: Spacing.side, paddingBottom: 100 }}>
-        <>
-            <Text style={s.tabIntro}>
-              While transcribing your class audio, our AI picked up names it couldn't confidently match to your roster. Confirm each one so the focus points from that lesson land on the right student.
-            </Text>
-
-            {nameMatches.map(notif => (
-              <NameMatchCard
-                key={notif.id}
-                notif={notif}
-                onConfirm={() => handleConfirmName(notif)}
-                onReject={() => handleRejectName(notif)}
+            {soloFPs.map((fp) => (
+              <PendingFocusCard
+                key={fp.id}
+                fp={fp}
+                isExpanded={expandedId === `fp-${fp.id}`}
+                onToggle={() => expand(`fp-${fp.id}`)}
+                studentName={studentMap[fp.user_id]?.name || 'Student'}
+                onApprove={() => openApproveForSolo(fp)}
+                onEdit={setEditingFp}
+                onDelete={handleReject}
+                onShowContext={setContextFp}
               />
             ))}
-
-            {nameMatches.length === 0 && (
-              <View style={s.emptyState}>
-                <Ionicons name="checkmark-circle" size={40} color={C.green} />
-                <Text style={s.emptyTitle}>All matched</Text>
-                <Text style={s.emptySub}>No name matches to review.</Text>
-              </View>
+            {pendingCoupleFPs.map((fp) => (
+              <PendingFocusCard
+                key={`c-${fp.id}`}
+                fp={{ ...fp, group_fp: false }}
+                isExpanded={expandedId === `couple-${fp.id}`}
+                onToggle={() => expand(`couple-${fp.id}`)}
+                studentName={fp.coupleName || 'The couple'}
+                onApprove={() => handleApproveCouple(fp)}
+                onEdit={() => setEditingFp(fp)}
+                onDelete={() => handleRejectCouple(fp)}
+              />
+            ))}
+            {toValidate > 1 && (
+              <TouchableOpacity style={s.bulk} activeOpacity={0.8} onPress={handleApproveAll} accessibilityRole="button">
+                <Text style={s.bulkT}>Approve all {toValidate}</Text>
+              </TouchableOpacity>
             )}
-        </>
+          </>
+        )}
+
+        {/* ── Questions students asked ── */}
+        {questions.length > 0 && (
+          <>
+            <Marker title="Questions" count={questions.length} />
+            {questions.map((q) => {
+              const { text, focusName } = splitFocusTag(q.message);
+              return (
+                <View key={q.id} style={s.qCard}>
+                  <View style={s.q}>
+                    <Text style={s.qT}>{text || q.message}</Text>
+                    <Text style={s.qS}>{q.studentName} · {daysAgoLabel(q.created_at)}</Text>
+                  </View>
+                  {!!focusName && (
+                    <Pressable
+                      style={({ pressed }) => [s.fpx, pressed && { backgroundColor: '#F4F2EC' }]}
+                      onPress={() => openQuestionFocus(q, focusName)}
+                      accessibilityRole="button"
+                      accessibilityLabel={`About ${focusName}`}
+                    >
+                      <View style={s.fpxDot} />
+                      <Text style={s.fpxT} numberOfLines={1}>{focusName}</Text>
+                      <Ionicons name="chevron-forward" size={13} color="rgba(10,10,10,0.3)" />
+                    </Pressable>
+                  )}
+                  <View style={s.act}>
+                    <TouchableOpacity
+                      style={s.ok}
+                      activeOpacity={0.88}
+                      accessibilityRole="button"
+                      accessibilityLabel={`See ${q.studentName}'s question`}
+                      onPress={() => {
+                        if (q.id !== activeQuestion?.id) setQuestionReply('');
+                        setActiveQuestion(q);
+                        setQuestionSheetVisible(true);
+                      }}
+                    >
+                      <Text style={s.okT}>See</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              );
+            })}
+          </>
+        )}
+
+        {/* ── Possible duplicates ── */}
+        {mergeRequests.length > 0 && (
+          <>
+            <Marker title="Duplicates" count={mergeRequests.length} />
+            {mergeRequests.map((mr) => (
+              <MergeCompareCard
+                key={mr.id}
+                mr={mr}
+                studentName={studentMap[mr.student_id]?.name || 'Your student'}
+                onMerge={handleMerge}
+                onKeepBoth={handleRejectMerge}
+                onShowContext={(m, pair) => setComparing({ mr: m, ...pair })}
+              />
+            ))}
+          </>
+        )}
+
+        {/* ── Too many focus points at once ── */}
+        {reconcileGroups.length > 0 && (
+          <>
+            <Marker title="Too many focus points" count={reconcileGroups.length} />
+            {reconcileGroups.map((g) => {
+              const st = studentMap[g.userId];
+              const total = 1 + g.candidates.length;
+              return (
+                <TouchableOpacity
+                  key={`${g.userId}:${g.category || 'all'}`}
+                  style={s.rec}
+                  activeOpacity={0.85}
+                  onPress={() => setReconciling(g)}
+                  accessibilityRole="button"
+                >
+                  <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
+                    <Text style={s.recName} numberOfLines={1}>{st?.name || 'Student'}</Text>
+                    <Text style={s.recSub} numberOfLines={2}>
+                      {total} focus points at once{g.category ? ` in ${g.category}` : ''} — keep three.
+                    </Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={14} color="rgba(10,10,10,0.3)" />
+                </TouchableOpacity>
+              );
+            })}
+          </>
+        )}
       </ScrollView>
-      </Animated.ScrollView>
+      </MaskedView>
 
-      <Modal visible={!!editingFp} transparent animationType="slide" onRequestClose={() => setEditingFp(null)}>
-        {editingFp && (
-          <FocusPointEditSheet
-            fp={editingFp}
-            onSave={handleSaveEdit}
-            onClose={() => setEditingFp(null)}
-            saveLabel="Save & Approve"
-          />
+      {/* ── Nothing left ── */}
+      {allClear && (
+        <View style={s.clear}>
+          <View style={s.tick}><Ionicons name="checkmark" size={30} color="#FFFFFF" /></View>
+          <Text style={s.clearH}>All clear</Text>
+          <Text style={s.clearP}>Thanks for checking everything — your students have it all.</Text>
+          {(done.approved > 0 || done.answered > 0 || done.merged > 0) && (
+            <View style={s.nums}>
+              {[['Approved', done.approved], ['Answered', done.answered], ['Merged', done.merged]]
+                .filter(([, n]) => n > 0)
+                .map(([label, n]) => (
+                  <View key={label} style={{ gap: 6 }}>
+                    <Text style={s.numsN}>{n}</Text>
+                    <Text style={s.numsL}>{label}</Text>
+                  </View>
+                ))}
+            </View>
+          )}
+          <TouchableOpacity style={s.out} activeOpacity={0.88} onPress={() => navigation.goBack()} accessibilityRole="button">
+            <Text style={s.outT}>Back to your students</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      <QuestionSheet
+        visible={questionSheetVisible}
+        question={activeQuestion}
+        studentId={activeQuestion?.student_id}
+        studentName={activeQuestion?.studentName}
+        focusPoints={[]}
+        reply={questionReply}
+        onReplyChange={setQuestionReply}
+        onClose={() => setQuestionSheetVisible(false)}
+        onDone={() => {
+          setQuestionSheetVisible(false);
+          setQuestions((prev) => prev.filter((x) => x.id !== activeQuestion?.id));
+          setActiveQuestion(null);
+          setQuestionReply('');
+          setDone((d) => ({ ...d, answered: d.answered + 1 }));
+          refresh();
+        }}
+      />
+
+      {!!editingFp && (
+        <FocusPointEditSheet
+          visible
+          fp={editingFp}
+          onSave={handleSaveEdit}
+          onClose={() => setEditingFp(null)}
+          saveLabel="Save & Approve"
+        />
+      )}
+
+      <RejectFocusSheet
+        visible={!!rejectingFp}
+        fp={rejectingFp}
+        onConfirm={handleConfirmReject}
+        onClose={() => setRejectingFp(null)}
+      />
+
+      <Modal visible={!!approvingFp} transparent animationType="fade" onRequestClose={() => setApprovingFp(null)}>
+        {approvingFp && (
+          <ApproveConfirmSheet fp={approvingFp} onConfirm={handleConfirmApprove} onCancel={() => setApprovingFp(null)} />
         )}
       </Modal>
 
-      <Modal visible={!!rejectingFp} transparent animationType="slide" onRequestClose={() => setRejectingFp(null)}>
-        {rejectingFp && (
-          <RejectFocusSheet
-            fp={rejectingFp}
-            onConfirm={handleConfirmReject}
-            onClose={() => setRejectingFp(null)}
-          />
-        )}
-      </Modal>
+      <ClassContextSheet visible={!!contextFp} fp={contextFp} onClose={() => setContextFp(null)} />
 
-      <Modal visible={!!contextFp} transparent animationType="slide" onRequestClose={() => setContextFp(null)}>
-        {contextFp && (
-          <ClassContextSheet
-            fp={contextFp}
-            onClose={() => setContextFp(null)}
-          />
-        )}
-      </Modal>
-
-      <Modal visible={!!reconciling} transparent animationType="slide" onRequestClose={() => setReconciling(null)}>
-        {reconciling && (
+      {!!reconciling && (
           <ReconcileFocusSheet
+            visible
             student={{
               name: studentMap[reconciling.userId]?.name || 'Student',
               initials: (studentMap[reconciling.userId]?.name || '?').split(' ').map((w) => w[0]).slice(0, 2).join('').toUpperCase(),
@@ -793,15 +674,24 @@ export default function ActionNeededScreen({ navigation }) {
             onConfirm={async (removedId) => { await applyReconcile(removedId); setReconciling(null); loadReconcile(); loadData(); }}
             onClose={() => setReconciling(null)}
           />
+      )}
+
+      {/* The focus point a question came from. */}
+      <Modal visible={!!focusPopup} transparent animationType="fade" onRequestClose={() => setFocusPopup(null)}>
+        {focusPopup && (
+          <FocusPopup popup={focusPopup} onClose={() => setFocusPopup(null)} />
         )}
       </Modal>
 
-      <Modal visible={!!approvingFp} transparent animationType="fade" onRequestClose={() => setApprovingFp(null)}>
-        {approvingFp && (
-          <ApproveConfirmSheet
-            fp={approvingFp}
-            onConfirm={handleConfirmApprove}
-            onCancel={() => setApprovingFp(null)}
+      {/* The two focus points, read side by side before merging. */}
+      <Modal visible={!!comparing} transparent animationType="fade" onRequestClose={() => setComparing(null)}>
+        {comparing && (
+          <MergeContextSheet
+            pair={comparing}
+            studentName={studentMap[comparing.mr.student_id]?.name || 'Your student'}
+            onClose={() => setComparing(null)}
+            onMerge={() => { const m = comparing.mr; setComparing(null); handleMerge(m); }}
+            onKeepBoth={() => { const m = comparing.mr; setComparing(null); handleRejectMerge(m); }}
           />
         )}
       </Modal>
@@ -809,502 +699,211 @@ export default function ActionNeededScreen({ navigation }) {
   );
 }
 
-// ── Styles ──────────────────────────────────────────────────────────────────
-const cpl = StyleSheet.create({
-  card: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(46,70,112,0.18)',
-    padding: 14,
-    marginBottom: 10,
-  },
-  head: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
-  couplePill: {
-    flexDirection: 'row', alignItems: 'center', gap: 5,
-    backgroundColor: 'rgba(46,70,112,0.10)',
-    paddingHorizontal: 9, paddingVertical: 4, borderRadius: 999, flexShrink: 1,
-  },
-  couplePillText: { fontFamily: Fonts.jakartaBold, fontSize: 11, color: '#2E4670' },
-  tier: { fontFamily: Fonts.jakartaSemiBold, fontSize: 10.5, color: 'rgba(10,10,10,0.4)', textTransform: 'uppercase', letterSpacing: 0.4 },
-  name: { fontFamily: Fonts.jakartaExtraBold, fontSize: 16, color: '#0A0A0A', letterSpacing: -0.3 },
-  sub: { fontFamily: Fonts.jakartaRegular, fontSize: 12.5, color: 'rgba(10,10,10,0.55)', marginTop: 3, lineHeight: 17 },
-  actions: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 12 },
-  declineBtn: { flex: 1, paddingVertical: 11, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(10,10,10,0.14)', alignItems: 'center' },
-  declineText: { fontFamily: Fonts.jakartaBold, fontSize: 13.5, color: 'rgba(10,10,10,0.6)' },
-  approveBtn: { flex: 1, flexDirection: 'row', gap: 6, paddingVertical: 11, borderRadius: 12, backgroundColor: '#2E4670', alignItems: 'center', justifyContent: 'center' },
-  approveText: { fontFamily: Fonts.jakartaBold, fontSize: 13.5, color: '#fff' },
-});
+// ─── The focus point behind a question ──────────────────────────────────────
+function FocusPopup({ popup, onClose }) {
+  const ctx = popup.ctx;
+  const fp = ctx?.focus || null;
+  const lesson = ctx?.lesson || null;
+  const rows = !ctx
+    ? []
+    : [
+        fp?.tier ? ['Tier', TIER_LABEL[fp.tier] || 'Focus point'] : null,
+        ['Practice', ctx.done > 0 ? `${ctx.done} of ${ctx.target} sessions done` : 'No practice yet'],
+        lesson ? ['Set in', `${lesson.title || lesson.dance || 'A lesson'} · ${dateLabel(lesson.created_at)}`] : null,
+        fp?.subtitle ? ['The cue', fp.subtitle] : null,
+        fp?.drill ? ['Drill', fp.drill] : null,
+      ].filter(Boolean);
+
+  return (
+    <Pressable style={s.popBack} onPress={onClose}>
+      <Pressable style={s.popBox} onPress={() => {}}>
+        <Text style={s.popH}>{fp?.name || popup.name}</Text>
+        <TouchableOpacity style={s.popCl} onPress={onClose} activeOpacity={0.8}
+          accessibilityRole="button" accessibilityLabel="Close">
+          <Ionicons name="close" size={14} color={INK} />
+        </TouchableOpacity>
+
+        {!ctx ? (
+          <View style={{ paddingVertical: 30, alignItems: 'center' }}><ActivityIndicator color={GOLD} /></View>
+        ) : !fp ? (
+          <Text style={s.popNote}>“{popup.name}” isn’t on their plan any more.</Text>
+        ) : (
+          <View style={s.sh}>
+            {rows.map(([dt, dd]) => (
+              <View key={dt}>
+                <Text style={s.shDt}>{dt}</Text>
+                <Text style={s.shDd}>{dd}</Text>
+              </View>
+            ))}
+          </View>
+        )}
+      </Pressable>
+    </Pressable>
+  );
+}
+
+const TIER_LABEL = { critical: 'Critical focus', important: 'Important focus', supporting: 'Supporting focus' };
+
+// ─── The two focus points, read side by side ────────────────────────────────
+function MergeContextSheet({ pair, studentName, onClose, onMerge, onKeepBoth }) {
+  const { existing, incoming } = pair;
+  const Section = ({ fp, isNew, rows }) => (
+    <View style={s.sh}>
+      <View style={s.hh}>
+        <View style={s.hhDot} />
+        <Text style={s.hhT} numberOfLines={2}>{fp?.name || '—'}</Text>
+        {isNew && <Text style={s.hhNew}>New</Text>}
+      </View>
+      {rows.map(([dt, dd]) => (
+        <View key={dt}>
+          <Text style={s.shDt}>{dt}</Text>
+          <Text style={s.shDd}>{dd}</Text>
+        </View>
+      ))}
+    </View>
+  );
+  const first = (studentName || 'Your student').split(' ')[0];
+  const practice = (fp) => (fp?.practiceCount
+    ? `${fp.practiceCount} session${fp.practiceCount === 1 ? '' : 's'}${fp.practiceMinutes ? ` · ${fp.practiceMinutes} min` : ''}`
+    : 'Never practised');
+
+  return (
+    <Pressable style={s.popBack} onPress={onClose}>
+      <Pressable style={s.popBox} onPress={() => {}}>
+        <Text style={s.popH}>Same idea?</Text>
+        <TouchableOpacity style={s.popCl} onPress={onClose} activeOpacity={0.8}
+          accessibilityRole="button" accessibilityLabel="Close">
+          <Ionicons name="close" size={14} color={INK} />
+        </TouchableOpacity>
+
+        <Section
+          fp={existing}
+          rows={[
+            ['Set in', existing?.created_at ? dateLabel(existing.created_at) : '—'],
+            ['Practice', practice(existing)],
+            ...(existing?.subtitle ? [['The cue', existing.subtitle]] : []),
+            ...(existing?.drill ? [['Drill', existing.drill]] : []),
+          ]}
+        />
+        <Section
+          fp={incoming}
+          isNew
+          rows={[
+            ['Set in', incoming?.created_at ? dateLabel(incoming.created_at) : '—'],
+            ['Practice', practice(incoming)],
+            ...(incoming?.subtitle ? [['The cue', incoming.subtitle]] : []),
+            ...(incoming?.drill ? [['Drill', incoming.drill]] : []),
+          ]}
+        />
+
+        <Text style={s.popNote}>
+          {first} keeps <Text style={s.popNoteB}>{existing?.name}</Text>
+          {existing?.practiceMinutes ? ` and its ${existing.practiceMinutes} min of practice` : ''}; the new cue is added to it.
+        </Text>
+
+        <View style={s.popAct}>
+          <TouchableOpacity style={s.ok} activeOpacity={0.88} onPress={onMerge} accessibilityRole="button">
+            <Text style={s.okT}>Merge</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={s.keep} activeOpacity={0.8} onPress={onKeepBoth} accessibilityRole="button">
+            <Text style={s.keepT}>Keep both</Text>
+          </TouchableOpacity>
+        </View>
+      </Pressable>
+    </Pressable>
+  );
+}
 
 const s = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: C.bg },
+  safe: { flex: 1, backgroundColor: PAGE },
 
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: Spacing.side,
-    paddingTop: 8,
-    paddingBottom: 14,
-    gap: 10,
+  top: { flexDirection: 'row', alignItems: 'center', gap: 11, paddingHorizontal: Spacing.side, paddingTop: 2 },
+  ib: {
+    width: 36, height: 36, borderRadius: 11, backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center',
+    shadowColor: INK, shadowOpacity: 0.07, shadowOffset: { width: 0, height: 1 }, shadowRadius: 2, elevation: 1,
   },
-  backBtn: {
-    width: 36,
-    height: 36,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 2,
-  },
-  headerTitle: {
-    flex: 1,
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 22,
-    color: C.text,
-    letterSpacing: -0.3,
-  },
-  totalBadge: {
-    backgroundColor: C.orange,
-    borderRadius: 10,
-    minWidth: 22,
-    height: 22,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 6,
-  },
-  totalBadgeText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 11,
-    color: '#fff',
-  },
+  h1: { flex: 1, minWidth: 0, fontFamily: Fonts.bold, fontSize: 26, letterSpacing: -1.04, color: INK },
 
-  // Tabs
-  tabRow: {
-    position: 'relative',
-    flexDirection: 'row',
-    borderBottomWidth: 1,
-    borderBottomColor: C.lightGray,
-  },
-  tab: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 14,
-  },
-  tabLabelRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  tabUnderline: {
-    position: 'absolute',
-    bottom: -1,
-    width: '23.333%',
-    height: 2.5,
-    borderRadius: 2,
-    backgroundColor: C.dark,
-  },
-  tabText: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 13,
-    color: C.gray,
-  },
-  tabTextActive: {
-    fontFamily: Fonts.jakartaBold,
-    color: C.text,
-  },
-  tabBadge: {
-    backgroundColor: C.surface,
-    borderRadius: 8,
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-  },
-  tabBadgeActive: {
-    backgroundColor: C.dark,
-  },
-  tabBadgeText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 10,
-    color: C.gray,
-  },
-  tabBadgeTextActive: {
-    color: '#fff',
-  },
+  count: { flexDirection: 'row', alignItems: 'baseline', gap: 9, paddingHorizontal: Spacing.side, paddingTop: 20 },
+  countN: { fontFamily: Fonts.extraBold, fontSize: 52, letterSpacing: -2.6, lineHeight: 47, color: RED, fontVariant: ['tabular-nums'] },
+  countL: { fontFamily: Fonts.regular, fontSize: 13, lineHeight: 17.5, color: INK_62, paddingBottom: 5 },
 
-  // Banner
-  banner: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 10,
-    backgroundColor: 'rgba(212,69,69,0.06)',
-    borderRadius: 14,
-    padding: 14,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(212,69,69,0.12)',
-  },
-  bannerTitle: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 13,
-    color: C.text,
-  },
-  bannerSub: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 11,
-    color: C.gray,
-    marginTop: 2,
-    lineHeight: 16,
-  },
+  feed: { paddingHorizontal: Spacing.side, paddingBottom: 40 },
+  mk: { flexDirection: 'row', alignItems: 'center', gap: 9, paddingTop: 18, paddingBottom: 9, paddingHorizontal: 2 },
+  mkT: { fontFamily: Fonts.semiBold, fontSize: 9.5, letterSpacing: 1.6, textTransform: 'uppercase', color: INK_62 },
+  mkLine: { flex: 1, height: 1, backgroundColor: 'rgba(10,10,10,0.12)' },
+  mkN: { fontFamily: Fonts.bold, fontSize: 12, color: INK, fontVariant: ['tabular-nums'] },
 
-  // Bulk
-  bulkRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 14,
-  },
-  bulkLabel: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 11,
-    color: C.gray,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  bulkBtn: {
-    backgroundColor: C.dark,
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-  },
-  bulkBtnText: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 11,
-    color: '#fff',
-  },
-  sectionHeader: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 11,
-    color: C.gray,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    marginBottom: 10,
-  },
-  sectionHeaderSpaced: {
-    marginTop: 14,
-  },
+  skel: { backgroundColor: '#FFFFFF', borderRadius: 20, padding: 18, marginBottom: 10 },
 
-  // Focus point card — editorial, minimal
-  fpCard: {
-    backgroundColor: C.card,
-    borderRadius: 14,
-    paddingVertical: 18,
-    paddingHorizontal: 18,
-    marginBottom: 10,
-    overflow: 'hidden',
-    // Subtle shadow instead of border — gives depth without boxiness
-    shadowColor: '#000',
-    shadowOpacity: 0.035,
-    shadowOffset: { width: 0, height: 1 },
-    shadowRadius: 3,
-    elevation: 1,
-  },
-  fpCardExpanded: {
-    shadowOpacity: 0.07,
-    shadowRadius: 10,
-    elevation: 3,
-  },
-  urgentAccent: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    bottom: 0,
-    width: 2.5,
-    backgroundColor: C.red,
-  },
-  metaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginBottom: 6,
-  },
-  metaCategory: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 10,
-    letterSpacing: 1.2,
-    color: C.orange,
-    textTransform: 'uppercase',
-  },
-  metaSep: {
-    fontSize: 10,
-    color: '#C8C8C8',
-    marginHorizontal: -2,
-  },
-  metaStudent: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 11,
-    color: C.gray,
-    letterSpacing: 0.2,
-    flexShrink: 1,
-  },
-  metaTime: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 11,
-    color: C.orange,
-    letterSpacing: 0.1,
-  },
-  metaTimeUrgent: {
-    color: C.red,
-  },
-  fpName: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 18,
-    lineHeight: 24,
-    letterSpacing: -0.3,
-    color: C.text,
-  },
-  fpDetail: {
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 13.5,
-    color: '#5C6370',
-    lineHeight: 20,
-    marginTop: 8,
-  },
-  fpExpanded: {
-    marginTop: 18,
-    paddingTop: 18,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#E8E8E8',
-  },
-  skeletonCard: {
-    backgroundColor: C.card,
-    borderRadius: 14,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: C.lightGray,
-  },
-  // Quote-style blocks (replacing boxy gray sections)
-  quoteBlock: {
-    marginBottom: 16,
-  },
-  quoteLabel: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 10,
-    color: C.gray,
-    letterSpacing: 1.2,
-    textTransform: 'uppercase',
-    marginBottom: 7,
-  },
-  quoteRow: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  quoteBar: {
-    width: 2,
-    backgroundColor: '#E0E0E0',
-    borderRadius: 1,
-  },
-  quoteText: {
-    flex: 1,
-    fontFamily: Fonts.jakartaRegular,
-    fontSize: 13.5,
-    color: C.text,
-    lineHeight: 20,
-  },
-  fpActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-    marginTop: 6,
-  },
-  approveBtn: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: C.dark,
-    borderRadius: 999,
-    paddingVertical: 12,
-  },
-  approveBtnText: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 13,
-    color: '#fff',
-    letterSpacing: 0.2,
-  },
-  textBtn: {
-    paddingVertical: 10,
-    paddingHorizontal: 4,
-  },
-  editBtnText: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 13,
-    color: C.text,
-    letterSpacing: 0.1,
-  },
-  rejectBtnText: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 13,
-    color: C.red,
-    letterSpacing: 0.1,
-  },
+  bulk: { alignSelf: 'flex-start', marginTop: 2, paddingHorizontal: 15, height: 38, borderRadius: 999, borderWidth: 1, borderColor: 'rgba(10,10,10,0.14)', alignItems: 'center', justifyContent: 'center' },
+  bulkT: { fontFamily: Fonts.semiBold, fontSize: 12.5, color: 'rgba(10,10,10,0.68)' },
 
-  // Tab intro
-  tabIntro: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 14,
-    color: C.gray,
-    lineHeight: 22,
-    marginBottom: 20,
+  // Questions
+  qCard: { backgroundColor: '#FFFFFF', borderRadius: 19, borderWidth: 1, borderColor: 'rgba(10,10,10,0.07)', overflow: 'hidden', marginBottom: 10 },
+  q: { paddingHorizontal: 16, paddingTop: 15, paddingBottom: 13, gap: 6 },
+  qT: { fontFamily: Fonts.semiBold, fontSize: 16, letterSpacing: -0.32, lineHeight: 21.5, color: INK },
+  qS: { fontFamily: Fonts.regular, fontSize: 11, color: INK_62 },
+  fpx: {
+    flexDirection: 'row', alignItems: 'center', gap: 9, paddingHorizontal: 16, paddingVertical: 11,
+    borderTopWidth: 1, borderTopColor: 'rgba(10,10,10,0.07)', backgroundColor: '#FBFAF7',
   },
+  fpxDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: GOLD },
+  fpxT: { flex: 1, minWidth: 0, fontFamily: Fonts.semiBold, fontSize: 14, letterSpacing: -0.25, color: INK },
 
-  // Name matching
-  nameCard: {
-    backgroundColor: C.card,
-    borderRadius: 16,
-    padding: 18,
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(232,168,56,0.3)',
+  act: {
+    flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 14,
+    borderTopWidth: 1, borderTopColor: 'rgba(10,10,10,0.07)',
   },
-  nameHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  nameAvatar: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
-    backgroundColor: 'rgba(232,168,56,0.08)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  nameAvatarText: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 14,
-    color: C.orange,
-  },
-  nameName: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 15,
-    color: C.text,
-  },
-  nameSource: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 12,
-    color: C.gray,
-    marginTop: 2,
-  },
-  pendingBadge: {
-    backgroundColor: 'rgba(232,168,56,0.08)',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-  },
-  pendingBadgeText: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 12,
-    color: C.orange,
-  },
-  matchRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: C.bg,
-    borderRadius: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    marginTop: 12,
-  },
-  matchLabel: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 12,
-    color: C.gray,
-  },
-  matchValue: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 13,
-    color: C.text,
-    flex: 1,
-  },
-  nameActions: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 12,
-  },
-  confirmBtn: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: C.dark,
-    borderRadius: 12,
-    paddingVertical: 10,
-  },
-  confirmBtnText: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 13,
-    color: '#fff',
-  },
-  denyBtn: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1.5,
-    borderColor: C.lightGray,
-    borderRadius: 12,
-    paddingVertical: 10,
-  },
-  denyBtnText: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 13,
-    color: C.gray,
-  },
+  ok: { flex: 1, height: 42, borderRadius: 999, backgroundColor: INK, alignItems: 'center', justifyContent: 'center' },
+  okT: { fontFamily: Fonts.semiBold, fontSize: 14, color: '#FFFFFF' },
+  keep: { height: 42, paddingHorizontal: 17, borderRadius: 999, borderWidth: 1, borderColor: 'rgba(10,10,10,0.14)', alignItems: 'center', justifyContent: 'center' },
+  keepT: { fontFamily: Fonts.semiBold, fontSize: 13.5, color: 'rgba(10,10,10,0.68)' },
 
-  // Merge card
-  mergeCard: {
-    backgroundColor: C.card,
-    borderRadius: 18,
-    padding: 18,
-    marginBottom: 14,
-    borderWidth: 1,
-    borderColor: C.lightGray,
+  // Too many focus points
+  rec: {
+    flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#FFFFFF', borderRadius: 17,
+    borderWidth: 1, borderColor: 'rgba(168,65,47,0.26)', paddingVertical: 14, paddingHorizontal: 16, marginBottom: 10,
   },
-  mergeHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  mergeIcon: {
-    width: 32,
-    height: 32,
-    borderRadius: 10,
-    backgroundColor: 'rgba(232,168,56,0.1)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  mergeTitleText: {
-    fontFamily: Fonts.jakartaBold,
-    fontSize: 14,
-    color: C.text,
-    flex: 1,
-  },
-  mergeMeta: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 12,
-    color: C.gray,
-  },
+  recName: { fontFamily: Fonts.semiBold, fontSize: 14.5, letterSpacing: -0.3, color: INK },
+  recSub: { fontFamily: Fonts.regular, fontSize: 12, lineHeight: 16.5, color: INK_62 },
 
-  // Empty state
-  emptyState: {
-    alignItems: 'center',
-    paddingTop: 60,
-    gap: 8,
+  // Nothing left
+  clear: {
+    ...StyleSheet.absoluteFillObject, backgroundColor: '#1F5F3F', alignItems: 'center', justifyContent: 'center',
+    paddingHorizontal: 44,
   },
-  emptyTitle: {
-    fontFamily: Fonts.jakartaExtraBold,
-    fontSize: 17,
-    color: C.text,
+  tick: {
+    width: 64, height: 64, borderRadius: 32, backgroundColor: 'rgba(255,255,255,0.14)',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.28)', alignItems: 'center', justifyContent: 'center',
   },
-  emptySub: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 13,
-    color: C.gray,
+  clearH: { fontFamily: Fonts.bold, fontSize: 34, letterSpacing: -1.5, lineHeight: 36, color: '#FFFFFF', marginTop: 26 },
+  clearP: { fontFamily: Fonts.regular, fontSize: 14.5, lineHeight: 21, color: 'rgba(255,255,255,0.76)', textAlign: 'center', marginTop: 11 },
+  nums: {
+    flexDirection: 'row', gap: 26, marginTop: 30, paddingTop: 22,
+    borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.2)',
   },
+  numsN: { fontFamily: Fonts.bold, fontSize: 22, letterSpacing: -0.9, lineHeight: 22, color: '#FFFFFF', fontVariant: ['tabular-nums'] },
+  numsL: { fontFamily: Fonts.semiBold, fontSize: 9, letterSpacing: 1.2, textTransform: 'uppercase', color: 'rgba(255,255,255,0.62)' },
+  out: { marginTop: 38, borderRadius: 999, backgroundColor: '#FFFFFF', paddingHorizontal: 26, paddingVertical: 14 },
+  outT: { fontFamily: Fonts.semiBold, fontSize: 14.5, color: INK },
+
+  // Merge context
+  popBack: { flex: 1, backgroundColor: 'rgba(10,10,10,0.45)', justifyContent: 'flex-end' },
+  popBox: { backgroundColor: PAGE, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, paddingBottom: 30, maxHeight: '82%' },
+  popH: { fontFamily: Fonts.bold, fontSize: 20, letterSpacing: -0.7, color: INK },
+  popCl: {
+    position: 'absolute', top: 18, right: 18, width: 30, height: 30, borderRadius: 15, backgroundColor: '#FFFFFF',
+    borderWidth: 1, borderColor: 'rgba(10,10,10,0.1)', alignItems: 'center', justifyContent: 'center',
+  },
+  sh: { backgroundColor: '#FFFFFF', borderRadius: 16, borderWidth: 1, borderColor: 'rgba(10,10,10,0.07)', padding: 15, marginTop: 11, gap: 8 },
+  hh: { flexDirection: 'row', alignItems: 'center', gap: 9 },
+  hhDot: { width: 7, height: 7, borderRadius: 3.5, backgroundColor: GOLD },
+  hhT: { flex: 1, minWidth: 0, fontFamily: Fonts.semiBold, fontSize: 14.5, letterSpacing: -0.26, color: INK },
+  hhNew: { fontFamily: Fonts.semiBold, fontSize: 10, letterSpacing: 1, textTransform: 'uppercase', color: RED },
+  shDt: { fontFamily: Fonts.semiBold, fontSize: 9, letterSpacing: 1.35, textTransform: 'uppercase', color: INK_62 },
+  shDd: { fontFamily: Fonts.regular, fontSize: 13, lineHeight: 19, color: INK, marginTop: 3 },
+  popNote: { marginTop: 13, padding: 14, borderRadius: 14, backgroundColor: 'rgba(10,10,10,0.045)', fontFamily: Fonts.regular, fontSize: 12.5, lineHeight: 18, color: INK },
+  popNoteB: { fontFamily: Fonts.semiBold },
+  popAct: { flexDirection: 'row', gap: 8, marginTop: 15 },
 });

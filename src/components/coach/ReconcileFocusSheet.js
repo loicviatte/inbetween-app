@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import BottomSheet from '../BottomSheet';
 import { Fonts } from '../../theme';
 import HeroCardGradient from '../HeroCardGradient';
 
@@ -33,6 +34,7 @@ const C = {
 };
 
 export default function ReconcileFocusSheet({
+  visible,
   student = { name: 'Student', initials: '?' },
   coachName = 'your coach',
   kept = { name: '—', tier: 'critical', done: 0, target: 3 },
@@ -73,10 +75,8 @@ export default function ReconcileFocusSheet({
   }
 
   return (
-    <View style={s.overlay}>
-      <TouchableOpacity style={s.backdrop} activeOpacity={1} onPress={onClose} />
-
-      <View style={s.sheet}>
+    <BottomSheet visible={visible} onClose={onClose} overlayColor="rgba(10,10,10,0.42)" sheetStyle={s.sheet}>
+      <>
         <View style={s.grab} />
 
         {/* Header */}
@@ -101,7 +101,7 @@ export default function ReconcileFocusSheet({
         <View style={s.hero}>
           <HeroCardGradient />
           <View style={s.kheadrow}>
-            <Text style={s.keyebrow}>Critical focus point for next class</Text>
+            <Text style={s.keyebrow}>Critical focus point for the next lesson</Text>
             <View style={s.klock}>
               <Ionicons name="lock-closed" size={12} color={C.gold300} />
             </View>
@@ -182,7 +182,7 @@ export default function ReconcileFocusSheet({
             <Text style={s.confirmText}>{submitting ? 'Saving…' : 'Confirm'}</Text>
           </TouchableOpacity>
         </View>
-      </View>
+      </>
 
       {infoFp && (
         <View style={s.infoOverlay}>
@@ -196,7 +196,7 @@ export default function ReconcileFocusSheet({
           </View>
         </View>
       )}
-    </View>
+    </BottomSheet>
   );
 }
 
@@ -214,56 +214,54 @@ const s = StyleSheet.create({
 
   shead: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 20, paddingTop: 6, paddingBottom: 14 },
   aw: { width: 42, height: 42, borderRadius: 21, backgroundColor: '#F0C24A', alignItems: 'center', justifyContent: 'center' },
-  awText: { fontFamily: Fonts.jakartaExtraBold, fontSize: 14, color: C.ink },
+  awText: { fontFamily: Fonts.semiBold, fontSize: 14, color: C.ink },
   fmid: { flex: 1, minWidth: 0 },
-  nm: { fontFamily: Fonts.jakartaExtraBold, fontSize: 18, color: C.ink, letterSpacing: -0.2 },
-  mt: { fontFamily: Fonts.travelsRegular, fontSize: 12, color: C.ink3, marginTop: 1 },
+  nm: { fontFamily: Fonts.semiBold, fontSize: 18, color: C.ink, letterSpacing: -0.2 },
+  mt: { fontFamily: Fonts.regular, fontSize: 12, color: C.ink3, marginTop: 1 },
   closeb: { width: 32, height: 32, borderRadius: 16, backgroundColor: 'rgba(10,10,10,0.05)', alignItems: 'center', justifyContent: 'center' },
 
-  intro: { fontFamily: Fonts.travelsRegular, fontSize: 13.5, lineHeight: 20, color: C.ink2, paddingHorizontal: 20 },
-  introB: { fontFamily: Fonts.jakartaExtraBold, color: C.ink },
+  intro: { fontFamily: Fonts.regular, fontSize: 13.5, lineHeight: 20, color: C.ink2, paddingHorizontal: 20 },
+  introB: { fontFamily: Fonts.semiBold, color: C.ink },
 
   hero: { marginHorizontal: 20, marginTop: 14, borderRadius: 18, padding: 16, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(240,194,74,0.3)' },
   kheadrow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  keyebrow: { fontFamily: Fonts.travelsMedium, fontSize: 10.5, letterSpacing: 0.3, color: C.gold300 },
+  keyebrow: { fontFamily: Fonts.medium, fontSize: 10.5, letterSpacing: 0.3, color: C.gold300 },
   klock: { width: 24, height: 24, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.12)', alignItems: 'center', justifyContent: 'center' },
-  kname: { fontFamily: Fonts.jakartaExtraBold, fontSize: 27, color: '#FFFFFF', letterSpacing: -0.6, marginTop: 9 },
+  kname: { fontFamily: Fonts.semiBold, fontSize: 27, color: '#FFFFFF', letterSpacing: -0.6, marginTop: 9 },
   kmeta: { flexDirection: 'row', alignItems: 'center', gap: 11, marginTop: 14 },
-  kpill: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: C.gold, borderRadius: 999, paddingHorizontal: 11, paddingVertical: 4 },
-  kpillText: { fontFamily: Fonts.travelsMedium, fontSize: 9.5, letterSpacing: 1.1, color: C.ink },
-  ktrained: { fontFamily: Fonts.travelsMedium, fontSize: 12, color: 'rgba(247,246,243,0.62)' },
+  ktrained: { fontFamily: Fonts.medium, fontSize: 12, color: 'rgba(247,246,243,0.62)' },
 
   dropk: { flexDirection: 'row', alignItems: 'baseline', paddingHorizontal: 22, paddingTop: 18, paddingBottom: 9 },
-  dropkLabel: { fontFamily: Fonts.travelsMedium, fontSize: 10, letterSpacing: 1.6, color: C.ink3 },
-  dropkN: { marginLeft: 'auto', fontFamily: Fonts.travelsMedium, fontSize: 11, color: C.ink3 },
+  dropkLabel: { fontFamily: Fonts.medium, fontSize: 10, letterSpacing: 1.6, color: C.ink3 },
+  dropkN: { marginLeft: 'auto', fontFamily: Fonts.medium, fontSize: 11, color: C.ink3 },
 
   list: { paddingHorizontal: 20, gap: 8 },
   fp: { flexDirection: 'row', alignItems: 'center', gap: 13, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: C.line, borderRadius: 14, paddingVertical: 13, paddingHorizontal: 14 },
   fpRemoved: { borderColor: C.critLine, backgroundColor: C.critTint },
   dot: { width: 9, height: 9, borderRadius: 5, backgroundColor: C.gold },
   dotRemoved: { backgroundColor: C.crit },
-  name: { fontFamily: Fonts.jakartaExtraBold, fontSize: 16, color: C.ink, letterSpacing: -0.2 },
+  name: { fontFamily: Fonts.semiBold, fontSize: 16, color: C.ink, letterSpacing: -0.2 },
   nameRemoved: { color: C.ink3, textDecorationLine: 'line-through' },
-  stt: { fontFamily: Fonts.travelsMedium, fontSize: 10, letterSpacing: 1.1, color: C.ink3, marginTop: 3 },
+  stt: { fontFamily: Fonts.medium, fontSize: 10, letterSpacing: 1.1, color: C.ink3, marginTop: 3 },
   sttRemoved: { textDecorationLine: 'line-through' },
-  frac: { fontFamily: Fonts.jakartaExtraBold, fontSize: 15, color: C.ink },
+  frac: { fontFamily: Fonts.semiBold, fontSize: 15, color: C.ink },
   remWrap: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  remText: { fontFamily: Fonts.travelsMedium, fontSize: 10, letterSpacing: 0.5, color: C.crit },
+  remText: { fontFamily: Fonts.medium, fontSize: 10, letterSpacing: 0.5, color: C.crit },
 
-  note: { fontFamily: Fonts.travelsRegular, fontSize: 12, lineHeight: 18, color: C.ink3, paddingHorizontal: 20, paddingTop: 13 },
-  noteB: { fontFamily: Fonts.travelsMedium, color: C.ink2 },
+  note: { fontFamily: Fonts.regular, fontSize: 12, lineHeight: 18, color: C.ink3, paddingHorizontal: 20, paddingTop: 13 },
+  noteB: { fontFamily: Fonts.medium, color: C.ink2 },
 
   sfoot: { paddingHorizontal: 20, paddingTop: 15 },
-  errMsg: { fontFamily: Fonts.travelsMedium, fontSize: 12, color: C.crit, marginBottom: 8, textAlign: 'center' },
+  errMsg: { fontFamily: Fonts.medium, fontSize: 12, color: C.crit, marginBottom: 8, textAlign: 'center' },
   confirm: { backgroundColor: C.ink, borderRadius: 15, paddingVertical: 16, alignItems: 'center' },
   confirmDisabled: { opacity: 0.45 },
-  confirmText: { fontFamily: Fonts.jakartaExtraBold, fontSize: 16, color: '#FFFFFF' },
+  confirmText: { fontFamily: Fonts.semiBold, fontSize: 16, color: '#FFFFFF' },
 
   infoBtn: { width: 26, height: 26, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(10,10,10,0.05)' },
   infoOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(10,10,10,0.5)', alignItems: 'center', justifyContent: 'center', padding: 28 },
   infoCard: { backgroundColor: C.sheet, borderRadius: 18, padding: 18, maxWidth: 320, width: '100%' },
-  infoTitle: { fontFamily: Fonts.jakartaExtraBold, fontSize: 18, color: C.ink, letterSpacing: -0.3 },
-  infoBody: { fontFamily: Fonts.travelsRegular, fontSize: 14, lineHeight: 21, color: C.ink2, marginTop: 8 },
+  infoTitle: { fontFamily: Fonts.semiBold, fontSize: 18, color: C.ink, letterSpacing: -0.3 },
+  infoBody: { fontFamily: Fonts.regular, fontSize: 14, lineHeight: 21, color: C.ink2, marginTop: 8 },
   infoClose: { marginTop: 16, alignSelf: 'flex-end', backgroundColor: C.ink, borderRadius: 12, paddingVertical: 10, paddingHorizontal: 20 },
-  infoCloseText: { fontFamily: Fonts.jakartaExtraBold, fontSize: 14, color: '#FFFFFF' },
+  infoCloseText: { fontFamily: Fonts.semiBold, fontSize: 14, color: '#FFFFFF' },
 });

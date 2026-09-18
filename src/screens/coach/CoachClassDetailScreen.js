@@ -11,6 +11,7 @@ import {
   FlatList,
   Alert,
   Pressable,
+  Linking,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -19,7 +20,7 @@ import HeroCardGradient from '../../components/HeroCardGradient';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useFocusEffect } from '@react-navigation/native';
 import { Colors, Fonts, Spacing } from '../../theme';
-import { GenericListSkeleton } from '../../components/Skeleton';
+import { Pulse, Bone } from '../../components/GroupSwitchSkeleton';
 import {
   getCoachClassDetail,
   setStudentAttendance,
@@ -31,7 +32,7 @@ import {
 
 // ─── Palette ────────────────────────────────────────────────────────────────
 const INK_950 = '#0A0A0A';
-const INK_50 = '#F7F6F3';
+const INK_50 = '#F2F0EB';
 const PAPER = '#FFFFFF';
 const FG_2 = 'rgba(10,10,10,0.55)';
 const FG_3 = 'rgba(10,10,10,0.30)';
@@ -207,7 +208,7 @@ const seg = StyleSheet.create({
   cellGreyedYes: { backgroundColor: 'rgba(76,175,80,0.16)' },
   cellGreyedNo: { backgroundColor: 'rgba(232,69,69,0.10)' },
   cellText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 11,
     color: FG_2,
     letterSpacing: 0.5,
@@ -321,7 +322,7 @@ const rowS = StyleSheet.create({
     justifyContent: 'center',
   },
   avText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 14,
   },
   body: {
@@ -330,28 +331,28 @@ const rowS = StyleSheet.create({
     gap: 2,
   },
   name: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 17,
     color: INK_950,
     letterSpacing: -0.3,
   },
   meta: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 12.5,
     color: FG_2,
     lineHeight: 17,
   },
   metaMismatch: {
     color: WARN_TEXT,
-    fontFamily: Fonts.jakartaSemiBold,
+    fontFamily: Fonts.semiBold,
   },
   metaSaidYes: {
     color: '#2F6B33',
-    fontFamily: Fonts.jakartaSemiBold,
+    fontFamily: Fonts.semiBold,
   },
   metaSaidNo: {
     color: '#9F2F2F',
-    fontFamily: Fonts.jakartaSemiBold,
+    fontFamily: Fonts.semiBold,
   },
 });
 
@@ -383,7 +384,7 @@ function StudentPickerModal({ visible, existingIds, onClose, onSelect }) {
         <View style={picker.sheet}>
           <View style={picker.handle} />
           <View style={picker.header}>
-            <Text style={picker.title}>Add student to class</Text>
+            <Text style={picker.title}>Add student to lesson</Text>
             <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
               <Ionicons name="close" size={20} color={FG_2} />
             </TouchableOpacity>
@@ -435,7 +436,7 @@ function StudentPickerModal({ visible, existingIds, onClose, onSelect }) {
               ListEmptyComponent={
                 <Text style={picker.empty}>
                   {remaining.length === 0
-                    ? 'All your students are already on this class.'
+                    ? 'All your students are already on this lesson.'
                     : 'No students match your search.'}
                 </Text>
               }
@@ -475,7 +476,7 @@ function NotePickerModal({ visible, onClose, onSelect, onCreateNew }) {
         <View style={picker.sheet}>
           <View style={picker.handle} />
           <View style={picker.header}>
-            <Text style={picker.title}>Link a note to this class</Text>
+            <Text style={picker.title}>Link a note to this lesson</Text>
             <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
               <Ionicons name="close" size={20} color={FG_2} />
             </TouchableOpacity>
@@ -645,7 +646,7 @@ export default function CoachClassDetailScreen({ route, navigation }) {
       const studentLabel = studentSaid === 'yes' ? 'present' : 'absent';
       const newLabel = next === 'yes' ? 'present' : 'absent';
       const tail = next === 'no'
-        ? ' On save, the focus points assigned to them from this class will be removed.'
+        ? ' On save, the focus points assigned to them from this lesson will be removed.'
         : '';
       Alert.alert(
         "Override student's reply?",
@@ -751,7 +752,7 @@ export default function CoachClassDetailScreen({ route, navigation }) {
   }
 
   async function handleUnlinkNote(note) {
-    Alert.alert('Unlink note', 'Remove this note from the class? The note itself stays.', [
+    Alert.alert('Unlink note', 'Remove this note from the lesson? The note itself stays.', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Unlink',
@@ -779,7 +780,7 @@ export default function CoachClassDetailScreen({ route, navigation }) {
     return (
       <SafeAreaView style={s.safe} edges={['top']}>
         <TopBar onBack={() => navigation.goBack()} />
-        <GenericListSkeleton rows={4} variant="detail" showHeader={false} showTitle={false} />
+        <DetailBones />
       </SafeAreaView>
     );
   }
@@ -788,7 +789,7 @@ export default function CoachClassDetailScreen({ route, navigation }) {
       <SafeAreaView style={s.safe} edges={['top']}>
         <TopBar onBack={() => navigation.goBack()} />
         <View style={s.errorWrap}>
-          <Text style={s.errorText}>Class not found.</Text>
+          <Text style={s.errorText}>Lesson not found.</Text>
         </View>
       </SafeAreaView>
     );
@@ -802,7 +803,7 @@ export default function CoachClassDetailScreen({ route, navigation }) {
     cls.title ||
     cls.ai_primary_focus ||
     (cls.practice_point_1 || '').split(' ').slice(0, 6).join(' ') ||
-    (isPrivate ? 'Private lesson' : 'Group class');
+    (isPrivate ? 'Private lesson' : 'Group lesson');
 
   const datePill = formatDatePill(cls.created_at);
 
@@ -933,6 +934,42 @@ export default function CoachClassDetailScreen({ route, navigation }) {
 
 // ─── Sub-components ─────────────────────────────────────────────────────────
 
+// The lesson while it loads: its hero, the tabs and a summary, as bones.
+const ON_DARK = { backgroundColor: 'rgba(255,255,255,0.14)' };
+function DetailBones() {
+  return (
+    <View>
+      <View style={s.heroCard}>
+        <HeroCardGradient />
+        <Pulse style={{ gap: 12 }}>
+          <View style={s.heroTopRow}>
+            <Bone w={80} h={10} r={4} style={ON_DARK} />
+            <Bone w={70} h={10} r={4} style={ON_DARK} />
+          </View>
+          <View style={s.heroPills}>
+            <Bone w={58} h={20} r={10} style={ON_DARK} />
+            <Bone w={70} h={20} r={10} style={ON_DARK} />
+          </View>
+          <Bone w="78%" h={24} r={6} style={ON_DARK} />
+          <View style={[s.heroStatsRow, { justifyContent: 'space-around' }]}>
+            {[0, 1, 2].map((i) => <Bone key={i} w={34} h={26} r={5} style={ON_DARK} />)}
+          </View>
+        </Pulse>
+      </View>
+      <Pulse style={[s.tabsBar, { paddingTop: 12, paddingBottom: 12, justifyContent: 'space-around' }]}>
+        {[0, 1, 2].map((i) => <Bone key={i} w={70} h={12} r={4} />)}
+      </Pulse>
+      <Pulse style={[s.tabContent, { gap: 10 }]}>
+        <Bone w={70} h={9} r={3} style={{ marginBottom: 4 }} />
+        <Bone w="100%" h={12} r={4} />
+        <Bone w="96%" h={12} r={4} />
+        <Bone w="90%" h={12} r={4} />
+        <Bone w="62%" h={12} r={4} />
+      </Pulse>
+    </View>
+  );
+}
+
 function TopBar({ onBack }) {
   return (
     <View style={s.topBar}>
@@ -1007,11 +1044,30 @@ function SummaryTab({ cls, isProcessing }) {
   const hasFocus = !!(cls.ai_primary_focus || cls.ai_secondary_focus);
 
   if (!hasSummary && !hasPracticePoints && !hasFocus) {
+    // A class that failed, or has sat "processing" for a day, says so and
+    // gives a way to get it run again — instead of waiting forever.
+    const failed = cls.status === 'error' || cls.status === 'failed';
+    const stuck = isProcessing && Date.now() - new Date(cls.created_at).getTime() > 24 * 3600 * 1000;
+    if (failed || stuck) {
+      const mail = `mailto:hello@useinbetween.com?subject=${encodeURIComponent('Lesson not processed')}&body=${encodeURIComponent(`Lesson ${cls.id}`)}`;
+      return (
+        <View>
+          <Text style={s.placeholder}>
+            {failed
+              ? 'We couldn’t process this lesson. Its recording is kept: write to us and we’ll run it again.'
+              : 'This lesson is taking much longer than usual to process. Write to us and we’ll look at it.'}
+          </Text>
+          <TouchableOpacity onPress={() => Linking.openURL(mail).catch(() => {})} activeOpacity={0.7} style={{ marginTop: 10 }}>
+            <Text style={[s.placeholder, { color: '#8A6414', fontFamily: Fonts.semiBold }]}>Contact us</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
     return (
       <Text style={s.placeholder}>
         {isProcessing
-          ? 'Class is still being processed. Summary will appear once transcription completes.'
-          : 'No summary yet for this class.'}
+          ? 'The lesson is still being processed. The summary appears once transcription completes.'
+          : 'No summary yet for this lesson.'}
       </Text>
     );
   }
@@ -1072,7 +1128,7 @@ function AttendanceTab({
   if (attendeesWithStatus.length === 0) {
     return (
       <View style={s.emptyState}>
-        <Text style={s.placeholder}>No students recorded for this class yet.</Text>
+        <Text style={s.placeholder}>No students recorded for this lesson yet.</Text>
         {!isPrivate && (
           <TouchableOpacity style={s.bigAddBtn} onPress={onAdd} activeOpacity={0.85}>
             <Ionicons name="add" size={16} color="#fff" />
@@ -1099,7 +1155,7 @@ function AttendanceTab({
 
       <Text style={s.attHint}>
         {isPrivate
-          ? 'Private class — attendance is locked to the booked student.'
+          ? 'Private lesson — attendance is locked to the booked student.'
           : 'Tap Present or Absent to mark each student. Rows where your mark disagrees with the student’s reply are highlighted.'}
       </Text>
 
@@ -1121,7 +1177,7 @@ function NotesTab({ notes, onOpen, onUnlink, onLink }) {
         <Text style={s.linkNoteBtnText}>Link a note</Text>
       </TouchableOpacity>
       {notes.length === 0 ? (
-        <Text style={s.placeholder}>No notes linked to this class yet.</Text>
+        <Text style={s.placeholder}>No notes linked to this lesson yet.</Text>
       ) : (
         notes.map(note => (
           <View key={note.id} style={s.noteRow}>
@@ -1179,9 +1235,9 @@ const s = StyleSheet.create({
     paddingBottom: 14,
   },
   iconBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
+    width: 36,
+    height: 36,
+    borderRadius: 11,
     backgroundColor: '#FFFFFF',
     alignItems: 'center',
     justifyContent: 'center',
@@ -1223,14 +1279,14 @@ const s = StyleSheet.create({
     marginBottom: 6,
   },
   heroDate: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 11,
     color: 'rgba(255,255,255,0.55)',
     letterSpacing: 0.2,
   },
   heroTeacher: {
     flexShrink: 1,
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 11,
     color: '#F6D27A',
     letterSpacing: 0.2,
@@ -1242,7 +1298,7 @@ const s = StyleSheet.create({
     marginBottom: 10,
   },
   heroTitle: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 24,
     color: '#FFFFFF',
     letterSpacing: -0.6,
@@ -1265,14 +1321,14 @@ const s = StyleSheet.create({
     borderRightColor: 'rgba(255,255,255,0.10)',
   },
   heroStatN: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 18,
     color: '#FFFFFF',
     letterSpacing: -0.36,
     lineHeight: 20,
   },
   heroStatL: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 8.5,
     color: 'rgba(255,255,255,0.55)',
     letterSpacing: 0.8,
@@ -1302,7 +1358,7 @@ const s = StyleSheet.create({
     backgroundColor: '#FF6B6B',
   },
   pillText: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 8.5,
     color: 'rgba(255,255,255,0.72)',
     letterSpacing: 0.3,
@@ -1327,17 +1383,17 @@ const s = StyleSheet.create({
     gap: 0,
   },
   tabText: {
-    fontFamily: Fonts.jakartaSemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 15,
     color: FG_3,
     letterSpacing: -0.2,
   },
   tabTextActive: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     color: INK_950,
   },
   tabBadge: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 11,
     color: '#C8732B',
     letterSpacing: 0.2,
@@ -1361,7 +1417,7 @@ const s = StyleSheet.create({
     marginBottom: 24,
   },
   sectionEyebrow: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 11,
     color: FG_2,
     letterSpacing: 0.8,
@@ -1369,13 +1425,13 @@ const s = StyleSheet.create({
     marginBottom: 10,
   },
   summaryText: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 15,
     color: INK_950,
     lineHeight: 24,
   },
   placeholder: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     color: FG_2,
     fontStyle: 'italic',
@@ -1400,7 +1456,7 @@ const s = StyleSheet.create({
     flexShrink: 0,
   },
   practiceText: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 14,
     color: INK_950,
     flex: 1,
@@ -1422,7 +1478,7 @@ const s = StyleSheet.create({
     borderRadius: 4,
   },
   focusText: {
-    fontFamily: Fonts.jakartaSemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 14,
     color: INK_950,
     flex: 1,
@@ -1432,7 +1488,7 @@ const s = StyleSheet.create({
   attHint: {
     marginTop: 14,
     paddingHorizontal: 4,
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     color: FG_2,
     lineHeight: 19,
@@ -1449,7 +1505,7 @@ const s = StyleSheet.create({
     marginTop: 14,
   },
   smallAddBtnText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 11,
     color: INK_950,
     letterSpacing: 0.4,
@@ -1471,7 +1527,7 @@ const s = StyleSheet.create({
     backgroundColor: INK_950,
   },
   bigAddBtnText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 13,
     color: '#fff',
     letterSpacing: 0.6,
@@ -1492,7 +1548,7 @@ const s = StyleSheet.create({
     marginBottom: 12,
   },
   linkNoteBtnText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 12,
     color: INK_950,
     letterSpacing: 0.4,
@@ -1511,20 +1567,20 @@ const s = StyleSheet.create({
     gap: 8,
   },
   noteTitle: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 14,
     color: INK_950,
     letterSpacing: -0.2,
   },
   notePreview: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 12.5,
     color: FG_2,
     lineHeight: 18,
     marginTop: 2,
   },
   noteDate: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 10,
     color: FG_3,
     marginTop: 4,
@@ -1536,7 +1592,7 @@ const s = StyleSheet.create({
     justifyContent: 'center',
   },
   errorText: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 15,
     color: FG_2,
   },
@@ -1572,13 +1628,13 @@ const s = StyleSheet.create({
     minWidth: 0,
   },
   saveBarCount: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 13,
     color: '#fff',
     letterSpacing: -0.2,
   },
   saveBarHint: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 11,
     color: 'rgba(255,255,255,0.6)',
     marginTop: 1,
@@ -1588,7 +1644,7 @@ const s = StyleSheet.create({
     paddingVertical: 8,
   },
   saveBarDiscardText: {
-    fontFamily: Fonts.jakartaSemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 12,
     color: 'rgba(255,255,255,0.7)',
     letterSpacing: 0.2,
@@ -1603,7 +1659,7 @@ const s = StyleSheet.create({
     justifyContent: 'center',
   },
   saveBarSaveText: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 12,
     color: INK_950,
     letterSpacing: 0.4,
@@ -1643,7 +1699,7 @@ const picker = StyleSheet.create({
     borderBottomWidth: 0.5,
     borderBottomColor: LINE,
   },
-  title: { fontFamily: Fonts.jakartaExtraBold, fontSize: 16, color: INK_950 },
+  title: { fontFamily: Fonts.semiBold, fontSize: 16, color: INK_950 },
   searchWrap: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1658,7 +1714,7 @@ const picker = StyleSheet.create({
   },
   searchInput: {
     flex: 1,
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 14,
     color: INK_950,
     padding: 0,
@@ -1677,23 +1733,23 @@ const picker = StyleSheet.create({
   },
   itemAvatarFallback: { alignItems: 'center', justifyContent: 'center' },
   itemAvatarText: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 14,
     color: INK_950,
   },
   itemName: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 15,
     color: INK_950,
   },
   itemSub: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 12,
     color: FG_2,
     marginTop: 1,
   },
   empty: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     color: FG_2,
     textAlign: 'center',
@@ -1711,7 +1767,7 @@ const picker = StyleSheet.create({
     borderRadius: 14,
   },
   createNewText: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 13,
     color: Colors.orange,
   },
@@ -1724,19 +1780,19 @@ const picker = StyleSheet.create({
     gap: 8,
   },
   noteTitle: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 14,
     color: INK_950,
   },
   noteContent: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 12,
     color: FG_2,
     marginTop: 3,
     lineHeight: 17,
   },
   noteDate: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 10,
     color: FG_3,
     marginTop: 4,

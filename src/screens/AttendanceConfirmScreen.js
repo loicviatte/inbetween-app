@@ -39,13 +39,13 @@ export default function AttendanceConfirmScreen({ navigation, route }) {
         <View style={s.iconWrap}>
           <Text style={s.icon}>🕺</Text>
         </View>
-        <Text style={s.title}>Were you at {coachName ?? 'your coach'}'s group class?</Text>
+        <Text style={s.title}>Were you at {coachName ?? 'your coach'}'s group lesson?</Text>
         {!!classDate && <Text style={s.date}>{classDate}</Text>}
-        <Text style={s.sub}>Confirm your attendance to receive your focus points from this class.</Text>
+        <Text style={s.sub}>Confirm your attendance to receive your focus points from this lesson.</Text>
 
         {done ? (
           <View style={s.doneWrap}>
-            <Text style={s.doneText}>{answer === 'yes' ? '✓ Confirmed!' : '✓ Noted, no focus points for this class.'}</Text>
+            <Text style={s.doneText}>{answer === 'yes' ? '✓ Confirmed!' : '✓ Noted, no focus points for this lesson.'}</Text>
           </View>
         ) : (
           <View style={s.buttons}>
@@ -67,15 +67,15 @@ const s = StyleSheet.create({
   content: { flex: 1, paddingHorizontal: Spacing.side, justifyContent: 'center', alignItems: 'center' },
   iconWrap: { marginBottom: 24 },
   icon: { fontSize: 52 },
-  title: { fontFamily: Fonts.jakartaExtraBold, fontSize: 22, color: Colors.black, textAlign: 'center', letterSpacing: -0.3, marginBottom: 8 },
-  date: { fontFamily: Fonts.jakartaSemiBold, fontSize: 14, color: Colors.orange, marginBottom: 12 },
-  sub: { fontFamily: Fonts.jakartaRegular, fontSize: 14, color: Colors.secondary, textAlign: 'center', lineHeight: 20, marginBottom: 36 },
+  title: { fontFamily: Fonts.semiBold, fontSize: 22, color: Colors.black, textAlign: 'center', letterSpacing: -0.3, marginBottom: 8 },
+  date: { fontFamily: Fonts.semiBold, fontSize: 14, color: Colors.orange, marginBottom: 12 },
+  sub: { fontFamily: Fonts.regular, fontSize: 14, color: Colors.secondary, textAlign: 'center', lineHeight: 20, marginBottom: 36 },
   buttons: { gap: 12, width: '100%' },
   btn: { borderRadius: 16, paddingVertical: 18, alignItems: 'center' },
   btnYes: { backgroundColor: Colors.black },
-  btnYesText: { fontFamily: Fonts.jakartaBold, fontSize: 16, color: Colors.white },
+  btnYesText: { fontFamily: Fonts.semiBold, fontSize: 16, color: Colors.white },
   btnNo: { backgroundColor: Colors.statCardBg, borderWidth: 0.5, borderColor: Colors.statCardBorder },
-  btnNoText: { fontFamily: Fonts.jakartaBold, fontSize: 16, color: Colors.secondary },
+  btnNoText: { fontFamily: Fonts.semiBold, fontSize: 16, color: Colors.secondary },
   doneWrap: { backgroundColor: 'rgba(76,175,80,0.1)', borderRadius: 14, paddingVertical: 16, paddingHorizontal: 24 },
-  doneText: { fontFamily: Fonts.jakartaSemiBold, fontSize: 15, color: Colors.activeLog, textAlign: 'center' },
+  doneText: { fontFamily: Fonts.semiBold, fontSize: 15, color: Colors.activeLog, textAlign: 'center' },
 });

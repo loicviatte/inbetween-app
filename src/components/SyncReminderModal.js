@@ -49,6 +49,7 @@ import Svg, {
 import { Fonts } from '../theme';
 import { useDjiSync } from '../context/DjiSyncContext';
 import { skipDelayMsFor, asksReason, nightsWaiting, MAX_TIER } from '../services/syncReminder';
+import { dateLabel, weekdayLong, weekdayShort } from '../utils/dates';
 
 const GRAIN_IMG = require('../../assets/grain-warm.png');
 
@@ -107,7 +108,7 @@ function fmtWhen(date, now) {
     return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
   }
   if (isYesterday(date, now)) return 'Yesterday';
-  return date.toLocaleDateString(undefined, { weekday: 'short' });
+  return weekdayShort(date);
 }
 
 /** Prose form — "tonight" / "yesterday" / "Monday" / "Mon 13 Jul" past a week. */
@@ -119,8 +120,8 @@ function fmtWhenLong(date, now) {
       new Date(date.getFullYear(), date.getMonth(), date.getDate())) /
       86400000,
   );
-  if (days < 7) return date.toLocaleDateString(undefined, { weekday: 'long' });
-  return date.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+  if (days < 7) return weekdayLong(date);
+  return dateLabel(date);
 }
 
 function fmtDuration(sec) {
@@ -137,9 +138,9 @@ function isMorningNow() {
 
 function labelFor(row) {
   if (row.studentName) return row.studentName;
-  if (row.lessonType === 'group') return 'Group class';
-  if (row.lessonType === 'couple') return 'Couple class';
-  return 'Private class';
+  if (row.lessonType === 'group') return 'Group lesson';
+  if (row.lessonType === 'couple') return 'Couple lesson';
+  return 'Private lesson';
 }
 
 const NUM = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine'];
@@ -925,7 +926,7 @@ const s = StyleSheet.create({
 
   eyebrowRow: { flexDirection: 'row', alignItems: 'center', gap: 9, alignSelf: 'center' },
   eyebrowDot: { width: 4, height: 4, borderRadius: 2 },
-  eyebrow: { fontFamily: Fonts.ttBold, fontSize: 9, letterSpacing: 3.2 },
+  eyebrow: { fontFamily: Fonts.bold, fontSize: 9, letterSpacing: 3.2 },
 
   focal: { alignItems: "center", marginTop: 26 },
   ring: { width: 104, height: 104, alignItems: "center", justifyContent: "center" },
@@ -941,7 +942,7 @@ const s = StyleSheet.create({
     borderColor: HAIR2,
   },
   avFallback: { alignItems: 'center', justifyContent: 'center' },
-  avLetter: { fontFamily: Fonts.ttBold, color: FG },
+  avLetter: { fontFamily: Fonts.bold, color: FG },
 
   cluster: { flexDirection: 'row', alignItems: 'center' },
   clusterItem: {
@@ -956,10 +957,10 @@ const s = StyleSheet.create({
     borderColor: HAIR2,
   },
   clusterMore: { backgroundColor: 'rgba(255,235,200,0.04)' },
-  clusterMoreText: { fontFamily: Fonts.ttDemiBold, fontSize: 13, color: FG2 },
+  clusterMoreText: { fontFamily: Fonts.semiBold, fontSize: 13, color: FG2 },
 
   h1: {
-    fontFamily: Fonts.ttDemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 28,
     marginTop: 26,
     color: FG,
@@ -969,7 +970,7 @@ const s = StyleSheet.create({
   },
   h1Small: { fontSize: 26, marginTop: 26 },
   sub: {
-    fontFamily: Fonts.travelsRegular,
+    fontFamily: Fonts.regular,
     marginTop: 13,
     fontSize: 14,
     lineHeight: 21,
@@ -990,11 +991,11 @@ const s = StyleSheet.create({
     height: 5,
     borderRadius: 2.5,
   },
-  progVal: { fontFamily: Fonts.ttBold, fontSize: 12.5, letterSpacing: -0.1 },
+  progVal: { fontFamily: Fonts.bold, fontSize: 12.5, letterSpacing: -0.1 },
   progHint: {
     marginTop: 11,
     textAlign: 'center',
-    fontFamily: Fonts.ttBold,
+    fontFamily: Fonts.bold,
     fontSize: 9,
     letterSpacing: 2.4,
     color: FG3,
@@ -1014,8 +1015,8 @@ const s = StyleSheet.create({
     borderWidth: 1,
     borderColor: HAIR2,
   },
-  pendName: { flex: 1, fontFamily: Fonts.ttDemiBold, fontSize: 14, color: FG, letterSpacing: -0.14 },
-  pendCount: { fontFamily: Fonts.ttDemiBold, fontSize: 11.5, color: FG3 },
+  pendName: { flex: 1, fontFamily: Fonts.semiBold, fontSize: 14, color: FG, letterSpacing: -0.14 },
+  pendCount: { fontFamily: Fonts.semiBold, fontSize: 11.5, color: FG3 },
 
   rowsWrap: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: HAIR, paddingBottom: 8 },
   lrow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12 },
@@ -1031,10 +1032,10 @@ const s = StyleSheet.create({
     borderWidth: 1,
     borderColor: HAIR2,
   },
-  lname: { fontFamily: Fonts.ttDemiBold, fontSize: 13.5, color: FG },
-  lmeta: { fontFamily: Fonts.travelsRegular, fontSize: 11, color: FG3, marginTop: 2 },
+  lname: { fontFamily: Fonts.semiBold, fontSize: 13.5, color: FG },
+  lmeta: { fontFamily: Fonts.regular, fontSize: 11, color: FG3, marginTop: 2 },
   lnights: {
-    fontFamily: Fonts.ttBold,
+    fontFamily: Fonts.bold,
     fontSize: 9.5,
     letterSpacing: 1.2,
     color: FG3,
@@ -1050,13 +1051,13 @@ const s = StyleSheet.create({
     marginTop: 14,
   },
   ctaText: {
-    fontFamily: Fonts.ttBold,
+    fontFamily: Fonts.bold,
     fontSize: 16,
     letterSpacing: -0.16,
     color: '#14110A',
   },
   textBtn: {
-    fontFamily: Fonts.ttDemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 14.5,
     color: FG,
     textAlign: 'center',
@@ -1064,7 +1065,7 @@ const s = StyleSheet.create({
   },
   exitRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
   exit: {
-    fontFamily: Fonts.ttDemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 13,
     color: FG3,
     textAlign: 'center',
@@ -1091,16 +1092,16 @@ const s = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  optTitle: { fontFamily: Fonts.ttDemiBold, fontSize: 15.5, color: FG, letterSpacing: -0.16 },
-  optDesc: { fontFamily: Fonts.travelsRegular, fontSize: 11.5, color: FG3, marginTop: 3 },
+  optTitle: { fontFamily: Fonts.semiBold, fontSize: 15.5, color: FG, letterSpacing: -0.16 },
+  optDesc: { fontFamily: Fonts.regular, fontSize: 11.5, color: FG3, marginTop: 3 },
   suggested: {
-    fontFamily: Fonts.ttBold,
+    fontFamily: Fonts.bold,
     fontSize: 9,
     letterSpacing: 1.6,
     color: 'rgba(232,181,48,0.7)',
   },
   backRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7 },
-  back: { fontFamily: Fonts.ttDemiBold, fontSize: 13, color: FG3, paddingVertical: 14 },
+  back: { fontFamily: Fonts.semiBold, fontSize: 13, color: FG3, paddingVertical: 14 },
 
   affect: { marginTop: 22, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: HAIR },
   affectRow: {
@@ -1111,20 +1112,20 @@ const s = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: HAIR,
   },
-  affectName: { fontFamily: Fonts.ttDemiBold, fontSize: 14, color: FG },
-  affectMeta: { marginLeft: 'auto', fontFamily: Fonts.travelsMedium, fontSize: 11, color: FG3 },
+  affectName: { fontFamily: Fonts.semiBold, fontSize: 14, color: FG },
+  affectMeta: { marginLeft: 'auto', fontFamily: Fonts.medium, fontSize: 11, color: FG3 },
   affectMore: { backgroundColor: 'rgba(255,235,200,0.04)' },
-  affectMoreText: { fontFamily: Fonts.ttDemiBold, fontSize: 10.5, color: FG2 },
+  affectMoreText: { fontFamily: Fonts.semiBold, fontSize: 10.5, color: FG2 },
   reassure: {
     marginTop: 18,
-    fontFamily: Fonts.travelsRegular,
+    fontFamily: Fonts.regular,
     fontSize: 12.5,
     lineHeight: 19,
     color: 'rgba(232,181,48,0.72)',
     textAlign: 'center',
   },
   danger: {
-    fontFamily: Fonts.ttDemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 14,
     color: AMBER_S,
     textAlign: 'center',
@@ -1142,14 +1143,14 @@ const s = StyleSheet.create({
     justifyContent: 'center',
   },
   doneH: {
-    fontFamily: Fonts.ttDemiBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 21,
     color: FG,
     letterSpacing: -0.5,
     textAlign: 'center',
   },
   doneS: {
-    fontFamily: Fonts.travelsRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13.5,
     lineHeight: 21,
     color: FG2,

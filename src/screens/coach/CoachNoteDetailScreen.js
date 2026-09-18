@@ -13,6 +13,7 @@ import {
   FlatList,
   Keyboard,
   Animated,
+  AppState,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -235,7 +236,7 @@ export default function CoachNoteDetailScreen({ route, navigation }) {
         if (!active || !data) return;
         setLinkedClass({
           id: data.id,
-          title: data.title || data.ai_primary_focus || 'Class',
+          title: data.title || data.ai_primary_focus || 'Lesson',
           lessonType: data.lesson_type || null,
           createdAt: data.created_at,
         });
@@ -245,16 +246,30 @@ export default function CoachNoteDetailScreen({ route, navigation }) {
     };
   }, [linkedClass?.id, linkedClass?.title]);
 
+  // Saves run one after another: an autosave still inserting when the next save
+  // starts would otherwise insert the note a second time (idRef not set yet).
+  const inFlightSaveRef = useRef(null);
   async function persist(data) {
-    const savedId = await saveCoachNote({
-      ...(idRef.current ? { id: idRef.current } : {}),
-      title: data.title,
-      content: data.content,
-      video_clips: data.video_clips,
-      linked_student_id: data.linkedStudent?.id || null,
-      linked_class_input_id: data.linkedClass?.id || null,
-    });
-    if (!idRef.current && savedId) idRef.current = savedId;
+    if (inFlightSaveRef.current) {
+      try { await inFlightSaveRef.current; } catch {}
+    }
+    const p = (async () => {
+      const savedId = await saveCoachNote({
+        ...(idRef.current ? { id: idRef.current } : {}),
+        title: data.title,
+        content: data.content,
+        video_clips: data.video_clips,
+        linked_student_id: data.linkedStudent?.id || null,
+        linked_class_input_id: data.linkedClass?.id || null,
+      });
+      if (!idRef.current && savedId) idRef.current = savedId;
+    })();
+    inFlightSaveRef.current = p;
+    try {
+      await p;
+    } finally {
+      if (inFlightSaveRef.current === p) inFlightSaveRef.current = null;
+    }
   }
 
   function scheduleAutoSave() {
@@ -274,6 +289,17 @@ export default function CoachNoteDetailScreen({ route, navigation }) {
       };
     }, [])
   );
+
+  // Leaving the app (or it being killed from the background) inside the 800 ms
+  // autosave wait would lose the last words: save as it goes to the background.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active' || !hasChanges.current) return;
+      if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
+      persist(stateRef.current);
+    });
+    return () => sub.remove();
+  }, []);
 
   async function pickVideo() {
     if (!ImagePicker) {
@@ -354,7 +380,7 @@ export default function CoachNoteDetailScreen({ route, navigation }) {
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn} activeOpacity={0.7}>
-          <Ionicons name="chevron-back" size={22} color={Colors.activeFocus} />
+          <Ionicons name="chevron-back" size={20} color="#0A0A0A" />
           <Text style={styles.backLabel} numberOfLines={1}>Notes</Text>
         </TouchableOpacity>
         <TouchableOpacity onPress={handleDelete} activeOpacity={0.7}>
@@ -425,7 +451,7 @@ export default function CoachNoteDetailScreen({ route, navigation }) {
                 <Text style={styles.linkedText} numberOfLines={1}>
                   Linked to{' '}
                   <Text style={styles.linkedClassName}>
-                    {linkedClass.title || 'class'}
+                    {linkedClass.title || 'lesson'}
                   </Text>
                 </Text>
               </TouchableOpacity>
@@ -560,7 +586,7 @@ export default function CoachNoteDetailScreen({ route, navigation }) {
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: Colors.background },
+  safe: { flex: 1, backgroundColor: '#F2F0EB' },
 
   header: {
     flexDirection: 'row',
@@ -572,12 +598,12 @@ const styles = StyleSheet.create({
   },
   backBtn: { flexDirection: 'row', alignItems: 'center', gap: 2 },
   backLabel: {
-    fontFamily: Fonts.jakartaMedium,
-    fontSize: 17,
-    color: Colors.activeFocus,
+    fontFamily: Fonts.semiBold,
+    fontSize: 16,
+    color: '#0A0A0A',
   },
   deleteText: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 15,
     color: '#FF3B30',
   },
@@ -585,7 +611,7 @@ const styles = StyleSheet.create({
   scrollContent: { paddingBottom: 40 },
 
   dateStamp: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 12,
     color: Colors.secondary,
     textAlign: 'center',
@@ -608,18 +634,18 @@ const styles = StyleSheet.create({
   },
   linkedAvatarFallback: { alignItems: 'center', justifyContent: 'center' },
   linkedAvatarText: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 10,
     color: Colors.black,
   },
   linkedText: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     color: Colors.secondary,
     flex: 1,
   },
   linkedName: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     color: Colors.orange,
   },
   linkedClassAvatar: {
@@ -628,12 +654,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   linkedClassName: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     color: '#2F6B33',
   },
 
   titleInput: {
-    fontFamily: Fonts.jakartaExtraBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 28,
     color: Colors.black,
     paddingHorizontal: Spacing.side,
@@ -671,13 +697,13 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
   videoChipLabel: {
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 13,
     color: Colors.black,
     flexShrink: 1,
   },
   videoChipDuration: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 11,
     color: Colors.secondary,
   },
@@ -690,7 +716,7 @@ const styles = StyleSheet.create({
   },
 
   contentInput: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 16,
     color: Colors.black,
     lineHeight: 27,
@@ -740,7 +766,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(13,13,18,0.08)',
   },
   bottomActionText: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 14,
     color: Colors.secondary,
   },
@@ -765,22 +791,6 @@ const vm = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   video: { width: '100%', height: 300 },
-  errorBox: {
-    backgroundColor: '#1a1a1a',
-    borderRadius: 16,
-    padding: 24,
-    margin: 32,
-    alignItems: 'center',
-    gap: 16,
-  },
-  errorText: { fontSize: 15, color: '#ccc', textAlign: 'center' },
-  errorBtn: {
-    paddingHorizontal: 24,
-    paddingVertical: 10,
-    backgroundColor: '#333',
-    borderRadius: 10,
-  },
-  errorBtnText: { fontSize: 15, color: '#fff' },
 });
 
 const picker = StyleSheet.create({
@@ -806,7 +816,7 @@ const picker = StyleSheet.create({
     borderBottomWidth: 0.5,
     borderBottomColor: 'rgba(13,13,18,0.08)',
   },
-  title: { fontFamily: Fonts.jakartaExtraBold, fontSize: 16, color: Colors.black },
+  title: { fontFamily: Fonts.semiBold, fontSize: 16, color: Colors.black },
   searchWrap: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -820,7 +830,7 @@ const picker = StyleSheet.create({
   },
   searchInput: {
     flex: 1,
-    fontFamily: Fonts.jakartaMedium,
+    fontFamily: Fonts.medium,
     fontSize: 14,
     color: Colors.black,
     padding: 0,
@@ -833,7 +843,7 @@ const picker = StyleSheet.create({
     backgroundColor: 'rgba(255,59,48,0.08)',
     borderRadius: 10,
   },
-  unlinkText: { fontFamily: Fonts.jakartaBold, fontSize: 13, color: '#FF3B30' },
+  unlinkText: { fontFamily: Fonts.semiBold, fontSize: 13, color: '#FF3B30' },
   item: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -849,23 +859,23 @@ const picker = StyleSheet.create({
   },
   itemAvatarFallback: { alignItems: 'center', justifyContent: 'center' },
   itemAvatarText: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 14,
     color: Colors.black,
   },
   itemName: {
-    fontFamily: Fonts.jakartaBold,
+    fontFamily: Fonts.semiBold,
     fontSize: 15,
     color: Colors.black,
   },
   itemSub: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 12,
     color: Colors.secondary,
     marginTop: 1,
   },
   empty: {
-    fontFamily: Fonts.jakartaRegular,
+    fontFamily: Fonts.regular,
     fontSize: 13,
     color: Colors.secondary,
     textAlign: 'center',
