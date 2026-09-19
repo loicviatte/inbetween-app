@@ -36,13 +36,30 @@ export async function deleteNotification(id) {
 // NOT be flipped to read just because the coach opened the notifications list —
 // otherwise the bell drops to 0 while the work still sits in ActionNeeded. They
 // are marked read by the review action itself (markFocusAddedNotificationsRead*
-// in coachStorage/coupleStorage). Students never receive these types, so the
-// exclusion is a no-op on the student side.
+// in coachStorage/coupleStorage).
+//
+// 'focus_point_added' is also the DANCER's "New focus point ready" (no
+// data.student_id): that one reads like any other notification.
 const KEEP_UNREAD_UNTIL_ACTIONED = [
   'focus_point_added',
   'focus_points_added',
   'focus_reconcile_needed',
 ];
+const READABLE = `type.not.in.(${KEEP_UNREAD_UNTIL_ACTIONED.join(',')}),`
+  + 'and(type.eq.focus_point_added,data->>student_id.is.null)';
+
+export async function markNotificationRead(id) {
+  try {
+    const { data: { session } } = await supabase.auth.getSession();
+    const userId = session?.user?.id;
+    if (!userId || !id) return;
+    await supabase
+      .from('notifications')
+      .update({ read: true })
+      .eq('id', id)
+      .eq('user_id', userId);
+  } catch {}
+}
 
 export async function markAllNotificationsRead() {
   try {
@@ -54,6 +71,6 @@ export async function markAllNotificationsRead() {
       .update({ read: true })
       .eq('user_id', userId)
       .eq('read', false)
-      .not('type', 'in', `(${KEEP_UNREAD_UNTIL_ACTIONED.join(',')})`);
+      .or(READABLE);
   } catch {}
 }

@@ -5,7 +5,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Fonts } from '../theme';
-import { getNotifications, markAllNotificationsRead, deleteNotification } from '../storage/notificationsStorage';
+import { getNotifications, markAllNotificationsRead, markNotificationRead, deleteNotification } from '../storage/notificationsStorage';
 import { supabase } from '../services/supabase/client';
 import { readCachedRole } from '../services/auth/role';
 import { locallyRespondedAttendance } from '../storage/attendanceState';
@@ -297,7 +297,24 @@ export default function NotificationsScreen({ navigation }) {
     });
   }
 
+  // A tapped notification has been read — except a coach's "to validate",
+  // which stays unread until the focus points are reviewed.
+  function markRead(notif) {
+    const coachToValidate = COACH_ACTION_TYPES.has(notif.type)
+      && !(notif.type === 'focus_point_added' && !notif.data?.student_id);
+    if (coachToValidate || notif.read === true) return;
+    notif.read = true;
+    markNotificationRead(notif.id);
+    setUnreadIds((prev) => {
+      if (!prev.has(notif.id)) return prev;
+      const next = new Set(prev);
+      next.delete(notif.id);
+      return next;
+    });
+  }
+
   function handleNotificationPress(notif) {
+    markRead(notif);
     if (notif.type === 'attendance_check' || notif.type === 'group_class_attendance') {
       if (!notif.data) return;
       const prior = getPriorAttendance(notif.data.class_input_id);
@@ -323,7 +340,8 @@ export default function NotificationsScreen({ navigation }) {
       // (data has focus_point_id). Route by payload, not just by type.
       const isStudentSide = !!notif.data?.focus_point_id && !notif.data?.student_id;
       if (isStudentSide) {
-        navigation.replace('AllFocusPoints');
+        // Pushed on top, so Back returns to the notifications.
+        navigation.navigate('AllFocusPoints');
       } else {
         navigation.navigate('ActionNeeded');
       }
@@ -449,12 +467,13 @@ export default function NotificationsScreen({ navigation }) {
     const isActionable = ACTIONABLE_TYPES.has(notif.type) && !alreadyResponded;
     // Coach-action notifs stay "unread" until the coach actually resolves the
     // action; once the linked class has no more pending_coach FPs, they fade.
+    // (A dancer's "New focus point ready" shares the type but is just news.)
+    const isStudentSideFocus = notif.type === 'focus_point_added' && !notif.data?.student_id;
     const linkedClassInputId = notif.data?.class_input_id;
     const stillHasPending =
-      COACH_ACTION_TYPES.has(notif.type) &&
+      COACH_ACTION_TYPES.has(notif.type) && !isStudentSideFocus &&
       (!linkedClassInputId || pendingClassInputIds.has(linkedClassInputId));
     const lookUnread = unreadIds.has(notif.id) || stillHasPending || isActionable;
-    const isStudentSideFocus = notif.type === 'focus_point_added' && !notif.data?.student_id;
     const cta = isActionable || lookUnread || notif.type === 'transcript_ready' || isStudentSideFocus
       ? (isCoach && meta.coachCta) || meta.cta
       : null;

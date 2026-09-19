@@ -961,6 +961,23 @@ export async function getCoachReplies() {
 }
 
 
+// A parent's view of what their child asked the coach, with the answers — read
+// only (coach_messages_select lets a guardian read, never write). getUserId()
+// is the child a parent account follows.
+export async function getChildQuestions() {
+  const childId = await getUserId();
+  const { data, error } = await supabase
+    .from('coach_messages')
+    .select('id, message, reply, status, created_at, replied_at, covered_class_input_id, '
+      + 'coach:users!coach_messages_coach_id_fkey(name), '
+      + 'lesson:class_inputs!coach_messages_covered_class_input_id_fkey(created_at, title)')
+    .eq('student_id', childId)
+    .order('created_at', { ascending: false })
+    .limit(100);
+  if (error) throw error;
+  return data || [];
+}
+
 export async function getUserRole() {
   const userId = await getUserId();
   const { data } = await supabase
