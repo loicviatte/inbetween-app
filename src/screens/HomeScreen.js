@@ -18,7 +18,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LinearGradient } from 'expo-linear-gradient';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Haptics from 'expo-haptics';
-import TabHeader, { useIsParentAccount } from '../components/TabHeader';
+import TabHeader, { useIsParentAccount, HeaderIconButton } from '../components/TabHeader';
 import StyleTitle from '../components/StyleTitle';
 import { useTabBarSpace } from '../components/CustomTabBar';
 import ModeTabs, { COUPLE_BLUE } from '../components/ModeTabs';
@@ -1312,6 +1312,11 @@ export default function HomeScreen({ navigation }) {
       <TabHeader
         navigation={navigation}
         style={s.header}
+        // A parent follows what their child asks the coach, and the answers.
+        actions={isParent ? (
+          <HeaderIconButton icon="chatbubbles-outline" label="Questions to the coach"
+            onPress={() => navigation.navigate('ChildQuestions')} />
+        ) : null}
         lead={
           <StyleTitle
             label={styleName}
