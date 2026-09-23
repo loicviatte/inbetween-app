@@ -98,6 +98,39 @@ export function clearFolder(): void {
   mod.clearFolder();
 }
 
+export interface MicStorage {
+  /** Free bytes on the mic's card. */
+  availableBytes: number;
+  /** Card capacity in bytes. */
+  totalBytes: number;
+}
+
+/**
+ * Free / total bytes on the mic's own card. A full card stops a recording
+ * exactly the way a dead battery does, and it is the only piece of mic
+ * hardware state iOS reports to us — nothing exposes the battery.
+ *
+ * Resolves null when the mic isn't mounted, when no folder was ever picked,
+ * AND on any binary built before this function existed (an OTA can ship the
+ * caller but not the native side) — so callers must treat null as "unknown"
+ * rather than "empty".
+ */
+export async function micStorage(): Promise<MicStorage | null> {
+  const mod = getMod();
+  if (!mod?.micStorage) return null;
+  try {
+    const res = await mod.micStorage();
+    if (!res || typeof res.totalBytes !== 'number' || typeof res.availableBytes !== 'number') {
+      return null;
+    }
+    if (res.totalBytes <= 0) return null;
+    return { availableBytes: res.availableBytes, totalBytes: res.totalBytes };
+  } catch (err) {
+    if (__DEV__) console.warn('[local-recording-files] micStorage failed:', err);
+    return null;
+  }
+}
+
 /**
  * Enumerates files in the bookmarked folder. Metadata only — for the
  * actual bytes call copyFileToCache(name) with the file you want.

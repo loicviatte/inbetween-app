@@ -1,19 +1,19 @@
 // ─── DjiSetupBanner ─────────────────────────────────────────────────────
 // Compact "SET UP" pill in the coach header (styled identically to
-// DjiSyncPill) shown when a class is waiting for audio AND no folder
-// bookmark exists yet. Tapping it opens the full-screen, dark one-time
-// setup flow that walks the coach from powering on the mic to granting
-// folder access — same visual language as MicSyncFlowModal.
+// DjiSyncPill) shown to a mic-flow coach for as long as no folder bookmark
+// exists — from their first day, not once a class has already gone unsynced.
+// Tapping it opens the full-screen, dark one-time setup flow that walks the
+// coach from powering on the mic to granting folder access — same visual
+// language as MicSyncFlowModal.
 //
 // Steps: intro · poweron · test · plug · files → (pickFolder) → verifying
 //        → success | error
 //
-// State is self-contained (we query Supabase for pendingCount + read the
-// native hasFolder flag on a polite cadence) so we don't have to thread it
-// through CoachTabHeader's parents.
+// State is self-contained (we read the native hasFolder flag on a polite
+// cadence) so we don't have to thread it through CoachTabHeader's parents.
 // ─────────────────────────────────────────────────────────────────────────
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -29,10 +29,11 @@ import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { SafeAreaProvider, initialWindowMetrics, useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { useIsFocused } from '@react-navigation/native';
 import { Fonts } from '../theme';
 import { supabase } from '../services/supabase/client';
 import { isLocalRecordingMode } from '../services/featureFlags';
-import { fetchPendingUploads, countMicSessions } from '../services/localRecordingAutoSync';
+import { countMicSessions } from '../services/localRecordingAutoSync';
 import * as DjiFiles from 'local-recording-files';
 import { BrowseTabChip, NoNameChip } from './DjiFilesChips';
 import { useDjiSync } from '../context/DjiSyncContext';
@@ -196,7 +197,6 @@ function OpenNavPreview() {
 export default function DjiSetupBanner() {
   const [authUser, setAuthUser] = useState(null);
   const [hasFolderAccess, setHasFolderAccess] = useState(false);
-  const [pendingCount, setPendingCount] = useState(0);
   const [modalOpen, setModalOpen] = useState(false);
   const [step, setStep] = useState('intro');
   // displayStep lags `step` during the out→in transition so the content that
@@ -206,6 +206,7 @@ export default function DjiSetupBanner() {
   const dismissedRef = useRef(false);
   const pickingRef = useRef(false); // a folder pick is in flight
   const sync = useDjiSync(); // sibling provider — to refresh its pill after grant
+  const isFocused = useIsFocused();
   const trans = useRef(new Animated.Value(1)).current; // 1 = shown, 0 = hidden
   const progress = useRef(new Animated.Value(STEP_META.intro.pct)).current;
 
@@ -232,26 +233,6 @@ export default function DjiSetupBanner() {
     });
     return () => sub.remove();
   }, []);
-
-  const refreshPending = useCallback(async () => {
-    if (!authUser?.id || !isLocalRecordingMode(authUser)) {
-      setPendingCount(0);
-      return;
-    }
-    try {
-      const rows = await fetchPendingUploads(authUser.id);
-      setPendingCount(rows.length);
-    } catch {
-      /* keep previous */
-    }
-  }, [authUser]);
-  useEffect(() => {
-    refreshPending();
-    const sub = AppState.addEventListener('change', (st) => {
-      if (st === 'active') refreshPending();
-    });
-    return () => sub.remove();
-  }, [refreshPending]);
 
   // Progress bar eases toward the new step's target the instant you tap.
   useEffect(() => {
@@ -293,15 +274,20 @@ export default function DjiSetupBanner() {
     setModalOpen(true);
   }
 
-  // The evening reminder's "Set up the mic" routes here rather than to
-  // MicSyncFlowModal's grant screen: a coach who never configured the mic needs
-  // the whole wizard, not just the folder picker. Guarded on 0 so mounting
-  // doesn't count as a request.
+  // Opens the wizard on request — the evening reminder's "Set up the mic" (a
+  // coach who never configured the mic needs the whole wizard, not just the
+  // folder picker) and the mic being plugged in (DjiSyncContext's route
+  // monitor). Guarded on 0 so mounting doesn't count as a request; guarded on
+  // focus because the tab navigator keeps a banner mounted per visited tab and
+  // all of them see the same request — without this they'd each stack a modal.
+  // Acknowledging it keeps a standing request from re-opening later.
   useEffect(() => {
     if (!sync?.micSetupRequest) return;
+    if (!isFocused) return;
+    sync?.ackMicSetupRequest?.();
     handleBannerTap();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sync?.micSetupRequest]);
+  }, [sync?.micSetupRequest, isFocused]);
 
   // Report visibility so the evening reminder stands down while this is up —
   // and comes back the moment the coach closes it without finishing.
@@ -351,7 +337,7 @@ export default function DjiSetupBanner() {
       } else {
         setHasFolderAccess(true);
         sync?.refreshFolderAccess?.(); // let the sibling provider show its sync pill
-        refreshPending();
+        sync?.refreshPending?.(); // …with the right count on it
         setFoundCount(djiCount);
         setStep('success');
       }
@@ -364,7 +350,12 @@ export default function DjiSetupBanner() {
     }
   }
 
-  const visible = isLocalMode && !hasFolderAccess && pendingCount > 0;
+  // Setup is offered from day one, not once a lesson has already gone
+  // unsynced: the pill used to wait for pendingCount > 0, so the first coach to
+  // teach with the mic only learned they had to grant folder access AFTER the
+  // first class had nowhere to put its audio. It disappears the moment access
+  // is granted.
+  const visible = isLocalMode && !hasFolderAccess;
   // Stay mounted while the flow modal is open even after hasFolderAccess flips
   // true (successful pick) — otherwise the whole component (and the modal) would
   // unmount mid-flow and the coach would never see verifying / success. The pill

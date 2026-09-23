@@ -62,6 +62,23 @@ declare global {
   const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void }
 }
 
+// ─── The five categories, and nothing else ───────────────────────────────
+// A focus point's category is a fixed list — it drives the student's readiness
+// per category and is named as such in the product's terms. The model is asked
+// to pick one (yoda-extract's prompt lists them), but what it answers is a
+// string, and a string is not a promise: "Technique", "technicality " or a
+// category it invented would all arrive here. The database refuses them
+// (focus_points_category_check) — which, without this, means the whole focus
+// point fails to insert over a word. Anything off the list becomes no category
+// at all, which the app already renders (plenty of older rows have none).
+const FOCUS_CATEGORIES = ['Stability', 'Technicality', 'Strength', 'Creativity', 'Musicality'] as const
+
+function focusCategory(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null
+  const needle = raw.trim().toLowerCase()
+  return FOCUS_CATEGORIES.find((c) => c.toLowerCase() === needle) ?? null
+}
+
 // Constant-time-ish string compare (avoids leaking the service-role key via
 // early-exit timing). Length is allowed to leak; the secret is high-entropy.
 function safeEqual(a: string, b: string): boolean {
@@ -358,11 +375,20 @@ async function processClassInput(supabase: any, payload: any): Promise<void> {
   const classDance: string[] = classInput.dance ?? []
   const isGroupClass = classInput.lesson_type === 'public' || classInput.lesson_type === 'group'
 
-  for (const studentJson of aiData.students ?? []) {
-    const studentId: string = studentJson.student_id
-    if (!studentId) continue
+  // A group class makes two focus points, the same two for everyone (2b below),
+  // and nothing else. The per-student pass is skipped there entirely — not just
+  // its creations, its merges too. It used to hand the students the AI happened
+  // to name their own copies of the same material in different words, and to
+  // notify the coach the STUDENT is linked to rather than the one who taught
+  // the class (Tanya's Latin group class notified Esther's ballroom coach).
+  // Private and couple classes keep it: individual work is what they are for.
+  if (!isGroupClass) {
+    for (const studentJson of aiData.students ?? []) {
+      const studentId: string = studentJson.student_id
+      if (!studentId) continue
 
-    await processStudentFocusPoints(supabase, studentId, studentJson, class_input_id, classDance, now, isGroupClass)
+      await processStudentFocusPoints(supabase, studentId, studentJson, class_input_id, classDance, now, isGroupClass)
+    }
   }
 
   // 2a. Empty-class guard (private only): the end-of-class debrief default-retires
@@ -415,7 +441,7 @@ async function processClassInput(supabase: any, payload: any): Promise<void> {
         dance: sharedDance,
         drill: sfp.drill ?? null,
         tier,
-        category: sfp.category ?? null,
+        category: focusCategory(sfp.category),
         base_score: STARTING_SCORES[tier],
         train_target: TRAIN_TARGET_BY_TIER[tier],
         mention_count: sfp.mention_count ?? 0,
@@ -484,7 +510,7 @@ async function processClassInput(supabase: any, payload: any): Promise<void> {
         dance: sharedDance,
         drill: sfp.drill ?? null,
         tier,
-        category: sfp.category ?? null,
+        category: focusCategory(sfp.category),
         base_score: STARTING_SCORES[tier],
         train_target: TRAIN_TARGET_BY_TIER[tier],
         mention_count: sfp.mention_count ?? 0,
@@ -685,7 +711,7 @@ async function processStudentFocusPoints(
             dance: (fpJson.dance && fpJson.dance.length > 0) ? fpJson.dance : defaultDance,
             drill: fpJson.drill ?? null,
             tier,
-            category: fpJson.category ?? null,
+            category: focusCategory(fpJson.category),
             base_score: STARTING_SCORES[tier],
         train_target: TRAIN_TARGET_BY_TIER[tier],
             mention_count: fpJson.mention_count ?? 0,
@@ -748,7 +774,7 @@ async function processStudentFocusPoints(
           dance: (fpJson.dance && fpJson.dance.length > 0) ? fpJson.dance : defaultDance,
           drill: fpJson.drill ?? null,
           tier,
-          category: fpJson.category ?? null,
+          category: focusCategory(fpJson.category),
           base_score: STARTING_SCORES[tier],
         train_target: TRAIN_TARGET_BY_TIER[tier],
           mention_count: fpJson.mention_count ?? 0,

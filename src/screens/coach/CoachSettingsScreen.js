@@ -19,6 +19,7 @@ import AccountSheet from '../../components/AccountSheet';
 import BottomSheet from '../../components/BottomSheet';
 import StudioPicker from '../../components/StudioPicker';
 import { SecLabel, SettingsCard, SettingRow, LogoutButton } from '../../components/settings/SettingsUI';
+import { HEALTH_CONSENT, healthConsentState, giveHealthConsent, withdrawHealthConsent } from '../../services/healthConsent';
 
 const STYLES = ['Latin', 'Ballroom', 'Latin & Ballroom'];
 
@@ -33,6 +34,29 @@ export default function CoachSettingsScreen({ navigation, route }) {
 
   const [couplesCount, setCouplesCount] = useState(null); // null until read
   const [studioError, setStudioError] = useState('');
+
+  // The coach's own health-data permission. Withdrawing it stops them starting
+  // a lesson at all — their voice is on every recording they make — and deletes
+  // nothing: deletion is a separate request.
+  const healthState = healthConsentState(user);
+  function toggleHealthConsent() {
+    if (!user?.id) return;
+    if (healthState === 'withdrawn') {
+      Alert.alert('Allow this again?', HEALTH_CONSENT, [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'I consent', onPress: async () => { await giveHealthConsent(user.id); refresh(); } },
+      ]);
+      return;
+    }
+    Alert.alert(
+      'Withdraw this permission?',
+      'You stop being able to record lessons from now on. What has already been recorded stays until you ask us to delete it — that is a separate request.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Withdraw', style: 'destructive', onPress: async () => { await withdrawHealthConsent(user.id); refresh(); } },
+      ],
+    );
+  }
 
   function openStyle() { setEditStyle(user?.dance_style || ''); setSheet('style'); }
   function openStudio() {
@@ -133,6 +157,16 @@ export default function CoachSettingsScreen({ navigation, route }) {
           <SettingsCard>
             <SettingRow label="Notification settings" value="Delivery and quiet hours"
               onPress={() => navigation.navigate('NotificationSettings', { coach: true })} isLast />
+          </SettingsCard>
+
+          <SecLabel text="Permission" />
+          <SettingsCard>
+            <SettingRow
+              label="Health data in lessons"
+              value={healthState === 'withdrawn' ? 'Withdrawn' : healthState === 'given' ? 'Given' : 'Not given'}
+              onPress={toggleHealthConsent}
+              isLast
+            />
           </SettingsCard>
 
           <LogoutButton onPress={() => logOutCoachWithChecks({ djiUploading: djiPhase === 'syncing' })} />

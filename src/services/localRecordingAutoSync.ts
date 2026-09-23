@@ -58,6 +58,14 @@ export interface PendingClassRow {
    * surfaces. See syncReminder.js / 20260721_sync_abandoned.sql.
    */
   abandonedAt: Date | null;
+  /**
+   * The server closed this class itself, hours after the app stopped talking
+   * (migration 20260923): the coach never tapped Stop. `durationSec` is then
+   * the moment the app died, not the end of the lesson — a floor, never the
+   * real length. Such a class skips the <60s "Start/Stop misfire" filter and
+   * its match is scored without trusting the duration.
+   */
+  durationUnknown: boolean;
 }
 
 export type AdminReviewStatus = 'approved' | 'pending';
@@ -83,6 +91,13 @@ export interface SyncPair {
   confidence: MatchConfidence;
   /** Total duration across all parts. */
   actualDurationSec: number;
+  /**
+   * The lesson's own length, for the "your recording stopped before the
+   * lesson did" check after the import. 0 when we don't know it (a class the
+   * server closed — see durationUnknown), which is exactly when the gap would
+   * be meaningless.
+   */
+  expectedDurationSec: number;
   studentName: string | null;
   /** Derived from confidence + session.status — auto-approved when sure. */
   adminReviewStatus: AdminReviewStatus;
@@ -111,6 +126,13 @@ export interface AutoSyncResult {
   unmatchedSessions?: OrphanSessionRef[];
   /** How many unmatched sessions were uploaded this run. */
   unmatchedUploaded?: number;
+  /**
+   * Recordings sitting on the mic that we refused to even consider because
+   * their date lands outside every pending class's ±2-day window — i.e. the
+   * mic's clock is badly off. Counted as recordings (DJI index), not files, so
+   * the flow can say so instead of reporting a serene "Up to date".
+   */
+  unplaceableRecordings?: number;
   /** True if a mic read timed out mid-import (receiver unplugged). */
   micDisconnected?: boolean;
   /** True if an upload failed for a network reason and items are held. */
@@ -334,7 +356,7 @@ export async function fetchPendingUploads(userId: string): Promise<PendingClassR
   const { data, error } = await supabase
     .from('class_recordings')
     .select(
-      'id, lesson_type, student_id, started_at, ended_at, sync_abandoned_at, users:student_id(name, avatar_url)',
+      'id, lesson_type, student_id, started_at, ended_at, sync_abandoned_at, meta, users:student_id(name, avatar_url)',
     )
     .eq('user_id', userId)
     .eq('local_recording_mode', true)
@@ -359,6 +381,7 @@ export async function fetchPendingUploads(userId: string): Promise<PendingClassR
         endedAt,
         durationSec,
         abandonedAt: row.sync_abandoned_at ? new Date(row.sync_abandoned_at) : null,
+        durationUnknown: row.meta?.duration_unknown === true,
       };
     })
     // Symmetric with the file-side <60s filter in planAutoSync: a
@@ -367,7 +390,8 @@ export async function fetchPendingUploads(userId: string): Promise<PendingClassR
     // accident. Filtering here keeps the dashboard pending count
     // clean AND keeps count-mismatch logic from being polluted by
     // ghost classes. The class row stays in the DB for forensics.
-    .filter((p) => p.durationSec >= MIN_VALID_DURATION_SEC);
+    // A class the server closed has no real length — it still taught a lesson.
+    .filter((p) => p.durationUnknown || p.durationSec >= MIN_VALID_DURATION_SEC);
 }
 
 /**
@@ -551,7 +575,19 @@ async function uploadFileToStorage(
   try {
     const upRes = await Promise.race([uploadPromise, stallGuard]);
     if (!upRes || upRes.status < 200 || upRes.status >= 300) {
-      throw new Error(`Storage upload ${upRes?.status}: ${(upRes?.body ?? '').slice(0, 200)}`);
+      const body = upRes?.body ?? '';
+      // Storage refused the object for its size. It arrives as an HTTP 400
+      // carrying a 413 body, and the raw JSON means nothing to a coach — say
+      // what happened and what it means for their recording, which is still
+      // sitting untouched on the mic. (Seen 2026-09-23: every full 30:50 mic
+      // part transcodes to ~52.3 MB against a 50 MiB bucket ceiling, so the
+      // longest ones tipped over. The ceiling is now 200 MB.)
+      if (upRes?.status === 413 || /entitytoolarge|maximum allowed size|payload too large/i.test(body)) {
+        throw new Error(
+          'E_TOO_LARGE: this recording is too large for the server to accept. It stays on the mic — nothing is lost.',
+        );
+      }
+      throw new Error(`Storage upload ${upRes?.status}: ${body.slice(0, 200)}`);
     }
   } finally {
     if (stallTimer) clearInterval(stallTimer);
@@ -862,7 +898,9 @@ async function reconcileOrphansToClasses(
   // earliest class when several are duration-close.
   const classes = [...pendingClasses].sort((a, b) => +a.startedAt - +b.startedAt);
   for (const cls of classes) {
-    const expected = cls.durationSec;
+    // Unknown-length classes can't be scored by duration at all (see
+    // classesForMatcher) — leave them to the positional matcher.
+    const expected = cls.durationUnknown ? 0 : cls.durationSec;
     if (!expected) continue;
     let best: any = null;
     let bestScore = Infinity;
@@ -979,6 +1017,9 @@ export async function planAutoSync(
   // window. NOTE: we do NOT drop short files here — a split recording can
   // end in a short tail part (e.g. a 28s 3rd chunk of a 62-min class) that
   // must stay with its session. The <60s filter is applied per SESSION below.
+  // Recordings the date window throws out — the coach is told about these
+  // rather than left with "Up to date" while their audio sits on the mic.
+  const unplaceableIdx = new Set<number>();
   const candidates = allEntries
     .map((entry: any) => {
       const meta = parseDjiFileName(entry.name);
@@ -990,7 +1031,10 @@ export async function planAutoSync(
       // per-session <60s filter + chronological ORDER still guard the matching.
       if (!isBareTimestampName(entry.name)) {
         const fileDate = meta.timestamp.toISOString().slice(0, 10);
-        if (!acceptableDates.has(fileDate)) return null;
+        if (!acceptableDates.has(fileDate)) {
+          unplaceableIdx.add(meta.index);
+          return null;
+        }
       }
       return { entry, meta };
     })
@@ -1001,6 +1045,7 @@ export async function planAutoSync(
       pairs: [],
       status: 'no_candidates',
       totalFilesInFolder: allEntries.length,
+      unplaceableRecordings: unplaceableIdx.size,
       errors: [],
       importedCount: 0,
     };
@@ -1032,6 +1077,7 @@ export async function planAutoSync(
       pairs: [],
       status: 'no_candidates',
       totalFilesInFolder: allEntries.length,
+      unplaceableRecordings: unplaceableIdx.size,
       errors: [],
       importedCount: 0,
     };
@@ -1040,7 +1086,12 @@ export async function planAutoSync(
   const classesForMatcher = workingClasses.map((p) => ({
     id: p.id,
     startedAt: p.startedAt,
-    endedAt: p.endedAt,
+    // A class the coach never stopped was closed by the server at its last
+    // heartbeat (migration 20260923), so its ended_at is NOT the end of the
+    // lesson. Hand the matcher a null rather than a length we don't know: it
+    // then pairs by chronological position and flags the match for review,
+    // instead of rejecting the real file for being "far from expected".
+    endedAt: p.durationUnknown ? null : p.endedAt,
     studentName: p.studentName,
   }));
 
@@ -1088,6 +1139,7 @@ export async function planAutoSync(
         startTimestamp: m.session.startTimestamp,
         confidence: m.confidence,
         actualDurationSec: m.actualDurationSec,
+        expectedDurationSec: m.expectedDurationSec,
         studentName: cls?.studentName ?? null,
         adminReviewStatus,
       });
@@ -1109,6 +1161,7 @@ export async function planAutoSync(
         startTimestamp: session.startTimestamp,
         confidence: m.confidence,
         actualDurationSec: m.actualDurationSec,
+        expectedDurationSec: m.expectedDurationSec,
         studentName: pendingRow?.studentName ?? null,
         // count_mismatch path is always pending review — the pairing was a guess.
         adminReviewStatus: 'pending',
@@ -1120,6 +1173,7 @@ export async function planAutoSync(
     pairs,
     status: result.status,
     totalFilesInFolder: allEntries.length,
+    unplaceableRecordings: unplaceableIdx.size,
     errors: [],
     importedCount: 0,
   };

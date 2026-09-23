@@ -33,6 +33,8 @@ import { setOnboardingHold } from '../utils/onboardingHold';
 import { recallToFocusPoints, saveOnboardingFocusPoints } from '../services/ai/onboardingRecall';
 import { createChildAccount } from '../services/childAccount';
 import { holdPendingOnboarding } from '../services/pendingOnboarding';
+import { HEALTH_CONSENT_VERSION, giveHealthConsent } from '../services/healthConsent';
+import { accountConsentStatements, recordAccountConsent } from '../services/consentRecord';
 import { clearSubjectCache, invalidateCache } from '../storage/storage';
 import { DEFAULT_COUNTRY, toE164, splitE164 } from '../utils/phone';
 import PhoneField from '../components/PhoneField';
@@ -359,22 +361,15 @@ const AXES = ['Technique', 'Musicality', 'Mental', 'Performance'];
 const TERMS_URL = 'https://www.useinbetween.com/terms';
 // Health data needs its own, explicit permission: a lesson's audio can carry an
 // injury, a pain, a limitation, and that is a special category under the GDPR.
-// Asked of every account — coach, student and parent — and written to
-// users.health_data_consent_at when the account is made.
-const HEALTH_CONSENT =
-  'Lessons are recorded and transcribed. Conversations during a lesson may include references to injuries, '
-  + 'pain or physical limitations. I explicitly consent to InBetween processing this information as part of lesson content.';
+// Asked of every account — coach, student and parent. The sentence and its
+// version live in services/healthConsent, which is also what withdraws it.
 
 // What a coach or a student ticks before their account is made — the parent's
 // statements, in the first person. A parent doesn't see them here: they have
 // already given the same permission, for their child, in the minor consent.
-const accountChecks = (isCoach) => [
-  isCoach
-    ? 'I record my lessons with InBetween: the audio is transcribed and turned into focus points for my students'
-    : 'My lessons are recorded and transcribed, and turned into focus points for me to train',
-  'I understand I can withdraw this consent and delete my data at any time',
-  HEALTH_CONSENT,
-];
+// The sentences live in services/consentRecord, which is also what stores them:
+// what was shown and what is kept as proof have to be the same text.
+const accountChecks = accountConsentStatements;
 const PRIVACY_URL = 'https://www.useinbetween.com/privacy';
 
 const DANCES = {
@@ -1053,6 +1048,8 @@ export default function OnboardingScreen({ navigation, route }) {
       // The health-data permission, carried through email confirmation like the
       // rest, so the proof isn't lost when the session only arrives later.
       healthConsentAt: healthConsentGiven() ? new Date().toISOString() : null,
+      healthConsentVersion: healthConsentGiven() ? HEALTH_CONSENT_VERSION : null,
+      accountChecksAcceptedAt: !isParent && healthConsentGiven() ? new Date().toISOString() : null,
       student: !isCoach && !isParent ? {
         lessons: a.lessons, soloLabel: a.soloLabel, weeklyGoal: weeklyTarget(a),
         coachId: a.coachId || null, cats: coachCats, focus: a.focus,
@@ -1078,8 +1075,12 @@ export default function OnboardingScreen({ navigation, route }) {
     holdPendingOnboarding(false);
 
     if (userId && healthConsentGiven()) {
-      supabase.from('users').update({ health_data_consent_at: new Date().toISOString() }).eq('id', userId)
-        .then(({ error }) => { if (error) console.warn('[onboarding] health consent not saved:', error.message); });
+      // The wording goes in with the timestamp: proof of consent is knowing
+      // which sentence the person read.
+      giveHealthConsent(userId);
+      // …and the three statements as they were shown, which is what proves the
+      // other two boxes were ticked at all.
+      if (!isParent) recordAccountConsent({ userId, isCoach, role: isCoach ? 'coach' : 'student' });
     }
 
     let studioId = a.studioId;

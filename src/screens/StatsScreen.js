@@ -30,6 +30,8 @@ import { withdrawChild, getConsentCopy, sendPhoneCode, checkPhoneCode } from '..
 import ProfileDashboard from '../components/ProfileDashboard';
 import ChildPhoneCard from '../components/ChildPhoneCard';
 import { logOutWithChecks } from '../services/logout';
+import { HEALTH_CONSENT, healthConsentState, giveHealthConsent, withdrawHealthConsent } from '../services/healthConsent';
+import { isAdminEmail } from '../services/featureFlags';
 import ProfileSkeleton from '../components/ProfileSkeleton';
 import StudioPicker from '../components/StudioPicker';
 import { useFocusEffect } from '@react-navigation/native';
@@ -908,7 +910,7 @@ export default function StatsScreen({ navigation, route }) {
 
     // Trainer-only: count pending reviews
     const trainerEmail = session?.user?.email;
-    if (trainerEmail === 'loic@danceuniteduk.com') {
+    if (isAdminEmail(trainerEmail)) {
       setIsTrainer(true);
       try {
         const { count: pendingCount } = await supabase
@@ -1052,6 +1054,50 @@ export default function StatsScreen({ navigation, route }) {
 
   // Withdrawal is a right, so it is one plain question — asked once because it
   // erases a child's whole record for good, never argued with or delayed.
+  // Health-data permission — the account holder's own. Withdrawing it stops
+  // their lessons being recorded from that moment (Start Class checks it); it
+  // deletes nothing, because deleting is a different request with different
+  // consequences, and conflating the two is how people lose data they meant to
+  // keep. A parent doesn't see this row: they gave the permission for their
+  // child in the minor consent, and take it back with the row above.
+  const healthState = healthConsentState(user);
+
+  function toggleHealthConsent() {
+    if (!user?.id) return;
+    if (healthState === 'withdrawn') {
+      Alert.alert('Allow this again?', HEALTH_CONSENT, [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'I consent',
+          onPress: async () => {
+            await giveHealthConsent(user.id);
+            setUser((p) => ({
+              ...p,
+              health_data_consent_at: new Date().toISOString(),
+              health_consent_withdrawn_at: null,
+            }));
+          },
+        },
+      ]);
+      return;
+    }
+    Alert.alert(
+      'Withdraw this permission?',
+      'Your lessons stop being recorded from now on. What has already been recorded stays until you ask us to delete it — that is a separate request.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Withdraw',
+          style: 'destructive',
+          onPress: async () => {
+            await withdrawHealthConsent(user.id);
+            setUser((p) => ({ ...p, health_consent_withdrawn_at: new Date().toISOString() }));
+          },
+        },
+      ],
+    );
+  }
+
   function confirmWithdraw(child) {
     Alert.alert(
       `Delete everything about ${child.name}?`,
@@ -1693,6 +1739,20 @@ export default function StatsScreen({ navigation, route }) {
                     isLast
                   />
                 </View>
+
+                {!isParent && (
+                  <>
+                    <SecLabel text="Permission" />
+                    <View style={set.card}>
+                      <SettingRow
+                        label="Health data in lessons"
+                        value={healthState === 'withdrawn' ? 'Withdrawn' : healthState === 'given' ? 'Given' : 'Not given'}
+                        onPress={toggleHealthConsent}
+                        isLast
+                      />
+                    </View>
+                  </>
+                )}
 
                 {isTrainer && pendingReviews > 0 && (
                   <TouchableOpacity
