@@ -1327,7 +1327,16 @@ ${coachName ? `${coachName.toUpperCase()}'S` : 'COACH'} KNOWLEDGE BASE
 (principles, tips, metaphors and drills from all lessons — use to answer questions not covered in student data)
 ════════════════════════════════════════
 
-${knowledgeBlock}` : ''}
+${knowledgeBlock}` : `
+
+════════════════════════════════════════
+COACH KNOWLEDGE BASE — EMPTY
+════════════════════════════════════════
+
+${coachName ? `${coachName} has` : 'The coach has'} no principles, cues, metaphors or drills recorded yet.
+There is nothing here to draw on. The student data above is your only source:
+if the answer is not in it, rule 3 applies — say so and offer to send the
+question to the coach. Do not fill the gap with general dance knowledge.`}
 
 ════════════════════════════════════════
 RULES — READ THIS FIRST, IT IS NON NEGOTIABLE

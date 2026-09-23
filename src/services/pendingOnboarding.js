@@ -5,6 +5,7 @@
 // answers ride in the account's metadata (pending_onboarding) and are applied
 // here at the first sign-in, instead of being lost.
 import { supabase } from './supabase/client';
+import { giveHealthConsent } from './healthConsent';
 
 const running = new Set();
 
@@ -23,9 +24,11 @@ export async function applyPendingOnboarding(session) {
     const { error: clearErr } = await supabase.auth.updateUser({ data: { pending_onboarding: null } });
     if (clearErr) return;
 
-    // Health-data permission, given at sign-up before the session existed.
+    // Health-data permission, given at sign-up before the session existed. The
+    // version travels with it: the wording that was on screen then is the one
+    // that was agreed to, even if the app has since changed it.
     if (plan.healthConsentAt) {
-      await supabase.from('users').update({ health_data_consent_at: plan.healthConsentAt }).eq('id', userId);
+      await giveHealthConsent(userId, plan.healthConsentAt, plan.healthConsentVersion ?? null);
     }
 
     if (plan.role === 'coach') {

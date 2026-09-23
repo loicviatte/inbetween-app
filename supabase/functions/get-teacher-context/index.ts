@@ -15,6 +15,19 @@ Deno.serve(async (req: Request) => {
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
   )
 
+  // The coach's knowledge base is the one thing here that belongs to somebody
+  // other than the caller, and the only isolation was this file filtering on
+  // coach_id. A one-line mistake would hand a student another coach's material.
+  // It is read through the caller's own JWT instead, so Postgres enforces the
+  // boundary (coach_knowledge_select: your own rows, or those of the coach you
+  // are linked to) and the code filter becomes the second line of defence
+  // rather than the only one.
+  const userClient = createClient(
+    Deno.env.get('SUPABASE_URL')!,
+    Deno.env.get('SUPABASE_ANON_KEY')!,
+    { global: { headers: { Authorization: `Bearer ${jwt}` } } },
+  )
+
   // Verify JWT and get student id
   const { data: { user }, error: authError } = await serviceClient.auth.getUser(jwt)
   if (authError || !user) {
@@ -95,14 +108,26 @@ Deno.serve(async (req: Request) => {
   // ── 6. Coach knowledge base (principles, tips, metaphors, drills) ─────────────
   let coachKnowledge: { type: string; content: string }[] = []
 
-  if (coachId) {
-    const { data: knowledge } = await serviceClient
+  // Only a coach this student is actually linked to — resolved from the
+  // student's own row above, and re-stated here so a future edit to the dance
+  // routing can't widen it by accident.
+  const linkedCoachIds = [studentProfile?.latin_coach_id, studentProfile?.ballroom_coach_id].filter(Boolean)
+  if (coachId && linkedCoachIds.includes(coachId)) {
+    const { data: knowledge, error: knowledgeError } = await userClient
       .from('coach_knowledge')
       .select('type, content')
       .eq('coach_id', coachId)
       .order('created_at', { ascending: false })
-
+    if (knowledgeError) {
+      // RLS said no, or the read failed: answer without the knowledge base
+      // rather than reaching around it with the service role. The assistant's
+      // own rules turn an empty base into "ask your coach" (see rule 3 of the
+      // system prompt in FocusSessionScreen).
+      console.warn('[get-teacher-context] coach_knowledge denied:', knowledgeError.message)
+    }
     coachKnowledge = knowledge ?? []
+  } else if (coachId) {
+    console.warn(`[get-teacher-context] coach ${coachId} is not linked to student ${studentId} — knowledge withheld`)
   }
 
   // ── 7. Return ─────────────────────────────────────────────────────────────────

@@ -59,6 +59,7 @@ import { isNewRecordingPipelineEnabled, isNativeRecorderEnabled, isLocalRecordin
 import { enqueueChunk } from '../../storage/recordingQueue';
 import { pokeUploadWorker } from '../../services/uploadWorker';
 import { takeMicChargeHint } from '../../services/micChargeHint';
+import { canBeRecorded } from '../../services/healthConsent';
 import ContinuousAudioRecorder from 'continuous-audio-recorder';
 
 // AssemblyAI is proxied server-side (supabase/functions/assemblyai-transcribe)
@@ -1364,11 +1365,27 @@ export default function StartClassScreen({ navigation }) {
     const people = view === 'private-briefing' && selectedStudent?.id ? [selectedStudent]
       : view === 'couple-briefing' && selectedCouple ? [selectedCouple.dancerA, selectedCouple.dancerB].filter((d) => d?.id)
       : [];
-    if (!people.length) return null;
-    const { data } = await supabase.from('users').select('id, consent_status, age_check').in('id', people.map((p) => p.id));
+    // The coach is on every recording they make — group lessons included, where
+    // no student is named yet — so their own permission is checked too.
+    const coachId = authUser?.id ?? userIdRef.current ?? null;
+    const ids = [...people.map((p) => p.id), ...(coachId ? [coachId] : [])];
+    if (!ids.length) return null;
+    const { data } = await supabase
+      .from('users')
+      .select('id, consent_status, age_check, health_data_consent_at, health_consent_withdrawn_at')
+      .in('id', ids);
+    const mine = coachId ? (data || []).find((r) => r.id === coachId) : null;
+    if (mine && !canBeRecorded(mine)) {
+      return ['Recording is off',
+        'You withdrew your permission for health data in lessons, so nothing can be recorded. Settings ▸ Permission gives it back.'];
+    }
     for (const p of people) {
       const row = (data || []).find((r) => r.id === p.id);
       if (!row) continue;
+      if (!canBeRecorded(row)) {
+        return ['Recording is off for this student',
+          `${p.name || 'This student'} withdrew their permission for health data in lessons. You can still teach — the lesson just can’t be recorded.`];
+      }
       if (row.age_check === 'minor_pending') {
         return ['Waiting for verification',
           `You marked ${p.name || 'this student'} as under 18. Recording works once they confirm they’re 18 or over, or a parent gives permission.`];
