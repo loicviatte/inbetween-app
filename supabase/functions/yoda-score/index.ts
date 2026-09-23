@@ -375,11 +375,20 @@ async function processClassInput(supabase: any, payload: any): Promise<void> {
   const classDance: string[] = classInput.dance ?? []
   const isGroupClass = classInput.lesson_type === 'public' || classInput.lesson_type === 'group'
 
-  for (const studentJson of aiData.students ?? []) {
-    const studentId: string = studentJson.student_id
-    if (!studentId) continue
+  // A group class makes two focus points, the same two for everyone (2b below),
+  // and nothing else. The per-student pass is skipped there entirely — not just
+  // its creations, its merges too. It used to hand the students the AI happened
+  // to name their own copies of the same material in different words, and to
+  // notify the coach the STUDENT is linked to rather than the one who taught
+  // the class (Tanya's Latin group class notified Esther's ballroom coach).
+  // Private and couple classes keep it: individual work is what they are for.
+  if (!isGroupClass) {
+    for (const studentJson of aiData.students ?? []) {
+      const studentId: string = studentJson.student_id
+      if (!studentId) continue
 
-    await processStudentFocusPoints(supabase, studentId, studentJson, class_input_id, classDance, now, isGroupClass)
+      await processStudentFocusPoints(supabase, studentId, studentJson, class_input_id, classDance, now, isGroupClass)
+    }
   }
 
   // 2a. Empty-class guard (private only): the end-of-class debrief default-retires
