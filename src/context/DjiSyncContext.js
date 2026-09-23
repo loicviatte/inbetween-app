@@ -51,7 +51,7 @@ import {
   purgeExpiredPreparedFiles,
   purgeExpiredM4aBackups,
 } from '../services/localRecordingAutoSync';
-import { getActiveCoachClass } from '../storage/activeCoachClass';
+import { getActiveCoachClass, subscribeToActiveCoachClass } from '../storage/activeCoachClass';
 import {
   evaluateReminder,
   nightsWaiting,
@@ -130,6 +130,9 @@ export function DjiSyncProvider({ children }) {
   const [imported, setImported] = useState(0);
   const [pendingReview, setPendingReview] = useState(0);
   const [unmatched, setUnmatched] = useState(0);
+  // Recordings on the mic the date window refused (mic clock off) — surfaced on
+  // the Complete screen so "nothing new" never reads as "nothing left".
+  const [unplaceable, setUnplaceable] = useState(0);
   const [summary, setSummary] = useState(null); // { files, runtimeSec, sizeBytes }
   const [errorInfo, setErrorInfo] = useState(null); // { kind, message }
   const [stageLabel, setStageLabel] = useState(null); // 'Copying…' | 'Compressing…' | 'Uploading N%'
@@ -442,6 +445,7 @@ export function DjiSyncProvider({ children }) {
       setImported(0);
       setPendingReview(0);
       setUnmatched(0);
+      setUnplaceable(0);
       // Clear the per-file counters too, else the Importing/Error screens
       // briefly show the PREVIOUS run's "N of M" + size before the first
       // onFile of this run lands.
@@ -670,10 +674,13 @@ export function DjiSyncProvider({ children }) {
     [userId, refreshPending, startOfflineRetry],
   );
 
-  // Resolve the flow to a calm "Up to date" Complete screen (files: 0). Used
-  // when the coach explicitly asked to sync, the mic reads fine, but there's
-  // nothing new to import — a positive verdict, NOT an error (nothing's wrong).
-  const resolveUpToDate = useCallback(() => {
+  // Resolve the flow to a Complete screen with nothing imported (files: 0):
+  // the coach explicitly asked to sync, the mic reads fine, and there was
+  // nothing new — not an error. Whether that reads as "Up to date" or "Still
+  // waiting" is the Complete screen's call, on the lessons still missing their
+  // audio and the recordings the date window refused.
+  const resolveUpToDate = useCallback((unplaceableCount = 0) => {
+    setUnplaceable(unplaceableCount);
     setErrorInfo(null);
     setStageLabel(null);
     setEtaSec(null);
@@ -725,8 +732,11 @@ export function DjiSyncProvider({ children }) {
       if (!hasWork) {
         if (foreground && explicit) {
           // Coach-initiated and the mic reads fine but there's nothing to do →
-          // show "Up to date" rather than spinning on Connect forever.
-          resolveUpToDate();
+          // show "Up to date" rather than spinning on Connect forever. The
+          // count of recordings the date window threw out rides along: a mic
+          // whose clock is off is the one case where "nothing to do" and "your
+          // audio is right there" are both true.
+          resolveUpToDate(plan.unplaceableRecordings ?? 0);
         } else if (
           !foreground &&
           phaseRef.current !== 'idle' &&
@@ -1107,6 +1117,13 @@ export function DjiSyncProvider({ children }) {
     () => devPreviewRows ?? pendingRows.filter((r) => !r.abandonedAt),
     [devPreviewRows, pendingRows],
   );
+  // Lessons whose audio never arrived and that the coach hasn't written off.
+  // Feeds the Complete screen so "nothing new on the mic" can't pass itself off
+  // as "everything is in" while classes are still missing their audio.
+  const awaitingAudioCount = useMemo(
+    () => pendingRows.filter((r) => !r.abandonedAt).length,
+    [pendingRows],
+  );
   const reminderPendingRef = useRef(reminderPending);
   useEffect(() => {
     reminderPendingRef.current = reminderPending;
@@ -1117,6 +1134,10 @@ export function DjiSyncProvider({ children }) {
   // request re-opens it without needing a reset in between.
   const [micSetupRequest, setMicSetupRequest] = useState(0);
   const requestMicSetup = useCallback(() => setMicSetupRequest((n) => n + 1), []);
+  // The banner clears the request once it has opened the wizard: several tab
+  // screens keep a banner mounted, and a request left standing would re-open on
+  // whichever one mounts next.
+  const ackMicSetupRequest = useCallback(() => setMicSetupRequest(0), []);
   // DjiSetupBanner mirrors its wizard's visibility here so the reminder gate
   // knows to stand down while it's up — without this, re-arming the evening on
   // the CTA (see reminderImportNow) would pop the wall straight back over the
@@ -1126,6 +1147,65 @@ export function DjiSyncProvider({ children }) {
   useEffect(() => {
     micSetupOpenRef.current = micSetupOpen;
   }, [micSetupOpen]);
+
+  // ─── First plug-in: open the wizard for them ──────────────────────────
+  // The 2s poll only sees the mic THROUGH the folder bookmark, so before the
+  // coach has granted access — exactly when a new coach needs the help —
+  // plugging the mic in does nothing on screen and they have to find the SET UP
+  // pill themselves. iOS tells us the moment a USB-C audio device appears: use
+  // that to open the setup wizard. Once folder access exists the monitor is
+  // pointless and we drop it — the poll takes over.
+  //
+  // The monitor holds an .ambient audio session, and local-recording mode's
+  // invariant is that the phone holds NO audio session during a class: it runs
+  // only while no class is active and while the app is in the foreground
+  // (DashboardScreen also stops it right before navigating to StartClass, which
+  // is why every re-entry starts it again rather than trusting our own flag).
+  // Both native calls are idempotent and run in order on the main queue, so
+  // start/stop can be fired as often as the state changes.
+  useEffect(() => {
+    if (!enabled || !userId || hasFolderAccess) return undefined;
+    let disposed = false;
+
+    // The event subscription is independent of the audio session — hold it for
+    // the whole effect so start/stop can't leave us with two listeners.
+    const sub =
+      DjiFiles.addDjiDeviceDetectedListener?.(() => {
+        // Mic on the cable, no folder access yet → walk them through it, unless
+        // they're already in the wizard or in the sync flow: those own the
+        // screen.
+        if (micSetupOpenRef.current || flowOpenRef.current) return;
+        requestMicSetup();
+      }) ?? null;
+
+    const stopMonitor = () => {
+      try {
+        Promise.resolve(DjiFiles.stopAudioRouteMonitor?.()).catch(() => {});
+      } catch {}
+    };
+    const apply = () => {
+      if (disposed) return;
+      if (getActiveCoachClass() || AppState.currentState !== 'active') {
+        stopMonitor();
+        return;
+      }
+      try {
+        Promise.resolve(DjiFiles.startAudioRouteMonitor?.()).catch(() => {});
+      } catch {}
+    };
+
+    apply();
+    const unsubClass = subscribeToActiveCoachClass(apply);
+    const appSub = AppState.addEventListener('change', apply);
+
+    return () => {
+      disposed = true;
+      unsubClass();
+      appSub.remove();
+      sub?.remove?.();
+      stopMonitor();
+    };
+  }, [enabled, userId, hasFolderAccess, requestMicSetup]);
 
   const [reminderOpen, setReminderOpen] = useState(false);
   const [reminderTier, setReminderTier] = useState(1);
@@ -1415,9 +1495,12 @@ export function DjiSyncProvider({ children }) {
       errorInfo,
       flowOpen,
       pendingUploadCount,
+      awaitingAudioCount,
+      unplaceable,
       hasFolderAccess,
       micSetupRequest,
       requestMicSetup,
+      ackMicSetupRequest,
       setMicSetupOpen,
       reminderOpen,
       reminderTier,
@@ -1458,9 +1541,12 @@ export function DjiSyncProvider({ children }) {
       errorInfo,
       flowOpen,
       pendingUploadCount,
+      awaitingAudioCount,
+      unplaceable,
       hasFolderAccess,
       micSetupRequest,
       requestMicSetup,
+      ackMicSetupRequest,
       setMicSetupOpen,
       reminderOpen,
       reminderTier,

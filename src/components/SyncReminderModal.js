@@ -131,6 +131,13 @@ function fmtDuration(sec) {
   return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}`;
 }
 
+/** A lesson the coach never stopped was closed by the server, so the length we
+ *  hold for it is the moment the app last checked in — not how long they
+ *  taught. Better to show no duration than a wrong one. */
+function rowDuration(r) {
+  return r?.durationUnknown ? null : fmtDuration(r?.durationSec);
+}
+
 /** Before noon — the side of the day that decides "tonight" vs "tomorrow". */
 function isMorningNow() {
   return new Date().getHours() < 12;
@@ -685,7 +692,7 @@ export default function SyncReminderModal() {
                         {rows.map((r, idx) => {
                           const when = r.endedAt ?? r.startedAt;
                           const n = nightsWaiting(when, now);
-                          const dur = fmtDuration(r.durationSec);
+                          const dur = rowDuration(r);
                           return (
                             <View key={r.id} style={[s.lrow, idx > 0 && s.lrowSep]}>
                               <View style={s.lavatar}>
@@ -845,7 +852,7 @@ export default function SyncReminderModal() {
                     <Text style={s.affectName}>{labelFor(r)}</Text>
                     <Text style={s.affectMeta}>
                       {fmtWhen(r.endedAt ?? r.startedAt, now)}
-                      {fmtDuration(r.durationSec) ? ` · ${fmtDuration(r.durationSec)}` : ''}
+                      {rowDuration(r) ? ` · ${rowDuration(r)}` : ''}
                     </Text>
                   </View>
                 ))}

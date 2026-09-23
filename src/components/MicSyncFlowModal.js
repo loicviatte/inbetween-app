@@ -104,6 +104,8 @@ export default function MicSyncFlowModal() {
     imported,
     unmatched,
     pendingReview,
+    awaitingAudioCount,
+    unplaceable,
     summary,
     errorInfo,
     runInBackground,
@@ -178,7 +180,16 @@ export default function MicSyncFlowModal() {
                 stageLabel={stageLabel}
               />
             )}
-            {phase === 'done' && <CompleteScreen summary={summary} imported={imported} unmatched={unmatched} pendingReview={pendingReview} />}
+            {phase === 'done' && (
+              <CompleteScreen
+                summary={summary}
+                imported={imported}
+                unmatched={unmatched}
+                pendingReview={pendingReview}
+                awaitingAudio={awaitingAudioCount}
+                unplaceable={unplaceable}
+              />
+            )}
             {phase === 'error' && (
               <ErrorScreen errorInfo={errorInfo} fileIdx={fileIdx} fileTotal={fileTotal} />
             )}
@@ -423,9 +434,27 @@ function ImportingScreen({ progressPct, fileIdx, fileTotal, fileSizeBytes, etaSe
 }
 
 // ─── Complete (done) ─────────────────────────────────────────────────────
-function CompleteScreen({ summary, imported, unmatched, pendingReview = 0 }) {
+function CompleteScreen({
+  summary,
+  imported,
+  unmatched,
+  pendingReview = 0,
+  awaitingAudio = 0,
+  unplaceable = 0,
+}) {
   const files = summary?.files ?? imported + unmatched;
   const noneNew = files === 0;
+  // "Up to date." would be a lie while lessons are still missing their audio:
+  // the mic read fine, it simply held nothing for them. Say that instead — a
+  // coach who reads "all done" here stops looking for a recording that the app
+  // still needs.
+  const stranded = noneNew && awaitingAudio > 0;
+  const one = awaitingAudio === 1;
+  // …and the one case where we can name the culprit: recordings ARE on the mic,
+  // dated too far from the lesson to be trusted (its clock drifts, and resets
+  // when the battery dies). Telling the coach to fix the date is the whole
+  // difference between a lost lesson and a two-tap fix.
+  const oneOff = unplaceable === 1;
   // Priority tail: an admin-review hold is the most important caveat (those
   // recordings are NOT live for the student yet), then unmatched, else the
   // default. Prevents "Ready to tag them" implying immediate use.
@@ -438,28 +467,38 @@ function CompleteScreen({ summary, imported, unmatched, pendingReview = 0 }) {
   return (
     <>
       <MicArt
-        badgeOk
+        badgeOk={!stranded}
         badge={
-          <Ionicons name="checkmark" size={18} color="#fff" />
+          stranded ? (
+            <Ionicons name="time" size={16} color="#0A0A0A" />
+          ) : (
+            <Ionicons name="checkmark" size={18} color="#fff" />
+          )
         }
       >
         <View style={s.orbit} pointerEvents="none">
           <Svg viewBox="0 0 100 100" width="100%" height="100%" style={{ transform: [{ rotate: '-90deg' }] }}>
             <Circle cx="50" cy="50" r="48" stroke="rgba(255,255,255,0.06)" strokeWidth="1" fill="none" />
-            <Circle cx="50" cy="50" r="48" stroke={GREEN} strokeWidth="1.5" fill="none" strokeLinecap="round" />
+            <Circle cx="50" cy="50" r="48" stroke={stranded ? GOLD_500 : GREEN} strokeWidth="1.5" fill="none" strokeLinecap="round" />
           </Svg>
         </View>
       </MicArt>
       <View style={s.copy}>
         <View style={s.eyebrowRow}>
-          <View style={[s.eyebrowDot, s.eyebrowDotOk, { opacity: 1 }]} />
-          <Text style={[s.eyebrow, s.eyebrowOk]}>ALL DONE</Text>
+          <View style={[s.eyebrowDot, !stranded && s.eyebrowDotOk, { opacity: 1 }]} />
+          <Text style={[s.eyebrow, !stranded && s.eyebrowOk]}>
+            {stranded ? 'NOTHING NEW' : 'ALL DONE'}
+          </Text>
         </View>
-        <Text style={s.h2}>{noneNew ? 'Up to date.' : 'Synced.'}</Text>
+        <Text style={s.h2}>{stranded ? 'Still waiting.' : noneNew ? 'Up to date.' : 'Synced.'}</Text>
         <Text style={s.p}>
-          {noneNew
-            ? "Nothing new on the mic — everything's already imported."
-            : `${files} ${files === 1 ? 'recording' : 'recordings'} landed safely.${tail}`}
+          {stranded
+            ? unplaceable > 0
+              ? `${awaitingAudio} ${one ? 'lesson is' : 'lessons are'} still waiting, and ${unplaceable} ${oneOff ? 'recording' : 'recordings'} on the mic ${oneOff ? 'is' : 'are'} dated too far off to place. Set the date and time on the mic, then sync again.`
+              : `Nothing new on the mic, and ${awaitingAudio} ${one ? 'lesson is' : 'lessons are'} still waiting for ${one ? 'its' : 'their'} audio. Check the mic is the one you taught with — ${one ? "its file isn't" : "their files aren't"} on it yet.`
+            : noneNew
+              ? "Nothing new on the mic — everything's already imported."
+              : `${files} ${files === 1 ? 'recording' : 'recordings'} landed safely.${tail}`}
         </Text>
       </View>
       {!noneNew && summary && (

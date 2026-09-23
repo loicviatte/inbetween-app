@@ -16,8 +16,18 @@
 // Repeats every evening until EITHER the audio is synced (mic_file_name set →
 // the class drops out of the query) OR the class is "superseded": the coach
 // later taught another class with at least one overlapping student, at which
-// point nagging about the older, now-stale recording stops. Bounded to the last
-// 30 days so an ancient unrecoverable class doesn't nag forever.
+// point nagging about the older, now-stale recording stops.
+//
+// Superseding only counts a later class that actually finished AND is not
+// itself waiting for its audio. A lesson the coach never stopped, or one whose
+// own audio is still on the mic, used to silence the reminders for every
+// earlier class — which is how three of Tanya's September lessons went quiet
+// while their audio sat on the mic. A night of unsynced lessons must be named
+// in full, not collapsed into its last one.
+//
+// The audio stays on the mic until it is imported, so we no longer give up
+// after 30 days: past that the class is still chased, once a week instead of
+// every evening, up to LOOKBACK_DAYS.
 //
 // Only pg_cron (service-role bearer) may invoke it.
 
@@ -27,9 +37,11 @@ const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 
 const MIN_VALID_DURATION_SEC = 60          // matches localRecordingAutoSync
-const LOOKBACK_DAYS = 30                    // don't nag about ancient classes
+const LOOKBACK_DAYS = 120                   // don't nag about ancient classes
+const DAILY_DAYS = 30                       // every evening for this long, then weekly
 const SUPERSEDE_LOOKBACK_DAYS = 60          // window to find a "taught them again" class
 const DEDUP_HOURS = 18                      // skip if we already pinged this coach recently
+const WEEKLY_HOURS = 7 * 24                 // the slower cadence for classes past DAILY_DAYS
 
 function jwtRoleIs(authHeader: string, expectedRole: string): boolean {
   const m = authHeader.match(/^\s*Bearer\s+(.+)$/i)
@@ -54,6 +66,15 @@ type Rec = {
   student_id: string | null
   started_at: string
   ended_at: string | null
+  mic_file_name?: string | null
+  sync_abandoned_at?: string | null
+  local_recording_mode?: boolean | null
+  meta?: { duration_unknown?: boolean } | null
+}
+
+/** Still missing its audio: it can be reminded about, and can't silence others. */
+function awaitingAudio(r: Rec): boolean {
+  return !!r.local_recording_mode && !r.mic_file_name && !r.sync_abandoned_at
 }
 
 function rosterOf(recId: string, studentId: string | null, crs: Map<string, Set<string>>): Set<string> {
@@ -84,7 +105,7 @@ Deno.serve(async (req) => {
   // 1. Classes awaiting audio (the reminder candidates).
   const { data: pendingRaw, error: pErr } = await supabase
     .from('class_recordings')
-    .select('id, user_id, student_id, started_at, ended_at')
+    .select('id, user_id, student_id, started_at, ended_at, meta')
     .eq('local_recording_mode', true)
     .is('mic_file_name', null)
     .is('sync_abandoned_at', null)
@@ -94,6 +115,9 @@ Deno.serve(async (req) => {
 
   const pending: Rec[] = (pendingRaw ?? []).filter((r: Rec) => {
     if (!r.ended_at) return false
+    // A lesson closed by the server has no real length (see migration
+    // 20260923): the <60s filter would read it as a Start/Stop misfire.
+    if (r.meta?.duration_unknown) return true
     const dur = (new Date(r.ended_at).getTime() - new Date(r.started_at).getTime()) / 1000
     return dur >= MIN_VALID_DURATION_SEC
   })
@@ -106,7 +130,7 @@ Deno.serve(async (req) => {
   const supersedeIso = new Date(nowMs - SUPERSEDE_LOOKBACK_DAYS * 86400000).toISOString()
   const { data: allRecs, error: aErr } = await supabase
     .from('class_recordings')
-    .select('id, user_id, student_id, started_at')
+    .select('id, user_id, student_id, started_at, ended_at, mic_file_name, sync_abandoned_at, local_recording_mode')
     .in('user_id', coachIds)
     .gte('started_at', supersedeIso)
   if (aErr) return json({ error: aErr.message }, 500)
@@ -126,12 +150,13 @@ Deno.serve(async (req) => {
     }
   }
 
-  const recsByCoach = new Map<string, Array<{ id: string; started: number; roster: Set<string> }>>()
+  const recsByCoach = new Map<string, Array<{ id: string; started: number; supersedes: boolean; roster: Set<string> }>>()
   for (const r of (allRecs ?? []) as Rec[]) {
     if (!recsByCoach.has(r.user_id)) recsByCoach.set(r.user_id, [])
     recsByCoach.get(r.user_id)!.push({
       id: r.id,
       started: new Date(r.started_at).getTime(),
+      supersedes: !!r.ended_at && !awaitingAudio(r),
       roster: rosterOf(r.id, r.student_id, crs),
     })
   }
@@ -143,7 +168,7 @@ Deno.serve(async (req) => {
     const mStart = new Date(m.started_at).getTime()
     const mRoster = rosterOf(m.id, m.student_id, crs)
     const later = (recsByCoach.get(m.user_id) ?? []).some(
-      (r) => r.id !== m.id && r.started > mStart && overlaps(r.roster, mRoster),
+      (r) => r.id !== m.id && r.supersedes && r.started > mStart && overlaps(r.roster, mRoster),
     )
     if (later) continue
     if (!survivorsByCoach.has(m.user_id)) survivorsByCoach.set(m.user_id, [])
@@ -172,13 +197,18 @@ Deno.serve(async (req) => {
   let skippedDedup = 0
   const results: Array<{ coach: string; count: number; body: string }> = []
 
+  const dailyCutoffMs = nowMs - DAILY_DAYS * 86400000
   for (const [coachId, recs] of survivorsByCoach) {
+    // Every evening while a class is fresh; once a week once they are all past
+    // DAILY_DAYS — still chased, no longer nagging.
+    const anyFresh = recs.some((r) => new Date(r.started_at).getTime() >= dailyCutoffMs)
+    const sinceIso = anyFresh ? dedupIso : new Date(nowMs - WEEKLY_HOURS * 3600000).toISOString()
     const { count: recent } = await supabase
       .from('notifications')
       .select('id', { count: 'exact', head: true })
       .eq('user_id', coachId)
       .eq('type', 'sync_reminder')
-      .gte('created_at', dedupIso)
+      .gte('created_at', sinceIso)
     if ((recent ?? 0) > 0) { skippedDedup += 1; continue }
 
     const count = recs.length
