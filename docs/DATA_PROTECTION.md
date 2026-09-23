@@ -136,9 +136,13 @@ limitation. It has its own explicit permission, separate from the terms.
   and the code cannot create one otherwise", which is an argument, not a record.
   The table is append-only from the app: insert-own and select-own, no update
   and no delete policy at all — evidence the subject can rewrite is not
-  evidence. Rows for the four accounts created before it existed are marked
+  evidence. Rows for the accounts created before it existed are marked
   `source: 'reconstructed'` and carry a note saying exactly what they are
-  derived from, rather than passing for captured ones.
+  derived from, rather than passing for captured ones. **Parent accounts get
+  none**: they never see these three sentences — they tick the minor consent's
+  four instead, and `parental_consents` already keeps the full text they read,
+  its version, the approval time, the approving IP and the SMS verification.
+  That record is stronger than this one.
   `users.consent_status`, which reads `not_required` on those rows, is a
   different question entirely: whether a **parent's** permission is needed.
 - **Service-specific wording**, one source: `src/services/healthConsent.js`
