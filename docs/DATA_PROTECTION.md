@@ -129,6 +129,18 @@ limitation. It has its own explicit permission, separate from the terms.
 - **Unticked** when the sign-up screen opens (`OnboardingScreen.acctChecks`
   starts `[false, false, false]`), and the account cannot be created until all
   three are ticked.
+- **Recorded, all three**: `consent_records` (migration `20260923f`) holds one
+  row per sign-up with the exact sentences that were on screen, in the order
+  shown, their version and the moment they were accepted. Until 23 September
+  only the health box left a trace; the other two rested on "the account exists,
+  and the code cannot create one otherwise", which is an argument, not a record.
+  The table is append-only from the app: insert-own and select-own, no update
+  and no delete policy at all — evidence the subject can rewrite is not
+  evidence. Rows for the four accounts created before it existed are marked
+  `source: 'reconstructed'` and carry a note saying exactly what they are
+  derived from, rather than passing for captured ones.
+  `users.consent_status`, which reads `not_required` on those rows, is a
+  different question entirely: whether a **parent's** permission is needed.
 - **Service-specific wording**, one source: `src/services/healthConsent.js`
   (`HEALTH_CONSENT`), the same sentence the parental consent uses.
 - **Date and version stored**: `users.health_data_consent_at` +
