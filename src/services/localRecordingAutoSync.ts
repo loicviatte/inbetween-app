@@ -575,7 +575,19 @@ async function uploadFileToStorage(
   try {
     const upRes = await Promise.race([uploadPromise, stallGuard]);
     if (!upRes || upRes.status < 200 || upRes.status >= 300) {
-      throw new Error(`Storage upload ${upRes?.status}: ${(upRes?.body ?? '').slice(0, 200)}`);
+      const body = upRes?.body ?? '';
+      // Storage refused the object for its size. It arrives as an HTTP 400
+      // carrying a 413 body, and the raw JSON means nothing to a coach — say
+      // what happened and what it means for their recording, which is still
+      // sitting untouched on the mic. (Seen 2026-09-23: every full 30:50 mic
+      // part transcodes to ~52.3 MB against a 50 MiB bucket ceiling, so the
+      // longest ones tipped over. The ceiling is now 200 MB.)
+      if (upRes?.status === 413 || /entitytoolarge|maximum allowed size|payload too large/i.test(body)) {
+        throw new Error(
+          'E_TOO_LARGE: this recording is too large for the server to accept. It stays on the mic — nothing is lost.',
+        );
+      }
+      throw new Error(`Storage upload ${upRes?.status}: ${body.slice(0, 200)}`);
     }
   } finally {
     if (stallTimer) clearInterval(stallTimer);
