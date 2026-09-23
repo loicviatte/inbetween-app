@@ -146,6 +146,40 @@ public class LocalRecordingFilesModule: Module {
       UserDefaults.standard.removeObject(forKey: BOOKMARK_KEY)
     }
 
+    // ─── micStorage() ─────────────────────────────────────────────────
+    // Free / total bytes on the volume the bookmarked folder lives on —
+    // i.e. the mic's own card. A full card stops a recording exactly the
+    // way a dead battery does, and this is the one piece of mic hardware
+    // state iOS will actually tell us about (nothing exposes its
+    // battery). Resolves nil when the mic isn't mounted.
+    AsyncFunction("micStorage") { (promise: Promise) in
+      guard let folderURL = LocalRecordingFilesModule.resolveFolderURL() else {
+        promise.resolve(nil)
+        return
+      }
+      let started = folderURL.startAccessingSecurityScopedResource()
+      defer { if started { folderURL.stopAccessingSecurityScopedResource() } }
+      do {
+        let values = try folderURL.resourceValues(forKeys: [
+          .volumeAvailableCapacityKey,
+          .volumeTotalCapacityKey,
+        ])
+        guard let available = values.volumeAvailableCapacity,
+              let total = values.volumeTotalCapacity, total > 0 else {
+          promise.resolve(nil)
+          return
+        }
+        promise.resolve([
+          "availableBytes": available,
+          "totalBytes": total,
+        ])
+      } catch {
+        // Volume unmounted mid-read, or a filesystem that won't report
+        // capacity: not knowing is fine, guessing is not.
+        promise.resolve(nil)
+      }
+    }
+
     // ─── listFiles() ──────────────────────────────────────────────────
     // Enumerates files in the bookmarked folder. Returns metadata only:
     // name, size in bytes, modificationDate as ISO string. The actual

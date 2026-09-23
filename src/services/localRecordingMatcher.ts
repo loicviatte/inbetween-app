@@ -172,6 +172,17 @@ export function estimateWavDurationSec(name: string, sizeBytes: number): number 
 }
 
 /**
+ * How many seconds of recording a number of free bytes buys on the mic.
+ * Always at the DJI rate: it is the higher of the two, so a bare-timestamp
+ * recorder gets MORE time than we promise, never less. Used to turn "bytes
+ * free on the card" into the only unit that means anything to a coach.
+ */
+export function wavSecondsForBytes(bytes: number): number {
+  if (!bytes || bytes <= 0) return 0;
+  return Math.floor(bytes / DJI_BYTES_PER_SEC);
+}
+
+/**
  * True iff the name is the bare-timestamp recorder format. Those devices'
  * RTC can be months off (it resets when the battery drains), so absolute
  * file dates are meaningless for them — date-window filters must be skipped

@@ -16,6 +16,7 @@ import {
   Text,
   TouchableOpacity,
   StyleSheet,
+  ScrollView,
   Animated,
   Easing,
 } from 'react-native';
@@ -106,6 +107,9 @@ export default function MicSyncFlowModal() {
     pendingReview,
     awaitingAudioCount,
     unplaceable,
+    cutShort,
+    micSpace,
+    lowMicSpace,
     summary,
     errorInfo,
     runInBackground,
@@ -181,14 +185,26 @@ export default function MicSyncFlowModal() {
               />
             )}
             {phase === 'done' && (
-              <CompleteScreen
-                summary={summary}
-                imported={imported}
-                unmatched={unmatched}
-                pendingReview={pendingReview}
-                awaitingAudio={awaitingAudioCount}
-                unplaceable={unplaceable}
-              />
+              // Complete is the one screen whose height varies: a summary grid,
+              // and a maintenance notice when the mic needs something. Centred
+              // while it fits, scrollable on a small phone when it doesn't.
+              <ScrollView
+                style={s.doneScroll}
+                contentContainerStyle={s.doneScrollInner}
+                showsVerticalScrollIndicator={false}
+              >
+                <CompleteScreen
+                  summary={summary}
+                  imported={imported}
+                  unmatched={unmatched}
+                  pendingReview={pendingReview}
+                  awaitingAudio={awaitingAudioCount}
+                  unplaceable={unplaceable}
+                  cutShort={cutShort}
+                  micSpace={micSpace}
+                  lowMicSpace={lowMicSpace}
+                />
+              </ScrollView>
             )}
             {phase === 'error' && (
               <ErrorScreen errorInfo={errorInfo} fileIdx={fileIdx} fileTotal={fileTotal} />
@@ -441,6 +457,9 @@ function CompleteScreen({
   pendingReview = 0,
   awaitingAudio = 0,
   unplaceable = 0,
+  cutShort = null,
+  micSpace = null,
+  lowMicSpace = false,
 }) {
   const files = summary?.files ?? imported + unmatched;
   const noneNew = files === 0;
@@ -501,6 +520,38 @@ function CompleteScreen({
               : `${files} ${files === 1 ? 'recording' : 'recordings'} landed safely.${tail}`}
         </Text>
       </View>
+      {(cutShort || lowMicSpace) && (
+        <View style={s.notice}>
+          <Ionicons
+            name={cutShort ? 'battery-dead' : 'save-outline'}
+            size={15}
+            color={GOLD_500}
+            style={s.noticeIc}
+          />
+          <Text style={s.noticeTxt}>
+            {cutShort ? (
+              <>
+                <Text style={s.noticeStrong}>
+                  {cutShort.count > 1
+                    ? `${cutShort.count} recordings stop early`
+                    : `Your recording stops ${fmtRuntime(cutShort.worstGapSec)} short`}
+                </Text>
+                {cutShort.count > 1
+                  ? ` — up to ${fmtRuntime(cutShort.worstGapSec)} missing from the end of a lesson. Charge the mic before your next lesson, and check REC stays on.`
+                  : ' of the end of its lesson. Charge the mic before your next lesson, and check REC stays on.'}
+              </>
+            ) : (
+              <>
+                <Text style={s.noticeStrong}>
+                  Mic almost full — about {fmtRuntime(micSpace?.secondsLeft)} left
+                </Text>
+                . Imported recordings are deleted from it, so syncing after each
+                lesson keeps the space clear.
+              </>
+            )}
+          </Text>
+        </View>
+      )}
       {!noneNew && summary && (
         <View style={s.summaryGrid}>
           <View style={s.summaryCell}>
@@ -665,6 +716,10 @@ const s = StyleSheet.create({
     paddingHorizontal: 24,
   },
   bottom: { paddingHorizontal: 20, paddingBottom: 8, alignItems: 'center' },
+  // flex:1 so the ScrollView fills the hero and scrolls INSIDE it; without it
+  // a tall Complete screen would overflow the hero instead of scrolling.
+  doneScroll: { flex: 1, alignSelf: 'stretch' },
+  doneScrollInner: { flexGrow: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 8 },
 
   micHero: {
     width: 200,
@@ -844,6 +899,33 @@ const s = StyleSheet.create({
     color: 'rgba(255,255,255,0.6)',
   },
   fileChipSize: { fontFamily: Fonts.medium, fontSize: 11, color: 'rgba(255,255,255,0.35)' },
+
+  // Mic maintenance, said once and only when true: a recording that stopped
+  // before its lesson did, or a card with almost no room left.
+  notice: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    marginTop: 18,
+    alignSelf: 'center',
+    width: '100%',
+    maxWidth: 300,
+    borderRadius: 14,
+    backgroundColor: 'rgba(232,181,48,0.08)',
+    borderWidth: 0.5,
+    borderColor: 'rgba(232,181,48,0.22)',
+    paddingVertical: 12,
+    paddingHorizontal: 13,
+  },
+  noticeIc: { marginTop: 1.5 },
+  noticeTxt: {
+    flex: 1,
+    fontFamily: Fonts.regular,
+    fontSize: 12.5,
+    lineHeight: 18,
+    color: 'rgba(255,255,255,0.62)',
+  },
+  noticeStrong: { fontFamily: Fonts.semiBold, color: 'rgba(255,255,255,0.92)' },
 
   summaryGrid: {
     flexDirection: 'row',

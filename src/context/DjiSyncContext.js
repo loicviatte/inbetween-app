@@ -52,6 +52,8 @@ import {
   purgeExpiredM4aBackups,
 } from '../services/localRecordingAutoSync';
 import { getActiveCoachClass, subscribeToActiveCoachClass } from '../storage/activeCoachClass';
+import { wavSecondsForBytes } from '../services/localRecordingMatcher';
+import { raiseMicChargeHint } from '../services/micChargeHint';
 import {
   evaluateReminder,
   nightsWaiting,
@@ -93,6 +95,21 @@ const REMINDER_BLOCKING_PHASES = new Set(['waiting', 'granting', 'syncing', 'err
 // connectivity test — it fails instantly (cheap) when offline.
 const OFFLINE_RETRY_MS = 8000;
 
+// ─── "Your recording stopped before the lesson did" ──────────────────────
+// The mic's battery level is unreadable (no iOS API gives an app a USB-C or
+// Bluetooth accessory's charge), so we watch for its consequence instead: an
+// import whose audio is meaningfully shorter than the lesson it belongs to. A
+// dead battery does this; so does a REC button pressed early or a full card.
+// Both thresholds must be crossed — a ratio alone flags a short lesson that
+// ended a minute late, minutes alone flag nothing on a three-hour workshop.
+const CUT_SHORT_RATIO = 0.9;
+const CUT_SHORT_MIN_GAP_SEC = 5 * 60;
+
+// Free space on the mic, in recording time — the unit a coach thinks in. Below
+// this we say so on the Complete screen; a full card stops a recording exactly
+// the way a flat battery does.
+const LOW_SPACE_SEC = 2 * 60 * 60;
+
 const DjiSyncContext = createContext(null);
 
 /** Consumers must null-guard: returns null when used outside the provider. */
@@ -133,6 +150,11 @@ export function DjiSyncProvider({ children }) {
   // Recordings on the mic the date window refused (mic clock off) — surfaced on
   // the Complete screen so "nothing new" never reads as "nothing left".
   const [unplaceable, setUnplaceable] = useState(0);
+  // { count, worstGapSec } — imports whose audio stopped before the lesson did.
+  const [cutShort, setCutShort] = useState(null);
+  // { secondsLeft } of recording still free on the mic's card, or null when
+  // unknown (mic unmounted, or a binary built before native micStorage()).
+  const [micSpace, setMicSpace] = useState(null);
   const [summary, setSummary] = useState(null); // { files, runtimeSec, sizeBytes }
   const [errorInfo, setErrorInfo] = useState(null); // { kind, message }
   const [stageLabel, setStageLabel] = useState(null); // 'Copying…' | 'Compressing…' | 'Uploading N%'
@@ -199,6 +221,22 @@ export function DjiSyncProvider({ children }) {
       setHasFolderAccess(DjiFiles.hasFolder?.() ?? false);
     } catch {
       setHasFolderAccess(false);
+    }
+  }, []);
+
+  // The mic's free space, read at the two moments it is guaranteed to be
+  // plugged in: the end of an import and the "nothing to import" verdict.
+  // Silent on failure — an unknown card is not a problem to report.
+  const refreshMicSpace = useCallback(async () => {
+    try {
+      const st = await DjiFiles.micStorage?.();
+      if (!st) {
+        setMicSpace(null);
+        return;
+      }
+      setMicSpace({ secondsLeft: wavSecondsForBytes(st.availableBytes) });
+    } catch {
+      setMicSpace(null);
     }
   }, []);
 
@@ -446,6 +484,7 @@ export function DjiSyncProvider({ children }) {
       setPendingReview(0);
       setUnmatched(0);
       setUnplaceable(0);
+      setCutShort(null);
       // Clear the per-file counters too, else the Importing/Error screens
       // briefly show the PREVIOUS run's "N of M" + size before the first
       // onFile of this run lands.
@@ -645,6 +684,30 @@ export function DjiSyncProvider({ children }) {
         );
         const pairRuntime = okPairs.reduce((n, p) => n + (p.actualDurationSec || 0), 0);
         const orphanRuntime = okOrphans.reduce((n, sn) => n + (sn.durationSec || 0), 0);
+        // Audio that stops before the lesson did — the visible face of a mic
+        // that ran out of battery (or was stopped early, or filled its card).
+        // Classes we closed ourselves carry expectedDurationSec 0 and are
+        // skipped: their length is a floor, so every one of them would look
+        // cut short.
+        const shortRuns = okPairs
+          .map((p) => ({ gap: (p.expectedDurationSec || 0) - (p.actualDurationSec || 0), p }))
+          .filter(
+            ({ gap, p }) =>
+              p.expectedDurationSec > 0 &&
+              gap >= CUT_SHORT_MIN_GAP_SEC &&
+              p.actualDurationSec <= p.expectedDurationSec * CUT_SHORT_RATIO,
+          );
+        if (shortRuns.length > 0) {
+          const worstGapSec = Math.max(...shortRuns.map((x) => x.gap));
+          setCutShort({ count: shortRuns.length, worstGapSec });
+          // …and let the next debrief say it too, when the coach is putting
+          // the gear away and can still plug it in.
+          raiseMicChargeHint(userId, worstGapSec);
+        } else {
+          setCutShort(null);
+        }
+        refreshMicSpace();
+
         setProgressPct(100);
         setEtaSec(null);
         setStageLabel(null);
@@ -671,7 +734,7 @@ export function DjiSyncProvider({ children }) {
         syncRunningRef.current = false;
       }
     },
-    [userId, refreshPending, startOfflineRetry],
+    [userId, refreshPending, startOfflineRetry, refreshMicSpace],
   );
 
   // Resolve the flow to a Complete screen with nothing imported (files: 0):
@@ -681,6 +744,8 @@ export function DjiSyncProvider({ children }) {
   // audio and the recordings the date window refused.
   const resolveUpToDate = useCallback((unplaceableCount = 0) => {
     setUnplaceable(unplaceableCount);
+    setCutShort(null);
+    refreshMicSpace();
     setErrorInfo(null);
     setStageLabel(null);
     setEtaSec(null);
@@ -692,7 +757,7 @@ export function DjiSyncProvider({ children }) {
     // Always coach-initiated (mic-connected / grant / retry) → sticky until ack.
     stickyDoneRef.current = true;
     setPhase('done');
-  }, []);
+  }, [refreshMicSpace]);
 
   // ─── Decide if there's work, then run ─────────────────────────────────
   // foreground=true also vacuums unmatched recordings (the "Sync files" flow);
@@ -1497,6 +1562,9 @@ export function DjiSyncProvider({ children }) {
       pendingUploadCount,
       awaitingAudioCount,
       unplaceable,
+      cutShort,
+      micSpace,
+      lowMicSpace: micSpace != null && micSpace.secondsLeft < LOW_SPACE_SEC,
       hasFolderAccess,
       micSetupRequest,
       requestMicSetup,
@@ -1543,6 +1611,8 @@ export function DjiSyncProvider({ children }) {
       pendingUploadCount,
       awaitingAudioCount,
       unplaceable,
+      cutShort,
+      micSpace,
       hasFolderAccess,
       micSetupRequest,
       requestMicSetup,

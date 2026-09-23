@@ -58,6 +58,7 @@ import {
 import { isNewRecordingPipelineEnabled, isNativeRecorderEnabled, isLocalRecordingMode } from '../../services/featureFlags';
 import { enqueueChunk } from '../../storage/recordingQueue';
 import { pokeUploadWorker } from '../../services/uploadWorker';
+import { takeMicChargeHint } from '../../services/micChargeHint';
 import ContinuousAudioRecorder from 'continuous-audio-recorder';
 
 // AssemblyAI is proxied server-side (supabase/functions/assemblyai-transcribe)
@@ -1726,7 +1727,16 @@ export default function StartClassScreen({ navigation }) {
     // Cumulative BT mic airtime: every 4h trigger a reminder both in-app
     // (banner inside the debrief sheet) and as a system notification.
     const shouldRemind = await bumpBtMicUsageAndMaybeRemind(finalDurationMs);
-    setChargeReminderInDebrief(shouldRemind);
+    // In the mic flow the phone records nothing, so the airtime counter above
+    // never fires — and the mic's own battery level is unreadable. The signal
+    // there is an import that came back shorter than its lesson, raised by
+    // DjiSyncContext (see services/micChargeHint). Same card, no push: the
+    // coach is already reading this screen.
+    let micHint = false;
+    try {
+      micHint = await takeMicChargeHint(userIdRef.current || authUser?.id);
+    } catch {}
+    setChargeReminderInDebrief(shouldRemind || micHint);
     if (shouldRemind) {
       try {
         const trigger = Notifications.SchedulableTriggerInputTypes

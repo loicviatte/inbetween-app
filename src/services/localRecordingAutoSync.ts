@@ -91,6 +91,13 @@ export interface SyncPair {
   confidence: MatchConfidence;
   /** Total duration across all parts. */
   actualDurationSec: number;
+  /**
+   * The lesson's own length, for the "your recording stopped before the
+   * lesson did" check after the import. 0 when we don't know it (a class the
+   * server closed — see durationUnknown), which is exactly when the gap would
+   * be meaningless.
+   */
+  expectedDurationSec: number;
   studentName: string | null;
   /** Derived from confidence + session.status — auto-approved when sure. */
   adminReviewStatus: AdminReviewStatus;
@@ -1120,6 +1127,7 @@ export async function planAutoSync(
         startTimestamp: m.session.startTimestamp,
         confidence: m.confidence,
         actualDurationSec: m.actualDurationSec,
+        expectedDurationSec: m.expectedDurationSec,
         studentName: cls?.studentName ?? null,
         adminReviewStatus,
       });
@@ -1141,6 +1149,7 @@ export async function planAutoSync(
         startTimestamp: session.startTimestamp,
         confidence: m.confidence,
         actualDurationSec: m.actualDurationSec,
+        expectedDurationSec: m.expectedDurationSec,
         studentName: pendingRow?.studentName ?? null,
         // count_mismatch path is always pending review — the pairing was a guess.
         adminReviewStatus: 'pending',
