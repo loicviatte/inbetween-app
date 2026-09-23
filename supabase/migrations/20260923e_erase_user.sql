@@ -103,16 +103,30 @@ begin
      set student_ids = array_remove(student_ids, p_user)
    where student_ids @> array[p_user];
 
-  -- 3. The other three NO ACTION references, which have no business keeping an
-  --    erased person's id alive: a couple's leader, a proposed leader, and the
-  --    "edited by" / "approved by" audit stamps.
-  update couples set leader_user_id = null where leader_user_id = p_user;
-  update couple_requests set proposed_leader_id = null where proposed_leader_id = p_user;
+  -- 3. Private recordings OF this person, taught by someone else. Same rule as
+  --    their class_inputs above — and the constraint leaves no choice:
+  --    class_recordings_private_has_student forbids a private recording with a
+  --    null student, which is what the SET NULL foreign key would produce.
+  delete from class_recordings where student_id = p_user and lesson_type = 'private';
+  update class_recordings set student_id = null where student_id = p_user;
+
+  -- 4. The partnership goes with the person. couples.leader_user_id is NOT
+  --    NULL, so it cannot be blanked, and the row would be deleted by the
+  --    cascade on user_a_id / user_b_id anyway — do it here, in the open,
+  --    including the couples this person only led or coached.
+  delete from couples
+   where user_a_id = p_user or user_b_id = p_user or leader_user_id = p_user;
+  delete from couple_requests
+   where requester_id = p_user or target_id = p_user or proposed_leader_id = p_user;
+
+  -- 5. The remaining NO ACTION references: the "edited by" / "approved by"
+  --    audit stamps, which have no business keeping an erased person's id
+  --    alive.
   update class_inputs set admin_approved_by = null where admin_approved_by = p_user;
   delete from class_input_edits where edited_by = p_user;
   delete from focus_point_edits where edited_by = p_user;
 
-  -- 4. The account. public.users.id references auth.users on delete cascade,
+  -- 6. The account. public.users.id references auth.users on delete cascade,
   --    so one delete takes the profile and every table keyed to it.
   delete from auth.users where id = p_user;
 
