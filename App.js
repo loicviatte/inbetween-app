@@ -36,6 +36,7 @@ import StudentAppNavigator from './src/navigation/StudentAppNavigator';
 import { isFirstScreenReady, onFirstScreenReady } from './src/utils/firstPaint';
 import InBetweenLoader from './src/components/InBetweenLoader';
 import RootErrorBoundary from './src/components/RootErrorBoundary';
+import { ADMIN_EMAIL } from './src/services/featureFlags';
 
 const navigationRef = createNavigationContainerRef();
 
@@ -82,7 +83,9 @@ function ColdStartOverlay({ done }) {
   );
 }
 
-const TRAINER_EMAIL = 'loic@danceuniteduk.com';
+// The one account that sees the trainer screens — services/featureFlags holds
+// the address, shared with the admin dashboard and the RLS policies.
+const TRAINER_EMAIL = ADMIN_EMAIL;
 
 const AppTheme = {
   ...DefaultTheme,

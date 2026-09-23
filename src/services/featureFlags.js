@@ -86,7 +86,15 @@ export function isLocalRecordingMode(user) {
 // a class, Loic sees the mismatch in the review screen and rejects/
 // re-assigns before the student is notified.
 
+// One address, one place. It is the same one the admin dashboard logs in with
+// and the same one public.admin_email() hands the RLS policies (migration
+// 20260923g) — moved off loic@danceuniteduk.com when that account was deleted.
+export const ADMIN_EMAIL = 'loic@useinbetween.com';
+
+export function isAdminEmail(email) {
+  return !!email && email.toLowerCase() === ADMIN_EMAIL;
+}
+
 export function isAdminReviewer(user) {
-  if (!user?.email) return false;
-  return user.email.toLowerCase() === 'loic@danceuniteduk.com';
+  return isAdminEmail(user?.email);
 }

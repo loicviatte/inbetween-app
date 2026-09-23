@@ -31,6 +31,7 @@ import ProfileDashboard from '../components/ProfileDashboard';
 import ChildPhoneCard from '../components/ChildPhoneCard';
 import { logOutWithChecks } from '../services/logout';
 import { HEALTH_CONSENT, healthConsentState, giveHealthConsent, withdrawHealthConsent } from '../services/healthConsent';
+import { isAdminEmail } from '../services/featureFlags';
 import ProfileSkeleton from '../components/ProfileSkeleton';
 import StudioPicker from '../components/StudioPicker';
 import { useFocusEffect } from '@react-navigation/native';
@@ -909,7 +910,7 @@ export default function StatsScreen({ navigation, route }) {
 
     // Trainer-only: count pending reviews
     const trainerEmail = session?.user?.email;
-    if (trainerEmail === 'loic@danceuniteduk.com') {
+    if (isAdminEmail(trainerEmail)) {
       setIsTrainer(true);
       try {
         const { count: pendingCount } = await supabase
