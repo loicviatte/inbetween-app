@@ -183,6 +183,33 @@ async function invite(admin: SupabaseClient, b: Row, ip: string) {
     return json({ error: 'This parent has already been invited several times today.' }, 429)
   }
 
+  // Already on the platform? A child whose parent signed them up sees "create
+  // an account" like anyone else, fills it in, and ends up with a second
+  // profile under the same name — which is what happened on 24 September.
+  // Their phone doesn't need a new account: it needs the 6-character code from
+  // Settings ▸ Your child. Same parent contact AND same first name, because
+  // the same parent's OTHER child is a sibling, not a duplicate.
+  const twinOr = [`parent_email.eq.${parentEmail}`]
+  if (parentPhone) twinOr.push(`parent_phone.eq.${parentPhone}`)
+  const { data: twins } = await admin
+    .from('parental_consents')
+    .select('child_id, child_name')
+    .eq('status', 'approved')
+    .or(twinOr.join(','))
+  const sameName = (twins ?? []).find((t: Row) =>
+    t.child_id && String(t.child_name ?? '').trim().toLowerCase() === childName.toLowerCase())
+  if (sameName) {
+    const { data: stillThere } = await admin.from('users').select('id').eq('id', sameName.child_id).maybeSingle()
+    if (stillThere) {
+      // Their name as the profile holds it, not as it was just typed.
+      const known = String(sameName.child_name ?? childName).trim()
+      return json({
+        code: 'child_exists',
+        error: `${known} already has a profile on InBetween. Ask your parent for the code in Settings ▸ Your child, then tap "I have a code from my parent" on the sign-in screen.`,
+      }, 409)
+    }
+  }
+
   const danceStyle = ['Latin', 'Ballroom', 'Latin & Ballroom'].includes(String(b.danceStyle)) ? String(b.danceStyle) : 'Latin'
   const coachId = str(b.coachId, 40) || null
   let coachName: string | null = null
@@ -213,12 +240,11 @@ async function invite(admin: SupabaseClient, b: Row, ip: string) {
   const { error: rowErr } = await admin.from('users').update(patch).eq('id', childId)
   if (rowErr) { await rollback(); return json({ error: "We couldn't set up your profile." }, 500) }
 
-  // The coach's roster reads accepted coach_requests, not the *_coach_id
-  // columns — without a request this student would never appear to them.
-  if (coachId) {
-    const cats = danceStyle === 'Latin & Ballroom' ? ['latin', 'ballroom'] : [danceStyle === 'Ballroom' ? 'ballroom' : 'latin']
-    await admin.from('coach_requests').insert(cats.map((category) => ({ coach_id: coachId, student_id: childId, status: 'pending', category })))
-  }
+  // NO coach_requests yet. The coach's roster reads accepted requests, so
+  // creating them here would put a child in front of a coach before their
+  // parent has allowed anything — which is how Fabio ended up accepting, and
+  // seeing, a second Yaroslava. They are created on approval instead (see
+  // approve), the one moment the permission actually exists.
 
   const s = await freshSecrets()
   const deviceSecret = randomCode(32)
@@ -485,6 +511,27 @@ async function approve(admin: SupabaseClient, b: Row, ip: string) {
   // A student a coach had flagged as under 18 is now accounted for.
   await admin.from('users').update({ age_check: 'minor_consented', age_check_at: new Date().toISOString() })
     .eq('id', row.child_id).eq('age_check', 'minor_pending')
+
+  // Now — and only now — the chosen coach is asked. The child picked them
+  // during sign-up; the roster reads accepted requests, so this is what makes
+  // the profile appear to them, permission in hand. Skipped for a student who
+  // already had an account (they are already on the coach's roster), and
+  // idempotent against a second approval.
+  if (row.coach_id) {
+    const { data: child } = await admin.from('users')
+      .select('dance_style, latin_coach_id, ballroom_coach_id').eq('id', row.child_id).maybeSingle()
+    const style = String(child?.dance_style ?? 'Latin')
+    const cats = style === 'Latin & Ballroom' ? ['latin', 'ballroom'] : [style === 'Ballroom' ? 'ballroom' : 'latin']
+    const { data: had } = await admin.from('coach_requests')
+      .select('category').eq('student_id', row.child_id).eq('coach_id', row.coach_id)
+    const already = new Set((had ?? []).map((r: Row) => r.category))
+    const missing = cats.filter((c) => !already.has(c))
+    if (missing.length > 0) {
+      await admin.from('coach_requests').insert(
+        missing.map((category) => ({ coach_id: row.coach_id, student_id: row.child_id, status: 'pending', category })),
+      )
+    }
+  }
 
   if (row.coach_id) {
     await admin.from('notifications').insert({
