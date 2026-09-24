@@ -12,12 +12,20 @@ async function call(action, body = {}) {
   if (error) {
     // invoke() hides the body on a non-2xx; the function's own message is the
     // one worth showing.
-    let detail = '';
-    try { detail = (await error.context?.json?.())?.error || ''; } catch { /* body already read */ }
+    let detail = '', code = '';
+    try {
+      const body = await error.context?.json?.();
+      detail = body?.error || '';
+      // Some refusals are a state the caller can act on rather than a failure
+      // to report — 'child_exists' means this dancer already has a profile and
+      // needs the pairing code, not a second account.
+      code = body?.code || '';
+    } catch { /* body already read */ }
     const e = new Error(detail || 'Something went wrong. Try again in a moment.');
     // 404 / 409 / 410 mean the invitation can no longer be used — the caller
     // needs to tell that apart from a network hiccup.
     e.status = error.context?.status;
+    e.code = code;
     throw e;
   }
   return data;

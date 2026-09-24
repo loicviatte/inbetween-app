@@ -572,6 +572,9 @@ export default function OnboardingScreen({ navigation, route }) {
     recall: '', focus: [],
     parentFirstName: '', parentEmail: '', parentPhone: '', parentPhoneCountry: DEFAULT_COUNTRY,
     inviteId: '', deviceSecret: '', maskedEmail: '', inviteStatus: '', inviteNote: '', editingInvite: false, inviteClosed: false,
+    // Their parent already signed them up: the answer is the pairing code, not
+    // another account (minor-consent returns code 'child_exists').
+    childExists: false,
     invToken: '', invCode: '', consent: null, checks: [false, false, false, false], parentPassword: '', hasInvite: null, signupCopy: null,
     acctChecks: [false, false, false],
     signupPhone: '', signupPhoneCountry: DEFAULT_COUNTRY, smsId: '', smsMasked: '', smsCode: '', phoneToken: '',
@@ -808,7 +811,7 @@ export default function OnboardingScreen({ navigation, route }) {
 
   // ── under 18: the student invites a parent ──────────────────────────────
   async function sendInvite() {
-    setError(''); setBusy(true);
+    setError(''); set({ childExists: false }); setBusy(true);
     const contact = {
       parentFirstName: a.parentFirstName.trim(), parentEmail: a.parentEmail.trim(),
       parentPhone: toE164(a.parentPhoneCountry, a.parentPhone),
@@ -829,7 +832,10 @@ export default function OnboardingScreen({ navigation, route }) {
       await savePendingInvite({ inviteId, deviceSecret, childName: a.name.trim(), ...contact });
       go('minorWaiting');
     } catch (e) {
-      if ([404, 409, 410].includes(e.status)) set({ inviteClosed: true, editingInvite: false });
+      // 'child_exists' is not a dead end: it is the one case where the next
+      // step is a different screen, so the message comes with the way out.
+      if (e.code === 'child_exists') set({ childExists: true });
+      else if ([404, 409, 410].includes(e.status)) set({ inviteClosed: true, editingInvite: false });
       setError(e.message);
     } finally {
       setBusy(false);
@@ -1477,6 +1483,15 @@ export default function OnboardingScreen({ navigation, route }) {
           )}
           <Text style={s.fieldNote}>We’ll send them a link. Nothing is recorded until they approve.</Text>
           {!!error && <Text style={s.err}>{error}</Text>}
+          {a.childExists && (
+            <TouchableOpacity
+              style={[s.later, { alignSelf: 'stretch', alignItems: 'center', marginTop: 12 }]}
+              onPress={() => { haptic(); setError(''); set({ childExists: false }); navigation.navigate('PairChild'); }}
+              accessibilityRole="button"
+            >
+              <Text style={s.laterT}>I have a code from my parent</Text>
+            </TouchableOpacity>
+          )}
         </Q>
       );
 
