@@ -24,12 +24,12 @@ const LINE = 'rgba(10,10,10,0.09)';
 
 const CLASS_STYLES = [
   { key: 'all', label: 'All lessons' },
-  { key: 'latin', label: 'Latin group' },
-  { key: 'ballroom', label: 'Ballroom group' },
+  { key: 'latin', label: 'Latin' },
+  { key: 'ballroom', label: 'Ballroom' },
 ];
 
-// mode 'group': Home and Students put "Latin group ▾" after the bell — the
-// group their numbers are for (a menu when the coach teaches both).
+// mode 'group': Home and Students put "Latin ▾" after the bell — the style
+// their numbers are for (a menu when the coach teaches both).
 // mode 'classes': the Class tab's "Classes ▾", then its calendar and notes buttons.
 // links: the Students tab's link button beside settings, which opens its Links.
 export default function CoachTabHeader({ mode = null, links = false }) {
@@ -44,7 +44,7 @@ export default function CoachTabHeader({ mode = null, links = false }) {
     style: tabView.classesStyle, setStyle: tabView.setClassesStyle,
   };
   const initial = user?.name ? user.name[0].toUpperCase() : 'C';
-  const classesLabel = classes.style === 'latin' ? 'Latin group' : classes.style === 'ballroom' ? 'Ballroom group' : 'Lessons';
+  const classesLabel = classes.style === 'latin' ? 'Latin' : classes.style === 'ballroom' ? 'Ballroom' : 'Lessons';
   const toggleView = (v) => classes.setView(classes.view === v ? 'list' : v);
 
   return (
@@ -68,7 +68,7 @@ export default function CoachTabHeader({ mode = null, links = false }) {
 
       {mode === 'group' && (
         <StyleTitle
-          label={styleFilter === 'ballroom' ? 'Ballroom group' : 'Latin group'}
+          label={styleFilter === 'ballroom' ? 'Ballroom' : 'Latin'}
           category={styleFilter}
           canSwitch={canSwitchStyle}
           onSelect={setStyleFilter}
