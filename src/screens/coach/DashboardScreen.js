@@ -427,9 +427,10 @@ export default function DashboardScreen({ navigation }) {
   const openStudents = () => { setLinksOpen(false); navigation.navigate('STUDENTS'); };
   // The mic comes before the first lesson, not after it. Until the coach has
   // linked the folder once, nothing they record can be imported — so that step
-  // takes the main button rather than sitting in a pill they may never notice.
-  // It stays reachable: the lesson can still be started from the line below,
-  // because a coach standing in the studio without their mic must not be stuck.
+  // takes the main button rather than sitting in a pill they may never notice,
+  // and it is the only thing offered here: a lesson started before the mic is
+  // linked is a lesson whose audio has nowhere to go. The + on Lessons still
+  // reaches Start a lesson for a coach who has to teach anyway.
   const micSetup = isLocalMode && hasFolderAccess === false;
   const setup = !user || taught !== false ? null
     : !(user.studio_id || user.studio?.id)
@@ -540,16 +541,6 @@ export default function DashboardScreen({ navigation }) {
               <Text style={[st.startT, { color: '#FFFFFF' }]}>SET UP YOUR MIC</Text>
             </TouchableOpacity>
             <Text style={st.setupHint}>Two minutes, once. After that your lessons import themselves.</Text>
-            <TouchableOpacity
-              onPress={async () => {
-                try { await DjiFiles.stopAudioRouteMonitor?.(); } catch {}
-                navigation.navigate('StartClass');
-              }}
-              activeOpacity={0.7}
-              accessibilityRole="button"
-            >
-              <Text style={st.setupSkip}>Start a lesson anyway</Text>
-            </TouchableOpacity>
           </View>
         ) : (
           <TouchableOpacity
@@ -641,7 +632,6 @@ const st = StyleSheet.create({
   page: { flex: 1, backgroundColor: PAGE },
   setup: { gap: 9 },
   setupHint: { fontFamily: Fonts.regular, fontSize: 12, lineHeight: 16, color: INK_62, textAlign: 'center', paddingHorizontal: 12 },
-  setupSkip: { fontFamily: Fonts.semiBold, fontSize: 12.5, color: INK_62, textAlign: 'center', textDecorationLine: 'underline', marginTop: 2 },
   pullLogo: { position: 'absolute', top: (PULL_REST - 27) / 2, left: 0, right: 0, alignItems: 'center' },
 
   nudge: {

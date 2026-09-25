@@ -84,17 +84,15 @@ export default function CoachTabHeader({ mode = null, links = false }) {
         />
       )}
 
-      {/* First-run DJI auto-sync prompt. Only visible when a coach in
-          local-recording mode has a pending class but no folder
-          bookmark yet. Tap → guided setup modal. Self-hides once the
-          bookmark is set. */}
+      {/* The one-time mic setup flow. Nothing of it shows in the header any
+          more — that step lives on the dashboard's main button, where Start a
+          lesson would be. Mounted here so it can be opened from any coach tab. */}
       <DjiSetupBanner />
 
       {/* Sync-status pill (folder already set up). 4 states — red "Sync
           files" / orange "Syncing %" / green "Synced" / "! Error". Tap
-          opens the full-screen flow. Mutually exclusive with the setup
-          banner above (that one requires NO bookmark). Self-hides when
-          there's nothing to sync. */}
+          opens the full-screen flow. Self-hides when there's nothing to
+          sync, and stays hidden while the mic has never been linked. */}
       <DjiSyncPill />
 
       {/* Right: settings (the student's Stats button, exactly) beside the avatar. */}

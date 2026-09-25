@@ -1,16 +1,17 @@
 // ─── DjiSetupBanner ─────────────────────────────────────────────────────
-// Compact "SET UP" pill in the coach header (styled identically to
-// DjiSyncPill) shown to a mic-flow coach for as long as no folder bookmark
-// exists — from their first day, not once a class has already gone unsynced.
-// Tapping it opens the full-screen, dark one-time setup flow that walks the
-// coach from powering on the mic to granting folder access — same visual
-// language as MicSyncFlowModal.
+// The full-screen, dark one-time setup flow that walks the coach from powering
+// on the mic to granting folder access — same visual language as
+// MicSyncFlowModal.
 //
 // Steps: intro · poweron · test · plug · files → (pickFolder) → verifying
 //        → success | error
 //
-// State is self-contained (we read the native hasFolder flag on a polite
-// cadence) so we don't have to thread it through CoachTabHeader's parents.
+// It used to also own a "SET UP" pill in the coach header. That pill is gone:
+// the step now takes the dashboard's main button, where Start a lesson would
+// be, so it cannot be missed and cannot be walked past. This component is
+// mounted in the header purely as the flow's host and renders nothing until
+// something opens it — the dashboard button, the evening reminder or the mic
+// being plugged in, all through DjiSyncContext.micSetupRequest.
 // ─────────────────────────────────────────────────────────────────────────
 
 import React, { useEffect, useRef, useState } from 'react';
@@ -23,7 +24,6 @@ import {
   Animated,
   Easing,
   ActivityIndicator,
-  AppState,
 } from 'react-native';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -31,8 +31,6 @@ import { SafeAreaProvider, initialWindowMetrics, useSafeAreaInsets } from 'react
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useIsFocused } from '@react-navigation/native';
 import { Fonts } from '../theme';
-import { supabase } from '../services/supabase/client';
-import { isLocalRecordingMode } from '../services/featureFlags';
 import { countMicSessions } from '../services/localRecordingAutoSync';
 import * as DjiFiles from 'local-recording-files';
 import { BrowseTabChip, NoNameChip } from './DjiFilesChips';
@@ -195,8 +193,6 @@ function OpenNavPreview() {
 }
 
 export default function DjiSetupBanner() {
-  const [authUser, setAuthUser] = useState(null);
-  const [hasFolderAccess, setHasFolderAccess] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [step, setStep] = useState('intro');
   // displayStep lags `step` during the out→in transition so the content that
@@ -209,30 +205,6 @@ export default function DjiSetupBanner() {
   const isFocused = useIsFocused();
   const trans = useRef(new Animated.Value(1)).current; // 1 = shown, 0 = hidden
   const progress = useRef(new Animated.Value(STEP_META.intro.pct)).current;
-
-  const isLocalMode = isLocalRecordingMode(authUser);
-
-  useEffect(() => {
-    supabase.auth
-      .getUser()
-      .then(({ data: { user } }) => setAuthUser(user))
-      .catch(() => setAuthUser(null));
-  }, []);
-
-  useEffect(() => {
-    const check = () => {
-      try {
-        setHasFolderAccess(DjiFiles.hasFolder?.() ?? false);
-      } catch {
-        setHasFolderAccess(false);
-      }
-    };
-    check();
-    const sub = AppState.addEventListener('change', (st) => {
-      if (st === 'active') check();
-    });
-    return () => sub.remove();
-  }, []);
 
   // Progress bar eases toward the new step's target the instant you tap.
   useEffect(() => {
@@ -350,41 +322,13 @@ export default function DjiSetupBanner() {
     }
   }
 
-  // Setup is offered from day one, not once a lesson has already gone
-  // unsynced: the pill used to wait for pendingCount > 0, so the first coach to
-  // teach with the mic only learned they had to grant folder access AFTER the
-  // first class had nowhere to put its audio. It disappears the moment access
-  // is granted.
-  const visible = isLocalMode && !hasFolderAccess;
-  // Stay mounted while the flow modal is open even after hasFolderAccess flips
-  // true (successful pick) — otherwise the whole component (and the modal) would
-  // unmount mid-flow and the coach would never see verifying / success. The pill
-  // itself still only renders when there's setup to do (`visible`).
-  if (!visible && !modalOpen) return null;
+  // Nothing of its own in the header — the flow is all there is.
+  if (!modalOpen) return null;
 
   const meta = STEP_META[step] ?? STEP_META.intro;
 
   return (
     <>
-      {visible && (
-        <TouchableOpacity
-          style={s.pillWrap}
-          activeOpacity={0.85}
-          onPress={handleBannerTap}
-          accessibilityRole="button"
-          accessibilityLabel="Set up DJI auto-sync"
-        >
-          <LinearGradient colors={['#C93838', '#B22A2A']} start={{ x: 0, y: 0 }} end={{ x: 0, y: 1 }} style={s.pill}>
-            <View style={s.pillIc}>
-              <Ionicons name="flash" size={12} color="#fff" />
-            </View>
-            <Text style={s.pillLbl} numberOfLines={1}>
-              SET UP
-            </Text>
-          </LinearGradient>
-        </TouchableOpacity>
-      )}
-
       <Modal visible={modalOpen} animationType="slide" transparent={false} onRequestClose={dismissModal} statusBarTranslucent>
         {/* A RN Modal renders into its own native window that does NOT inherit
             the host app's SafeAreaProvider — so the ambient insets read 0 at the
@@ -701,29 +645,6 @@ function renderBottom(step, { dismissModal, setStep, handleOpenPicker }) {
 }
 
 const s = StyleSheet.create({
-  // ─── Header pill (matches DjiSyncPill exactly) ──────────────────────
-  pillWrap: { flex: 1, alignItems: 'center', marginHorizontal: 10 },
-  pill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    height: 32,
-    paddingLeft: 6,
-    paddingRight: 12,
-    borderRadius: 999,
-    borderWidth: 0.5,
-    borderColor: 'rgba(255,255,255,0.10)',
-  },
-  pillIc: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: 'rgba(255,255,255,0.15)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  pillLbl: { fontFamily: Fonts.semiBold, fontSize: 10, letterSpacing: 1.4, color: '#fff' },
-
   // ─── Full-screen flow ───────────────────────────────────────────────
   stage: { flex: 1, backgroundColor: STAGE },
   stageErr: { backgroundColor: '#0A0606' },
