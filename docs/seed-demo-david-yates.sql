@@ -390,3 +390,88 @@ begin
   end loop;
 end
 $seed$;
+
+-- ───────────────────────────────────────────────────────────────────────
+-- The second style, for the two dancers linked in both
+--
+-- Chloé and Sofia are each linked to David in Latin AND Ballroom, so they
+-- appear under both toggles — but their plans only existed in one, and the
+-- other read "—". Readiness anchors on the last PRIVATE lesson carrying a
+-- live focus point in that style: Chloé had no Ballroom lesson at all, and
+-- Sofia's only Latin focus came from a group lesson, which never anchors.
+-- One private lesson each, in the missing style.
+
+with dy as (select id from public.users where email = 'viatteloic@gmail.com'),
+     ch as (select id from public.users where email = 'chloe.fontaine@demo.useinbetween.com'),
+     so as (select id from public.users where email = 'sofia.ricci@demo.useinbetween.com'),
+ins as (
+  insert into class_inputs
+    (id, user_id, student_id, student_ids, lesson_type, dance, title, class_summary,
+     practice_point_1, priority_score_1, practice_point_2, priority_score_2,
+     teacher_name, status, created_at, processed_at, admin_approved_at)
+  select gen_random_uuid(), dy.id, ch.id, array[ch.id], 'private', 'Waltz',
+         'Waltz — rise and fall',
+         'Natural turns down the long side. The rise arrives late, so the sway lands after the beat and the second step shortens.',
+         'Start the rise on the end of one', 8,
+         'Keep the second step as long as the first', 6,
+         'David Yates', 'scored',
+         '2026-09-16 10:30:00+00'::timestamptz, '2026-09-16 10:58:00+00'::timestamptz, '2026-09-16 11:10:00+00'::timestamptz
+    from dy, ch
+  union all
+  select gen_random_uuid(), dy.id, so.id, array[so.id], 'private', 'Rumba',
+         'Rumba — hip settle',
+         'Alternating basics in the middle of the floor. The hip settles a beat early, so the four is rushed and the standing leg never straightens.',
+         'Let the hip settle on the four', 9,
+         'Straighten the standing leg before the weight moves', 6,
+         'David Yates', 'scored',
+         '2026-09-21 09:15:00+00'::timestamptz, '2026-09-21 09:44:00+00'::timestamptz, '2026-09-21 09:55:00+00'::timestamptz
+    from dy, so
+  returning id, student_id, dance, created_at
+),
+fps as (
+  insert into focus_points
+    (id, user_id, name, normalized_name, subtitle, context, drill, dance, tier, train_target,
+     status, class_input_id, source_class_input_id, created_at, last_mentioned_at,
+     count, mention_count, base_score, coach_signal, is_other, group_fp)
+  select gen_random_uuid(), i.student_id, v.name, lower(v.name), v.subtitle, v.context, v.drill,
+         array[i.dance], v.tier, v.target, 'active', i.id, i.id,
+         i.created_at + interval '2 hours', i.created_at,
+         1, 1, 5, 0, false, false
+    from ins i
+    join (values
+      ('Waltz', 'Rise on the end of one',
+       'The rise starts in the foot, before the turn closes.',
+       'A late rise pushes the sway past the beat.',
+       'Eight bars of natural turn, rising on the end of one only.',
+       'important', 2),
+      ('Waltz', 'Even second step',
+       'Step two stays as long as step one.',
+       'The step shortens as soon as the rise is late.',
+       'Four natural turns, counting the length of two out loud.',
+       'important', 2),
+      ('Rumba', 'Settle on the four',
+       'The hip arrives with the four, not before it.',
+       'Settling early rushes the end of the figure.',
+       'Eight alternating basics, counting four out loud.',
+       'critical', 3),
+      ('Rumba', 'Straight standing leg',
+       'The leg finishes straight before the weight moves.',
+       'A soft standing leg hides the settle.',
+       'Slow basics at the mirror, checking the knee each time.',
+       'important', 2)
+    ) as v(dance, name, subtitle, context, drill, tier, target)
+      on v.dance = i.dance
+  returning id, user_id, name, class_input_id
+)
+insert into practice_logs
+  (id, student_id, focus_point_id, duration_minutes, rating, feeling, created_at, started_at, completed_at)
+select gen_random_uuid(), f.user_id, f.id, l.mins, l.rating, l.feeling,
+       l.started, l.started, l.started + (l.mins || ' minutes')::interval
+  from fps f
+  join (values
+    ('Rise on the end of one', 7, 'good', 'Good', '2026-09-18 18:40:00+00'::timestamptz),
+    ('Rise on the end of one', 6, 'okay', 'Okay', '2026-09-22 07:25:00+00'::timestamptz),
+    ('Settle on the four',     8, 'good', 'Good', '2026-09-22 19:10:00+00'::timestamptz),
+    ('Settle on the four',     6, 'okay', 'Okay', '2026-09-24 18:05:00+00'::timestamptz)
+  ) as l(fp, mins, rating, feeling, started)
+    on l.fp = f.name;
