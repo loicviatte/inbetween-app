@@ -580,6 +580,22 @@ export default function HomeScreen({ navigation }) {
     };
   }
 
+  // Which style to open on when the dancer has never chosen one. Latin was the
+  // convention, and a dancer whose profile says "Latin & Ballroom" but whose
+  // lessons are all Ballroom opened on an empty plan — the focus points were
+  // there, one tap away, and the app looked like it had lost them. So: probe
+  // Latin (still the default when both hold something, and when neither does),
+  // and fall back to Ballroom when Latin is empty and Ballroom is not. The
+  // bundle it fetched is handed back so the caller does not fetch it twice.
+  async function resolveDefaultStyle() {
+    const hasContent = (d) => !!(d && !d.error && (d.slot1 || d.coupleSlots?.slot1));
+    const latin = await fetchCategoryData('latin');
+    if (hasContent(latin)) return { cat: 'latin', data: latin };
+    const ballroom = await fetchCategoryData('ballroom');
+    if (hasContent(ballroom)) return { cat: 'ballroom', data: ballroom };
+    return { cat: 'latin', data: latin };
+  }
+
   // Push a fetched bundle into the on-screen state.
   function applyCategoryData(d, hasCouple) {
     setSlot1(d.slot1);
@@ -642,10 +658,19 @@ export default function HomeScreen({ navigation }) {
     const availBallroom = soloBallroom || !!coupleV?.doesBallroom;
     const both = availLatin && availBallroom;
     let cat = catOverride;
+    let preloaded = null;
     if (cat === undefined) {
       if (both) {
         const saved = await AsyncStorage.getItem(CATEGORY_STORAGE_KEY).catch(() => null);
-        cat = saved === 'ballroom' ? 'ballroom' : 'latin';
+        if (saved === 'latin' || saved === 'ballroom') {
+          cat = saved;
+        } else {
+          preloaded = await resolveDefaultStyle();
+          cat = preloaded.cat;
+          // Persist it like a toggle, so the cold-start path (which reads this
+          // key before anything is fetched) opens on the same side next time.
+          AsyncStorage.setItem(CATEGORY_STORAGE_KEY, cat).catch(() => {});
+        }
       } else {
         cat = null; // single-style across the union → no filter needed
       }
@@ -667,7 +692,7 @@ export default function HomeScreen({ navigation }) {
     // cold-start critical path.
     setMyUserId(u?.id || null);
     const coupleId = coupleV?.coupleId || null;
-    const catData = await fetchCategoryData(cat);
+    const catData = preloaded && preloaded.cat === cat ? preloaded.data : await fetchCategoryData(cat);
     setUser(u);
     setCouple(coupleV);
     // A transient failure returns { error:true } with null slots — DON'T apply it,
