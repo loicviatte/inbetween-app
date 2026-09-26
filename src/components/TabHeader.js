@@ -6,6 +6,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Colors, Fonts, Spacing } from '../theme';
 import { useProfile } from '../context/ProfileContext';
+import { getUser } from '../storage/storage';
 import { getNotifications } from '../storage/notificationsStorage';
 import { locallyRespondedAttendance } from '../storage/attendanceState';
 import { supabase } from '../services/supabase/client';
@@ -51,7 +52,7 @@ export function HeaderIconButton({ icon, onPress, on = false, badge = 0, label }
 }
 
 export default function TabHeader({ navigation, onProfilePress, editMode = false, center = null, right = null, lead = null, style = null, actions = null, hideChildNudge = false }) {
-  const { avatarUri, initials: contextInitials } = useProfile();
+  const { avatarUri, initials: contextInitials, setInitials } = useProfile();
 
   const [cachedPhoto, setCachedPhoto] = useState(null);
   const [cachedInitials, setCachedInitials] = useState('');
@@ -60,17 +61,29 @@ export default function TabHeader({ navigation, onProfilePress, editMode = false
   const nudge = useChildPhoneNudge(isParent && !hideChildNudge, navigation);
 
   useEffect(() => {
+    let alive = true;
+    const iniOf = (n) => (n || '').split(' ').filter(Boolean).map(w => w[0]).join('').slice(0, 2).toUpperCase();
     async function load() {
       const [photo, name] = await Promise.all([
         AsyncStorage.getItem('@profile_photo'),
         AsyncStorage.getItem('@profile_name'),
       ]);
+      if (!alive) return;
       setCachedPhoto(photo || null);
-      if (name) {
-        setCachedInitials(name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase());
-      }
+      if (name) { setCachedInitials(iniOf(name)); return; }
+      // Nothing cached yet. Until now the name was only ever written by the
+      // Stats tab and the account sheet, so on a fresh install every other tab
+      // greeted the dancer as "ME" until they happened to open Stats. Fetch it
+      // here instead — once, and it fills the same cache for everyone else.
+      const me = await getUser().catch(() => null);
+      if (!alive || !me?.name) return;
+      setCachedInitials(iniOf(me.name));
+      setInitials?.(iniOf(me.name));
+      AsyncStorage.setItem('@profile_name', me.name).catch(() => {});
     }
     load();
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {

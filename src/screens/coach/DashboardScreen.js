@@ -274,7 +274,7 @@ export default function DashboardScreen({ navigation }) {
   // A denied iOS permission is invisible: the nightly sync-reminder rows are
   // still created server-side, but no push can ever be delivered. Surface it
   // only when it matters: permission not granted AND a class waiting for audio.
-  const { pendingUploadCount } = useDjiSync() ?? {};
+  const { pendingUploadCount, hasFolderAccess, requestMicSetup } = useDjiSync() ?? {};
   const [notifPerm, setNotifPerm] = useState('granted'); // optimistic — no flash
   const notifPermRef = useRef('granted');
   useEffect(() => {
@@ -425,6 +425,13 @@ export default function DashboardScreen({ navigation }) {
   // the way in. Only before a coach has taught: one who records lessons with
   // couples or a studio's group, with no student linked, keeps Start.
   const openStudents = () => { setLinksOpen(false); navigation.navigate('STUDENTS'); };
+  // The mic comes before the first lesson, not after it. Until the coach has
+  // linked the folder once, nothing they record can be imported — so that step
+  // takes the main button rather than sitting in a pill they may never notice,
+  // and it is the only thing offered here: a lesson started before the mic is
+  // linked is a lesson whose audio has nowhere to go. The + on Lessons still
+  // reaches Start a lesson for a coach who has to teach anyway.
+  const micSetup = isLocalMode && hasFolderAccess === false;
   const setup = !user || taught !== false ? null
     : !(user.studio_id || user.studio?.id)
       ? { icon: 'business-outline', label: 'Add your studio', hint: 'Your students find you through your studio.',
@@ -520,6 +527,20 @@ export default function DashboardScreen({ navigation }) {
               <Text style={st.startT}>{setup.label}</Text>
             </TouchableOpacity>
             <Text style={st.setupHint}>{setup.hint}</Text>
+          </View>
+        ) : micSetup ? (
+          <View style={st.setup}>
+            <TouchableOpacity
+              style={[st.start, st.startMic]}
+              onPress={() => requestMicSetup?.()}
+              activeOpacity={0.88}
+              accessibilityRole="button"
+              accessibilityLabel="Set up your mic"
+            >
+              <Ionicons name="flash" size={18} color="#FFFFFF" />
+              <Text style={[st.startT, { color: '#FFFFFF' }]}>SET UP YOUR MIC</Text>
+            </TouchableOpacity>
+            <Text style={st.setupHint}>Two minutes, once. After that your lessons import themselves.</Text>
           </View>
         ) : (
           <TouchableOpacity
@@ -656,6 +677,9 @@ const st = StyleSheet.create({
   },
   startT: { fontFamily: Fonts.bold, fontSize: 19, letterSpacing: -0.4, color: INK },
   startLive: { backgroundColor: INK },
+  // The one CTA that isn't gold: linking the mic is the only thing that can
+  // quietly cost a coach a whole lesson's audio.
+  startMic: { backgroundColor: '#C93838' },
   startBones: { backgroundColor: 'rgba(10,10,10,0.06)' },
   liveDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#D06A5A' },
   liveTimer: { fontFamily: Fonts.bold, fontSize: 15, color: GOLD, fontVariant: ['tabular-nums'] },

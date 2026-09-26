@@ -24,12 +24,12 @@ const LINE = 'rgba(10,10,10,0.09)';
 
 const CLASS_STYLES = [
   { key: 'all', label: 'All lessons' },
-  { key: 'latin', label: 'Latin group' },
-  { key: 'ballroom', label: 'Ballroom group' },
+  { key: 'latin', label: 'Latin' },
+  { key: 'ballroom', label: 'Ballroom' },
 ];
 
-// mode 'group': Home and Students put "Latin group ▾" after the bell — the
-// group their numbers are for (a menu when the coach teaches both).
+// mode 'group': Home and Students put "Latin ▾" after the bell — the style
+// their numbers are for (a menu when the coach teaches both).
 // mode 'classes': the Class tab's "Classes ▾", then its calendar and notes buttons.
 // links: the Students tab's link button beside settings, which opens its Links.
 export default function CoachTabHeader({ mode = null, links = false }) {
@@ -44,7 +44,7 @@ export default function CoachTabHeader({ mode = null, links = false }) {
     style: tabView.classesStyle, setStyle: tabView.setClassesStyle,
   };
   const initial = user?.name ? user.name[0].toUpperCase() : 'C';
-  const classesLabel = classes.style === 'latin' ? 'Latin group' : classes.style === 'ballroom' ? 'Ballroom group' : 'Lessons';
+  const classesLabel = classes.style === 'latin' ? 'Latin' : classes.style === 'ballroom' ? 'Ballroom' : 'Lessons';
   const toggleView = (v) => classes.setView(classes.view === v ? 'list' : v);
 
   return (
@@ -68,7 +68,7 @@ export default function CoachTabHeader({ mode = null, links = false }) {
 
       {mode === 'group' && (
         <StyleTitle
-          label={styleFilter === 'ballroom' ? 'Ballroom group' : 'Latin group'}
+          label={styleFilter === 'ballroom' ? 'Ballroom' : 'Latin'}
           category={styleFilter}
           canSwitch={canSwitchStyle}
           onSelect={setStyleFilter}
@@ -84,17 +84,15 @@ export default function CoachTabHeader({ mode = null, links = false }) {
         />
       )}
 
-      {/* First-run DJI auto-sync prompt. Only visible when a coach in
-          local-recording mode has a pending class but no folder
-          bookmark yet. Tap → guided setup modal. Self-hides once the
-          bookmark is set. */}
+      {/* The one-time mic setup flow. Nothing of it shows in the header any
+          more — that step lives on the dashboard's main button, where Start a
+          lesson would be. Mounted here so it can be opened from any coach tab. */}
       <DjiSetupBanner />
 
       {/* Sync-status pill (folder already set up). 4 states — red "Sync
           files" / orange "Syncing %" / green "Synced" / "! Error". Tap
-          opens the full-screen flow. Mutually exclusive with the setup
-          banner above (that one requires NO bookmark). Self-hides when
-          there's nothing to sync. */}
+          opens the full-screen flow. Self-hides when there's nothing to
+          sync, and stays hidden while the mic has never been linked. */}
       <DjiSyncPill />
 
       {/* Right: settings (the student's Stats button, exactly) beside the avatar. */}

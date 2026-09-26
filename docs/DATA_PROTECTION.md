@@ -97,6 +97,18 @@ with the provider between calls.
 its transcript, focus point, note, notification and storage object all gone; one
 audit row left with the counts.
 
+**Corrected 25 September** (migration `20260925a`), on the first erasure of a
+student who had a coach. Deleting the private lessons *about* the person was
+refused by `focus_points.class_input_id`, a `NO ACTION` reference the throwaway
+account happened not to have: a focus point still named the lesson, so the whole
+transaction rolled back. Two references of that shape are now moved out of the
+way first — the focus points on those lessons (the person's own go with them,
+anyone else's are only unlinked) and a partner's `alias_of` /
+`merge_candidate_id` pointing at the person's focus points, which is what
+merging a couple's two plans leaves behind. Storage is deleted before the
+database precisely so a refusal like this one loses nothing: the re-run
+completed, and the audit row says which half had already happened.
+
 ## 4. Export — NOT BUILT
 
 Out of scope by decision. Until it exists, the privacy policy must not promise a

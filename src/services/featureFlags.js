@@ -58,6 +58,11 @@ export function isNativeRecorderEnabled(user) {
 // specific coach OUT of the new DJI-mic + USB-C sync flow.
 const LOCAL_RECORDING_LEGACY_EMAILS = new Set([
   'testmarius@gmail.com', // Marius — still on the old Bluetooth / live-capture setup
+  // The presentation account. It has no mic and never will, so the whole mic
+  // flow is noise on it — and since the setup step took the dashboard's main
+  // button, leaving it on would mean no Start a lesson at all in front of an
+  // audience. Off the flow, the dashboard behaves like the old one.
+  'viatteloic@gmail.com', // David Yates — demo
 ]);
 
 export function isLocalRecordingMode(user) {
