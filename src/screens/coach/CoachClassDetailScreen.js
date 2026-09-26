@@ -226,6 +226,9 @@ function AttendanceRow({
   status,
   onSetCoach,
   busy,
+  // A couple lesson has no attendance question: the coach picked the two
+  // dancers, they were both there. The row states it instead of asking.
+  locked,
 }) {
   const isMismatch = status.kind === 'mismatch';
   const isSaidYes = status.kind === 'said-yes';
@@ -252,7 +255,7 @@ function AttendanceRow({
 
       <View style={rowS.body}>
         <Text style={rowS.name} numberOfLines={1}>{att.name}</Text>
-        <Text
+        {locked ? null : <Text
           style={[
             rowS.meta,
             isMismatch && rowS.metaMismatch,
@@ -262,19 +265,25 @@ function AttendanceRow({
           numberOfLines={1}
         >
           {status.meta}
-        </Text>
+        </Text>}
       </View>
 
-      <SegmentedToggle
-        value={att.attendance || 'pending'}
-        studentSaid={
-          att.studentResponse
-            ? (att.studentResponse.attended ? 'yes' : 'no')
-            : null
-        }
-        onChange={(v) => onSetCoach?.(att, v)}
-        disabled={att.isPrivateOnly || busy}
-      />
+      {locked ? (
+        <View style={rowS.lockedMark}>
+          <Text style={rowS.lockedMarkText}>PRESENT</Text>
+        </View>
+      ) : (
+        <SegmentedToggle
+          value={att.attendance || 'pending'}
+          studentSaid={
+            att.studentResponse
+              ? (att.studentResponse.attended ? 'yes' : 'no')
+              : null
+          }
+          onChange={(v) => onSetCoach?.(att, v)}
+          disabled={att.isPrivateOnly || busy}
+        />
+      )}
 
       {busy ? (
         <ActivityIndicator
@@ -288,6 +297,21 @@ function AttendanceRow({
 }
 
 const rowS = StyleSheet.create({
+  lockedMark: {
+    paddingHorizontal: 12,
+    height: 26,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(76,175,80,0.16)',
+  },
+  lockedMarkText: {
+    fontFamily: Fonts.semiBold,
+    fontSize: 11,
+    color: '#3D7A40',
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -582,6 +606,9 @@ export default function CoachClassDetailScreen({ route, navigation }) {
   const linkedNotes = data?.linkedNotes || [];
   const focusCount = data?.focusCount || 0;
   const isPrivate = !cls ? false : (cls.lesson_type === 'private' || cls.lesson_type == null);
+  // A couple lesson is not a group lesson: the roster is the couple, both
+  // dancers were there by definition, and nobody is awaiting anyone's reply.
+  const isCouple = cls?.lesson_type === 'couple';
 
   const attendees = useMemo(() => {
     if (!data) return [];
@@ -803,7 +830,7 @@ export default function CoachClassDetailScreen({ route, navigation }) {
     cls.title ||
     cls.ai_primary_focus ||
     (cls.practice_point_1 || '').split(' ').slice(0, 6).join(' ') ||
-    (isPrivate ? 'Private lesson' : 'Group lesson');
+    (isPrivate ? 'Private lesson' : isCouple ? 'Couple lesson' : 'Group lesson');
 
   const datePill = formatDatePill(cls.created_at);
 
@@ -812,7 +839,9 @@ export default function CoachClassDetailScreen({ route, navigation }) {
   // or the size of the group on a group class.
   const heroRight = isPrivate
     ? (cls.student?.name || '')
-    : (totalCount > 0 ? `${totalCount} student${totalCount === 1 ? '' : 's'}` : '');
+    : isCouple
+      ? attendees.map((a) => a.name).filter(Boolean).join(' & ')
+      : (totalCount > 0 ? `${totalCount} student${totalCount === 1 ? '' : 's'}` : '');
 
   const attendedLabel = totalCount > 0 ? `${yesCount}/${totalCount}` : (isPrivate ? '1/1' : '—');
 
@@ -834,7 +863,7 @@ export default function CoachClassDetailScreen({ route, navigation }) {
           )}
         </View>
         <View style={s.heroPills}>
-          <Pill>{isPrivate ? 'Private' : 'Group'}</Pill>
+          <Pill>{isPrivate ? 'Private' : isCouple ? 'Couple' : 'Group'}</Pill>
           {cls.recorded ? <Pill variant="rec">Recorded</Pill> : null}
         </View>
         <Text style={s.heroTitle} numberOfLines={3}>{title}</Text>
@@ -894,6 +923,7 @@ export default function CoachClassDetailScreen({ route, navigation }) {
               onSetCoach={handleSetCoach}
               onAdd={() => setStudentPickerOpen(true)}
               isPrivate={isPrivate}
+              isCouple={isCouple}
             />
           )}
           {activeTab === 'notes' && (
@@ -1124,12 +1154,17 @@ function AttendanceTab({
   onRemove,
   onAdd,
   isPrivate,
+  isCouple,
 }) {
+  // A private lesson and a couple lesson both have a roster the coach chose:
+  // one booked student, or the two dancers of the couple. There is nobody to
+  // add and nothing to confirm.
+  const lockedRoster = isPrivate || isCouple;
   if (attendeesWithStatus.length === 0) {
     return (
       <View style={s.emptyState}>
         <Text style={s.placeholder}>No students recorded for this lesson yet.</Text>
-        {!isPrivate && (
+        {!lockedRoster && (
           <TouchableOpacity style={s.bigAddBtn} onPress={onAdd} activeOpacity={0.85}>
             <Ionicons name="add" size={16} color="#fff" />
             <Text style={s.bigAddBtnText}>Add a student</Text>
@@ -1149,17 +1184,20 @@ function AttendanceTab({
           onSetCoach={onSetCoach}
           onRemove={onRemove}
           busy={busyStudentId === att.id}
-          showRemove={!isPrivate}
+          showRemove={!lockedRoster}
+          locked={isCouple}
         />
       ))}
 
       <Text style={s.attHint}>
-        {isPrivate
-          ? 'Private lesson — attendance is locked to the booked student.'
-          : 'Tap Present or Absent to mark each student. Rows where your mark disagrees with the student’s reply are highlighted.'}
+        {isCouple
+          ? 'Couple lesson — you danced with both of them, so both are marked present.'
+          : isPrivate
+            ? 'Private lesson — attendance is locked to the booked student.'
+            : 'Tap Present or Absent to mark each student. Rows where your mark disagrees with the student’s reply are highlighted.'}
       </Text>
 
-      {!isPrivate && (
+      {!lockedRoster && (
         <TouchableOpacity style={s.smallAddBtn} onPress={onAdd} activeOpacity={0.85}>
           <Ionicons name="add" size={14} color={INK_950} />
           <Text style={s.smallAddBtnText}>Add student</Text>

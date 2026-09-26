@@ -310,7 +310,9 @@ export default function ClassDetailScreen({ route, navigation }) {
       )
     : [];
   const lessonTypeLabel = item.lesson_type
-    ? (isPrivateLesson(item.lesson_type) ? 'Private' : 'Group')
+    ? (isPrivateLesson(item.lesson_type)
+        ? 'Private'
+        : item.lesson_type === 'couple' ? 'Couple' : 'Group')
     : null;
 
   return (
