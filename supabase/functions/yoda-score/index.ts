@@ -322,7 +322,7 @@ async function restorePlanIfClassEmpty(
     .from('class_inputs')
     .select('id')
     .in('id', priorIds)
-    .or('lesson_type.eq.private,lesson_type.is.null')
+    .or('lesson_type.eq.private,lesson_type.eq.couple,lesson_type.is.null')
     .not('is_deleted', 'is', true)
     .order('created_at', { ascending: false })
     .limit(1)

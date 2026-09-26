@@ -321,7 +321,9 @@ async function _getMyStudentsImpl() {
     if (!sid) continue;
     if (!lastClassByStudent[sid]) lastClassByStudent[sid] = c.created_at;
     if (
-      (c.lesson_type === 'private' || !c.lesson_type) &&
+      // Same set get_lesson_readiness anchors on — couple included, since a
+      // couple lesson's personal focus points are that dancer's own plan.
+      (c.lesson_type === 'private' || c.lesson_type === 'couple' || !c.lesson_type) &&
       !lastPrivateClassByStudent[sid]
     ) {
       const fpClassIds = classIdsWithFPsByStudent[sid];
@@ -674,9 +676,10 @@ export async function getStudentLastClassDate(studentId) {
 
   if (!classes || classes.length === 0) return null;
 
-  // Only private lessons count (lesson_type 'private' or legacy null)
+  // One-to-one lessons only: private, couple (its personal focus points are
+  // the dancer's own), or legacy null. A group class is not "their last lesson".
   const privateLessons = classes.filter(
-    (c) => c.lesson_type === 'private' || c.lesson_type == null
+    (c) => c.lesson_type === 'private' || c.lesson_type === 'couple' || c.lesson_type == null
   );
   if (privateLessons.length === 0) return null;
 
