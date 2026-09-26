@@ -38,7 +38,7 @@ import { AppState } from 'react-native';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import * as DjiFiles from 'local-recording-files';
 import { supabase } from '../services/supabase/client';
-import { isLocalRecordingMode, forcesMicSetupState } from '../services/featureFlags';
+import { isLocalRecordingMode } from '../services/featureFlags';
 import { parseDjiFileName } from '../services/localRecordingMatcher';
 import {
   fetchPendingUploads,
@@ -217,18 +217,12 @@ export function DjiSyncProvider({ children }) {
   const stickyDoneRef = useRef(false);
 
   const refreshFolderAccess = useCallback(() => {
-    // An account pinned to the setup state reports the folder as never linked,
-    // whatever this phone holds — see featureFlags.MIC_SETUP_PREVIEW_EMAILS.
-    if (forcesMicSetupState(authUser)) {
-      setHasFolderAccess(false);
-      return;
-    }
     try {
       setHasFolderAccess(DjiFiles.hasFolder?.() ?? false);
     } catch {
       setHasFolderAccess(false);
     }
-  }, [authUser]);
+  }, []);
 
   // The mic's free space, read at the two moments it is guaranteed to be
   // plugged in: the end of an import and the "nothing to import" verdict.

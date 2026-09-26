@@ -60,25 +60,6 @@ const LOCAL_RECORDING_LEGACY_EMAILS = new Set([
   'testmarius@gmail.com', // Marius — still on the old Bluetooth / live-capture setup
 ]);
 
-// Accounts pinned to "the mic has never been linked", whatever the phone says.
-//
-// The SET UP button only shows before the folder has been linked once, and the
-// link is a native bookmark that outlives signing out — so on a phone that has
-// already done it, that screen is unreachable. The __DEV__ reset link is gone,
-// and __DEV__ is false in a TestFlight build. This is how the state can be
-// looked at on a real phone. It changes nothing else: with no folder the pill
-// stays hidden and there is nothing to import.
-//
-// Normally empty.
-const MIC_SETUP_PREVIEW_EMAILS = new Set([
-  'viatteloic@gmail.com', // David Yates — the presentation account, no mic
-]);
-
-export function forcesMicSetupState(user) {
-  const email = user?.email?.toLowerCase();
-  return !!email && MIC_SETUP_PREVIEW_EMAILS.has(email);
-}
-
 export function isLocalRecordingMode(user) {
   // iOS-only: the DJI import flow (folder picker, file copy, WAV→m4a
   // transcode) is backed by the local-recording-files native module, which
