@@ -133,6 +133,28 @@ There is **no embeddings table and no pgvector**: `coach_knowledge` is plain
 rows, already under RLS (four policies, one per command). Proven in production —
 as a linked student: 273 rows from her own coach, 0 from another.
 
+**A second one, found and closed on 26 September** (migration `20260926f`).
+`focus_points` carried a policy named `focus_points_require_admin_approval`,
+written as a barrier — nothing leaves before the admin has checked it. It was
+PERMISSIVE, and a permissive policy can only grant: Postgres combines them with
+OR. So instead of locking the real policy it opened a second way in, and that
+one never asked who the reader was — only whether the row's class was approved,
+**or whether the row had no class at all**. That last clause checks nothing, so
+every focus point attached to no class (dictated at sign-up, created by a coach,
+carried over by hand) was readable by any authenticated account. Measured, not
+assumed: signed in as a dancer who joined this week, 43 focus points of an
+unrelated student came back — name, subtitle and context, which is what someone
+was corrected on and can name an injury. 45 rows were exposed; no evidence any
+were read.
+
+It is now RESTRICTIVE, which ANDs: a focus point is readable when the ownership
+policy allows it **and** its class has opened (the admin's approval, or the
+four-hour rule of `20260926b`). The same gate was added to
+`couple_focus_points`, whose own policy was correctly scoped. Re-measured after
+the change: that dancer reads 9 rows, all hers; her coach reads her 127; a coach
+who shares a student with another coach still reads that student's focus points
+from the other's lessons; the admin still reads all 601.
+
 ## 6. Health-data consent
 
 Special-category data: a lesson's audio can carry an injury, a pain, a
