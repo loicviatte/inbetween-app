@@ -182,30 +182,11 @@ async function publishExpiredFocusPoints(supabase: any): Promise<void> {
 
   if (!expired || expired.length === 0) return
 
-  // Admin gate: only publish FPs whose parent class_input is admin-approved.
-  // Before approval, the 18h coach window doesn't start; approveClass
-  // resets the deadline at approval time so the coach gets a fresh window.
-  const classIds: string[] = [
-    ...new Set(
-      (expired as any[])
-        .map((fp) => fp.class_input_id)
-        .filter((v: any): v is string => !!v),
-    ),
-  ]
-  const approvedSet = new Set<string>()
-  if (classIds.length > 0) {
-    const { data: approvedClasses } = await supabase
-      .from('class_inputs')
-      .select('id')
-      .in('id', classIds)
-      .not('admin_approved_at', 'is', null)
-    for (const c of (approvedClasses ?? []) as { id: string }[]) {
-      approvedSet.add(c.id)
-    }
-  }
-  const eligible = (expired as any[]).filter(
-    (fp) => fp.class_input_id == null || approvedSet.has(fp.class_input_id),
-  )
+  // No admin check here any more: a deadline exists only once the class has
+  // opened to the coach (migration 20260926b), so anything expired is by
+  // definition past both gates. A class the admin rejected never opens and its
+  // focus points carry no deadline, so they can never be picked up.
+  const eligible = expired as any[]
 
   // Group FPs publish only if the student explicitly confirmed attendance
   // (attendance_responses.attended = true). Pending or missing responses
@@ -364,7 +345,7 @@ async function processClassInput(supabase: any, payload: any): Promise<void> {
   // 1. Load class input (also fetch dance to determine coach category)
   const { data: classInput, error: ciError } = await supabase
     .from('class_inputs')
-    .select('id, raw_ai_json, status, dance, lesson_type, couple_id, student_id')
+    .select('id, raw_ai_json, status, dance, lesson_type, couple_id, student_id, coach_released_at')
     .eq('id', class_input_id)
     .single()
 
@@ -374,6 +355,12 @@ async function processClassInput(supabase: any, payload: any): Promise<void> {
 
   const aiData = classInput.raw_ai_json as any
   const now = new Date()
+  // Is this class already open to its coach? Most are not at this point — the
+  // admin has not looked yet, and public.release_class_to_coach will tell him
+  // when they open. But a class the database approves at insert (the test
+  // account, and every class a student logs themselves) is open before it is
+  // even scored, and for those the coach is told here, as he always was.
+  const classOpen = !!classInput.coach_released_at
   // Only the first transition into 'scored' should notify the review queue.
   const wasAlreadyScored = classInput.status === 'scored'
 
@@ -393,7 +380,7 @@ async function processClassInput(supabase: any, payload: any): Promise<void> {
       const studentId: string = studentJson.student_id
       if (!studentId) continue
 
-      await processStudentFocusPoints(supabase, studentId, studentJson, class_input_id, classDance, now, isGroupClass)
+      await processStudentFocusPoints(supabase, studentId, studentJson, class_input_id, classDance, now, isGroupClass, classOpen)
     }
   }
 
@@ -457,7 +444,9 @@ async function processClassInput(supabase: any, payload: any): Promise<void> {
         class_input_id: class_input_id,
         source_class_input_id: class_input_id,
         status: 'pending_coach',
-        coach_review_deadline: new Date(now.getTime() + 18 * 60 * 60 * 1000).toISOString(),
+        // No deadline yet: the 18 hour window starts when the class opens to the
+        // coach (the admin's approval, or four hours) — public.release_class_to_coach.
+        coach_review_deadline: null,
         group_fp: true,
         shared_group_id: sharedGroupId,
         count: 0,
@@ -528,7 +517,9 @@ async function processClassInput(supabase: any, payload: any): Promise<void> {
         // Couple FP go through coach review like solo: pending_coach until the
         // couple-coach approves (or the 18h deadline auto-publishes them).
         status: 'pending_coach',
-        coach_review_deadline: new Date(now.getTime() + 18 * 60 * 60 * 1000).toISOString(),
+        // No deadline yet: the 18 hour window starts when the class opens to the
+        // coach (the admin's approval, or four hours) — public.release_class_to_coach.
+        coach_review_deadline: null,
         is_deleted: false,
         is_other: false,
       })
@@ -539,14 +530,17 @@ async function processClassInput(supabase: any, payload: any): Promise<void> {
         console.log(`[yoda-score] Created couple focus point ${sfp.title} for couple ${classInput.couple_id}`)
       }
     }
-    // Batched: notify the couple coach(es) once to review (parity with solo's
-    // focus_points_added). One push per class, not one per focus point.
-    if (coupleCreated > 0) {
+    if (coupleCreated > 0 && !classOpen) {
+      // The couple's coaches hear about it when the class opens — see
+      // public.release_class_to_coach. Telling them now is what used to put a
+      // coach ahead of the admin.
+      console.log(`[yoda-score] ${coupleCreated} couple focus point(s) waiting for the class to open`)
+    } else if (coupleCreated > 0) {
       const { data: cpl } = await supabase
         .from('couples')
         .select('latin_couple_coach_id, ballroom_couple_coach_id')
         .eq('id', classInput.couple_id)
-        .single()
+        .maybeSingle()
       const coachIds = [...new Set([cpl?.latin_couple_coach_id, cpl?.ballroom_couple_coach_id].filter(Boolean))]
       for (const cid of coachIds) {
         await supabase.from('notifications').insert({
@@ -630,6 +624,10 @@ async function processStudentFocusPoints(
   classDance: string[],
   now: Date,
   isGroupClass: boolean = false,
+  // True when the class was already open to its coach before it was scored —
+  // the database approves some classes at insert. Then, and only then, the
+  // coach is told here rather than by public.release_class_to_coach.
+  classOpen: boolean = false,
 ): Promise<void> {
   // Get the coach linked to the class's dance category
   const { data: studentRow } = await supabase
@@ -732,7 +730,9 @@ async function processStudentFocusPoints(
             class_input_id: classInputId,
             source_class_input_id: classInputId,
             status: 'pending_coach',
-            coach_review_deadline: new Date(now.getTime() + 18 * 60 * 60 * 1000).toISOString(),
+            // No deadline yet: the 18 hour window starts when the class opens to the
+        // coach (the admin's approval, or four hours) — public.release_class_to_coach.
+        coach_review_deadline: null,
             count: 0,
             is_archived: false,
             is_deleted: false,
@@ -751,8 +751,10 @@ async function processStudentFocusPoints(
             status: 'pending_coach',
           })
 
-          // coachId already resolved from classDance above
-          if (coachId) {
+          // Before the class opens, the prompt goes out with everything else
+          // when it does (public.release_class_to_coach picks up this
+          // merge_request). A class that was already open is told now.
+          if (classOpen && coachId) {
             await supabase.from('notifications').insert({
               user_id: coachId,
               type: 'merge_request',
@@ -794,7 +796,9 @@ async function processStudentFocusPoints(
           last_mentioned_at: now.toISOString(),
           class_input_id: classInputId,
           status: 'pending_coach',
-          coach_review_deadline: new Date(now.getTime() + 18 * 60 * 60 * 1000).toISOString(),
+          // No deadline yet: the 18 hour window starts when the class opens to the
+        // coach (the admin's approval, or four hours) — public.release_class_to_coach.
+        coach_review_deadline: null,
           group_fp: isGroupClass,
           source_class_input_id: classInputId,
           count: 0,
@@ -861,9 +865,13 @@ async function processStudentFocusPoints(
   // (No cap-to-3 and no score-based retirement: focus points stay active until
   // the coach validates/rejects or the student archives. Tier is target-count only.)
 
-  // Notify coach only for focus points that were actually created (pending_coach), not merges
+  // The coach is told when the class opens (the admin's approval, or four
+  // hours) — public.release_class_to_coach sends this same notification, one
+  // per student. Telling him at scoring time is what used to put him ahead of
+  // the admin check. A class that was open before it was scored is the one
+  // case where now IS when it opens, so he is told here.
   const newFPCount = decisions.filter((d: any) => d.action === 'create').length
-  if (newFPCount > 0 && coachId) {
+  if (classOpen && newFPCount > 0 && coachId) {
     await supabase.from('notifications').insert({
       user_id: coachId,
       type: 'focus_points_added',

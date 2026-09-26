@@ -212,6 +212,9 @@ async function _getMyStudentsImpl() {
       .select('user_id')
       .eq('status', 'pending_coach')
       .eq('is_other', false)
+      // The roster's "review needed" badge counts what is open for review,
+      // not what is still waiting for the class to be checked.
+      .not('coach_review_deadline', 'is', null)
       .in('user_id', studentIds),
     supabase
       .from('focus_points')
@@ -1148,6 +1151,10 @@ export async function getPendingFocusPoints(studentId) {
       .eq('status', 'pending_coach')
       .eq('is_other', false)
       .eq('is_deleted', false)
+      // A focus point is only up for review once its class has opened — the
+      // admin approved it, or four hours passed (migration 20260926b). Before
+      // that it carries no deadline, and the database refuses to publish it.
+      .not('coach_review_deadline', 'is', null)
       .order('created_at', { ascending: true });
     if (res.error) throw res.error;
     data = res.data ?? [];
@@ -1169,6 +1176,10 @@ export async function getPendingFocusPoints(studentId) {
       .eq('status', 'pending_coach')
       .eq('is_other', false)
       .eq('is_deleted', false)
+      // A focus point is only up for review once its class has opened — the
+      // admin approved it, or four hours passed (migration 20260926b). Before
+      // that it carries no deadline, and the database refuses to publish it.
+      .not('coach_review_deadline', 'is', null)
       .order('created_at', { ascending: true });
     if (res.error) throw res.error;
     data = res.data ?? [];
@@ -1196,6 +1207,8 @@ export async function getPendingFocusPointsCount() {
     .eq('status', 'pending_coach')
     .eq('is_other', false)
     .eq('is_deleted', false)
+    // Only what the coach can actually act on — see getPendingFocusPoints.
+    .not('coach_review_deadline', 'is', null)
     .in('user_id', studentIds);
   return count ?? 0;
 }

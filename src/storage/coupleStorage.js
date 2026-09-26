@@ -518,6 +518,9 @@ export async function getPendingCoupleFocusPoints() {
     .eq('status', 'pending_coach')
     .eq('is_other', false)
     .eq('is_deleted', false)
+    // Open for review only once the class has opened (migration 20260926b):
+    // before that there is no deadline, and the database refuses the publish.
+    .not('coach_review_deadline', 'is', null)
     .order('created_at', { ascending: true });
   if (error) throw error;
   // Attach the couple display name (Anna & Loic) for the review card header.
