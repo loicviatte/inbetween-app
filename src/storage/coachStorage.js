@@ -212,6 +212,9 @@ async function _getMyStudentsImpl() {
       .select('user_id')
       .eq('status', 'pending_coach')
       .eq('is_other', false)
+      // The roster's "review needed" badge counts what is open for review,
+      // not what is still waiting for the class to be checked.
+      .not('coach_review_deadline', 'is', null)
       .in('user_id', studentIds),
     supabase
       .from('focus_points')
@@ -321,7 +324,9 @@ async function _getMyStudentsImpl() {
     if (!sid) continue;
     if (!lastClassByStudent[sid]) lastClassByStudent[sid] = c.created_at;
     if (
-      (c.lesson_type === 'private' || !c.lesson_type) &&
+      // Same set get_lesson_readiness anchors on — couple included, since a
+      // couple lesson's personal focus points are that dancer's own plan.
+      (c.lesson_type === 'private' || c.lesson_type === 'couple' || !c.lesson_type) &&
       !lastPrivateClassByStudent[sid]
     ) {
       const fpClassIds = classIdsWithFPsByStudent[sid];
@@ -674,9 +679,10 @@ export async function getStudentLastClassDate(studentId) {
 
   if (!classes || classes.length === 0) return null;
 
-  // Only private lessons count (lesson_type 'private' or legacy null)
+  // One-to-one lessons only: private, couple (its personal focus points are
+  // the dancer's own), or legacy null. A group class is not "their last lesson".
   const privateLessons = classes.filter(
-    (c) => c.lesson_type === 'private' || c.lesson_type == null
+    (c) => c.lesson_type === 'private' || c.lesson_type === 'couple' || c.lesson_type == null
   );
   if (privateLessons.length === 0) return null;
 
@@ -1145,6 +1151,10 @@ export async function getPendingFocusPoints(studentId) {
       .eq('status', 'pending_coach')
       .eq('is_other', false)
       .eq('is_deleted', false)
+      // A focus point is only up for review once its class has opened — the
+      // admin approved it, or four hours passed (migration 20260926b). Before
+      // that it carries no deadline, and the database refuses to publish it.
+      .not('coach_review_deadline', 'is', null)
       .order('created_at', { ascending: true });
     if (res.error) throw res.error;
     data = res.data ?? [];
@@ -1166,6 +1176,10 @@ export async function getPendingFocusPoints(studentId) {
       .eq('status', 'pending_coach')
       .eq('is_other', false)
       .eq('is_deleted', false)
+      // A focus point is only up for review once its class has opened — the
+      // admin approved it, or four hours passed (migration 20260926b). Before
+      // that it carries no deadline, and the database refuses to publish it.
+      .not('coach_review_deadline', 'is', null)
       .order('created_at', { ascending: true });
     if (res.error) throw res.error;
     data = res.data ?? [];
@@ -1193,6 +1207,8 @@ export async function getPendingFocusPointsCount() {
     .eq('status', 'pending_coach')
     .eq('is_other', false)
     .eq('is_deleted', false)
+    // Only what the coach can actually act on — see getPendingFocusPoints.
+    .not('coach_review_deadline', 'is', null)
     .in('user_id', studentIds);
   return count ?? 0;
 }

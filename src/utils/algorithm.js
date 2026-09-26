@@ -279,8 +279,10 @@ export async function getSoloFocusCounts(category = null) {
 // Scoped to match what actually anchors solo readiness:
 //   • user_id OR student_id — a coach-recorded class carries the student on
 //     student_id, but a self-logged one (saveClassInput) only sets user_id.
-//   • private / NULL lesson_type — get_lesson_readiness only anchors on those,
-//     so a pending GROUP class must NOT flip the solo card into this state.
+//   • private / couple / NULL lesson_type — get_lesson_readiness anchors on
+//     those (a couple lesson's personal focus points are the dancer's own work,
+//     migration 20260926a), so a pending GROUP class must NOT flip the solo
+//     card into this state, but a pending couple one must.
 // Returns the pending class row, or null.
 export async function getClassPendingValidation() {
   try {
@@ -289,7 +291,7 @@ export async function getClassPendingValidation() {
       .from('class_inputs')
       .select('id, created_at')
       .or(`user_id.eq.${userId},student_id.eq.${userId}`)
-      .or('lesson_type.eq.private,lesson_type.is.null')
+      .or('lesson_type.eq.private,lesson_type.eq.couple,lesson_type.is.null')
       .not('is_deleted', 'is', true)
       .in('status', ['extracted', 'scored'])
       .is('admin_approved_at', null)

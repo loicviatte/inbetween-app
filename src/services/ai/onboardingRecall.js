@@ -24,14 +24,22 @@ export async function recallToFocusPoints(recall, style) {
 // expects from focus_points: active, not archived, tier drives the train target.
 export async function saveOnboardingFocusPoints(userId, points) {
   if (!userId || !points?.length) return;
-  const rows = points.map((p) => ({
-    user_id: userId,
-    name: p.name,
-    subtitle: p.subtitle || null,
-    dance: p.dance ? [p.dance] : null,
-    tier: p.tier === 'critical' ? 'critical' : 'important',
-    status: 'active',
-  }));
+  const rows = points.map((p) => {
+    const tier = p.tier === 'critical' ? 'critical' : 'important';
+    return {
+      user_id: userId,
+      name: p.name,
+      subtitle: p.subtitle || null,
+      dance: p.dance ? [p.dance] : null,
+      tier,
+      // Stored, like every other focus point (TRAIN_TARGET_BY_TIER server side:
+      // critical 3, everything else 2). The comment above always said the tier
+      // drove the target, but the column was left null here, so these rows fell
+      // back to a default computed at read time and showed no target of their own.
+      train_target: tier === 'critical' ? 3 : 2,
+      status: 'active',
+    };
+  });
   const { error } = await supabase.from('focus_points').insert(rows);
   if (error) console.warn('[onboarding] focus points not saved:', error.message);
 }
