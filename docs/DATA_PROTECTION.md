@@ -151,9 +151,28 @@ It is now RESTRICTIVE, which ANDs: a focus point is readable when the ownership
 policy allows it **and** its class has opened (the admin's approval, or the
 four-hour rule of `20260926b`). The same gate was added to
 `couple_focus_points`, whose own policy was correctly scoped. Re-measured after
-the change: that dancer reads 9 rows, all hers; her coach reads her 127; a coach
-who shares a student with another coach still reads that student's focus points
-from the other's lessons; the admin still reads all 601.
+the change: that dancer reads 9 rows, all hers; her coach reads her 127; the
+admin still reads all 601.
+
+**And the style boundary, the same evening** (migration `20260926g`). Esther has
+two coaches: Tanya for Latin, Nataliia for Ballroom. Every screen shows each of
+them only their own style — the roster, the metrics, the readiness are all
+filtered by the coach's category — but the read policy said "my students' focus
+points", full stop. Signed in as Nataliia, 169 Latin focus points of her four
+students came back, taught by two other coaches, against 18 of her own. The
+boundary existed in the client and not in the data, which is precisely the
+finding this section opens with.
+
+A second RESTRICTIVE policy now says what the app says: the dancer, their
+guardian and the admin keep everything; a coach reads what they taught (the
+class is theirs, whatever style it was tagged with) and the style they coach
+that dancer in — from the accepted `coach_request`'s category or from
+`users.latin_coach_id` / `ballroom_coach_id`. An untagged focus point belongs to
+no style and stays visible to both, as the app already treats it. The couple
+table gets the same rule against its two coach columns. After: Nataliia reads
+20 rows (18 Ballroom, plus 2 Latin from a class she taught herself) instead of
+189; Tanya reads 119 Latin and no Ballroom; Esther still reads all 127 of her
+own; the admin all 601.
 
 ## 6. Health-data consent
 
