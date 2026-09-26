@@ -351,6 +351,12 @@ async function restorePlanIfClassEmpty(
 
 async function processClassInput(supabase: any, payload: any): Promise<void> {
   const { class_input_id } = payload
+  // Repair mode: write the couple's shared focus points and nothing else. The
+  // per-dancer focus points of a class already scored are correct and must not
+  // be scored a second time — re-running the student pass would merge or
+  // duplicate them. Used after yoda-extract's couple_shared_only pass fills in
+  // a shared plan that the first extraction missed.
+  const sharedOnly = payload.couple_shared_only === true
 
   // Auto-publish expired pending_coach FPs before processing new ones
   await publishExpiredFocusPoints(supabase)
@@ -382,7 +388,7 @@ async function processClassInput(supabase: any, payload: any): Promise<void> {
   // notify the coach the STUDENT is linked to rather than the one who taught
   // the class (Tanya's Latin group class notified Esther's ballroom coach).
   // Private and couple classes keep it: individual work is what they are for.
-  if (!isGroupClass) {
+  if (!isGroupClass && !sharedOnly) {
     for (const studentJson of aiData.students ?? []) {
       const studentId: string = studentJson.student_id
       if (!studentId) continue
@@ -396,7 +402,7 @@ async function processClassInput(supabase: any, payload: any): Promise<void> {
   // produces replacements. If this class yielded ZERO focus points for the student
   // (a test / content-less lesson), that bet fails and the student is left with 0
   // active private focuses — which must never happen. Restore the retired carry-over.
-  if (!isGroupClass && classInput.lesson_type !== 'couple') {
+  if (!isGroupClass && !sharedOnly && classInput.lesson_type !== 'couple') {
     const privateStudentIds = [
       ...new Set(
         [classInput.student_id, ...(aiData.students ?? []).map((s: any) => s.student_id)]
@@ -411,7 +417,7 @@ async function processClassInput(supabase: any, payload: any): Promise<void> {
   // 2b. Process shared_focus_points (group-wide drills) — insert one row per student
   // linked by shared_group_id so the coach can aggregate across students.
   const sharedFps = aiData.shared_focus_points ?? []
-  if (isGroupClass && sharedFps.length > 0) {
+  if (isGroupClass && !sharedOnly && sharedFps.length > 0) {
     // Shared focus points are CLASS-WIDE → give them to every attendee (the
     // class_input_students roster), not just the students the AI happened to
     // return. The AI omits students it had nothing individual to say about, so
@@ -553,6 +559,11 @@ async function processClassInput(supabase: any, payload: any): Promise<void> {
       }
       console.log(`[yoda-score] Notified ${coachIds.length} couple coach(es) of ${coupleCreated} new couple FPs`)
     }
+  }
+
+  if (sharedOnly) {
+    console.log(`[yoda-score] ✓ Couple shared focus points only for ${class_input_id} — nothing else touched`)
+    return
   }
 
   // 3. Check merge_requests older than MERGE_NOTIFY_STUDENT_DAYS → escalate to student

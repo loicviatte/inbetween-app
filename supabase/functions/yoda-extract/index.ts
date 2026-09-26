@@ -288,70 +288,11 @@ async function logAnthropicCallSafe(
 
 // ─── System prompt ────────────────────────────────────────────────────────────
 
-const SYSTEM_PROMPT = `You are Yoda Extract, a specialized AI that processes coaching lesson transcripts. Your sole job is to output a single structured JSON object — nothing else. No explanation, no preamble, no markdown.
-
-## INPUTS YOU RECEIVE
-- lesson_type: "private", "group", "public", or "couple" ("group" and "public" are both multi-student classes and follow the same rules)
-- coach_name: string
-- coach_speaker_id: string (e.g. "A")
-- students: array of { id, name }
-- existing_focus_points: array of { id, name, subtitle, tier } — focus points already in the system for each student
-- transcript: raw lesson transcript with paragraph timestamps in format [MM:SS - MM:SS] Speaker X: ...
-
-## WHAT IS A FOCUS POINT
-A focus point is a specific correction tied to a single root cause.
-- ONE focus point = ONE root cause (not one symptom)
-- If the coach addresses "shoulders rising" and "arm collapsing" → that is ONE focus point: back connection. The symptoms go in the context field, not as separate focus points.
-
-NOT a focus point:
-- General encouragement ("good job", "much better")
-- Administrative talk ("see you next week", "let's take a break")
-- Warm-up instructions with no specific correction attached
-- Vague observations without actionable direction ("you seem tired today")
-- Off-topic conversation unrelated to the lesson
-
-## ASSIGNMENT RULES
-- Private lesson → assign all focus points to the student they are directed at
-- Group / public lesson (multiple students) → a PERSONAL focus point (in a student's focus_points, with their student_id) is created ONLY when that student's name is stated CLEARLY and EXPLICITLY in the transcript together with the correction (e.g. "Alexandra, keep your frame"). Do NOT guess who a correction is for from speaker order, tone, "you"/"you guys", which student it "feels" like, or their existing focus points. If the name is not clearly said, DO NOT create a personal focus point for anyone. Names are frequently absent in these recordings — that is expected; in that case simply create no personal focus point.
-- Group / public lesson → corrections addressed to the whole class ("you guys", "everyone", "the class"), and any genuinely class-wide teaching point, go into "shared_focus_points" (applies to every student, no student_id). HARD LIMIT: at most 2 shared_focus_points for a group/public lesson — keep only the 2 most important by the SELECTING criteria; the rest go to other_focus_points.
-- Group / public lesson → a correction that is clearly aimed at ONE individual but whose student is NOT clearly named is neither personal nor shared → put it in other_focus_points (do not surface it, do not guess a name, do not force it onto the whole class).
-- Couple lesson (the two students are dance partners): a correction about how the pair moves TOGETHER — shared timing, connection, frame as a couple, spatial awareness as a unit, lead/follow communication → put it in "shared_focus_points" (it belongs to the couple, no student_id). A correction aimed at ONE dancer's own technique ("Alex, your individual posture") → that dancer's focus_points using their student_id. When in doubt on a couple lesson, default a partnering correction to shared_focus_points.
-- Generic motivational talk, admin, or vague observations → coach_knowledge only, no focus point created
-- If you cannot confidently assign a correction to a specific NAMED student or the whole class, do not create a focus point
-
-## SELECTING FOCUS POINTS
-Extract all corrections first. Then select the most important ones as focus_points based on these criteria, in order of weight:
-
-1. Time ratio — how much of the total lesson duration was spent addressing this point. This is the strongest signal.
-2. Mention count — how many times the coach returned to this point
-3. Explicit priority — coach used words like "most important", "above all", "focus on this", "before anything else"
-
-Rules:
-- Minimum 1, maximum 3 focus points per student
-- Only include what is genuinely important — do not force 3 if only 1 or 2 qualify
-- All remaining corrections go into other_focus_points
-
-## TIER
-Each focus point must have a tier:
-- "critical" — the most important focus point in this lesson (max 1 per student)
-- "important" — significant but secondary
-- "supporting" — worth tracking but lower priority
-
-## MERGE DETECTION
-Compare each extracted focus point against the student's existing_focus_points.
-
-- If the root cause is clearly the SAME concept (even if described differently): set merge_action = "auto_merge", existing_focus_point_id = <id of the matching existing focus point>
-- If the root cause MIGHT be the same but you are not certain: set merge_action = "notify_coach", existing_focus_point_id = <id of the most likely match>
-- If it is clearly a new concept: set merge_action = null, existing_focus_point_id = null
-
-## COACH SIGNAL
-If the coach explicitly signals progress or regression on an EXISTING focus point for a specific student:
-- Positive: "much better", "you've really improved on this", "this is looking good now" → coach_signal = "positive"
-- Negative: "still struggling with", "this is getting worse", "we really need to fix this" → coach_signal = "negative"
-- Only set this for existing focus points (include existing_focus_point_id alongside it)
-- Omit the field or set null if no explicit signal
-
-## FOR EACH FOCUS POINT
+// The field rules every focus point obeys — title length, subtitle length,
+// drill shape, category. Held in one constant because two prompts need them:
+// the main extraction below, and the couple second look, which produced a
+// 64 character title the first time it ran without them.
+const FOCUS_POINT_FIELD_RULES = `## FOR EACH FOCUS POINT
 
 ### title
 - 1 to 2 words maximum
@@ -418,7 +359,75 @@ Pick the best fit. Every focus point must have a category.
 ### Other fields
 - timestamp: MM:SS when first addressed (from paragraph timestamps)
 - mention_count: how many times this was addressed across the full lesson
-- explicit_priority: true if coach used words like "most important", "above all", "focus on this", "before anything else"
+- explicit_priority: true if coach used words like "most important", "above all", "focus on this", "before anything else"`
+
+const SYSTEM_PROMPT = `You are Yoda Extract, a specialized AI that processes coaching lesson transcripts. Your sole job is to output a single structured JSON object — nothing else. No explanation, no preamble, no markdown.
+
+## INPUTS YOU RECEIVE
+- lesson_type: "private", "group", "public", or "couple" ("group" and "public" are both multi-student classes and follow the same rules)
+- coach_name: string
+- coach_speaker_id: string (e.g. "A")
+- students: array of { id, name }
+- existing_focus_points: array of { id, name, subtitle, tier } — focus points already in the system for each student
+- transcript: raw lesson transcript with paragraph timestamps in format [MM:SS - MM:SS] Speaker X: ...
+
+## WHAT IS A FOCUS POINT
+A focus point is a specific correction tied to a single root cause.
+- ONE focus point = ONE root cause (not one symptom)
+- If the coach addresses "shoulders rising" and "arm collapsing" → that is ONE focus point: back connection. The symptoms go in the context field, not as separate focus points.
+
+NOT a focus point:
+- General encouragement ("good job", "much better")
+- Administrative talk ("see you next week", "let's take a break")
+- Warm-up instructions with no specific correction attached
+- Vague observations without actionable direction ("you seem tired today")
+- Off-topic conversation unrelated to the lesson
+
+## ASSIGNMENT RULES
+- Private lesson → assign all focus points to the student they are directed at
+- Group / public lesson (multiple students) → a PERSONAL focus point (in a student's focus_points, with their student_id) is created ONLY when that student's name is stated CLEARLY and EXPLICITLY in the transcript together with the correction (e.g. "Alexandra, keep your frame"). Do NOT guess who a correction is for from speaker order, tone, "you"/"you guys", which student it "feels" like, or their existing focus points. If the name is not clearly said, DO NOT create a personal focus point for anyone. Names are frequently absent in these recordings — that is expected; in that case simply create no personal focus point.
+- Group / public lesson → corrections addressed to the whole class ("you guys", "everyone", "the class"), and any genuinely class-wide teaching point, go into "shared_focus_points" (applies to every student, no student_id). HARD LIMIT: at most 2 shared_focus_points for a group/public lesson — keep only the 2 most important by the SELECTING criteria; the rest go to other_focus_points.
+- Group / public lesson → a correction that is clearly aimed at ONE individual but whose student is NOT clearly named is neither personal nor shared → put it in other_focus_points (do not surface it, do not guess a name, do not force it onto the whole class).
+- Couple lesson (the two students are dance partners): a correction about how the pair moves TOGETHER — shared timing, connection, frame as a couple, spatial awareness as a unit, lead/follow communication, one dancer making room or angle for the other → put it in "shared_focus_points" (it belongs to the couple, no student_id). A correction aimed at ONE dancer's own body ("Alex, your individual posture") → that dancer's focus_points using their student_id. When in doubt on a couple lesson, default a partnering correction to shared_focus_points.
+- Couple lesson: one partnering fix is usually taught as two halves, an instruction to each dancer in turn ("give her the space through the pivot" / "take the step more diagonal so he can pass"). Those two halves are ONE shared focus point, written from the couple's side — not two personal ones.
+- Couple lesson: 1 to 3 shared_focus_points, and at least one. A couple lesson is taught to the pair, so the single most important partnering correction belongs to them. Never pad to reach a number: a shared focus point must be a real correction the coach actually made and spent time on, chosen by the SELECTING criteria below. If the lesson genuinely contained no partnering work at all — which is rare for a couple — return an empty list rather than promoting an individual correction.
+- Generic motivational talk, admin, or vague observations → coach_knowledge only, no focus point created
+- If you cannot confidently assign a correction to a specific NAMED student or the whole class, do not create a focus point
+
+## SELECTING FOCUS POINTS
+Extract all corrections first. Then select the most important ones as focus_points based on these criteria, in order of weight:
+
+1. Time ratio — how much of the total lesson duration was spent addressing this point. This is the strongest signal.
+2. Mention count — how many times the coach returned to this point
+3. Explicit priority — coach used words like "most important", "above all", "focus on this", "before anything else"
+
+Rules:
+- Minimum 1, maximum 3 focus points per student
+- Couple lesson: minimum 1, maximum 3 shared_focus_points for the pair, by the same criteria (see ASSIGNMENT RULES)
+- Only include what is genuinely important — do not force 3 if only 1 or 2 qualify
+- All remaining corrections go into other_focus_points
+
+## TIER
+Each focus point must have a tier:
+- "critical" — the most important focus point in this lesson (max 1 per student)
+- "important" — significant but secondary
+- "supporting" — worth tracking but lower priority
+
+## MERGE DETECTION
+Compare each extracted focus point against the student's existing_focus_points.
+
+- If the root cause is clearly the SAME concept (even if described differently): set merge_action = "auto_merge", existing_focus_point_id = <id of the matching existing focus point>
+- If the root cause MIGHT be the same but you are not certain: set merge_action = "notify_coach", existing_focus_point_id = <id of the most likely match>
+- If it is clearly a new concept: set merge_action = null, existing_focus_point_id = null
+
+## COACH SIGNAL
+If the coach explicitly signals progress or regression on an EXISTING focus point for a specific student:
+- Positive: "much better", "you've really improved on this", "this is looking good now" → coach_signal = "positive"
+- Negative: "still struggling with", "this is getting worse", "we really need to fix this" → coach_signal = "negative"
+- Only set this for existing focus points (include existing_focus_point_id alongside it)
+- Omit the field or set null if no explicit signal
+
+${FOCUS_POINT_FIELD_RULES}
 
 ## CLASS SUMMARY
 For each student, write a "class_summary" as a thorough recap of the whole lesson — proper meeting minutes, not a teaser. The student should be able to re read this weeks later and reconstruct what was actually covered without watching the video again. Cover EVERY meaningful idea raised during the class; do not pick three favourites and skip the rest.
@@ -571,12 +580,31 @@ Deno.serve(async (req: Request) => {
   }
 
   let record: ClassInputRecord | null = null
+  let body: any = null
   try {
-    const payload: WebhookPayload = await req.json()
-    record = payload.record
+    body = await req.json()
+    record = (body as WebhookPayload).record
   } catch (err) {
     console.error('[yoda-extract] Failed to parse webhook payload:', err)
     return new Response(JSON.stringify({ error: 'Invalid payload' }), { status: 400 })
+  }
+
+  // Repair call, for a couple lesson already extracted without a shared plan:
+  // runs the couple pass alone and patches raw_ai_json. Everything else the
+  // extraction produced — every per-dancer focus point — is left as it is.
+  // Answers synchronously: whoever asks for this wants to see what came back.
+  if (body?.couple_shared_only && body?.class_input_id) {
+    try {
+      const result = await rerunCoupleShared(String(body.class_input_id))
+      return new Response(JSON.stringify(result), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      console.error('[yoda-extract] couple_shared_only failed:', message)
+      return new Response(JSON.stringify({ error: message }), { status: 500 })
+    }
   }
 
   // Respond to the webhook immediately to avoid timeout
@@ -837,6 +865,184 @@ async function loadTrainerFeedback(supabase: ReturnType<typeof createClient>): P
   return result
 }
 
+// ─── Couple lesson: the pair's own focus points ──────────────────────────────
+//
+// A couple lesson is taught to the pair, so the pair must come out of it with
+// something of their own: 1 to 3 shared focus points, which yoda-score writes
+// to couple_focus_points (the personal ones stay personal, untouched).
+//
+// The prompt asks for this, but asking is not enough — the first three couple
+// lessons in production all came back with shared_focus_points: [], and their
+// partnering corrections were split into two personal halves ("make space for
+// your partner" to one dancer, "take the diagonal so your partner can pass" to
+// the other). So the rule is enforced here instead of hoped for: cap at three,
+// and when the first pass found none, look once more at the partnering
+// material alone, with the per-dancer points it already chose in view.
+//
+// The second look may still answer "none", and says why — an empty couple plan
+// has to be a verdict, not an oversight. It never pads: one honest shared point
+// is worth more than three invented ones.
+
+const COUPLE_SHARED_MAX = 3
+
+function tierRank(t: unknown): number {
+  return t === 'critical' ? 0 : t === 'important' ? 1 : 2
+}
+
+/** Strongest first: explicit priority, then tier, then how often it came up. */
+function compareSharedFps(a: any, b: any): number {
+  if (!!a.explicit_priority !== !!b.explicit_priority) return a.explicit_priority ? -1 : 1
+  const t = tierRank(a.tier) - tierRank(b.tier)
+  if (t !== 0) return t
+  return (b.mention_count ?? 0) - (a.mention_count ?? 0)
+}
+
+async function ensureCoupleShared(
+  supabase: ReturnType<typeof createClient>,
+  parsed: any,
+  opts: { id: string; userId: string; transcript: string },
+): Promise<void> {
+  const shared: any[] = Array.isArray(parsed.shared_focus_points) ? parsed.shared_focus_points : []
+
+  if (shared.length > 0) {
+    parsed.shared_focus_points = shared.length > COUPLE_SHARED_MAX
+      ? [...shared].sort(compareSharedFps).slice(0, COUPLE_SHARED_MAX)
+      : shared
+    if (shared.length > COUPLE_SHARED_MAX) {
+      console.log(`[yoda-extract] Couple ${opts.id}: capped ${shared.length} shared focus points to ${COUPLE_SHARED_MAX}`)
+    }
+    return
+  }
+
+  const personal = (parsed.students ?? []).flatMap((st: any) =>
+    (st.focus_points ?? []).map((fp: any) => `- ${fp.title}: ${fp.subtitle ?? ''} ${fp.context ?? ''}`.trim()),
+  )
+
+  console.log(`[yoda-extract] Couple ${opts.id}: first pass found no shared focus point, looking again`)
+  try {
+    const res = await fetchAnthropicWithRetry(
+      {
+        model: 'claude-sonnet-4-6',
+        max_tokens: 2000,
+        messages: [{
+          role: 'user',
+          content: `This was a COUPLE lesson: the two students are dance partners. The first pass returned no focus point belonging to the pair. Look again, at the partnering material only.
+
+A shared focus point is a correction about how the two move TOGETHER: timing between them, connection, frame as a couple, the space and the angle one gives the other, lead and follow. One partnering fix is usually taught as two halves, an instruction to each dancer in turn — those halves are ONE shared focus point, written from the couple's side.
+
+Return 1 to 3, chosen by how much of the lesson went into them, how often the coach came back to them, and whether the coach named them as the priority. Never pad: if this lesson genuinely contained no partnering work, return an empty list and say why in "none_reason".
+
+The per-dancer focus points already chosen, for context. Do not repeat one as shared unless it really belongs to the couple:
+${personal.join('\n') || '(none)'}
+
+transcript:
+${opts.transcript}
+
+Every field obeys the same rules as any other focus point:
+
+${FOCUS_POINT_FIELD_RULES}
+
+Write "context" to the pair, in the second person ("you two", "between you").
+
+Return ONLY this JSON, no preamble:
+{
+  "shared_focus_points": [
+    {
+      "title": string,
+      "subtitle": string,
+      "context": string,
+      "dance": [string],
+      "drill": string | null,
+      "timestamp": "MM:SS",
+      "mention_count": number,
+      "explicit_priority": boolean,
+      "tier": "critical" | "important" | "supporting",
+      "category": "Stability" | "Technicality" | "Strength" | "Creativity" | "Musicality"
+    }
+  ],
+  "none_reason": string | null
+}${NO_HYPHEN_RULE}`,
+        }],
+      },
+      { context: 'couple_shared', supabase, classInputId: opts.id, userId: opts.userId },
+    )
+    const data = await res.json()
+    const text: string = (data.content?.[0]?.text ?? '').trim()
+    const jsonText = text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/, '').trim()
+    const second = JSON.parse(jsonText)
+    const found: any[] = Array.isArray(second.shared_focus_points) ? second.shared_focus_points : []
+    if (found.length === 0) {
+      console.log(`[yoda-extract] Couple ${opts.id}: still no shared focus point — ${second.none_reason ?? 'no reason given'}`)
+      parsed.couple_shared_none_reason = second.none_reason ?? null
+      parsed.shared_focus_points = []
+      return
+    }
+    parsed.shared_focus_points = trimAllDrills(
+      sanitizeStrings([...found].sort(compareSharedFps).slice(0, COUPLE_SHARED_MAX)),
+    )
+    console.log(`[yoda-extract] Couple ${opts.id}: second look found ${parsed.shared_focus_points.length} shared focus point(s)`)
+  } catch (err) {
+    // The couple loses its shared plan for this lesson, not the whole class.
+    console.error(`[yoda-extract] Couple ${opts.id}: second look failed:`, err instanceof Error ? err.message : String(err))
+    parsed.shared_focus_points = []
+  }
+}
+
+/** The couple pass on its own, for a lesson whose extraction already ran. */
+async function rerunCoupleShared(classInputId: string): Promise<Record<string, unknown>> {
+  const supabase = createClient(
+    Deno.env.get('SUPABASE_URL')!,
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
+  )
+  const { data: row, error } = await supabase
+    .from('class_inputs')
+    .select('id, user_id, lesson_type, transcript, raw_ai_json')
+    .eq('id', classInputId)
+    .single()
+  if (error || !row) throw new Error(`cannot load class_input ${classInputId}: ${error?.message}`)
+  if (row.lesson_type !== 'couple') throw new Error(`class_input ${classInputId} is not a couple lesson`)
+  if (!row.raw_ai_json) throw new Error(`class_input ${classInputId} has no extraction to repair`)
+  if (!row.transcript?.trim()) throw new Error(`class_input ${classInputId} has no transcript`)
+
+  const parsed = row.raw_ai_json as any
+  await ensureCoupleShared(supabase, parsed, { id: row.id, userId: row.user_id, transcript: row.transcript })
+
+  const { error: upErr } = await supabase
+    .from('class_inputs')
+    .update({ raw_ai_json: parsed })
+    .eq('id', classInputId)
+  if (upErr) throw new Error(`raw_ai_json update failed: ${upErr.message}`)
+
+  // Then hand it to yoda-score exactly as the extraction does, in the mode
+  // that writes the couple's rows and leaves everything else alone. Invoked
+  // from here rather than by the caller so it carries this function's own
+  // service key — the caller only needs to reach yoda-extract.
+  const shared = (parsed.shared_focus_points ?? []) as unknown[]
+  if (shared.length > 0) {
+    // Plain fetch rather than functions.invoke: invoke swallows the response
+    // body and reports every failure as "non-2xx", which says nothing about
+    // what went wrong on the other side.
+    const scoreRes = await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/yoda-score`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`,
+      },
+      body: JSON.stringify({ event: 'class_input', class_input_id: classInputId, couple_shared_only: true }),
+    })
+    if (!scoreRes.ok) {
+      throw new Error(`yoda-score ${scoreRes.status}: ${(await scoreRes.text()).slice(0, 300)}`)
+    }
+  }
+
+  return {
+    class_input_id: classInputId,
+    scored: shared.length > 0,
+    shared_focus_points: parsed.shared_focus_points ?? [],
+    none_reason: parsed.couple_shared_none_reason ?? null,
+  }
+}
+
 // ─── Processing logic ─────────────────────────────────────────────────────────
 
 async function processRecord(record: ClassInputRecord): Promise<void> {
@@ -1038,6 +1244,12 @@ async function processRecord(record: ClassInputRecord): Promise<void> {
     // Belt-and-suspenders: the prompt forbids hyphens, but strip any that
     // slipped through from every string field before we write anything.
     parsed = trimAllDrills(sanitizeStrings(parsed)) as typeof parsed
+
+    // A couple lesson owes the pair 1 to 3 shared focus points — enforced, not
+    // hoped for (see ensureCoupleShared).
+    if (lesson_type === 'couple') {
+      await ensureCoupleShared(supabase, parsed as any, { id, userId: user_id, transcript })
+    }
 
     // Write raw JSON back
     await supabase
