@@ -279,8 +279,9 @@ export default function DjiSetupBanner() {
   // recordings (else the error step + retry). Guards: pickingRef blocks a
   // double-tap starting a second picker; dismissedRef is checked after EVERY
   // await so a stale continuation can't clear a just-granted bookmark or flip
-  // the flow after the coach closed it. hasFolderAccess is only trusted once the
-  // folder is verified to actually contain DJI files (no false→true→false churn).
+  // the flow after the coach closed it. The provider's folder flag is refreshed
+  // only once the folder is verified to actually contain DJI files (no
+  // false→true→false churn).
   async function handleOpenPicker() {
     if (pickingRef.current) return;
     pickingRef.current = true;
@@ -307,8 +308,10 @@ export default function DjiSetupBanner() {
         } catch {}
         setStep('error');
       } else {
-        setHasFolderAccess(true);
-        sync?.refreshFolderAccess?.(); // let the sibling provider show its sync pill
+        // The bookmark is set and verified — the provider is the only holder of
+        // that flag now, and re-reading it is what turns the dashboard's SET UP
+        // button back into Start a lesson.
+        sync?.refreshFolderAccess?.();
         sync?.refreshPending?.(); // …with the right count on it
         setFoundCount(djiCount);
         setStep('success');
