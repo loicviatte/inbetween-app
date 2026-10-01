@@ -174,6 +174,45 @@ table gets the same rule against its two coach columns. After: Nataliia reads
 189; Tanya reads 119 Latin and no Ballroom; Esther still reads all 127 of her
 own; the admin all 601.
 
+## 5b. Incident, 1 October: a couple lesson read from another student's account
+
+Reported by the coach, not caught by us. Fabio taught a couple lesson to Sanna
+and Sadie on 26 September; on 1 October he wrote that its data was showing on
+Yaroslava's account. Yaroslava is a **child account** with a guardian, who owns
+no lesson and no focus point and whose only link to that lesson is that Fabio is
+also her Ballroom coach.
+
+**Cause.** One branch of the `class_inputs` read policy: *my coach taught this
+class, and the class is either about me or names no student*. "Names no student"
+was written to mean a group class, where the roster lives elsewhere and every
+student of that coach may read the shared summary. A **couple** lesson carries
+no `student_id` either — its two dancers are the couple — so it fell into the
+same branch and every other student of that coach could read it: title, summary
+and the 2,883-character transcript.
+
+**Exposure.** Four students are linked to that coach. Two are the dancers
+themselves. The other two are Yaroslava and Madeleine Lodge. Madeleine last
+opened the app on 24 September, two days before the lesson existed, so she never
+saw it. Yaroslava's account did: it opened the lesson detail **seven times on
+30 September between 23:14 and 23:20**. Window: 26 September 20:41 (scoring) to
+1 October (fix), four days and fourteen hours. No focus point, no couple focus
+point and no recording were reachable from that account — only the lesson row.
+
+**Fix** (migration `20261001a`): the student branch now excludes a couple lesson
+explicitly, by `couple_id` and by `lesson_type` (one older couple class carries
+the type but no `couple_id`). The couple's own branch, first in the policy,
+already gives the two dancers and their couple coaches what they need. Verified
+after the change: Yaroslava and Madeleine read zero lessons, Sanna and Sadie
+still read theirs, every other account is unchanged.
+
+**What this says about the pattern.** Three read boundaries have now been found
+in the same place — the approval gate that was a door (26 September), the
+style boundary that lived only in the client (26 September) and this one. Each
+was a policy written for one lesson type and inherited by another. A couple
+lesson resembles a group lesson in the schema and resembles a private one in
+life; every rule that keys off "no named student" needs re-reading with that in
+mind.
+
 ## 6. Health-data consent
 
 Special-category data: a lesson's audio can carry an injury, a pain, a
