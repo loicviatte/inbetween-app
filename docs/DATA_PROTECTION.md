@@ -241,9 +241,17 @@ requires a signed-in caller; the app reads the view in all four places. Signed
 out, the API now returns an empty array for `users` and the directory for
 `coach_directory`.
 
-**One exposure deliberately left for a few days:** a *signed-in* user can still
-read those 11 coach rows in full. The branch is kept only so a build that has
-not taken the update yet keeps working, and it is the next thing to drop.
+**Closed the same day** (`20261001d`). The branch was kept for a few hours in
+case a build in the field still read the table; the two screens that could have
+been affected are the sign-up coach list, which only a brand-new install sees,
+and the teacher typeahead in the manual log, where the name can be typed by
+hand. So it went. A dancer now reads a coach's row only through
+`is_my_coach()` — their own coach, linked or still pending — and, added with
+it, the coach of a couple they dance in, which until then worked only because
+every coach was readable by everyone. Measured after: a student with no lessons
+reads 2 rows (herself and her coach), a dancer in a couple 3, a guardian 3
+(herself, her child, the child's coach), a coach her own students plus the
+coaches of her own studio.
 
 **Everything else held.** Thirteen tables have no read policy at all, so they
 answer only to the service role. Every write policy checks the caller. A coach
