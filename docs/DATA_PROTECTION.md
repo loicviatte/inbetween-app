@@ -260,6 +260,53 @@ student sees only her own roster rows. A guardian sees her child and nothing
 beyond. Signed out, the only thing left in reach is the studio list — six
 names.
 
+## 5d. The audit beyond the row policies, 1 October
+
+5c tested what each table lets a reader see. This pass looked at every other
+way in: the functions a client can call, the edge functions, storage, the
+realtime feed. Every finding below was proven before it was fixed, each time in
+a transaction that was rolled back or against an id that does not exist.
+
+**A guard that a missing identity walks through** (`20261001e`). Three
+SECURITY DEFINER functions defended themselves with an inequality —
+`IF auth.email() != admin_email() THEN RAISE`. Signed out, the identity is
+NULL, the comparison is neither true nor false, and IF skips the RAISE. The
+worst was `trainer_insert_class_input`: holding only the public key, with a
+coach id from the public directory, an anonymous caller inserted a lesson into
+that coach's account — and a lesson insert is what wakes the extraction
+pipeline. The other two let an anonymous caller who knew a request id pair a
+couple or accept a coach request. All three now use IS DISTINCT FROM, and the
+anonymous role lost EXECUTE on thirteen functions that change or return data
+and have no signed-out use. No lesson in production carries the traces of an
+anonymous insert: every lesson without a recording belongs to the demo
+account, to a student's own log, or to the April lessons before recording
+existed.
+
+**Push notifications to anyone, from anyone.** `send-push` asked for nothing,
+and the gateway's JWT check is satisfied by the anon key inside the app: any
+title and body could be pushed to any user id, under the InBetween name. Proven
+against an id that does not exist, so nothing was sent. It now answers only to
+the service role, which every legitimate caller uses — the notification
+webhook and six database functions, each checked.
+
+**A coach link nobody accepted** (`create-child-account`). The parent's choice
+of coach was written straight into the child's coach column with the service
+role, which the acceptance guard exempts. The read policies trust that column,
+so anyone who signed up as a parent could name any coach and immediately read
+that coach's group lessons, transcripts included, and their whole knowledge
+base — four lessons and seventy entries in the reproduction — before the coach
+had answered. The function now files a pending request only; the column is
+written when the coach accepts, as for every student. One account still carries
+such a link from before the fix.
+
+**Checked and clean.** Lesson audio is readable only from its owner's folder;
+age proofs have no read policy at all; avatars are public by design. The only
+view a client can read is the coach directory. The six tables on the realtime
+feed are all behind row policies, and the app uses no broadcast or presence
+channel. Every other edge function either verifies the caller or a webhook
+secret and ties the ids it receives to that caller; the one open endpoint,
+the onboarding recall, runs before an account exists and is rate-limited by IP.
+
 ## 6. Health-data consent
 
 Special-category data: a lesson's audio can carry an injury, a pain, a

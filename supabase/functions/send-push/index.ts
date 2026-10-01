@@ -35,7 +35,32 @@ interface DirectPayload {
 
 // ─── Main handler ─────────────────────────────────────────────────────────────
 
+// Only the server may push. Every legitimate caller — the on-notification-insert
+// webhook and the six notify_* database functions — sends the service role.
+// Until 1 October this function asked for nothing, and the gateway's JWT check
+// is satisfied by the anon key that ships inside the app: anyone could push any
+// title and body to any user id, branded as InBetween. The gateway verifies the
+// signature (verify_jwt stays ON for this function — never deploy it with
+// --no-verify-jwt), so reading the role claim from the verified token is safe.
+function callerIsServiceRole(req: Request): boolean {
+  const m = (req.headers.get('Authorization') ?? '').match(/^\s*Bearer\s+(.+)$/i)
+  if (!m) return false
+  const parts = m[1].trim().split('.')
+  if (parts.length !== 3) return false
+  try {
+    let b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/')
+    if (b64.length % 4) b64 += '='.repeat(4 - (b64.length % 4))
+    return JSON.parse(atob(b64))?.role === 'service_role'
+  } catch {
+    return false
+  }
+}
+
 Deno.serve(async (req: Request) => {
+  if (!callerIsServiceRole(req)) {
+    return new Response(JSON.stringify({ error: 'forbidden' }), { status: 403 })
+  }
+
   let payload: WebhookPayload | null = null
   try {
     payload = await req.json()

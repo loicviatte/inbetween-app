@@ -167,13 +167,21 @@ Deno.serve(async (req: Request) => {
   await admin.from('users').update({ account_for: 'child' }).eq('id', parent.id)
 
   if (body.coachId) {
-    // Which side the coach teaches follows the style the parent chose.
-    const col = body.danceStyle === 'Ballroom' ? 'ballroom_coach_id' : 'latin_coach_id'
-    await admin.from('users').update({ [col]: body.coachId }).eq('id', childId)
-    // The coach's roster reads coach_requests, not these columns: without a
-    // request the child never appears in their student list.
-    const cats = body.danceStyle === 'Latin & Ballroom' ? ['latin', 'ballroom'] : [body.danceStyle === 'Ballroom' ? 'ballroom' : 'latin']
-    await admin.from('coach_requests').insert(cats.map((category) => ({ coach_id: body.coachId, student_id: childId, status: 'pending', category })))
+    // A request, never a link. The coach columns are what the read policies
+    // trust ("my coach taught this class"), so they are only ever written when
+    // the coach accepts — coach_respond_request does it, for this child as for
+    // any student. Writing the parent's choice here, with the service role,
+    // walked straight past guard_user_links: until 1 October anyone who signed
+    // up as a parent could name any coach from the public directory and read
+    // that coach's group lessons, transcripts included, and their knowledge
+    // base, before the coach had answered or even seen the request.
+    // The child exists by now, so an id that is not a coach is skipped rather
+    // than failing the whole sign-up.
+    const { data: coach } = await admin.from('users').select('role').eq('id', body.coachId).maybeSingle()
+    if (coach?.role === 'coach') {
+      const cats = body.danceStyle === 'Latin & Ballroom' ? ['latin', 'ballroom'] : [body.danceStyle === 'Ballroom' ? 'ballroom' : 'latin']
+      await admin.from('coach_requests').insert(cats.map((category) => ({ coach_id: body.coachId, student_id: childId, status: 'pending', category })))
+    }
   }
 
   const points = (Array.isArray(body.focusPoints) ? body.focusPoints : []).slice(0, 5)
