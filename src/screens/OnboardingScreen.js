@@ -686,7 +686,10 @@ export default function OnboardingScreen({ navigation, route }) {
     if (step !== 'coach') return;
     let cancelled = false;
     setCoachesLoading(true);
-    let q = supabase.from('users').select('id, name, dance_style, studio_id').eq('role', 'coach');
+    // The directory, not the profile: this screen runs before the account
+    // exists, so it reads public.coach_directory (name, style, studio) and
+    // never the users table, which is closed to the app's public key.
+    let q = supabase.from('coach_directory').select('id, name, dance_style, studio_id');
     if (a.studioId) q = q.eq('studio_id', a.studioId);
     q.order('name', { ascending: true }).limit(24).then(({ data }) => {
       if (!cancelled) { setCoaches(data || []); setCoachesLoading(false); }

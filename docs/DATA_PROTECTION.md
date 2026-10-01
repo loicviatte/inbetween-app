@@ -213,6 +213,45 @@ lesson resembles a group lesson in the schema and resembles a private one in
 life; every rule that keys off "no named student" needs re-reading with that in
 mind.
 
+## 5c. The pass over every policy, 1 October
+
+After 5b, every row-level policy in the database was read and then tested by
+simulation: an account's JWT claims set, the role switched, and the visible row
+count taken table by table, for a signed-out caller, a brand-new account, a
+student with no lessons, a child account, a guardian, two students with
+lessons, and three coaches. What the policy says and what it does are not the
+same question; this answers the second.
+
+**Two more instances of the 5b clause, one of them live.** Three SECURITY
+DEFINER functions carry the same sentence the policy carried —
+`guardian_can_read_class_input`, `lesson_minutes`, `get_lesson_readiness`. The
+first was reachable: after the policy was fixed, Yaroslava's **guardian** could
+still read the couple lesson, through her daughter's coach link. Fixed in
+`20261001b`, all three aligned with the policy.
+
+**The users table answered to the app's public key.** One branch of its read
+policy — `invite_code IS NOT NULL AND role = 'coach'` — names no caller, so
+anybody holding the anon key that ships inside the app read all 11 coach rows
+in full: email, the legacy `push_token` column (19 rows in this table still
+carry one), `consent_status`, the health-consent dates, the notification
+settings. Nothing there is needed to pick a teacher from a list. Fixed in
+`20261001c`: `public.coach_directory`, a view of the six fields the picker
+uses, readable by anyone including before sign-up; the table's branch now
+requires a signed-in caller; the app reads the view in all four places. Signed
+out, the API now returns an empty array for `users` and the directory for
+`coach_directory`.
+
+**One exposure deliberately left for a few days:** a *signed-in* user can still
+read those 11 coach rows in full. The branch is kept only so a build that has
+not taken the update yet keeps working, and it is the next thing to drop.
+
+**Everything else held.** Thirteen tables have no read policy at all, so they
+answer only to the service role. Every write policy checks the caller. A coach
+sees exactly the students who attended her own classes, and no others. A
+student sees only her own roster rows. A guardian sees her child and nothing
+beyond. Signed out, the only thing left in reach is the studio list — six
+names.
+
 ## 6. Health-data consent
 
 Special-category data: a lesson's audio can carry an injury, a pain, a

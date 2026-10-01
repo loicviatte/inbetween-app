@@ -530,9 +530,8 @@ export default function LogModal({ visible, onClose, onSubmitted, initialDraft }
     searchTimeout.current = setTimeout(async () => {
       try {
         const { data } = await supabase
-          .from('users')
+          .from('coach_directory')
           .select('id, name')
-          .eq('role', 'coach')
           .ilike('name', `%${text.trim()}%`)
           .limit(5);
         setTeacherSuggestions(data || []);
