@@ -1,6 +1,7 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
-import { Platform } from 'react-native';
+import { AppState, Linking, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from './supabase/client';
 
@@ -67,6 +68,67 @@ export async function registerPushToken(userId) {
   else console.log('[Push] Token registered:', token);
 
   return token;
+}
+
+// Where this phone stands with notifications, for a screen that offers to turn
+// them on. The phone asks the person exactly once: after a refusal,
+// requestPermissionsAsync() returns 'denied' without showing anything, and only
+// the app's page in Settings can change it — which is how a coach can go a week
+// without a single reminder reaching her and nobody, her included, knowing.
+//   'granted'     — on; this phone's token is (re)sent to the server
+//   'ask'         — never asked: enable() shows the system prompt
+//   'settings'    — refused before: enable() opens Settings
+//   'unsupported' — simulator, or the check failed
+export function usePushPermission(userId) {
+  const [state, setState] = useState('unsupported');
+  // Once per screen is enough: the screen re-reads the permission every time
+  // the app comes back to the foreground, which during a lesson is often.
+  const sentRef = useRef(false);
+
+  const refresh = useCallback(async () => {
+    if (!Device.isDevice) { setState('unsupported'); return 'unsupported'; }
+    try {
+      const p = await Notifications.getPermissionsAsync();
+      const on = p.status === 'granted'
+        || p.ios?.status === Notifications.IosAuthorizationStatus.PROVISIONAL;
+      if (on) {
+        // Granted is not enough on its own: the server may have dropped this
+        // phone's token (Expo reports a reinstalled or silenced app as gone).
+        if (userId && !sentRef.current) {
+          sentRef.current = true;
+          registerPushToken(userId).catch(() => { sentRef.current = false; });
+        }
+        setState('granted');
+        return 'granted';
+      }
+      const next = p.canAskAgain ? 'ask' : 'settings';
+      setState(next);
+      return next;
+    } catch {
+      setState('unsupported');
+      return 'unsupported';
+    }
+  }, [userId]);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  // Back from Settings: read it again.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (s) => { if (s === 'active') refresh(); });
+    return () => sub.remove();
+  }, [refresh]);
+
+  const enable = useCallback(async () => {
+    if (state === 'settings') {
+      Linking.openSettings().catch(() => {});
+      return;
+    }
+    // Shows the system prompt, and on yes sends this phone's token.
+    if (userId) await registerPushToken(userId).catch(() => {});
+    await refresh();
+  }, [state, userId, refresh]);
+
+  return { state, enable };
 }
 
 // On logout: this phone stops receiving the account's pushes; its other phones
