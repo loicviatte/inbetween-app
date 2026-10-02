@@ -34,7 +34,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import { AppState } from 'react-native';
+import { AppState, Linking } from 'react-native';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import * as DjiFiles from 'local-recording-files';
 import { supabase } from '../services/supabase/client';
@@ -54,6 +54,7 @@ import {
 import { getActiveCoachClass, subscribeToActiveCoachClass } from '../storage/activeCoachClass';
 import { wavSecondsForBytes } from '../services/localRecordingMatcher';
 import { raiseMicChargeHint } from '../services/micChargeHint';
+import { syncMicPendingActivity, reportMicImportProgress } from '../services/micPendingActivity';
 import {
   evaluateReminder,
   nightsWaiting,
@@ -68,6 +69,8 @@ import {
   scheduleMorningNotification,
   cancelAllReminderNotifications,
   subscribeReminderOpen,
+  syncMicNudge,
+  subscribeMicSyncOpen,
 } from '../services/syncReminder';
 
 const POLL_INTERVAL_MS = 2000;
@@ -109,6 +112,12 @@ const CUT_SHORT_MIN_GAP_SEC = 5 * 60;
 // this we say so on the Complete screen; a full card stops a recording exactly
 // the way a flat battery does.
 const LOW_SPACE_SEC = 2 * 60 * 60;
+
+// Where the "Plug in your mic" Live Activity sends a tap (see
+// services/micPendingActivity.js). The launch URL is read once per process:
+// getInitialURL keeps returning it, and a remounted provider must not replay it.
+const MIC_SYNC_URL = 'inbetween://mic-sync';
+let initialMicSyncUrlSeen = false;
 
 const DjiSyncContext = createContext(null);
 
@@ -250,6 +259,7 @@ export function DjiSyncProvider({ children }) {
     }
     try {
       const rows = await fetchPendingUploads(userId);
+      syncMicPendingActivity(rows);
       setPendingUploadCount(rows.length);
       const sig = rows.map((r) => `${r.id}:${r.abandonedAt ? 1 : 0}`).join(',');
       if (sig !== pendingSigRef.current) {
@@ -1435,6 +1445,55 @@ export function DjiSyncProvider({ children }) {
     }, 350);
   }, [hasFolderAccess, openFlow, requestMicSetup]);
 
+  // Two hours after the last lesson still waiting for its audio, a notification
+  // — in case the coach swiped the Live Activity away (see syncReminder.js).
+  useEffect(() => {
+    if (!enabled || !userId) return;
+    syncMicNudge(pendingRows.filter((r) => !r.abandonedAt));
+  }, [enabled, userId, pendingRows]);
+
+  // The lesson's Live Activity shows the import as "Sending audio" (60→80%).
+  useEffect(() => {
+    if (!enabled) return;
+    reportMicImportProgress({ phase, progressPct, fileIdx, fileTotal });
+  }, [enabled, phase, progressPct, fileIdx, fileTotal]);
+
+  // Tapping the "Plug in your mic" Live Activity opens inbetween://mic-sync;
+  // tapping the two-hour nudge asks for the same through the syncReminder bus.
+  // The link can land before the auth user resolves (a tap that cold-starts
+  // the app), so it's latched and acted on once the provider can act.
+  const [micSyncLinkAt, setMicSyncLinkAt] = useState(0);
+  useEffect(() => {
+    const onUrl = (url) => {
+      if (url?.startsWith(MIC_SYNC_URL)) setMicSyncLinkAt(Date.now());
+    };
+    if (!initialMicSyncUrlSeen) {
+      initialMicSyncUrlSeen = true;
+      Linking.getInitialURL().then(onUrl).catch(() => {});
+    }
+    const sub = Linking.addEventListener('url', ({ url }) => onUrl(url));
+    // The two-hour nudge's tap lands here too (App.js → syncReminder bus).
+    const off = subscribeMicSyncOpen(() => setMicSyncLinkAt(Date.now()));
+    return () => {
+      sub.remove();
+      off();
+    };
+  }, []);
+  useEffect(() => {
+    if (!micSyncLinkAt || !enabled || !userId) return;
+    setMicSyncLinkAt(0);
+    // A lesson still running owns the screen; an open flow already is the answer.
+    if (getActiveCoachClass() || flowOpenRef.current) return;
+    if (reminderOpenRef.current) {
+      reminderImportNow();
+      return;
+    }
+    let configured = false;
+    try { configured = DjiFiles.hasFolder?.() ?? false; } catch {}
+    if (configured) openFlow();
+    else requestMicSetup();
+  }, [micSyncLinkAt, enabled, userId, openFlow, requestMicSetup, reminderImportNow]);
+
   /** One line naming what's still waiting — reused by both local reminders. */
   const pendingBlurb = useCallback((suffix) => {
     const rows = reminderPendingRef.current;
@@ -1443,7 +1502,7 @@ export function DjiSyncProvider({ children }) {
     const n = rows.length;
     const head =
       n === 1
-        ? `${who ?? 'A lesson'} is still waiting for ${who ? 'her' : 'its'} audio.`
+        ? `${who ? `${who}’s lesson` : 'A lesson'} is still waiting for its audio.`
         : `${n} lessons are still waiting for their audio${who ? ` (${who}…)` : ''}.`;
     return `${head} ${suffix}`;
   }, []);

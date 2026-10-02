@@ -6,6 +6,18 @@ public class LiveActivitiesModule: Module {
   public func definition() -> ModuleDefinition {
     Name("LiveActivities")
 
+    // A mic-pending activity's push token, as Apple hands it over (and again
+    // whenever it rotates) — the server pushes the lesson's later steps to it.
+    Events("onMicPendingPushToken")
+
+    OnCreate {
+      if #available(iOS 16.2, *) {
+        for activity in Activity<MicPendingAttributes>.activities {
+          self.observePushToken(activity)
+        }
+      }
+    }
+
     AsyncFunction("startCoachRecording") { (params: [String: Any], promise: Promise) in
       guard #available(iOS 16.2, *) else { promise.resolve(nil); return }
       guard ActivityAuthorizationInfo().areActivitiesEnabled else {
@@ -79,6 +91,69 @@ public class LiveActivitiesModule: Module {
       }
     }
 
+    // ─── Mic pending (a lesson's road from class to focus points) ─────────
+    // One activity at a time: start creates it, update rewrites its state,
+    // end closes it.
+
+    AsyncFunction("startMicPending") { (params: [String: Any], promise: Promise) in
+      guard #available(iOS 16.2, *) else { promise.resolve(nil); return }
+      guard ActivityAuthorizationInfo().areActivitiesEnabled else {
+        promise.reject("E_LA_DISABLED", "Live Activities are disabled in iOS Settings")
+        return
+      }
+      do {
+        let activity = try Activity.request(
+          attributes: MicPendingAttributes(),
+          content: .init(state: micPendingState(params), staleDate: nil),
+          pushType: .token
+        )
+        self.observePushToken(activity)
+        promise.resolve(activity.id)
+      } catch {
+        promise.reject("E_LA_START", error.localizedDescription)
+      }
+    }
+
+    AsyncFunction("updateMicPending") { (params: [String: Any], promise: Promise) in
+      guard #available(iOS 16.2, *) else { promise.resolve(0); return }
+      let state = micPendingState(params)
+      Task {
+        var updated = 0
+        for activity in Activity<MicPendingAttributes>.activities where activity.activityState == .active {
+          await activity.update(.init(state: state, staleDate: nil))
+          updated += 1
+        }
+        promise.resolve(updated)
+      }
+    }
+
+    AsyncFunction("endMicPending") { (promise: Promise) in
+      guard #available(iOS 16.2, *) else { promise.resolve(nil); return }
+      Task {
+        for activity in Activity<MicPendingAttributes>.activities {
+          await activity.end(nil, dismissalPolicy: .immediate)
+        }
+        promise.resolve(nil)
+      }
+    }
+
+    // The tokens already known, for activities started in an earlier run.
+    AsyncFunction("micPendingPushTokens") { (promise: Promise) in
+      guard #available(iOS 16.2, *) else { promise.resolve([]); return }
+      let list: [[String: String]] = Activity<MicPendingAttributes>.activities.compactMap { activity in
+        guard activity.activityState == .active, let token = activity.pushToken else { return nil }
+        return ["activityId": activity.id, "token": hex(token)]
+      }
+      promise.resolve(list)
+    }
+
+    // Which of Apple's push environments this build talks to: a development-
+    // signed build (local, Xcode) uses the sandbox; TestFlight and the App
+    // Store carry no embedded profile and use production.
+    Function("apnsEnvironment") { () -> String in
+      return apnsEnvironment()
+    }
+
     AsyncFunction("startFocusPoint") { (params: [String: Any], promise: Promise) in
       guard #available(iOS 16.2, *) else { promise.resolve(nil); return }
       guard ActivityAuthorizationInfo().areActivitiesEnabled else {
@@ -140,4 +215,41 @@ public class LiveActivitiesModule: Module {
       }
     }
   }
+
+  @available(iOS 16.2, *)
+  private func observePushToken(_ activity: Activity<MicPendingAttributes>) {
+    Task { [weak self] in
+      for await token in activity.pushTokenUpdates {
+        self?.sendEvent("onMicPendingPushToken", ["activityId": activity.id, "token": hex(token)])
+      }
+    }
+  }
+}
+
+@available(iOS 16.2, *)
+private func micPendingState(_ params: [String: Any]) -> MicPendingAttributes.ContentState {
+  return MicPendingAttributes.ContentState(
+    stage: (params["stage"] as? String) ?? "waiting",
+    progress: min(1, max(0, (params["progress"] as? Double) ?? 0.6)),
+    title: (params["title"] as? String) ?? "No audio yet",
+    detail: (params["detail"] as? String) ?? "",
+    badge: params["badge"] as? String,
+    cta: params["cta"] as? String,
+    link: (params["link"] as? String) ?? "inbetween://mic-sync"
+  )
+}
+
+private func hex(_ data: Data) -> String {
+  data.map { String(format: "%02x", $0) }.joined()
+}
+
+private func apnsEnvironment() -> String {
+  guard
+    let url = Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision"),
+    let data = try? Data(contentsOf: url),
+    // The profile is a signed plist; its XML sits in the clear inside.
+    let text = String(data: data, encoding: .isoLatin1)
+  else { return "production" }
+  let pattern = "<key>aps-environment</key>\\s*<string>development</string>"
+  return text.range(of: pattern, options: .regularExpression) != nil ? "sandbox" : "production"
 }

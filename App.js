@@ -11,7 +11,7 @@
 // is skipped on a student cold start.
 
 import React, { useEffect, useRef, useState } from 'react';
-import { View, AppState, StyleSheet, Animated, Platform } from 'react-native';
+import { View, AppState, StyleSheet, Animated, Platform, Linking } from 'react-native';
 import { NavigationContainer, DefaultTheme, createNavigationContainerRef } from '@react-navigation/native';
 import * as Notifications from 'expo-notifications';
 import * as SplashScreen from 'expo-splash-screen';
@@ -133,6 +133,12 @@ function handleNotificationTap(data) {
     // needed once a reminder is actually tapped. The bus latches the request
     // when the tap cold-starts the app (DjiSyncProvider subscribes later).
     require('./src/services/syncReminder').requestReminderOpen();
+    return;
+  }
+  if (type === 'mic_nudge') {
+    // The two-hour "No audio yet" nudge → straight into the mic sync (or the
+    // mic setup, for a coach who never did it). Same lazy bus as above.
+    require('./src/services/syncReminder').requestMicSyncOpen();
     return;
   }
   if (type === 'coach_request_received') {
@@ -334,6 +340,20 @@ export default function App() {
         pendingNotifTapRef.current = data;
       }
     });
+    return () => sub.remove();
+  }, []);
+
+  // The lesson's Live Activity, once its focus points are ready, opens
+  // inbetween://action-needed — the same place as their push.
+  useEffect(() => {
+    const open = (url) => {
+      if (!url?.startsWith('inbetween://action-needed')) return;
+      const data = { type: 'focus_points_added' };
+      if (navigationRef.isReady()) handleNotificationTap(data);
+      else pendingNotifTapRef.current = data;
+    };
+    Linking.getInitialURL().then(open).catch(() => {});
+    const sub = Linking.addEventListener('url', ({ url }) => open(url));
     return () => sub.remove();
   }, []);
 

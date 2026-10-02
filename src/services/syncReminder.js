@@ -327,9 +327,90 @@ export async function cancelMorningNotification() {
   }
 }
 
-/** Everything landed → drop both pending local reminders. */
+// ─── Two hours after the lesson ──────────────────────────────────────────
+// The lesson's Live Activity (micPendingActivity.js) asks for the mic from the
+// moment class ends — but a coach can swipe it away, and iOS doesn't tell
+// anyone when they do. So the app also leaves a notification on the phone for
+// two hours after the last lesson still waiting for its audio, withdrawn as
+// soon as the audio lands (or the lesson is written off). One at a time: a new
+// lesson moves it back, so a coach teaching all afternoon hears it once, two
+// hours after the last one — not between lessons.
+
+const MIC_NUDGE_ID = 'mic-nudge';
+export const MIC_NUDGE_DELAY_MS = 2 * 3600 * 1000;
+// Daytime only. From 20:00 the evening reminder owns the subject, and a nudge
+// at 19:xx would only be followed by it; at night, nobody plugs in a mic.
+const MIC_NUDGE_FIRST_H = 8;
+const MIC_NUDGE_LAST_H = 19;
+
+/** When the nudge for these waiting lessons should land, or null for none. */
+export function micNudgeAt(waiting, now = new Date()) {
+  if (!waiting.length) return null;
+  const lastEnd = Math.max(...waiting.map((r) => new Date(r.endedAt ?? r.startedAt).getTime()));
+  const at = new Date(lastEnd + MIC_NUDGE_DELAY_MS);
+  if (at.getTime() <= now.getTime()) return null;
+  const h = at.getHours();
+  if (h < MIC_NUDGE_FIRST_H || h >= MIC_NUDGE_LAST_H) return null;
+  return at;
+}
+
+function nudgeLesson(row) {
+  if (row.studentName) return `${row.studentName}’s lesson`;
+  if (row.lessonType === 'group') return 'your group lesson';
+  if (row.lessonType === 'couple') return 'your couple lesson';
+  return 'your private lesson';
+}
+
+let lastNudgeSig = '';
+
+/**
+ * Brings the scheduled nudge in line with the lessons waiting for audio
+ * (written-off ones excluded): scheduled, moved, or withdrawn.
+ */
+export async function syncMicNudge(waiting, now = new Date()) {
+  const at = micNudgeAt(waiting, now);
+  const body = waiting.length === 1
+    ? `Plug in your mic to get the focus points from ${nudgeLesson(waiting[0])}.`
+    : `Plug in your mic to get the focus points from your ${waiting.length} lessons.`;
+  const sig = at ? `${at.getTime()}|${body}` : '';
+  if (sig === lastNudgeSig) return;
+  try {
+    await Notifications.cancelScheduledNotificationAsync(MIC_NUDGE_ID);
+  } catch {
+    /* nothing scheduled */
+  }
+  lastNudgeSig = '';
+  if (!at) return;
+  try {
+    const { status } = await Notifications.getPermissionsAsync();
+    if (status !== 'granted') return;
+    await Notifications.scheduleNotificationAsync({
+      identifier: MIC_NUDGE_ID,
+      content: {
+        title: 'No audio yet',
+        body,
+        data: { type: 'mic_nudge' },
+      },
+      trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: at },
+    });
+    lastNudgeSig = sig;
+  } catch {
+    /* best-effort */
+  }
+}
+
+export async function cancelMicNudge() {
+  lastNudgeSig = '';
+  try {
+    await Notifications.cancelScheduledNotificationAsync(MIC_NUDGE_ID);
+  } catch {
+    /* nothing scheduled */
+  }
+}
+
+/** Everything landed → drop every pending local reminder. */
 export async function cancelAllReminderNotifications() {
-  await Promise.all([cancelSnoozeNotification(), cancelMorningNotification()]);
+  await Promise.all([cancelSnoozeNotification(), cancelMorningNotification(), cancelMicNudge()]);
 }
 
 // ─── Open-on-demand bus ──────────────────────────────────────────────────
@@ -362,4 +443,31 @@ export function subscribeReminderOpen(fn) {
     } catch {}
   }
   return () => _listeners.delete(fn);
+}
+
+// Same bus, for the two-hour nudge: its tap goes straight to the mic sync.
+const _micSyncListeners = new Set();
+let _pendingMicSync = false;
+
+export function requestMicSyncOpen() {
+  if (_micSyncListeners.size === 0) {
+    _pendingMicSync = true;
+    return;
+  }
+  _micSyncListeners.forEach((fn) => {
+    try {
+      fn();
+    } catch {}
+  });
+}
+
+export function subscribeMicSyncOpen(fn) {
+  _micSyncListeners.add(fn);
+  if (_pendingMicSync) {
+    _pendingMicSync = false;
+    try {
+      fn();
+    } catch {}
+  }
+  return () => _micSyncListeners.delete(fn);
 }

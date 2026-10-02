@@ -7,6 +7,7 @@ struct InBetweenLiveActivitiesBundle: WidgetBundle {
     if #available(iOS 16.2, *) {
       CoachRecordingLiveActivity()
       FocusPointLiveActivity()
+      MicPendingLiveActivity()
     }
   }
 }
