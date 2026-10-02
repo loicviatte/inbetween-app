@@ -64,3 +64,8 @@ verify_jwt = false
 # Live Activity follows moves on — gate on the JWT like notify-audio-lost.
 [functions.live-activity-push]
 verify_jwt = true
+
+# pg_cron every 15 min with a service-role bearer: DJI lessons still without
+# audio 8h after they ended → one Telegram message to the admin.
+[functions.notify-audio-missing]
+verify_jwt = true
