@@ -92,6 +92,7 @@
         }
       ],
       "expo-asset",
+      "./plugins/withWidgetVersionMatchesApp.js",
       "@bacons/apple-targets",
       "./plugins/withGradleMemory.js",
       "./plugins/withPodsDeploymentTarget.js"
