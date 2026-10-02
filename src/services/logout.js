@@ -9,6 +9,8 @@ import { clearUserCaches } from '../storage/userCaches';
 import { invalidateCache, clearSubjectCache } from '../storage/storage';
 import { getActiveSession, clearActiveSession, clearChatMessages } from '../storage/activeSession';
 import { getActiveCoachClass, clearActiveCoachClass } from '../storage/activeCoachClass';
+import { clearMicPendingActivity } from './micPendingActivity';
+import { cancelMicNudge } from './syncReminder';
 
 // resetProfile clears the in-memory avatar and initials (ProfileContext) so the
 // next account never flashes this one's photo.
@@ -79,6 +81,8 @@ export function logOutCoachWithChecks({ djiUploading = false } = {}) {
   const activeClass = getActiveCoachClass();
   const go = async () => {
     clearActiveCoachClass();
+    await clearMicPendingActivity();
+    await cancelMicNudge();
     await clearUserCaches();
     forgetMemoryCaches();
     const { data: { session } } = await supabase.auth.getSession();

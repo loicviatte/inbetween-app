@@ -31,6 +31,8 @@ const USER_CACHE_KEYS = [
   'activeSession.v1',
   'activeCoachClass.v1',
   'startClassRoster.v1',
+  'micPendingActivity.shown.v1',
+  'micPendingActivity.filed.v1',
 ];
 
 // Families of keys that are per-entity (one key per student+style, etc.) and so

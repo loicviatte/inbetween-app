@@ -59,3 +59,8 @@ verify_jwt = false
 
 [functions.age-check]
 verify_jwt = false
+
+# Fired by DB triggers (pg_net) with a service-role bearer when a lesson that a
+# Live Activity follows moves on — gate on the JWT like notify-audio-lost.
+[functions.live-activity-push]
+verify_jwt = true

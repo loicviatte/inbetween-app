@@ -63,4 +63,49 @@ export async function endFocusPoint(activityId: string, targetReached?: boolean)
   await native.endFocusPoint({ activityId, targetReached: !!targetReached });
 }
 
+export type MicPendingState = {
+  stage: 'waiting' | 'uploading' | 'extracting' | 'ready';
+  progress: number; // overall 0...1 — Lesson 60%, Mic audio 20%, Focus points 20%
+  title: string;
+  detail: string;
+  badge: string | null; // compact Dynamic Island text in place of the %
+  cta: string | null; // button label, none when null
+  link: string; // where a tap goes
+};
+
+export async function startMicPending(state: MicPendingState): Promise<string | null> {
+  if (!native?.startMicPending) return null;
+  return await native.startMicPending(state);
+}
+
+/** Rewrites every live mic-pending activity; resolves how many it reached. */
+export async function updateMicPending(state: MicPendingState): Promise<number> {
+  if (!native?.updateMicPending) return 0;
+  return await native.updateMicPending(state);
+}
+
+export async function endMicPending(): Promise<void> {
+  if (!native?.endMicPending) return;
+  await native.endMicPending();
+}
+
+export type MicPendingPushToken = { activityId: string; token: string };
+
+/** Push tokens of the live mic-pending activities (ones started earlier too). */
+export async function micPendingPushTokens(): Promise<MicPendingPushToken[]> {
+  if (!native?.micPendingPushTokens) return [];
+  return await native.micPendingPushTokens();
+}
+
+/** Called with each activity's push token as Apple hands it over. */
+export function addMicPendingPushTokenListener(fn: (e: MicPendingPushToken) => void): { remove: () => void } {
+  if (!native?.addListener) return { remove: () => {} };
+  return native.addListener('onMicPendingPushToken', fn);
+}
+
+/** 'sandbox' for a development-signed build, 'production' otherwise. */
+export function apnsEnvironment(): 'sandbox' | 'production' {
+  return native?.apnsEnvironment?.() ?? 'production';
+}
+
 export const isLiveActivitiesAvailable = (): boolean => !!native;
