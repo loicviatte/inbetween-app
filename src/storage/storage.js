@@ -709,10 +709,10 @@ async function _linkToCoachByCategory(userId, inviteCode, category) {
   const coachIdField = category === 'latin' ? 'latin_coach_id' : 'ballroom_coach_id';
 
   const { data: coach } = await supabase
-    .from('users')
-    .select('id, name, role, dance_style, studio:studios!users_studio_id_fkey(id, name)')
+    // public.coach_directory carries what linking needs — no email, no token.
+    .from('coach_directory')
+    .select('id, name, role, dance_style, studio_id, studio_name')
     .eq('invite_code', code)
-    .eq('role', 'coach')
     .maybeSingle();
 
   if (!coach) throw new Error('Coach not found. Check the code and try again.');

@@ -73,18 +73,21 @@ Deno.serve(async (req: Request) => {
     return new Response(JSON.stringify({ error: insertError?.message ?? 'Insert failed' }), { status: 500 })
   }
 
-  // 2. Invoke yoda-score to update the focus point scores
-  const { error: scoreError } = await supabase.functions.invoke('yoda-score', {
-    body: {
-      event: 'practice_log',
-      student_id,
-      practice_log_id: newLog.id,
+  // 2. Hand the session to yoda-score. A plain fetch with the service key, as
+  // in yoda-extract: functions.invoke() stopped getting through yoda-score's
+  // service-role check when the injected key changed on 26 September.
+  const scoreRes = await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/yoda-score`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`,
     },
+    body: JSON.stringify({ event: 'practice_log', student_id, practice_log_id: newLog.id }),
   })
 
-  if (scoreError) {
-    console.error('[practice-log] yoda-score error:', scoreError.message)
-    // Non-fatal: log was inserted, scoring will be retried or fixed manually
+  if (!scoreRes.ok) {
+    console.error(`[practice-log] yoda-score ${scoreRes.status}:`, (await scoreRes.text()).slice(0, 300))
+    // Non-fatal: the log is inserted, and readiness counts logs directly.
   }
 
   // 3. Return updated focus point

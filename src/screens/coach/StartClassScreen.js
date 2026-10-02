@@ -42,6 +42,7 @@ import {
   clearActiveCoachClass,
 } from '../../storage/activeCoachClass';
 import { supabase } from '../../services/supabase/client';
+import { usePushPermission } from '../../services/notifications';
 import {
   presentAudioRoutePicker,
   getCurrentInputRoute,
@@ -699,6 +700,14 @@ export default function StartClassScreen({ navigation }) {
 
   // End-of-class debrief modal
   const [debriefOpen, setDebriefOpen] = useState(false);
+  // Notifications, offered where they matter: the lesson just ended, and its
+  // focus points are the next thing the coach will want to hear about.
+  const push = usePushPermission(authUser?.id);
+  const pushAskedRef = useRef(false);
+  const [pushJustOn, setPushJustOn] = useState(false);
+  useEffect(() => {
+    if (push.state === 'granted' && pushAskedRef.current) setPushJustOn(true);
+  }, [push.state]);
   const [debriefDurationMs, setDebriefDurationMs] = useState(0);
   const [validatedFpIds, setValidatedFpIds] = useState([]);
 
@@ -2540,6 +2549,35 @@ export default function StartClassScreen({ navigation }) {
                   )}
                 </Card>
               )}
+
+              {/* Shown only to a phone that cannot be reached. The phone asks
+                  once; after a refusal the only way back is Settings, so the
+                  button says so instead of pretending to ask again. */}
+              {pushJustOn ? (
+                <Card style={{ marginTop: 18 }}>
+                  <View style={ls.noteRow}>
+                    <Ionicons name="checkmark-circle" size={16} color={L.GREEN} />
+                    <Text style={ls.noteText}>You’ll be told when this lesson’s focus points are ready.</Text>
+                  </View>
+                </Card>
+              ) : (push.state === 'ask' || push.state === 'settings') && (
+                <Card style={{ marginTop: 18 }}>
+                  <View style={ls.notifyBox}>
+                    <View style={ls.notifyHead}>
+                      <Ionicons name="notifications-off-outline" size={16} color={L.GOLD_INK} />
+                      <Text style={ls.noteText}>
+                        {push.state === 'settings'
+                          ? 'Notifications are off for InBetween. Your phone only asks once, so they come back on in Settings.'
+                          : 'Notifications are off: you won’t hear when this lesson’s focus points are ready, or if its audio is still missing tonight.'}
+                      </Text>
+                    </View>
+                    <PopupButton
+                      label={push.state === 'settings' ? 'Turn on in Settings' : 'Notify me when focus points are ready'}
+                      onPress={() => { pushAskedRef.current = true; push.enable(); }}
+                    />
+                  </View>
+                </Card>
+              )}
             </ScrollView>
 
             <StartFoot label="Done" icon={null} bottom={insets.bottom} onPress={finishDebrief} />
@@ -3543,6 +3581,8 @@ const ls = StyleSheet.create({
 
   noteRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12, paddingHorizontal: 15 },
   noteText: { flex: 1, fontFamily: Fonts.regular, fontSize: 12.5, lineHeight: 17, color: 'rgba(10,10,10,0.72)' },
+  notifyBox: { paddingVertical: 14, paddingHorizontal: 15, gap: 12 },
+  notifyHead: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
 });
 
 // ── Choose your mic ─────────────────────────────────────────────────────────

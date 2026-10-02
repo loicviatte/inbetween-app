@@ -332,7 +332,7 @@ export async function requestCoupleCoachByCode(coupleId, code, category) {
   if (category !== 'latin' && category !== 'ballroom') throw new Error('Pick a style.');
 
   const { data: coach } = await supabase
-    .from('users').select('id, name, role').eq('invite_code', clean).eq('role', 'coach').maybeSingle();
+    .from('coach_directory').select('id, name, role').eq('invite_code', clean).maybeSingle();
   if (!coach) throw new Error('No coach found for this code.');
 
   // One couple-coach request per (couple, style): replace any existing one.

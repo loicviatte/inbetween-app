@@ -174,6 +174,139 @@ table gets the same rule against its two coach columns. After: Nataliia reads
 189; Tanya reads 119 Latin and no Ballroom; Esther still reads all 127 of her
 own; the admin all 601.
 
+## 5b. Incident, 1 October: a couple lesson read from another student's account
+
+Reported by the coach, not caught by us. Fabio taught a couple lesson to Sanna
+and Sadie on 26 September; on 1 October he wrote that its data was showing on
+Yaroslava's account. Yaroslava is a **child account** with a guardian, who owns
+no lesson and no focus point and whose only link to that lesson is that Fabio is
+also her Ballroom coach.
+
+**Cause.** One branch of the `class_inputs` read policy: *my coach taught this
+class, and the class is either about me or names no student*. "Names no student"
+was written to mean a group class, where the roster lives elsewhere and every
+student of that coach may read the shared summary. A **couple** lesson carries
+no `student_id` either — its two dancers are the couple — so it fell into the
+same branch and every other student of that coach could read it: title, summary
+and the 2,883-character transcript.
+
+**Exposure.** Four students are linked to that coach. Two are the dancers
+themselves. The other two are Yaroslava and Madeleine Lodge. Madeleine last
+opened the app on 24 September, two days before the lesson existed, so she never
+saw it. Yaroslava's account did: it opened the lesson detail **seven times on
+30 September between 23:14 and 23:20**. Window: 26 September 20:41 (scoring) to
+1 October (fix), four days and fourteen hours. No focus point, no couple focus
+point and no recording were reachable from that account — only the lesson row.
+
+**Fix** (migration `20261001a`): the student branch now excludes a couple lesson
+explicitly, by `couple_id` and by `lesson_type` (one older couple class carries
+the type but no `couple_id`). The couple's own branch, first in the policy,
+already gives the two dancers and their couple coaches what they need. Verified
+after the change: Yaroslava and Madeleine read zero lessons, Sanna and Sadie
+still read theirs, every other account is unchanged.
+
+**What this says about the pattern.** Three read boundaries have now been found
+in the same place — the approval gate that was a door (26 September), the
+style boundary that lived only in the client (26 September) and this one. Each
+was a policy written for one lesson type and inherited by another. A couple
+lesson resembles a group lesson in the schema and resembles a private one in
+life; every rule that keys off "no named student" needs re-reading with that in
+mind.
+
+## 5c. The pass over every policy, 1 October
+
+After 5b, every row-level policy in the database was read and then tested by
+simulation: an account's JWT claims set, the role switched, and the visible row
+count taken table by table, for a signed-out caller, a brand-new account, a
+student with no lessons, a child account, a guardian, two students with
+lessons, and three coaches. What the policy says and what it does are not the
+same question; this answers the second.
+
+**Two more instances of the 5b clause, one of them live.** Three SECURITY
+DEFINER functions carry the same sentence the policy carried —
+`guardian_can_read_class_input`, `lesson_minutes`, `get_lesson_readiness`. The
+first was reachable: after the policy was fixed, Yaroslava's **guardian** could
+still read the couple lesson, through her daughter's coach link. Fixed in
+`20261001b`, all three aligned with the policy.
+
+**The users table answered to the app's public key.** One branch of its read
+policy — `invite_code IS NOT NULL AND role = 'coach'` — names no caller, so
+anybody holding the anon key that ships inside the app read all 11 coach rows
+in full: email, the legacy `push_token` column (19 rows in this table still
+carry one), `consent_status`, the health-consent dates, the notification
+settings. Nothing there is needed to pick a teacher from a list. Fixed in
+`20261001c`: `public.coach_directory`, a view of the six fields the picker
+uses, readable by anyone including before sign-up; the table's branch now
+requires a signed-in caller; the app reads the view in all four places. Signed
+out, the API now returns an empty array for `users` and the directory for
+`coach_directory`.
+
+**Closed the same day** (`20261001d`). The branch was kept for a few hours in
+case a build in the field still read the table; the two screens that could have
+been affected are the sign-up coach list, which only a brand-new install sees,
+and the teacher typeahead in the manual log, where the name can be typed by
+hand. So it went. A dancer now reads a coach's row only through
+`is_my_coach()` — their own coach, linked or still pending — and, added with
+it, the coach of a couple they dance in, which until then worked only because
+every coach was readable by everyone. Measured after: a student with no lessons
+reads 2 rows (herself and her coach), a dancer in a couple 3, a guardian 3
+(herself, her child, the child's coach), a coach her own students plus the
+coaches of her own studio.
+
+**Everything else held.** Thirteen tables have no read policy at all, so they
+answer only to the service role. Every write policy checks the caller. A coach
+sees exactly the students who attended her own classes, and no others. A
+student sees only her own roster rows. A guardian sees her child and nothing
+beyond. Signed out, the only thing left in reach is the studio list — six
+names.
+
+## 5d. The audit beyond the row policies, 1 October
+
+5c tested what each table lets a reader see. This pass looked at every other
+way in: the functions a client can call, the edge functions, storage, the
+realtime feed. Every finding below was proven before it was fixed, each time in
+a transaction that was rolled back or against an id that does not exist.
+
+**A guard that a missing identity walks through** (`20261001e`). Three
+SECURITY DEFINER functions defended themselves with an inequality —
+`IF auth.email() != admin_email() THEN RAISE`. Signed out, the identity is
+NULL, the comparison is neither true nor false, and IF skips the RAISE. The
+worst was `trainer_insert_class_input`: holding only the public key, with a
+coach id from the public directory, an anonymous caller inserted a lesson into
+that coach's account — and a lesson insert is what wakes the extraction
+pipeline. The other two let an anonymous caller who knew a request id pair a
+couple or accept a coach request. All three now use IS DISTINCT FROM, and the
+anonymous role lost EXECUTE on thirteen functions that change or return data
+and have no signed-out use. No lesson in production carries the traces of an
+anonymous insert: every lesson without a recording belongs to the demo
+account, to a student's own log, or to the April lessons before recording
+existed.
+
+**Push notifications to anyone, from anyone.** `send-push` asked for nothing,
+and the gateway's JWT check is satisfied by the anon key inside the app: any
+title and body could be pushed to any user id, under the InBetween name. Proven
+against an id that does not exist, so nothing was sent. It now answers only to
+the service role, which every legitimate caller uses — the notification
+webhook and six database functions, each checked.
+
+**A coach link nobody accepted** (`create-child-account`). The parent's choice
+of coach was written straight into the child's coach column with the service
+role, which the acceptance guard exempts. The read policies trust that column,
+so anyone who signed up as a parent could name any coach and immediately read
+that coach's group lessons, transcripts included, and their whole knowledge
+base — four lessons and seventy entries in the reproduction — before the coach
+had answered. The function now files a pending request only; the column is
+written when the coach accepts, as for every student. One account still carries
+such a link from before the fix.
+
+**Checked and clean.** Lesson audio is readable only from its owner's folder;
+age proofs have no read policy at all; avatars are public by design. The only
+view a client can read is the coach directory. The six tables on the realtime
+feed are all behind row policies, and the app uses no broadcast or presence
+channel. Every other edge function either verifies the caller or a webhook
+secret and ties the ids it receives to that caller; the one open endpoint,
+the onboarding recall, runs before an account exists and is rate-limited by IP.
+
 ## 6. Health-data consent
 
 Special-category data: a lesson's audio can carry an injury, a pain, a

@@ -1420,15 +1420,30 @@ Return ONLY a JSON array of numbers, e.g. [1, 3]. No explanation.`,
       }
     }
 
-    // Invoke yoda-score to insert focus points and seed scores
-    const { error: scoreError } = await supabase.functions.invoke('yoda-score', {
-      body: {
-        event: 'class_input',
-        class_input_id: id,
+    // Hand the class to yoda-score, which writes the focus points.
+    //
+    // A plain fetch with the service key in the Authorization header, not
+    // supabase.functions.invoke. On 26 September at 21:11 the platform swapped
+    // the SUPABASE_SERVICE_ROLE_KEY it injects into functions, and from that
+    // minute invoke() stopped getting through yoda-score's service-role check:
+    // every lesson extracted after it stopped at 'extracted', with no focus
+    // point and nothing but a swallowed console.error to say so. The same fetch
+    // in the couple repair path kept working, which is how this was found.
+    // A failure now leaves the class marked, so it cannot pass for in progress.
+    const scoreRes = await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/yoda-score`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`,
       },
+      body: JSON.stringify({ event: 'class_input', class_input_id: id }),
     })
-    if (scoreError) {
-      console.error(`[yoda-extract] yoda-score error for ${id}:`, scoreError.message)
+    if (!scoreRes.ok) {
+      const detail = (await scoreRes.text()).slice(0, 300)
+      console.error(`[yoda-extract] yoda-score ${scoreRes.status} for ${id}: ${detail}`)
+      await supabase.from('class_inputs')
+        .update({ error_message: `scoring failed (${scoreRes.status}): ${detail}` })
+        .eq('id', id)
     }
 
     // Fire-and-forget: generate alternative focus point versions for trainer review
