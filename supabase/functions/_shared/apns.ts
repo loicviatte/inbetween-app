@@ -67,10 +67,15 @@ export async function providerToken(supabase: any, fresh = false): Promise<strin
 }
 
 export type LiveActivityPush = {
-  event: 'update' | 'end'
+  event: 'start' | 'update' | 'end'
   contentState?: Record<string, unknown> | null
   // 10 = now; 5 = when convenient (iOS budgets the 10s).
   priority?: 5 | 10
+  // 'start' only (push-to-start): the Swift ActivityAttributes type, its
+  // static fields, and the alert iOS shows as the activity appears.
+  attributesType?: string
+  attributes?: Record<string, unknown>
+  alert?: { title: string; body: string }
 }
 
 export type ApnsResult = { ok: boolean; status: number; reason?: string; env: ApnsEnv }
@@ -113,6 +118,11 @@ export async function sendLiveActivity(
   const aps: Record<string, unknown> = { timestamp: now, event: push.event }
   if (push.contentState) aps['content-state'] = push.contentState
   if (push.event === 'end') aps['dismissal-date'] = now
+  if (push.event === 'start') {
+    aps['attributes-type'] = push.attributesType
+    aps['attributes'] = push.attributes ?? {}
+    if (push.alert) aps['alert'] = { ...push.alert, sound: 'default' }
+  }
   const body = JSON.stringify({ aps })
   const priority = push.priority ?? 10
 

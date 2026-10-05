@@ -34,12 +34,32 @@ function serverStep(rec: any): { share: number; text: string } {
   return { share: 0.55, text: 'Reading the lesson' }
 }
 
-function lessonPhrase(rec: any): string {
+export function lessonPhrase(rec: any): string {
   const name = rec.student?.name
   if (name) return `${name}’s lesson`
   if (rec.lesson_type === 'group') return 'Your group lesson'
   if (rec.lesson_type === 'couple') return 'Your couple lesson'
   return 'Your private lesson'
+}
+
+/**
+ * "No audio yet" for these lessons (class_recordings rows with ended_at, and
+ * student:student_id(name) for the phrase). Also what the server starts on a
+ * phone with push-to-start (live-activity-restart).
+ */
+export function waitingState(waiting: any[]): LessonRoadState {
+  const oldest = waiting.reduce((a: any, b: any) => (new Date(b.ended_at) < new Date(a.ended_at) ? b : a))
+  return {
+    stage: 'waiting',
+    progress: 0.6,
+    title: 'No audio yet',
+    detail: waiting.length === 1
+      ? `${lessonPhrase(oldest)} can’t sync without it`
+      : `${waiting.length} lessons can’t sync without it`,
+    badge: 'Plug mic',
+    cta: 'Plug in your mic',
+    link: MIC_SYNC_LINK,
+  }
 }
 
 /** The state for an activity following `ids`, or null when nothing is left. */
@@ -61,20 +81,7 @@ export async function lessonRoadState(supabase: any, ids: string[]): Promise<Les
 
   // Still waiting for the mic's audio.
   const waiting = recs.filter((r: any) => !r.mic_file_name && r.ended_at)
-  if (waiting.length) {
-    const oldest = waiting.reduce((a: any, b: any) => (new Date(b.ended_at) < new Date(a.ended_at) ? b : a))
-    return {
-      stage: 'waiting',
-      progress: 0.6,
-      title: 'No audio yet',
-      detail: waiting.length === 1
-        ? `${lessonPhrase(oldest)} can’t sync without it`
-        : `${waiting.length} lessons can’t sync without it`,
-      badge: 'Plug mic',
-      cta: 'Plug in your mic',
-      link: MIC_SYNC_LINK,
-    }
-  }
+  if (waiting.length) return waitingState(waiting)
 
   const arrived = recs.filter((r: any) => r.mic_file_name)
   const released = arrived.filter((r: any) => r.class_inputs?.coach_released_at).map((r: any) => r.class_input_id)
