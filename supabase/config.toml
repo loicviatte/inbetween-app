@@ -69,3 +69,8 @@ verify_jwt = true
 # audio 8h after they ended → one Telegram message to the admin.
 [functions.notify-audio-missing]
 verify_jwt = true
+
+# pg_cron hourly with a service-role bearer: puts the "No audio yet" Live
+# Activity back on a coach's phone by push-to-start.
+[functions.live-activity-restart]
+verify_jwt = true

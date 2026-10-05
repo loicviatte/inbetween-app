@@ -3,17 +3,37 @@ import ActivityKit
 import Foundation
 
 public class LiveActivitiesModule: Module {
+  // Activities whose push token we already follow (the app's own, and the
+  // ones the server starts by push-to-start).
+  private var observed = Set<String>()
+  private let observedLock = NSLock()
+
   public func definition() -> ModuleDefinition {
     Name("LiveActivities")
 
     // A mic-pending activity's push token, as Apple hands it over (and again
     // whenever it rotates) — the server pushes the lesson's later steps to it.
-    Events("onMicPendingPushToken")
+    Events("onMicPendingPushToken", "onMicPendingPushToStartToken")
 
     OnCreate {
       if #available(iOS 16.2, *) {
         for activity in Activity<MicPendingAttributes>.activities {
           self.observePushToken(activity)
+        }
+      }
+      if #available(iOS 17.2, *) {
+        // The token the server uses to START an activity on this phone
+        // (live-activity-restart), handed over again whenever it rotates.
+        Task { [weak self] in
+          for await data in Activity<MicPendingAttributes>.pushToStartTokenUpdates {
+            self?.sendEvent("onMicPendingPushToStartToken", ["token": hex(data)])
+          }
+        }
+        // An activity the server started: follow its update token too.
+        Task { [weak self] in
+          for await activity in Activity<MicPendingAttributes>.activityUpdates {
+            self?.observePushToken(activity)
+          }
         }
       }
     }
@@ -147,6 +167,15 @@ public class LiveActivitiesModule: Module {
       promise.resolve(list)
     }
 
+    // The push-to-start token, when iOS already gave one (iOS 17.2+).
+    AsyncFunction("micPendingPushToStartToken") { (promise: Promise) in
+      if #available(iOS 17.2, *) {
+        promise.resolve(Activity<MicPendingAttributes>.pushToStartToken.map { hex($0) })
+      } else {
+        promise.resolve(nil)
+      }
+    }
+
     // Which of Apple's push environments this build talks to: a development-
     // signed build (local, Xcode) uses the sandbox; TestFlight and the App
     // Store carry no embedded profile and use production.
@@ -218,6 +247,10 @@ public class LiveActivitiesModule: Module {
 
   @available(iOS 16.2, *)
   private func observePushToken(_ activity: Activity<MicPendingAttributes>) {
+    observedLock.lock()
+    let isNew = observed.insert(activity.id).inserted
+    observedLock.unlock()
+    guard isNew else { return }
     Task { [weak self] in
       for await token in activity.pushTokenUpdates {
         self?.sendEvent("onMicPendingPushToken", ["activityId": activity.id, "token": hex(token)])

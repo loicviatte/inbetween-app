@@ -29,6 +29,8 @@ import {
   endMicPending,
   micPendingPushTokens,
   addMicPendingPushTokenListener,
+  micPendingPushToStartToken,
+  addMicPendingPushToStartTokenListener,
   apnsEnvironment,
 } from 'live-activities';
 import { supabase } from './supabase/client';
@@ -274,6 +276,40 @@ async function reconcileServer() {
   await saveFiled([...filed]);
 }
 
+// ─── Push-to-start ───────────────────────────────────────────────────────
+// With this token the server can put the activity back on the phone without
+// the app being opened (live-activity-restart: the morning after, for lessons
+// still waiting for their audio). iOS 17.2+; filed again whenever it rotates.
+
+let lastStartFiled = '';
+
+async function fileStartToken(given) {
+  let token = given;
+  if (!token) {
+    try {
+      token = await micPendingPushToStartToken();
+    } catch {
+      token = null;
+    }
+  }
+  if (!token) return;
+  const env = apnsEnvironment();
+  const sig = `${token}|${env}`;
+  if (sig === lastStartFiled) return;
+  const { error } = await supabase.rpc('register_live_activity_start_token', { p_token: token, p_apns_env: env });
+  if (!error) lastStartFiled = sig;
+}
+
+async function forgetStartToken() {
+  lastStartFiled = '';
+  let token = null;
+  try {
+    token = await micPendingPushToStartToken();
+  } catch {}
+  if (!token) return;
+  await supabase.rpc('unregister_live_activity_start_token', { p_token: token }).then(() => {}, () => {});
+}
+
 // ─── Putting it on screen ────────────────────────────────────────────────
 
 let lastSent = '';
@@ -334,6 +370,7 @@ async function recount(rows) {
   // Only a lesson the coach hasn't been shown yet may (re)start an activity.
   const hasNew = waitingIds.some((id) => !stillShown.includes(id));
   await render({ mayStart: hasNew });
+  await fileStartToken();
 }
 
 // Recounts and import ticks run one after another, never interleaved, so two
@@ -351,6 +388,10 @@ addMicPendingPushTokenListener(() => {
     lastFiled = '';
     await reconcileServer();
   });
+});
+
+addMicPendingPushToStartTokenListener(({ token }) => {
+  enqueue(() => fileStartToken(token));
 });
 
 /** `rows` = every lesson awaiting mic audio, written-off ones included. */
@@ -382,5 +423,6 @@ export function clearMicPendingActivity() {
     await endMicPending();
     await saveShown([]);
     await reconcileServer();
+    await forgetStartToken();
   });
 }

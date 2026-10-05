@@ -103,6 +103,18 @@ export function addMicPendingPushTokenListener(fn: (e: MicPendingPushToken) => v
   return native.addListener('onMicPendingPushToken', fn);
 }
 
+/** The token the server uses to start an activity on this phone (iOS 17.2+). */
+export async function micPendingPushToStartToken(): Promise<string | null> {
+  if (!native?.micPendingPushToStartToken) return null;
+  return await native.micPendingPushToStartToken();
+}
+
+/** Called with the push-to-start token as iOS hands it over (and rotates it). */
+export function addMicPendingPushToStartTokenListener(fn: (e: { token: string }) => void): { remove: () => void } {
+  if (!native?.addListener) return { remove: () => {} };
+  return native.addListener('onMicPendingPushToStartToken', fn);
+}
+
 /** 'sandbox' for a development-signed build, 'production' otherwise. */
 export function apnsEnvironment(): 'sandbox' | 'production' {
   return native?.apnsEnvironment?.() ?? 'production';
