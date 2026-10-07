@@ -24,9 +24,15 @@
 // ───────────────────────────────────────────────────────────────────────
 
 import * as FileSystem from 'expo-file-system/legacy';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from './supabase/client';
 import {
   parseDjiFileName,
+  correctMicTimestamp,
+  anchorFromLesson,
+  anchorFromSetupTest,
+  latestAnchor,
+  MicClockAnchor,
   estimateWavDurationSec,
   isBareTimestampName,
   matchFilesToClasses,
@@ -133,6 +139,12 @@ export interface AutoSyncResult {
    * the flow can say so instead of reporting a serene "Up to date".
    */
   unplaceableRecordings?: number;
+  /**
+   * Nothing on the mic fitted any waiting lesson's dates, so the mic's clock
+   * is off (or changed since we last learned it): recordings were paired by
+   * order and length instead, and every pairing is held for admin review.
+   */
+  clockOff?: boolean;
   /** True if a mic read timed out mid-import (receiver unplugged). */
   micDisconnected?: boolean;
   /** True if an upload failed for a network reason and items are held. */
@@ -941,6 +953,59 @@ async function reconcileOrphansToClasses(
  * Returns status === 'no_folder' if the folder bookmark isn't granted
  * (caller should kick off pickFolder via DjiFiles directly).
  */
+// ─── The mic's clock ─────────────────────────────────────────────────────
+// How far off the mic's clock is (see "The mic's clock" in
+// localRecordingMatcher). The setup test's anchor lives on the phone; lesson
+// anchors are read back from the lessons themselves — a trusted lesson's first
+// file name and its start are both already stored, so nothing new is kept.
+
+const SETUP_ANCHOR_KEY = 'micClockAnchor.v1:';
+
+/** From the setup wizard: the test just recorded, read off the mic. */
+export async function saveSetupClockAnchor(
+  userId: string,
+  entries: Array<{ name: string; sizeBytes: number }>,
+  recordedAt: number,
+): Promise<MicClockAnchor | null> {
+  const anchor = anchorFromSetupTest(entries, recordedAt);
+  if (!anchor) return null;
+  try {
+    await AsyncStorage.setItem(SETUP_ANCHOR_KEY + userId, JSON.stringify(anchor));
+  } catch {}
+  return anchor;
+}
+
+/** mic time − real time for this coach's mic, in ms (0 when unknown). */
+export async function fetchMicClockOffsetMs(userId: string): Promise<number> {
+  let setup: MicClockAnchor | null = null;
+  try {
+    const raw = await AsyncStorage.getItem(SETUP_ANCHOR_KEY + userId);
+    setup = raw ? JSON.parse(raw) : null;
+  } catch {}
+
+  let lesson: MicClockAnchor | null = null;
+  try {
+    // The latest lesson whose audio was trusted: auto-approved, or confirmed
+    // by the admin (which is how a clock change gets learned).
+    const { data } = await supabase
+      .from('class_recordings')
+      .select('mic_file_name, started_at')
+      .eq('user_id', userId)
+      .eq('local_recording_mode', true)
+      .eq('admin_review_status', 'approved')
+      .not('mic_file_name', 'is', null)
+      .order('started_at', { ascending: false })
+      .limit(1);
+    const r = data?.[0];
+    if (r?.mic_file_name && r.started_at) {
+      const startedAt = new Date(r.started_at);
+      lesson = anchorFromLesson(r.mic_file_name, startedAt, +startedAt);
+    }
+  } catch {}
+
+  return latestAnchor([setup, lesson])?.offsetMs ?? 0;
+}
+
 export async function planAutoSync(
   userId: string,
   pendingClasses: PendingClassRow[],
@@ -1017,67 +1082,71 @@ export async function planAutoSync(
   // window. NOTE: we do NOT drop short files here — a split recording can
   // end in a short tail part (e.g. a 28s 3rd chunk of a 62-min class) that
   // must stay with its session. The <60s filter is applied per SESSION below.
-  // Recordings the date window throws out — the coach is told about these
-  // rather than left with "Up to date" while their audio sits on the mic.
-  const unplaceableIdx = new Set<number>();
-  const candidates = allEntries
-    .map((entry: any) => {
-      const meta = parseDjiFileName(entry.name);
-      if (!meta) return null;
-      if (importedFilenames.has(entry.name)) return null;
-      // Bare-timestamp recorders skip the date window: their RTC can be months
-      // off (resets when the battery drains), so absolute dates are noise. The
-      // mic-as-queue sweep above keeps their folder to pending-only, and the
-      // per-session <60s filter + chronological ORDER still guard the matching.
-      if (!isBareTimestampName(entry.name)) {
-        const fileDate = meta.timestamp.toISOString().slice(0, 10);
-        if (!acceptableDates.has(fileDate)) {
-          unplaceableIdx.add(meta.index);
-          return null;
-        }
-      }
-      return { entry, meta };
-    })
-    .filter(Boolean) as Array<{ entry: any; meta: { index: number; timestamp: Date } }>;
-
-  if (candidates.length === 0) {
-    return {
-      pairs: [],
-      status: 'no_candidates',
-      totalFilesInFolder: allEntries.length,
-      unplaceableRecordings: unplaceableIdx.size,
-      errors: [],
-      importedCount: 0,
-    };
+  // File times are put on the real clock first: the mic's own stamp minus how
+  // far off we learned its clock is (0 until we know — see fetchMicClockOffsetMs).
+  const offsetMs = await fetchMicClockOffsetMs(userId);
+  type Candidate = { entry: any; timestamp: Date; index: number };
+  const inWindow: Candidate[] = [];
+  const outOfWindow: Candidate[] = [];
+  for (const entry of allEntries as any[]) {
+    const meta = parseDjiFileName(entry.name);
+    if (!meta) continue;
+    if (importedFilenames.has(entry.name)) continue;
+    // Bare-timestamp recorders skip the date window: their RTC can be months
+    // off (resets when the battery drains), so absolute dates are noise. The
+    // mic-as-queue sweep above keeps their folder to pending-only, and the
+    // per-session <60s filter + chronological ORDER still guard the matching.
+    const bare = isBareTimestampName(entry.name);
+    const timestamp = bare ? meta.timestamp : correctMicTimestamp(meta.timestamp, offsetMs);
+    const c = { entry, timestamp, index: meta.index };
+    if (!bare && !acceptableDates.has(timestamp.toISOString().slice(0, 10))) outOfWindow.push(c);
+    else inWindow.push(c);
   }
 
-  // Build MicFiles + a name→relativePath lookup (relativePath is what
-  // DjiFiles.copyFileToCache needs; MicFile itself doesn't carry it).
+  // name→relativePath (what DjiFiles.copyFileToCache needs; MicFile itself
+  // doesn't carry it).
   const relPathByName = new Map<string, string>();
-  const micFiles: MicFile[] = candidates.map(({ entry, meta }) => {
-    relPathByName.set(entry.name as string, (entry.relativePath ?? entry.name) as string);
-    return {
-      fileName: entry.name as string,
-      index: meta.index,
-      timestamp: meta.timestamp,
-      durationSec: estimateWavDurationSec(entry.name as string, entry.sizeBytes),
-      sizeBytes: entry.sizeBytes as number,
-      uri: '',
-    };
-  });
-
   // Stitch split parts into continuous recording sessions, then drop
   // sessions too short to be a real class (symmetric with the pending-class
   // <60s filter — the short tail part survives because we sum the session).
-  const sessions = groupMicFilesIntoSessions(micFiles)
-    .filter((s) => s.durationSec >= MIN_VALID_DURATION_SEC);
+  const sessionsOf = (list: Candidate[]): MicSession[] => groupMicFilesIntoSessions(
+    list.map(({ entry, timestamp, index }): MicFile => {
+      relPathByName.set(entry.name as string, (entry.relativePath ?? entry.name) as string);
+      return {
+        fileName: entry.name as string,
+        index,
+        timestamp,
+        durationSec: estimateWavDurationSec(entry.name as string, entry.sizeBytes),
+        sizeBytes: entry.sizeBytes as number,
+        uri: '',
+      };
+    }),
+  ).filter((s) => s.durationSec >= MIN_VALID_DURATION_SEC);
+
+  let sessions = sessionsOf(inWindow);
+  // Recordings the date window throws out — the coach is told about these
+  // rather than left with "Up to date" while their audio sits on the mic.
+  const unplaceable = sessionsOf(outOfWindow).length;
+
+  // Lessons are waiting and the mic holds recordings of a lesson's length, but
+  // not one fits their dates: the mic's clock is off — never set, reset by a
+  // flat battery, or changed since we last learned it. The mic only holds what
+  // hasn't been imported (the sweep above deletes the rest), so pair them by
+  // order and length anyway — the most plausible guess — and hold every
+  // pairing for the admin. A confirmed pairing becomes the anchor the next
+  // sync corrects with, so the clock is relearned after one review.
+  let clockOff = false;
+  if (sessions.length === 0 && unplaceable > 0 && workingClasses.length > 0) {
+    clockOff = true;
+    sessions = sessionsOf([...inWindow, ...outOfWindow]);
+  }
 
   if (sessions.length === 0) {
     return {
       pairs: [],
       status: 'no_candidates',
       totalFilesInFolder: allEntries.length,
-      unplaceableRecordings: unplaceableIdx.size,
+      unplaceableRecordings: unplaceable,
       errors: [],
       importedCount: 0,
     };
@@ -1113,7 +1182,11 @@ export async function planAutoSync(
   if (result.status === 'matched') {
     for (const m of result.matches) {
       const cls = workingClasses.find((p) => p.id === m.class.id);
+      // Paired without dates: a length that doesn't fit is no guess at all, and
+      // a length that does still goes to the admin.
+      if (clockOff && m.confidence === 'low') continue;
       let adminReviewStatus = deriveAdminReviewStatus(result.status, m.confidence);
+      if (clockOff) adminReviewStatus = 'pending';
       // Auto-approval ALSO requires the paired file's date to be plausibly near
       // the class date. Equal session/class counts force a positional 1:1
       // pairing even when the sets are actually mis-aligned — a class with no
@@ -1153,6 +1226,7 @@ export async function planAutoSync(
       const scored = matchSessionsToClasses([cls], [session]);
       const m = scored.matches[0];
       if (!m) continue;
+      if (clockOff && m.confidence === 'low') continue;
       const pendingRow = workingClasses.find((p) => p.id === cls.id);
       pairs.push({
         classId: cls.id,
@@ -1173,7 +1247,10 @@ export async function planAutoSync(
     pairs,
     status: result.status,
     totalFilesInFolder: allEntries.length,
-    unplaceableRecordings: unplaceableIdx.size,
+    // In clock-off mode the "unplaceable" recordings are the ones placed —
+    // unless their lengths matched no lesson either.
+    unplaceableRecordings: clockOff && pairs.length > 0 ? 0 : unplaceable,
+    clockOff,
     errors: [],
     importedCount: 0,
   };
@@ -1197,6 +1274,7 @@ export async function scanUnmatchedSessions(
   const allEntries = await DjiFiles.listFiles();
   const imported = await fetchImportedFilenames(userId);
   const cutoffMs = Date.now() - ORPHAN_RECENCY_DAYS * 24 * 60 * 60 * 1000;
+  const offsetMs = await fetchMicClockOffsetMs(userId);
 
   const relPathByName = new Map<string, string>();
   const micFiles: MicFile[] = [];
@@ -1208,12 +1286,14 @@ export async function scanUnmatchedSessions(
     // Same RTC caveat as planAutoSync: a bare-timestamp recorder's file dates
     // can be months off, so the orphan recency cutoff would wrongly mark every
     // file "ancient". Their folder is queue-swept instead.
-    if (!isBareTimestampName(entry.name) && +meta.timestamp < cutoffMs) continue;
+    const bare = isBareTimestampName(entry.name);
+    const timestamp = bare ? meta.timestamp : correctMicTimestamp(meta.timestamp, offsetMs);
+    if (!bare && +timestamp < cutoffMs) continue;
     relPathByName.set(entry.name as string, (entry.relativePath ?? entry.name) as string);
     micFiles.push({
       fileName: entry.name as string,
       index: meta.index,
-      timestamp: meta.timestamp,
+      timestamp,
       durationSec: estimateWavDurationSec(entry.name as string, entry.sizeBytes),
       sizeBytes: entry.sizeBytes as number,
       uri: '',

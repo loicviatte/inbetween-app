@@ -469,10 +469,9 @@ function CompleteScreen({
   // still needs.
   const stranded = noneNew && awaitingAudio > 0;
   const one = awaitingAudio === 1;
-  // …and the one case where we can name the culprit: recordings ARE on the mic,
-  // dated too far from the lesson to be trusted (its clock drifts, and resets
-  // when the battery dies). Telling the coach to fix the date is the whole
-  // difference between a lost lesson and a two-tap fix.
+  // …and recordings ARE on the mic, but none fits: not their dates (a mic
+  // clock that's off is learned and corrected for, so it never gets here
+  // alone), and not their length either. Most often another mic's card.
   const oneOff = unplaceable === 1;
   // Priority tail: an admin-review hold is the most important caveat (those
   // recordings are NOT live for the student yet), then unmatched, else the
@@ -513,7 +512,7 @@ function CompleteScreen({
         <Text style={s.p}>
           {stranded
             ? unplaceable > 0
-              ? `${awaitingAudio} ${one ? 'lesson is' : 'lessons are'} still waiting, and ${unplaceable} ${oneOff ? 'recording' : 'recordings'} on the mic ${oneOff ? 'is' : 'are'} dated too far off to place. Set the date and time on the mic, then sync again.`
+              ? `${awaitingAudio} ${one ? 'lesson is' : 'lessons are'} still waiting, and the ${unplaceable === 1 ? 'recording' : `${unplaceable} recordings`} on the mic ${oneOff ? "doesn't" : "don't"} match ${one ? 'its' : 'their'} length. Check the mic is the one you taught with.`
               : `Nothing new on the mic, and ${awaitingAudio} ${one ? 'lesson is' : 'lessons are'} still waiting for ${one ? 'its' : 'their'} audio. Check the mic is the one you taught with — ${one ? "its file isn't" : "their files aren't"} on it yet.`
             : noneNew
               ? "Nothing new on the mic — everything's already imported."

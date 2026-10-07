@@ -547,3 +547,92 @@ export function assignSessionsByDuration(
   }
   return out;
 }
+
+// ─── The mic's clock ───────────────────────────────────────────────────────
+// A DJI mic stamps each file with its own clock, and that clock is often
+// wrong: never set on a new mic, reset when the battery runs flat. Coaches
+// won't set it, so we learn how far off it is and correct for it:
+//
+//   offset = mic time − real time
+//
+// learned from an anchor — a moment we can place on both clocks:
+//   • the setup test: the coach records three seconds and taps RECORDED; the
+//     test's end on the mic ≈ that tap (seconds of error);
+//   • every lesson whose audio was trusted (auto-approved, or confirmed by the
+//     admin): its file's mic stamp vs the lesson's start in the app (the coach
+//     presses REC at Start — minutes of error, against a ±2-day window).
+// The latest anchor wins. When the clock jumps (reset, or set by hand) no
+// recording fits any lesson any more; the planner then pairs by order and
+// length for admin review, and that confirmed pairing is the next anchor.
+
+export interface MicClockAnchor {
+  /** mic time − real time, in ms. */
+  offsetMs: number;
+  /** When the anchor was taken (epoch ms) — the latest one wins. */
+  at: number;
+  source: 'setup' | 'lesson';
+}
+
+/** The real time of a moment the mic stamped. */
+export function correctMicTimestamp(micTime: Date, offsetMs: number): Date {
+  return offsetMs ? new Date(+micTime - offsetMs) : micTime;
+}
+
+/**
+ * Anchor from a lesson whose file was trusted: its first file's mic stamp
+ * against the lesson's start in the app. Null for a name we can't read, and
+ * for a bare-timestamp recorder (its folder is handled as a queue instead).
+ */
+export function anchorFromLesson(
+  micFileName: string,
+  startedAt: Date,
+  at: number,
+): MicClockAnchor | null {
+  if (isBareTimestampName(micFileName)) return null;
+  const meta = parseDjiFileName(micFileName);
+  if (!meta || Number.isNaN(+startedAt)) return null;
+  return { offsetMs: +meta.timestamp - +startedAt, at, source: 'lesson' };
+}
+
+// A setup test is a few seconds; anything longer isn't the test.
+const SETUP_TEST_MAX_SEC = 120;
+
+/**
+ * Anchor from the setup test: the newest recording on the mic, if it is short
+ * enough to be the test the coach just made, ended about when they tapped
+ * RECORDED (`recordedAt`, epoch ms). "Newest" is the mic's own counter
+ * (DJI_<index>), not its stamp — the stamp is the very thing in doubt.
+ */
+export function anchorFromSetupTest(
+  entries: Array<{ name: string; sizeBytes: number }>,
+  recordedAt: number,
+): MicClockAnchor | null {
+  let newest: { index: number; start: Date; durationSec: number } | null = null;
+  for (const e of entries) {
+    if (isBareTimestampName(e.name)) continue;
+    const meta = parseDjiFileName(e.name);
+    if (!meta) continue;
+    const later = !newest
+      || meta.index > newest.index
+      || (meta.index === newest.index && +meta.timestamp > +newest.start);
+    if (later) {
+      newest = {
+        index: meta.index,
+        start: meta.timestamp,
+        durationSec: estimateWavDurationSec(e.name, e.sizeBytes),
+      };
+    }
+  }
+  if (!newest || newest.durationSec > SETUP_TEST_MAX_SEC) return null;
+  const micEnd = +newest.start + newest.durationSec * 1000;
+  return { offsetMs: micEnd - recordedAt, at: recordedAt, source: 'setup' };
+}
+
+/** The anchor to trust: the latest one. */
+export function latestAnchor(anchors: Array<MicClockAnchor | null | undefined>): MicClockAnchor | null {
+  let best: MicClockAnchor | null = null;
+  for (const a of anchors) {
+    if (a && Number.isFinite(a.offsetMs) && (!best || a.at > best.at)) best = a;
+  }
+  return best;
+}
