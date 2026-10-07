@@ -31,7 +31,8 @@ import { SafeAreaProvider, initialWindowMetrics, useSafeAreaInsets } from 'react
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useIsFocused } from '@react-navigation/native';
 import { Fonts } from '../theme';
-import { countMicSessions } from '../services/localRecordingAutoSync';
+import { countMicSessions, saveSetupClockAnchor } from '../services/localRecordingAutoSync';
+import { supabase } from '../services/supabase/client';
 import * as DjiFiles from 'local-recording-files';
 import { BrowseTabChip, NoNameChip } from './DjiFilesChips';
 import { useDjiSync } from '../context/DjiSyncContext';
@@ -201,6 +202,9 @@ export default function DjiSetupBanner() {
   const [foundCount, setFoundCount] = useState(0);
   const dismissedRef = useRef(false);
   const pickingRef = useRef(false); // a folder pick is in flight
+  // When the coach tapped RECORDED: the test's end on the mic's clock against
+  // this moment on the phone's tells us how far off the mic's clock is.
+  const testRecordedAtRef = useRef(null);
   const sync = useDjiSync(); // sibling provider — to refresh its pill after grant
   const isFocused = useIsFocused();
   const trans = useRef(new Animated.Value(1)).current; // 1 = shown, 0 = hidden
@@ -275,6 +279,13 @@ export default function DjiSetupBanner() {
     setTimeout(() => setStep('intro'), 250);
   }
 
+  // Test step → RECORDED: the moment is kept to learn the mic's clock once
+  // the folder is read (see saveSetupClockAnchor).
+  function markTestRecorded() {
+    testRecordedAtRef.current = Date.now();
+    setStep('plug');
+  }
+
   // Files step → fire the iOS folder picker, then verify the pick holds DJI
   // recordings (else the error step + retry). Guards: pickingRef blocks a
   // double-tap starting a second picker; dismissedRef is checked after EVERY
@@ -297,6 +308,14 @@ export default function DjiSetupBanner() {
         // Count logical recordings (sessions), not raw file-parts — a split
         // recording is several files sharing an index but is ONE recording.
         djiCount = countMicSessions(entries);
+        const recordedAt = testRecordedAtRef.current;
+        if (recordedAt && djiCount > 0) {
+          testRecordedAtRef.current = null;
+          supabase.auth.getSession().then(({ data }) => {
+            const uid = data?.session?.user?.id;
+            if (uid) saveSetupClockAnchor(uid, entries, recordedAt);
+          }).catch(() => {});
+        }
       } catch {
         /* listFiles can fail right after pick — treat as 0 */
       }
@@ -366,7 +385,7 @@ export default function DjiSetupBanner() {
 
             {/* Bottom actions */}
             <Animated.View style={[s.bottom, { opacity: trans }]}>
-              {renderBottom(displayStep, { dismissModal, setStep, handleOpenPicker })}
+              {renderBottom(displayStep, { dismissModal, setStep, handleOpenPicker, markTestRecorded })}
             </Animated.View>
             </ModalSafe>
           </View>
@@ -591,7 +610,7 @@ function BackBtn({ onPress, label = 'BACK' }) {
 
 const arrow = <Ionicons name="arrow-forward" size={13} color={INK} style={{ marginLeft: 2 }} />;
 
-function renderBottom(step, { dismissModal, setStep, handleOpenPicker }) {
+function renderBottom(step, { dismissModal, setStep, handleOpenPicker, markTestRecorded }) {
   switch (step) {
     case 'intro':
       return (
@@ -611,7 +630,7 @@ function renderBottom(step, { dismissModal, setStep, handleOpenPicker }) {
       return (
         <View style={s.actions}>
           <BackBtn onPress={() => setStep('poweron')} />
-          <PrimaryBtn label="RECORDED" icon={arrow} onPress={() => setStep('plug')} />
+          <PrimaryBtn label="RECORDED" icon={arrow} onPress={markTestRecorded} />
         </View>
       );
     case 'plug':
