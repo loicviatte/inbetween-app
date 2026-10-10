@@ -57,7 +57,6 @@ export function isNativeRecorderEnabled(user) {
 // Coaches kept on the OLD live phone-capture flow. Add an email here to opt a
 // specific coach OUT of the new DJI-mic + USB-C sync flow.
 const LOCAL_RECORDING_LEGACY_EMAILS = new Set([
-  'testmarius@gmail.com', // Marius — still on the old Bluetooth / live-capture setup
   // The presentation account. It has no mic and never will, so the whole mic
   // flow is noise on it — and since the setup step took the dashboard's main
   // button, leaving it on would mean no Start a lesson at all in front of an
