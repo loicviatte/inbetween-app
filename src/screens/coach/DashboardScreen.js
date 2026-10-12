@@ -421,9 +421,10 @@ export default function DashboardScreen({ navigation }) {
   });
 
   // What stands between a new coach and a first lesson: a studio (students find
-  // their coach through it), then a student. Requests already waiting count as
-  // the way in. Only before a coach has taught: one who records lessons with
-  // couples or a studio's group, with no student linked, keeps Start.
+  // their coach through it), then the mic, then a student. Requests already
+  // waiting count as the way in. Only before a coach has taught: one who records
+  // lessons with couples or a studio's group, with no student linked, keeps
+  // Start.
   const openStudents = () => { setLinksOpen(false); navigation.navigate('STUDENTS'); };
   // The mic comes before the first lesson, not after it. Until the coach has
   // linked the folder once, nothing they record can be imported — so that step
@@ -436,7 +437,9 @@ export default function DashboardScreen({ navigation }) {
     : !(user.studio_id || user.studio?.id)
       ? { icon: 'business-outline', label: 'Add your studio', hint: 'Your students find you through your studio.',
           onPress: () => navigation.navigate('CoachSettings', { open: 'studio' }) }
-      : allStudents.length > 0 ? null
+      // The mic before the first student: it is set up once, alone, while the
+      // students come at their own pace.
+      : micSetup || allStudents.length > 0 ? null
         : requests?.length
           ? { icon: 'person-add-outline', label: `Review ${requests.length} request${requests.length === 1 ? '' : 's'}`,
               hint: 'Students asked to join you. Accept them to record their lessons.', onPress: openStudents }
