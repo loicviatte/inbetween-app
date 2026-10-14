@@ -34,7 +34,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import { AppState, Linking } from 'react-native';
+import { Alert, AppState, Linking } from 'react-native';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import * as DjiFiles from 'local-recording-files';
 import { supabase } from '../services/supabase/client';
@@ -126,7 +126,7 @@ export function useDjiSync() {
   return useContext(DjiSyncContext);
 }
 
-export function DjiSyncProvider({ children }) {
+export function DjiSyncProvider({ children, navigationRef }) {
   const [authUser, setAuthUser] = useState(null);
   useEffect(() => {
     supabase.auth
@@ -778,6 +778,8 @@ export function DjiSyncProvider({ children }) {
   const attemptSync = useCallback(
     async (foreground, { explicit = false } = {}) => {
       if (syncRunningRef.current || !userId) return;
+      // Never while a lesson is running on this phone (see blockedByLesson).
+      if (getActiveCoachClass()) return;
       // Never start a fresh plan/execute while prepared items are held offline:
       // the 8s retry timer owns them, and a new runExecute would reset
       // summaryAccumRef and ignore the hold, racing (and mis-counting) the drain.
@@ -1093,11 +1095,36 @@ export function DjiSyncProvider({ children }) {
   }, [enabled, userId, attemptSync]);
 
   // ─── Actions exposed to the pill + modal ──────────────────────────────
+  // No sync while a lesson is running on this phone. The recording attaches to
+  // a lesson that has ended: synced while it's still open, the audio has no
+  // lesson to go to and lands among the orphans. So the coach is sent to the
+  // lesson to stop it first.
+  const blockedByLesson = useCallback(() => {
+    if (!getActiveCoachClass()) return false;
+    Alert.alert(
+      'Lesson still in progress',
+      'Finish the lesson before syncing your mic.',
+      [
+        { text: 'Not now', style: 'cancel' },
+        {
+          text: 'Go to the lesson',
+          onPress: () => {
+            if (navigationRef?.isReady?.()) {
+              try { navigationRef.navigate('StartClass'); } catch {}
+            }
+          },
+        },
+      ],
+    );
+    return true;
+  }, [navigationRef]);
+
   const openFlow = useCallback(() => {
+    if (blockedByLesson()) return;
     refreshFolderAccess();
     setFlowOpen(true);
     setPhase((prev) => (prev === 'idle' ? 'waiting' : prev));
-  }, [refreshFolderAccess]);
+  }, [refreshFolderAccess, blockedByLesson]);
 
   // "Run in background": hide the modal, keep the sync going.
   const runInBackground = useCallback(() => {
@@ -1482,8 +1509,9 @@ export function DjiSyncProvider({ children }) {
   useEffect(() => {
     if (!micSyncLinkAt || !enabled || !userId) return;
     setMicSyncLinkAt(0);
-    // A lesson still running owns the screen; an open flow already is the answer.
-    if (getActiveCoachClass() || flowOpenRef.current) return;
+    // An open flow already is the answer; a lesson still running gets the
+    // "finish it first" popup instead of the flow.
+    if (flowOpenRef.current || blockedByLesson()) return;
     if (reminderOpenRef.current) {
       reminderImportNow();
       return;
@@ -1492,7 +1520,7 @@ export function DjiSyncProvider({ children }) {
     try { configured = DjiFiles.hasFolder?.() ?? false; } catch {}
     if (configured) openFlow();
     else requestMicSetup();
-  }, [micSyncLinkAt, enabled, userId, openFlow, requestMicSetup, reminderImportNow]);
+  }, [micSyncLinkAt, enabled, userId, openFlow, requestMicSetup, reminderImportNow, blockedByLesson]);
 
   /** One line naming what's still waiting — reused by both local reminders. */
   const pendingBlurb = useCallback((suffix) => {

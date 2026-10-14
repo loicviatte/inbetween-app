@@ -534,6 +534,10 @@ export function assignSessionsByDuration(
       if (expectedDurSec > 0) {
         const ratio = sortedSessions[i].durationSec / expectedDurSec;
         durScore = Math.abs(ratio - 1) * 100;
+      } else {
+        // No length to go on (never stopped): the session that began nearest
+        // the lesson's start, in minutes.
+        durScore = Math.abs(+sortedSessions[i].startTimestamp - +cls.startedAt) / 60000;
       }
       const score = durScore + i * 0.001;
       if (score < bestScore) {
@@ -626,6 +630,20 @@ export function anchorFromSetupTest(
   if (!newest || newest.durationSec > SETUP_TEST_MAX_SEC) return null;
   const micEnd = +newest.start + newest.durationSec * 1000;
   return { offsetMs: micEnd - recordedAt, at: recordedAt, source: 'setup' };
+}
+
+// ─── A lesson the coach never stopped ──────────────────────────────────────
+// It has no length to match on, only its start. The mic is switched on around
+// the moment the lesson is started in the app: a little before at most, up to
+// half an hour after (on the real clock — the mic's offset corrected first).
+
+const STARTS_BEFORE_LESSON_MS = 10 * 60 * 1000;
+const STARTS_AFTER_LESSON_MS = 30 * 60 * 1000;
+
+/** True when a recording began with this lesson. */
+export function recordingStartsWithLesson(recordingStart: Date, lessonStart: Date): boolean {
+  const gap = +recordingStart - +lessonStart;
+  return gap >= -STARTS_BEFORE_LESSON_MS && gap <= STARTS_AFTER_LESSON_MS;
 }
 
 /** The anchor to trust: the latest one. */
