@@ -136,7 +136,7 @@ export default function CoachAppNavigator({ navigationRef }) {
   useCoachStartupEffects(navigationRef);
   return (
     <CoachDataProvider>
-      <DjiSyncProvider>
+      <DjiSyncProvider navigationRef={navigationRef}>
       <CoachStack.Navigator screenOptions={{ headerShown: false }}>
         <CoachStack.Screen name="CoachMainTabs" component={CoachMainTabs} />
         <CoachStack.Screen

@@ -29,6 +29,7 @@ import { supabase } from './supabase/client';
 import {
   parseDjiFileName,
   correctMicTimestamp,
+  recordingStartsWithLesson,
   anchorFromLesson,
   anchorFromSetupTest,
   latestAnchor,
@@ -910,22 +911,32 @@ async function reconcileOrphansToClasses(
   // earliest class when several are duration-close.
   const classes = [...pendingClasses].sort((a, b) => +a.startedAt - +b.startedAt);
   for (const cls of classes) {
-    // Unknown-length classes can't be scored by duration at all (see
-    // classesForMatcher) — leave them to the positional matcher.
     const expected = cls.durationUnknown ? 0 : cls.durationSec;
-    if (!expected) continue;
     let best: any = null;
     let bestScore = Infinity;
     for (const o of orphans) {
       if (used.has(o.id)) continue;
       if (!o.duration_sec || !o.mic_timestamp) continue;
       if (!Array.isArray(o.storage_paths) || o.storage_paths.length === 0) continue;
-      const ratio = o.duration_sec / expected;
-      if (ratio < 0.5 || ratio > 1.5) continue; // ±50% (matcher's medium band)
-      const oDay = Math.floor(Date.parse(o.mic_timestamp) / DAY_MS);
-      const cDay = Math.floor(+cls.startedAt / DAY_MS);
-      if (Math.abs(oDay - cDay) > RECONCILE_DATE_TOLERANCE_DAYS) continue;
-      const score = Math.abs(ratio - 1);
+      let score: number;
+      if (cls.durationUnknown) {
+        // A lesson the coach never stopped has no length to compare, only its
+        // start. The orphan's stamp is on the real clock (the mic's offset is
+        // corrected before upload), so a recording that began with the lesson
+        // is that lesson's. Typically: synced while the lesson was still open,
+        // so the file went up as an orphan, then the lesson was closed.
+        const start = new Date(o.mic_timestamp);
+        if (!recordingStartsWithLesson(start, cls.startedAt)) continue;
+        score = Math.abs(+start - +cls.startedAt);
+      } else {
+        if (!expected) continue;
+        const ratio = o.duration_sec / expected;
+        if (ratio < 0.5 || ratio > 1.5) continue; // ±50% (matcher's medium band)
+        const oDay = Math.floor(Date.parse(o.mic_timestamp) / DAY_MS);
+        const cDay = Math.floor(+cls.startedAt / DAY_MS);
+        if (Math.abs(oDay - cDay) > RECONCILE_DATE_TOLERANCE_DAYS) continue;
+        score = Math.abs(ratio - 1);
+      }
       if (score < bestScore) { bestScore = score; best = o; }
     }
     if (!best) continue;
@@ -942,6 +953,86 @@ async function reconcileOrphansToClasses(
     }
   }
   return reconciled;
+}
+
+// ─── Lessons the coach never stopped ─────────────────────────────────────
+// The server closes them after six hours without a sign of life (migration
+// 20260923). A sync can know sooner: a recording on the mic that began with
+// the lesson means the lesson is over. Closed the same way — the end is when
+// that recording stopped, and the length stays unknown for matching, so the
+// pairing lands in admin review.
+
+const NEVER_STOPPED_MIN_AGE_MS = 10 * 60 * 1000;
+const NEVER_STOPPED_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
+
+async function closeNeverStoppedLessons(
+  userId: string,
+  sessions: MicSession[],
+  knownIds: Set<string>,
+): Promise<PendingClassRow[]> {
+  if (sessions.length === 0) return [];
+  const now = Date.now();
+  const { data, error } = await supabase
+    .from('class_recordings')
+    .select('id, lesson_type, started_at, meta, users:student_id(name, avatar_url)')
+    .eq('user_id', userId)
+    .eq('local_recording_mode', true)
+    .eq('status', 'recording')
+    .is('ended_at', null)
+    .is('mic_file_name', null)
+    .gt('started_at', new Date(now - NEVER_STOPPED_MAX_AGE_MS).toISOString())
+    .lt('started_at', new Date(now - NEVER_STOPPED_MIN_AGE_MS).toISOString())
+    .order('started_at', { ascending: true })
+    .limit(20);
+  if (error) throw error;
+
+  const closed: PendingClassRow[] = [];
+  const used = new Set<MicSession>();
+  for (const row of (data ?? []) as any[]) {
+    if (knownIds.has(row.id)) continue;
+    const startedAt = new Date(row.started_at);
+    let session: MicSession | null = null;
+    for (const s of sessions) {
+      if (used.has(s) || !recordingStartsWithLesson(s.startTimestamp, startedAt)) continue;
+      if (!session || Math.abs(+s.startTimestamp - +startedAt) < Math.abs(+session.startTimestamp - +startedAt)) {
+        session = s;
+      }
+    }
+    if (!session) continue;
+    used.add(session);
+    const endedAt = new Date(Math.max(+startedAt, +session.startTimestamp + session.durationSec * 1000));
+    const { error: upErr } = await supabase
+      .from('class_recordings')
+      .update({
+        ended_at: endedAt.toISOString(),
+        meta: {
+          ...(row.meta ?? {}),
+          auto_closed_at: new Date().toISOString(),
+          auto_closed_reason: 'closed at sync: never stopped, its recording was on the mic',
+          duration_unknown: true,
+        },
+      })
+      .eq('id', row.id)
+      .eq('status', 'recording')
+      .is('ended_at', null)
+      .is('mic_file_name', null);
+    if (upErr) {
+      console.warn('[autoSync] could not close never-stopped lesson', row.id, upErr.message);
+      continue;
+    }
+    closed.push({
+      id: row.id,
+      lessonType: row.lesson_type,
+      studentName: row.users?.name ?? null,
+      studentAvatarUrl: row.users?.avatar_url ?? null,
+      startedAt,
+      endedAt,
+      durationSec: Math.round((+endedAt - +startedAt) / 1000),
+      abandonedAt: null,
+      durationUnknown: true,
+    });
+  }
+  return closed;
 }
 
 // ─── Planning: figure out what to import without uploading yet ──────────
@@ -1029,9 +1120,7 @@ export async function planAutoSync(
   } catch (err) {
     console.warn('[autoSync] orphan reconciliation failed (non-fatal):', err);
   }
-  const workingClasses = reconciledIds.size
-    ? pendingClasses.filter((p) => !reconciledIds.has(p.id))
-    : pendingClasses;
+  const workingClasses: PendingClassRow[] = pendingClasses.filter((p) => !reconciledIds.has(p.id));
 
   const allEntries = await DjiFiles.listFiles();
   const importedFilenames = await fetchImportedFilenames(userId);
@@ -1053,6 +1142,61 @@ export async function planAutoSync(
         console.warn('[autoSync] mic cleanup failed for', entry.name, err?.message ?? err);
       }
     }
+  }
+
+  // File times are put on the real clock first: the mic's own stamp minus how
+  // far off we learned its clock is (0 until we know — see fetchMicClockOffsetMs).
+  // Already-imported files are skipped (dedup by exact filename — the index
+  // counter restarts on reformat). NOTE: we do NOT drop short files here — a
+  // split recording can end in a short tail part (e.g. a 28s 3rd chunk of a
+  // 62-min class) that must stay with its session. The <60s filter is applied
+  // per SESSION below.
+  const offsetMs = await fetchMicClockOffsetMs(userId);
+  type Candidate = { entry: any; timestamp: Date; index: number; bare: boolean };
+  const fileCandidates: Candidate[] = [];
+  for (const entry of allEntries as any[]) {
+    const meta = parseDjiFileName(entry.name);
+    if (!meta) continue;
+    if (importedFilenames.has(entry.name)) continue;
+    const bare = isBareTimestampName(entry.name);
+    const timestamp = bare ? meta.timestamp : correctMicTimestamp(meta.timestamp, offsetMs);
+    fileCandidates.push({ entry, timestamp, index: meta.index, bare });
+  }
+
+  // name→relativePath (what DjiFiles.copyFileToCache needs; MicFile itself
+  // doesn't carry it).
+  const relPathByName = new Map<string, string>();
+  // Stitch split parts into continuous recording sessions, then drop
+  // sessions too short to be a real class (symmetric with the pending-class
+  // <60s filter — the short tail part survives because we sum the session).
+  const sessionsOf = (list: Candidate[]): MicSession[] => groupMicFilesIntoSessions(
+    list.map(({ entry, timestamp, index }): MicFile => {
+      relPathByName.set(entry.name as string, (entry.relativePath ?? entry.name) as string);
+      return {
+        fileName: entry.name as string,
+        index,
+        timestamp,
+        durationSec: estimateWavDurationSec(entry.name as string, entry.sizeBytes),
+        sizeBytes: entry.sizeBytes as number,
+        uri: '',
+      };
+    }),
+  ).filter((s) => s.durationSec >= MIN_VALID_DURATION_SEC);
+
+  // A lesson the coach never stopped is still open, so it isn't waiting for
+  // audio yet — its recording would go up as an orphan. When a recording on
+  // the mic began with it, the lesson is over (the mic only reaches the phone
+  // once it has stopped recording): close it here and give it that recording.
+  // Bare-timestamp recorders are left out — their clock can't place anything.
+  try {
+    const closed = await closeNeverStoppedLessons(
+      userId,
+      sessionsOf(fileCandidates.filter((c) => !c.bare)),
+      new Set(pendingClasses.map((p) => p.id)),
+    );
+    workingClasses.push(...closed);
+  } catch (err) {
+    console.warn('[autoSync] closing never-stopped lessons failed (non-fatal):', err);
   }
 
   // Acceptable file dates: each pending class's date ± a couple of days.
@@ -1077,51 +1221,16 @@ export async function planAutoSync(
     }
   }
 
-  // Filter to DJI-pattern files, not already imported (dedup by exact
-  // filename — the index counter restarts on reformat), within the date
-  // window. NOTE: we do NOT drop short files here — a split recording can
-  // end in a short tail part (e.g. a 28s 3rd chunk of a 62-min class) that
-  // must stay with its session. The <60s filter is applied per SESSION below.
-  // File times are put on the real clock first: the mic's own stamp minus how
-  // far off we learned its clock is (0 until we know — see fetchMicClockOffsetMs).
-  const offsetMs = await fetchMicClockOffsetMs(userId);
-  type Candidate = { entry: any; timestamp: Date; index: number };
+  // Bare-timestamp recorders skip the date window: their RTC can be months
+  // off (resets when the battery drains), so absolute dates are noise. The
+  // mic-as-queue sweep above keeps their folder to pending-only, and the
+  // per-session <60s filter + chronological ORDER still guard the matching.
   const inWindow: Candidate[] = [];
   const outOfWindow: Candidate[] = [];
-  for (const entry of allEntries as any[]) {
-    const meta = parseDjiFileName(entry.name);
-    if (!meta) continue;
-    if (importedFilenames.has(entry.name)) continue;
-    // Bare-timestamp recorders skip the date window: their RTC can be months
-    // off (resets when the battery drains), so absolute dates are noise. The
-    // mic-as-queue sweep above keeps their folder to pending-only, and the
-    // per-session <60s filter + chronological ORDER still guard the matching.
-    const bare = isBareTimestampName(entry.name);
-    const timestamp = bare ? meta.timestamp : correctMicTimestamp(meta.timestamp, offsetMs);
-    const c = { entry, timestamp, index: meta.index };
-    if (!bare && !acceptableDates.has(timestamp.toISOString().slice(0, 10))) outOfWindow.push(c);
+  for (const c of fileCandidates) {
+    if (!c.bare && !acceptableDates.has(c.timestamp.toISOString().slice(0, 10))) outOfWindow.push(c);
     else inWindow.push(c);
   }
-
-  // name→relativePath (what DjiFiles.copyFileToCache needs; MicFile itself
-  // doesn't carry it).
-  const relPathByName = new Map<string, string>();
-  // Stitch split parts into continuous recording sessions, then drop
-  // sessions too short to be a real class (symmetric with the pending-class
-  // <60s filter — the short tail part survives because we sum the session).
-  const sessionsOf = (list: Candidate[]): MicSession[] => groupMicFilesIntoSessions(
-    list.map(({ entry, timestamp, index }): MicFile => {
-      relPathByName.set(entry.name as string, (entry.relativePath ?? entry.name) as string);
-      return {
-        fileName: entry.name as string,
-        index,
-        timestamp,
-        durationSec: estimateWavDurationSec(entry.name as string, entry.sizeBytes),
-        sizeBytes: entry.sizeBytes as number,
-        uri: '',
-      };
-    }),
-  ).filter((s) => s.durationSec >= MIN_VALID_DURATION_SEC);
 
   let sessions = sessionsOf(inWindow);
   // Recordings the date window throws out — the coach is told about these
