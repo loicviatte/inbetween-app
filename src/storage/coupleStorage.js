@@ -267,14 +267,19 @@ export async function acquireCoupleLock(coupleId, focusPointId, durationMin) {
   return { ok: row?.locked_by_user_id === me, lockedByUserId: row?.locked_by_user_id || null };
 }
 
+// A Supabase query has no .catch(): chaining one threw a TypeError before the
+// request was even sent — no heartbeat or release ever reached the server, and
+// the throw after a couple session's insert showed "Could not save" on a
+// session that had been saved (so dancers retried, logging it again and again).
+// Awaited inside try/catch instead; the query itself resolves with { error }.
 export async function heartbeatCoupleLock(coupleId) {
   if (!coupleId) return;
-  await supabase.rpc('heartbeat_couple_lock', { p_couple: coupleId }).catch(() => {});
+  try { await supabase.rpc('heartbeat_couple_lock', { p_couple: coupleId }); } catch {}
 }
 
 export async function releaseCoupleLock(coupleId) {
   if (!coupleId) return;
-  await supabase.rpc('release_couple_lock', { p_couple: coupleId }).catch(() => {});
+  try { await supabase.rpc('release_couple_lock', { p_couple: coupleId }); } catch {}
 }
 
 // The current live lock for a couple (for the partner's "training in progress"
@@ -318,8 +323,19 @@ export async function completeCoupleTrainingSession(coupleId, coupleFocusPointId
   if (feeling) payload.feeling = feeling;
   if (sessionNote) payload.session_note = sessionNote;
   if (sessionMotivation === 1 || sessionMotivation === 2 || sessionMotivation === 3) payload.session_motivation = sessionMotivation;
-  const { error } = await supabase.from('couple_practice_logs').insert(payload);
-  if (error) throw error;
+  // A retry of the same session (same focus, same start) after a save whose
+  // answer was lost must not log it twice.
+  const { data: already } = await supabase
+    .from('couple_practice_logs')
+    .select('id')
+    .eq('couple_id', coupleId)
+    .eq('couple_focus_point_id', coupleFocusPointId)
+    .eq('started_at', payload.started_at)
+    .limit(1);
+  if (!already?.length) {
+    const { error } = await supabase.from('couple_practice_logs').insert(payload);
+    if (error) throw error;
+  }
   await releaseCoupleLock(coupleId);
 }
 
@@ -581,13 +597,15 @@ export async function rejectCoupleFocusPoint({ fpId, coupleId, fpName, reason })
   const ids = [c?.user_a_id, c?.user_b_id].filter(Boolean);
   if (ids.length) {
     const trimmed = (reason || '').trim();
-    await supabase.from('notifications').insert(ids.map((uid) => ({
-      user_id: uid,
-      type: 'couple_focus_rejected',
-      title: 'Couple focus declined by your coach',
-      body: trimmed ? `"${fpName}" — ${trimmed}` : `Your coach declined "${fpName}".`,
-      data: { couple_id: coupleId, focus_point_name: fpName, reason: trimmed || null },
-    }))).catch(() => {});
+    try {
+      await supabase.from('notifications').insert(ids.map((uid) => ({
+        user_id: uid,
+        type: 'couple_focus_rejected',
+        title: 'Couple focus declined by your coach',
+        body: trimmed ? `"${fpName}" — ${trimmed}` : `Your coach declined "${fpName}".`,
+        data: { couple_id: coupleId, focus_point_name: fpName, reason: trimmed || null },
+      })));
+    } catch {}
   }
   await markCoupleFocusAddedRead(coupleId);
 }
