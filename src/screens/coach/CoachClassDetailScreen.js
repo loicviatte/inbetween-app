@@ -226,9 +226,6 @@ function AttendanceRow({
   status,
   onSetCoach,
   busy,
-  // A couple lesson has no attendance question: the coach picked the two
-  // dancers, they were both there. The row states it instead of asking.
-  locked,
 }) {
   const isMismatch = status.kind === 'mismatch';
   const isSaidYes = status.kind === 'said-yes';
@@ -255,7 +252,7 @@ function AttendanceRow({
 
       <View style={rowS.body}>
         <Text style={rowS.name} numberOfLines={1}>{att.name}</Text>
-        {locked ? null : <Text
+        <Text
           style={[
             rowS.meta,
             isMismatch && rowS.metaMismatch,
@@ -265,25 +262,19 @@ function AttendanceRow({
           numberOfLines={1}
         >
           {status.meta}
-        </Text>}
+        </Text>
       </View>
 
-      {locked ? (
-        <View style={rowS.lockedMark}>
-          <Text style={rowS.lockedMarkText}>PRESENT</Text>
-        </View>
-      ) : (
-        <SegmentedToggle
-          value={att.attendance || 'pending'}
-          studentSaid={
-            att.studentResponse
-              ? (att.studentResponse.attended ? 'yes' : 'no')
-              : null
-          }
-          onChange={(v) => onSetCoach?.(att, v)}
-          disabled={att.isPrivateOnly || busy}
-        />
-      )}
+      <SegmentedToggle
+        value={att.attendance || 'pending'}
+        studentSaid={
+          att.studentResponse
+            ? (att.studentResponse.attended ? 'yes' : 'no')
+            : null
+        }
+        onChange={(v) => onSetCoach?.(att, v)}
+        disabled={att.isPrivateOnly || busy}
+      />
 
       {busy ? (
         <ActivityIndicator
@@ -297,21 +288,6 @@ function AttendanceRow({
 }
 
 const rowS = StyleSheet.create({
-  lockedMark: {
-    paddingHorizontal: 12,
-    height: 26,
-    borderRadius: 999,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(76,175,80,0.16)',
-  },
-  lockedMarkText: {
-    fontFamily: Fonts.semiBold,
-    fontSize: 11,
-    color: '#3D7A40',
-    letterSpacing: 0.5,
-    textTransform: 'uppercase',
-  },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -607,8 +583,11 @@ export default function CoachClassDetailScreen({ route, navigation }) {
   const focusCount = data?.focusCount || 0;
   const isPrivate = !cls ? false : (cls.lesson_type === 'private' || cls.lesson_type == null);
   // A couple lesson is not a group lesson: the roster is the couple, both
-  // dancers were there by definition, and nobody is awaiting anyone's reply.
+  // dancers were there by definition (one alone would be a private lesson),
+  // so it has no attendance at all — no tab, no "attended" count.
   const isCouple = cls?.lesson_type === 'couple';
+  // The screen opens on Attendance; a couple lesson has none, so Summary.
+  const tab = isCouple && activeTab === 'attendance' ? 'summary' : activeTab;
 
   const attendees = useMemo(() => {
     if (!data) return [];
@@ -874,14 +853,16 @@ export default function CoachClassDetailScreen({ route, navigation }) {
               <Text style={s.heroStatL}>Min</Text>
             </View>
           )}
-          <View style={[s.heroStat, s.heroStatDivider]}>
+          <View style={[s.heroStat, !isCouple && s.heroStatDivider]}>
             <Text style={s.heroStatN}>{String(focusCount)}</Text>
             <Text style={s.heroStatL}>Focus</Text>
           </View>
-          <View style={s.heroStat}>
-            <Text style={s.heroStatN}>{attendedLabel}</Text>
-            <Text style={s.heroStatL}>Attended</Text>
-          </View>
+          {!isCouple && (
+            <View style={s.heroStat}>
+              <Text style={s.heroStatN}>{attendedLabel}</Text>
+              <Text style={s.heroStatL}>Attended</Text>
+            </View>
+          )}
         </View>
       </View>
 
@@ -889,18 +870,20 @@ export default function CoachClassDetailScreen({ route, navigation }) {
       <View style={s.tabsBar}>
         <TabBtn
           label="Summary"
-          active={activeTab === 'summary'}
+          active={tab === 'summary'}
           onPress={() => setActiveTab('summary')}
         />
-        <TabBtn
-          label="Attendance"
-          active={activeTab === 'attendance'}
-          badge={mismatchCount > 0 ? mismatchCount : null}
-          onPress={() => setActiveTab('attendance')}
-        />
+        {!isCouple && (
+          <TabBtn
+            label="Attendance"
+            active={tab === 'attendance'}
+            badge={mismatchCount > 0 ? mismatchCount : null}
+            onPress={() => setActiveTab('attendance')}
+          />
+        )}
         <TabBtn
           label="Notes"
-          active={activeTab === 'notes'}
+          active={tab === 'notes'}
           badge={linkedNotes.length > 0 ? linkedNotes.length : null}
           onPress={() => setActiveTab('notes')}
         />
@@ -913,20 +896,19 @@ export default function CoachClassDetailScreen({ route, navigation }) {
         showsVerticalScrollIndicator={false}
       >
         <View style={s.tabContent}>
-          {activeTab === 'summary' && (
+          {tab === 'summary' && (
             <SummaryTab cls={cls} isProcessing={isProcessing} />
           )}
-          {activeTab === 'attendance' && (
+          {tab === 'attendance' && (
             <AttendanceTab
               attendeesWithStatus={attendeesWithStatus}
               busyStudentId={busyStudentId}
               onSetCoach={handleSetCoach}
               onAdd={() => setStudentPickerOpen(true)}
               isPrivate={isPrivate}
-              isCouple={isCouple}
             />
           )}
-          {activeTab === 'notes' && (
+          {tab === 'notes' && (
             <NotesTab
               notes={linkedNotes}
               onOpen={(n) => navigation.navigate('CoachNoteDetail', { noteId: n.id })}
@@ -937,7 +919,7 @@ export default function CoachClassDetailScreen({ route, navigation }) {
         </View>
       </ScrollView>
 
-      {activeTab === 'attendance' && pendingCount > 0 && (
+      {tab === 'attendance' && pendingCount > 0 && (
         <SaveBar
           count={pendingCount}
           saving={savingAttendance}
@@ -1154,12 +1136,9 @@ function AttendanceTab({
   onRemove,
   onAdd,
   isPrivate,
-  isCouple,
 }) {
-  // A private lesson and a couple lesson both have a roster the coach chose:
-  // one booked student, or the two dancers of the couple. There is nobody to
-  // add and nothing to confirm.
-  const lockedRoster = isPrivate || isCouple;
+  // A private lesson's roster is the one booked student: nobody to add.
+  const lockedRoster = isPrivate;
   if (attendeesWithStatus.length === 0) {
     return (
       <View style={s.emptyState}>
@@ -1185,16 +1164,13 @@ function AttendanceTab({
           onRemove={onRemove}
           busy={busyStudentId === att.id}
           showRemove={!lockedRoster}
-          locked={isCouple}
         />
       ))}
 
       <Text style={s.attHint}>
-        {isCouple
-          ? 'Couple lesson — you danced with both of them, so both are marked present.'
-          : isPrivate
-            ? 'Private lesson — attendance is locked to the booked student.'
-            : 'Tap Present or Absent to mark each student. Rows where your mark disagrees with the student’s reply are highlighted.'}
+        {isPrivate
+          ? 'Private lesson — attendance is locked to the booked student.'
+          : 'Tap Present or Absent to mark each student. Rows where your mark disagrees with the student’s reply are highlighted.'}
       </Text>
 
       {!lockedRoster && (
