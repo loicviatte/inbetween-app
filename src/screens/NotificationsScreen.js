@@ -61,6 +61,7 @@ const TYPE_META = {
   focus_reconcile_needed:  { group: 'coach', icon: 'swap-horizontal-outline', cta: 'Pick which to keep' },
   merge_request:           { group: 'coach', icon: 'git-merge-outline', cta: 'Review' },
   merge_request_student:   { group: 'coach', icon: 'git-merge-outline', cta: 'Review' },
+  coach_reply:             { group: 'coach', icon: 'chatbubble-ellipses-outline', cta: 'Read the answer' },
   coach_request_received:  { group: 'coach', icon: 'person-add-outline', cta: 'Review' },
   coach_request_accepted:  { group: 'coach', icon: 'checkmark-circle-outline' },
   coach_request_declined:  { group: 'coach', icon: 'close-circle-outline' },
@@ -345,6 +346,8 @@ export default function NotificationsScreen({ navigation }) {
       } else {
         navigation.navigate('ActionNeeded');
       }
+    } else if (notif.type === 'coach_reply') {
+      navigation.navigate('ChildQuestions', { openId: notif.data?.message_id ?? null });
     } else if (notif.type === 'merge_request_student') {
       // No dedicated merge-review screen exists; TrainerReview surfaces the
       // student's focus points with the merge-request badge, so it's the

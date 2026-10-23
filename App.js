@@ -141,6 +141,11 @@ function handleNotificationTap(data) {
     require('./src/services/syncReminder').requestMicSyncOpen();
     return;
   }
+  if (type === 'coach_reply') {
+    // The coach answered a question → that question, with the answer.
+    navigationRef.navigate('ChildQuestions', { openId: data?.message_id ?? null });
+    return;
+  }
   if (type === 'coach_request_received') {
     // Carry the request id so the Students screen pops an Accept/Decline modal
     // right away (payload uses snake_case; older pushes used camelCase).

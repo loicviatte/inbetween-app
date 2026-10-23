@@ -1481,7 +1481,7 @@ I don't have that in your data, but you can send the question to your coach if y
       // Build context: question + last few exchanges + current focus point name
       const fpName = focusPoint?.name ? ` [Focus: ${focusPoint.name}]` : '';
       const contextual = `${msg.forQuestion}${fpName}`;
-      await askCoach(contextual, 'clarification', focusPointId || null);
+      await askCoach(contextual, 'clarification', focusPointId || null, { couple: !!(couple && coupleId) });
       setAiMessages(prev => prev.map((m, i) =>
         i === messageIdx ? { ...m, coachAskPending: false, coachAskOk: true } : m
       ));

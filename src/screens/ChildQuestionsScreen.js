@@ -1,14 +1,18 @@
-// A parent's window on their child's questions to the coach (parent accounts
-// only, from Train's header): every question the child asked, the ones still
-// waiting first, and — tap one — the exchange as it happened. Read only: the
-// parent sees, the child and the coach talk.
-import React, { useCallback, useState } from 'react';
+// The questions a dancer asked their coach while training, from Train's header:
+// the ones still waiting first, and — tap one — the exchange as it happened.
+// The dancer reads their own answers here; a parent account sees their child's,
+// read only (the child and the coach talk). A coach's reply notification opens
+// straight onto its question (route param openId).
+import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Pressable, RefreshControl } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Fonts } from '../theme';
-import { getChildQuestions, getUser } from '../storage/storage';
+import { getChildQuestions, getUser, getQuestionFocus } from '../storage/storage';
+import { openFocusSession } from '../utils/openFocusSession';
+import { markQuestionsSeen } from '../storage/questionsSeen';
+import { useIsParentAccount } from '../components/TabHeader';
 import { dateLabel, dayLabel } from '../utils/dates';
 import BottomSheet from '../components/BottomSheet';
 import { Pulse, Bone } from '../components/GroupSwitchSkeleton';
@@ -80,7 +84,7 @@ function Row({ q, first, onPress }) {
   );
 }
 
-function Thread({ q, child }) {
+function Thread({ q, asker }) {
   if (!q) return null;
   const { text, focus } = splitFocus(q.message);
   const outcome = outcomeOf(q);
@@ -92,7 +96,7 @@ function Thread({ q, child }) {
       {!!focus && <Text style={s.sheetFocus}>About · {focus}</Text>}
 
       <View style={s.msg}>
-        <Text style={s.who}>{child || 'Your child'} · {dayLabel(q.created_at)}</Text>
+        <Text style={s.who}>{asker} · {dayLabel(q.created_at)}</Text>
         <View style={s.bubble}><Text style={s.bubbleT}>{text}</Text></View>
       </View>
 
@@ -126,8 +130,10 @@ function Thread({ q, child }) {
   );
 }
 
-export default function ChildQuestionsScreen({ navigation }) {
+export default function ChildQuestionsScreen({ navigation, route }) {
   const insets = useSafeAreaInsets();
+  const isParent = useIsParentAccount();
+  const openId = route?.params?.openId ?? null;
   const [questions, setQuestions] = useState(null); // null while loading
   const [failed, setFailed] = useState(false);
   const [child, setChild] = useState('');
@@ -146,7 +152,34 @@ export default function ChildQuestionsScreen({ navigation }) {
     }
   }, []);
 
-  useFocusEffect(useCallback(() => { load(); }, [load]));
+  // Opening the screen reads the answers: the badge on Train's button clears.
+  useFocusEffect(useCallback(() => { load(); markQuestionsSeen(); }, [load]));
+
+  // The focus point the open question was asked from, for the dancer to go
+  // back to it (a parent only reads). Null until found, or when it's gone.
+  const [openFocus, setOpenFocus] = useState(null);
+  useEffect(() => {
+    setOpenFocus(null);
+    if (!open || isParent) return undefined;
+    let alive = true;
+    getQuestionFocus(open).then((f) => { if (alive) setOpenFocus(f); }).catch(() => {});
+    return () => { alive = false; };
+  }, [open, isParent]);
+
+  function goToFocus() {
+    const f = openFocus;
+    setOpen(null);
+    // The sheet is a modal: let it finish closing before the next screen pushes.
+    if (f) setTimeout(() => openFocusSession(navigation, f.focusPointId, { coupleId: f.coupleId || undefined }), 300);
+  }
+
+  // Opened from a coach's reply: straight onto that question, once.
+  useEffect(() => {
+    if (!openId || !questions) return;
+    const q = questions.find((x) => x.id === openId);
+    if (q) setOpen(q);
+    navigation.setParams({ openId: undefined });
+  }, [openId, questions, navigation]);
 
   async function refresh() {
     setRefreshing(true);
@@ -169,7 +202,9 @@ export default function ChildQuestionsScreen({ navigation }) {
           <View style={{ flex: 1, minWidth: 0 }}>
             <Text style={s.h1} numberOfLines={1}>Questions</Text>
             <Text style={s.sub} numberOfLines={1}>
-              {child ? `${child} and ${coach || 'their coach'}` : 'Your child and their coach'}
+              {isParent
+                ? (child ? `${child} and ${coach || 'their coach'}` : 'Your child and their coach')
+                : `You and ${coach || 'your coach'}`}
             </Text>
           </View>
         </View>
@@ -201,7 +236,9 @@ export default function ChildQuestionsScreen({ navigation }) {
                 <Text style={s.emptyB}>
                   {failed
                     ? 'Check your connection and pull to try again.'
-                    : `When ${child || 'your child'} asks ${coach || 'their coach'} something while training, it shows up here with the answer.`}
+                    : isParent
+                      ? `When ${child || 'your child'} asks ${coach || 'their coach'} something while training, it shows up here with the answer.`
+                      : `When you ask ${coach || 'your coach'} something while training, it shows up here with the answer.`}
                 </Text>
               </View>
             ) : (
@@ -222,7 +259,9 @@ export default function ChildQuestionsScreen({ navigation }) {
                     </View>
                   </>
                 )}
-                <Text style={s.foot}>You can read these; only {child || 'your child'} and {coach || 'the coach'} write them.</Text>
+                {isParent && (
+                  <Text style={s.foot}>You can read these; only {child || 'your child'} and {coach || 'the coach'} write them.</Text>
+                )}
               </>
             )}
           </ScrollView>
@@ -231,8 +270,14 @@ export default function ChildQuestionsScreen({ navigation }) {
 
       <BottomSheet visible={!!open} onClose={() => setOpen(null)} sheetStyle={s.sheet}>
         <View style={s.handle} />
-        <Thread q={open} child={child} />
-        <TouchableOpacity style={s.close} onPress={() => setOpen(null)} activeOpacity={0.8} accessibilityRole="button">
+        <Thread q={open} asker={isParent ? (child || 'Your child') : 'You'} />
+        {!!openFocus && (
+          <TouchableOpacity style={s.toFocus} onPress={goToFocus} activeOpacity={0.85} accessibilityRole="button">
+            <Ionicons name="locate-outline" size={16} color="#FFFFFF" />
+            <Text style={s.toFocusT}>Open the focus point</Text>
+          </TouchableOpacity>
+        )}
+        <TouchableOpacity style={[s.close, !!openFocus && s.closeAfterFocus]} onPress={() => setOpen(null)} activeOpacity={0.8} accessibilityRole="button">
           <Text style={s.closeT}>Close</Text>
         </TouchableOpacity>
       </BottomSheet>
@@ -286,6 +331,9 @@ const s = StyleSheet.create({
   bubbleCoachT: { color: '#FFFFFF' },
   note: { flexDirection: 'row', alignItems: 'center', gap: 9, backgroundColor: TILE, borderRadius: 12, paddingVertical: 11, paddingHorizontal: 13 },
   noteT: { flex: 1, fontFamily: Fonts.regular, fontSize: 13, lineHeight: 18, color: INK },
+  toFocus: { marginTop: 20, height: 48, borderRadius: 999, backgroundColor: INK, flexDirection: 'row', gap: 8, alignItems: 'center', justifyContent: 'center' },
+  toFocusT: { fontFamily: Fonts.semiBold, fontSize: 14.5, color: '#FFFFFF' },
+  closeAfterFocus: { marginTop: 10 },
   close: { marginTop: 20, height: 48, borderRadius: 999, borderWidth: 1, borderColor: 'rgba(10,10,10,0.16)', alignItems: 'center', justifyContent: 'center' },
   closeT: { fontFamily: Fonts.semiBold, fontSize: 14.5, color: INK },
 });
