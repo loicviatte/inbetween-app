@@ -880,8 +880,9 @@ export async function getMyCoachForCategory(category) {
 // ─── Student → Coach Messages ─────────────────────────────────────────────────
 
 // question_type: 'confirmation' | 'clarification' | 'confusion' (default: 'clarification')
-// focusPointId: optional — the focus point this question relates to
-export async function askCoach(message, question_type = 'clarification', focusPointId = null) {
+// focusPointId: optional — the focus point this question relates to; with
+// `couple`, a couple focus point. Kept on the question so its thread can open it.
+export async function askCoach(message, question_type = 'clarification', focusPointId = null, { couple = false } = {}) {
   const userId = await getUserId();
 
   const { data: me } = await supabase
@@ -894,7 +895,7 @@ export async function askCoach(message, question_type = 'clarification', focusPo
   // If a focus point is provided, use its dance to pick the matching coach.
   // Otherwise fall back to the student's dance_style.
   let coachId = null;
-  if (focusPointId) {
+  if (focusPointId && !couple) {
     const { data: fp } = await supabase
       .from('focus_points')
       .select('dance')
@@ -913,16 +914,19 @@ export async function askCoach(message, question_type = 'clarification', focusPo
 
   if (!coachId) throw new Error('No coach linked. Add your coach first.');
 
-  await supabase.from('coach_messages').insert({
+  const { error: insErr } = await supabase.from('coach_messages').insert({
     student_id:    userId,
     coach_id:      coachId,
     message:       message.trim(),
     question_type: question_type,
     status:        'pending',
+    focus_point_id:        couple ? null : focusPointId,
+    couple_focus_point_id: couple ? focusPointId : null,
   });
+  if (insErr) throw insErr;
 
   // Update struggle score on the related focus point
-  if (focusPointId) {
+  if (focusPointId && !couple) {
     const eventType =
       question_type === 'confirmation' ? 'QUESTION_CONFIRMATION'
       : question_type === 'confusion'  ? 'QUESTION_CONFUSION'
@@ -969,6 +973,7 @@ export async function getChildQuestions() {
   const { data, error } = await supabase
     .from('coach_messages')
     .select('id, message, reply, status, created_at, replied_at, covered_class_input_id, '
+      + 'focus_point_id, couple_focus_point_id, '
       + 'coach:users!coach_messages_coach_id_fkey(name), '
       + 'lesson:class_inputs!coach_messages_covered_class_input_id_fkey(created_at, title)')
     .eq('student_id', childId)
@@ -976,6 +981,44 @@ export async function getChildQuestions() {
     .limit(100);
   if (error) throw error;
   return data || [];
+}
+
+// The focus point a question was asked from, to open it from the answer:
+// { focusPointId, coupleId } (coupleId for a couple focus point), or null when
+// it no longer exists. Questions asked before the id was kept are matched by the
+// name the session screen appended ("… [Focus: X]").
+export async function getQuestionFocus(question) {
+  if (!question) return null;
+  if (question.focus_point_id) {
+    const { data } = await supabase
+      .from('focus_points').select('id').eq('id', question.focus_point_id).eq('is_deleted', false).maybeSingle();
+    return data ? { focusPointId: data.id, coupleId: null } : null;
+  }
+  if (question.couple_focus_point_id) {
+    const { data } = await supabase
+      .from('couple_focus_points').select('id, couple_id').eq('id', question.couple_focus_point_id).eq('is_deleted', false).maybeSingle();
+    return data ? { focusPointId: data.id, coupleId: data.couple_id } : null;
+  }
+  const m = /\[Focus:\s*([^\]]+)\]\s*$/i.exec(question.message || '');
+  const name = m?.[1]?.trim();
+  if (!name) return null;
+  const userId = await getUserId();
+  const { data: solo } = await supabase
+    .from('focus_points').select('id, status')
+    .eq('user_id', userId).eq('is_deleted', false).ilike('name', name)
+    .order('created_at', { ascending: false }).limit(5);
+  const pick = (solo || []).find((f) => f.status === 'active') || (solo || [])[0];
+  if (pick) return { focusPointId: pick.id, coupleId: null };
+  const { data: couples } = await supabase
+    .from('couples').select('id').or(`user_a_id.eq.${userId},user_b_id.eq.${userId}`);
+  const coupleIds = (couples || []).map((c) => c.id);
+  if (!coupleIds.length) return null;
+  const { data: shared } = await supabase
+    .from('couple_focus_points').select('id, couple_id, status')
+    .in('couple_id', coupleIds).eq('is_deleted', false).ilike('name', name)
+    .order('created_at', { ascending: false }).limit(5);
+  const pc = (shared || []).find((f) => f.status === 'active') || (shared || [])[0];
+  return pc ? { focusPointId: pc.id, coupleId: pc.couple_id } : null;
 }
 
 export async function getUserRole() {

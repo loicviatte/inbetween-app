@@ -56,6 +56,7 @@ import {
 import HomeSkeleton from '../components/HomeSkeleton';
 import { getAllStudentMetrics } from '../utils/studentMetrics';
 import { getStudentDashboard } from '../storage/dashboardStorage';
+import { countUnseenAnswers } from '../storage/questionsSeen';
 
 const HOME_CACHE_KEY = '@cache_home';
 // Couple card is fetched non-blocking (separate from the solo HOME_CACHE), so it
@@ -430,6 +431,13 @@ export default function HomeScreen({ navigation }) {
   const [metrics, setMetrics] = useState({ progression: 0, retention: 100, global: 0 });
   const [showFilter, setShowFilter] = useState(false);
   const isParent = useIsParentAccount();
+  // Coach answers not read yet — the badge on the Questions button.
+  const [unseenAnswers, setUnseenAnswers] = useState(0);
+  useFocusEffect(useCallback(() => {
+    let alive = true;
+    countUnseenAnswers().then((n) => { if (alive) setUnseenAnswers(n); }).catch(() => {});
+    return () => { alive = false; };
+  }, []));
   // Train doesn't scroll: it keeps clear of the floating tab bar.
   const tabBarSpace = useTabBarSpace();
   const [category, setCategory] = useState(null); // global: 'latin' | 'ballroom' | null
@@ -1337,11 +1345,14 @@ export default function HomeScreen({ navigation }) {
       <TabHeader
         navigation={navigation}
         style={s.header}
-        // A parent follows what their child asks the coach, and the answers.
-        actions={isParent ? (
-          <HeaderIconButton icon="chatbubbles-outline" label="Questions to the coach"
+        // What the dancer asked their coach while training, and the answers (a
+        // parent follows their child's).
+        actions={(
+          <HeaderIconButton icon="chatbubbles-outline"
+            label={isParent ? 'Questions to the coach' : 'Your questions'}
+            badge={unseenAnswers}
             onPress={() => navigation.navigate('ChildQuestions')} />
-        ) : null}
+        )}
         lead={
           <StyleTitle
             label={styleName}
