@@ -51,7 +51,9 @@ import {
   purgeExpiredPreparedFiles,
   purgeExpiredM4aBackups,
 } from '../services/localRecordingAutoSync';
-import { getActiveCoachClass, subscribeToActiveCoachClass } from '../storage/activeCoachClass';
+import { endAllCoachRecordings as laEndAllCoachRecordings } from 'live-activities';
+import { getActiveCoachClass, subscribeToActiveCoachClass, clearActiveCoachClass } from '../storage/activeCoachClass';
+import { hydrateAllFromCold } from '../storage/hydrate';
 import { wavSecondsForBytes } from '../services/localRecordingMatcher';
 import { raiseMicChargeHint } from '../services/micChargeHint';
 import { syncMicPendingActivity, reportMicImportProgress } from '../services/micPendingActivity';
@@ -118,6 +120,29 @@ const LOW_SPACE_SEC = 2 * 60 * 60;
 // getInitialURL keeps returning it, and a remounted provider must not replay it.
 const MIC_SYNC_URL = 'inbetween://mic-sync';
 let initialMicSyncUrlSeen = false;
+
+// ─── A lesson left running ───────────────────────────────────────────────
+// No sync while a lesson runs on this phone (see blockedByLesson). But a lesson
+// the coach never stopped stays "running" on the phone for good — Tanya, 24 Oct:
+// a group lesson started, the app put away, never stopped — and every sync after
+// it got "Lesson still in progress". Four hours on, the lesson is over: it ends
+// on the phone the way Stop ends it there (widget gone, lesson cleared). The
+// server row is closed by the sync (closeNeverStoppedLessons) or after six hours
+// without a sign of life (migration 20260923). A lesson screen still ticking
+// (heartbeat under a minute old) is left alone.
+const STALE_LESSON_MS = 4 * 60 * 60 * 1000;
+const LIVE_HEARTBEAT_MS = 60 * 1000;
+
+function lessonInProgress() {
+  const active = getActiveCoachClass();
+  if (!active) return null;
+  const now = Date.now();
+  if (now - active.startedAt < STALE_LESSON_MS) return active;
+  if (active.lastHeartbeatAt && now - active.lastHeartbeatAt < LIVE_HEARTBEAT_MS) return active;
+  try { Promise.resolve(laEndAllCoachRecordings()).catch(() => {}); } catch {}
+  clearActiveCoachClass();
+  return null;
+}
 
 const DjiSyncContext = createContext(null);
 
@@ -779,7 +804,7 @@ export function DjiSyncProvider({ children, navigationRef }) {
     async (foreground, { explicit = false } = {}) => {
       if (syncRunningRef.current || !userId) return;
       // Never while a lesson is running on this phone (see blockedByLesson).
-      if (getActiveCoachClass()) return;
+      if (lessonInProgress()) return;
       // Never start a fresh plan/execute while prepared items are held offline:
       // the 8s retry timer owns them, and a new runExecute would reset
       // summaryAccumRef and ignore the hold, racing (and mis-counting) the drain.
@@ -1094,13 +1119,27 @@ export function DjiSyncProvider({ children, navigationRef }) {
     };
   }, [enabled, userId, attemptSync]);
 
+  // A lesson left running for hours is ended as the app opens (and comes back
+  // to the front), so the Dashboard stops showing it before any sync is tried.
+  useEffect(() => {
+    let alive = true;
+    hydrateAllFromCold().then(() => { if (alive) lessonInProgress(); }, () => {});
+    const sub = AppState.addEventListener('change', (s) => {
+      if (s === 'active') lessonInProgress();
+    });
+    return () => {
+      alive = false;
+      sub.remove();
+    };
+  }, []);
+
   // ─── Actions exposed to the pill + modal ──────────────────────────────
   // No sync while a lesson is running on this phone. The recording attaches to
   // a lesson that has ended: synced while it's still open, the audio has no
   // lesson to go to and lands among the orphans. So the coach is sent to the
   // lesson to stop it first.
   const blockedByLesson = useCallback(() => {
-    if (!getActiveCoachClass()) return false;
+    if (!lessonInProgress()) return false;
     Alert.alert(
       'Lesson still in progress',
       'Finish the lesson before syncing your mic.',
@@ -1331,7 +1370,7 @@ export function DjiSyncProvider({ children, navigationRef }) {
       flowOpenRef.current ||
       micSetupOpenRef.current ||
       REMINDER_BLOCKING_PHASES.has(phaseRef.current) ||
-      !!getActiveCoachClass(),
+      !!lessonInProgress(),
     [],
   );
 
