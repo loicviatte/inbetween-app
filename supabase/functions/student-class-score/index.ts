@@ -174,6 +174,17 @@ async function process(supabase: any, payload: Payload): Promise<void> {
     }
   }
 
+  // The lesson is the reviewing coach's now, whatever style it was tagged with
+  // (migration 20261025a): he reads its focus points even outside the style he
+  // coaches this dancer in. Set before they exist, so none is ever hidden.
+  if (coachId) {
+    const { error: revErr } = await supabase
+      .from('class_inputs')
+      .update({ reviewer_coach_id: coachId })
+      .eq('id', class_input_id)
+    if (revErr) console.warn('[student-class-score] reviewer_coach_id update failed:', revErr.message)
+  }
+
   const { data: existing } = await supabase
     .from('focus_points')
     .select('id, name, normalized_name, count, tier, base_score, train_target, drill, status, subtitle, context')
@@ -267,7 +278,15 @@ async function process(supabase: any, payload: Payload): Promise<void> {
     }
   }
 
-  if (coachId && touchedNames.length > 0) {
+  // The coach hears about it when the lesson opens: marking it scored below
+  // releases it, and release_class_to_coach tells him "<dancer> logged a class".
+  // Only a lesson that opened before its points existed needs telling here.
+  const { data: opened } = await supabase
+    .from('class_inputs')
+    .select('coach_released_at')
+    .eq('id', class_input_id)
+    .maybeSingle()
+  if (coachId && touchedNames.length > 0 && opened?.coach_released_at) {
     const studentName = studentRow?.name ?? 'a student'
     const { error: notifErr } = await supabase.from('notifications').insert({
       user_id: coachId,
@@ -286,7 +305,8 @@ async function process(supabase: any, payload: Payload): Promise<void> {
     }
   } else {
     console.log(
-      `[student-class-score] no notif sent (coachId=${coachId}, touched=${touchedNames.length})`,
+      `[student-class-score] no notif sent here (coachId=${coachId}, touched=${touchedNames.length}, ` +
+        `opened=${!!opened?.coach_released_at})`,
     )
   }
 
