@@ -64,8 +64,8 @@ export async function processClassDraft(draft) {
     created_at: createdAt,
   });
 
-  // Server creates focus_points as pending_coach (or active if no linked coach)
-  // and notifies the coach. This is the single source of truth.
+  // Server creates the focus points, live straight away: a lesson the dancer
+  // logs goes to no coach for review. This is the single source of truth.
   if (classInputId) {
     const focuses = [
       primaryFocusName
