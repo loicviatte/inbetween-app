@@ -539,6 +539,14 @@ export default function LogModal({ visible, onClose, onSubmitted, initialDraft }
     }, 300);
   }
 
+  // A teacher outside the app (Amy, who teaches Sadie and Sanna Latin) is not in
+  // the list, and a typed name used to stay loose text — nothing said it would
+  // be kept, so dancers took it for refused and left the coach pre-filled.
+  // The typed name is offered as a choice of its own, and Done keeps it too.
+  const typedTeacher = teacherName.trim();
+  const useTypedTeacher = teacherEditing && typedTeacher.length >= 2 &&
+    !teacherSuggestions.some((s) => (s.name || '').trim().toLowerCase() === typedTeacher.toLowerCase());
+
   function selectSuggestion(name) {
     setTeacherName(name);
     setTeacherSuggestions([]);
@@ -633,6 +641,7 @@ export default function LogModal({ visible, onClose, onSubmitted, initialDraft }
                               value={teacherName}
                               onChangeText={handleTeacherChange}
                               onBlur={() => setTimeout(() => setTeacherSuggestions([]), 150)}
+                              onSubmitEditing={() => { if (teacherName.trim()) selectSuggestion(teacherName.trim()); }}
                               placeholder="Search or type a name…"
                               placeholderTextColor={Colors.secondary}
                               returnKeyType="done"
@@ -641,7 +650,7 @@ export default function LogModal({ visible, onClose, onSubmitted, initialDraft }
                           </View>
                         )}
                       </View>
-                      {teacherEditing && teacherSuggestions.length > 0 && (
+                      {teacherEditing && (teacherSuggestions.length > 0 || useTypedTeacher) && (
                         <View style={styles.suggestionBox}>
                           {teacherSuggestions.map((s) => (
                             <TouchableOpacity
@@ -653,6 +662,15 @@ export default function LogModal({ visible, onClose, onSubmitted, initialDraft }
                               <Text style={styles.suggestionText}>{s.name}</Text>
                             </TouchableOpacity>
                           ))}
+                          {useTypedTeacher && (
+                            <TouchableOpacity
+                              style={styles.suggestionItem}
+                              onPress={() => selectSuggestion(typedTeacher)}
+                              activeOpacity={0.7}
+                            >
+                              <Text style={styles.suggestionText}>Use “{typedTeacher}”</Text>
+                            </TouchableOpacity>
+                          )}
                         </View>
                       )}
                     </View>
