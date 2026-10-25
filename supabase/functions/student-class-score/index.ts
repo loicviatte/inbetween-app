@@ -6,6 +6,7 @@ declare global {
 }
 
 const LATIN_DANCES = ['Cha Cha', 'Samba', 'Rumba', 'Paso Doble', 'Jive']
+const REVIEW_WINDOW_MS = 18 * 60 * 60 * 1000
 
 // Marker dances used when a focus point is created without an explicit
 // dance list (the user logged a class without selecting any dances). Stored
@@ -127,23 +128,25 @@ async function process(supabase: any, payload: Payload): Promise<void> {
         ? ci.dance
         : []
 
-  // A lesson the dancer logs is theirs: its focus points go straight to them,
-  // whoever they name as the teacher, and no coach is asked to review them.
-  // Sadie and Sanna log their Latin lessons with Amy, who isn't on the app, and
-  // Sanna put Fabio's name on one (24 Oct): he was sent a lesson he never
-  // taught, in a style he can't see.
+  // Who reviews the focus points of a lesson the dancer logs: the coach they
+  // name, when that coach teaches them the lesson's style. The points then wait
+  // for him, as a recorded lesson's do. Otherwise they go straight to the
+  // dancer, with nobody to review them:
+  //   · a name that matches none of their coaches is a teacher outside the app
+  //     (Sadie and Sanna's Latin lessons with Amy);
+  //   · a coach of theirs, but not in this style: Sanna logged a Cha Cha lesson
+  //     under Fabio, her Ballroom coach (24 Oct), and he was asked to review a
+  //     lesson the style boundary (20260926g) hides from him.
+  // No name typed: the coach for the lesson's style → their only coach → any
+  // coach column, under the same style rule.
   //
-  // The teacher is still looked up for one thing: a lesson logged without a
-  // dance takes the teacher's style, so its focus points land in the right
-  // Latin/Ballroom ranking. The name typed, among the dancer's coaches (a name
-  // that matches none is a teacher outside the app) → with no name, the coach
-  // for the lesson's style → their only coach → any coach column.
+  // The teacher found also gives a lesson logged without a dance its style.
   let teacherId: string | null = null
 
   // Load all accepted coach_requests for this student (source of truth for link)
   const { data: acceptedReqs } = await supabase
     .from('coach_requests')
-    .select('coach_id, coach:coach_id(id, name)')
+    .select('coach_id, category, coach:coach_id(id, name)')
     .eq('student_id', studentId)
     .eq('status', 'accepted')
 
@@ -169,6 +172,34 @@ async function process(supabase: any, payload: Payload): Promise<void> {
     }
   }
 
+  // The lesson's style by the database's rule (focus_category_of): one of the
+  // five Latin dances makes it Latin, any other dance Ballroom, no dance unknown.
+  const lessonCategory: 'latin' | 'ballroom' | null =
+    danceList.length === 0
+      ? null
+      : danceList.some((d) => LATIN_DANCES.includes(d)) ? 'latin' : 'ballroom'
+
+  // Does this coach teach this dancer that style? The same test coach_sees_focus
+  // makes, so a coach is only ever sent what he can see.
+  const teachesStyle = (id: string): boolean => {
+    const cats = (acceptedReqs ?? []).filter((r: any) => r.coach_id === id).map((r: any) => r.category)
+    if (cats.some((c: string | null) => c == null || lessonCategory == null || c === lessonCategory)) return true
+    if (studentRow?.latin_coach_id === id && lessonCategory !== 'ballroom') return true
+    if (studentRow?.ballroom_coach_id === id && lessonCategory !== 'latin') return true
+    return false
+  }
+  const coachId: string | null = teacherId && teachesStyle(teacherId) ? teacherId : null
+
+  // The lesson is the reviewing coach's: the release tells him, not whichever
+  // coach column comes first (migration 20261025a).
+  if (coachId) {
+    const { error: revErr } = await supabase
+      .from('class_inputs')
+      .update({ reviewer_coach_id: coachId })
+      .eq('id', class_input_id)
+    if (revErr) console.warn('[student-class-score] reviewer_coach_id update failed:', revErr.message)
+  }
+
   const { data: existing } = await supabase
     .from('focus_points')
     .select('id, name, normalized_name, count, tier, base_score, train_target, drill, status, subtitle, context')
@@ -181,21 +212,36 @@ async function process(supabase: any, payload: Payload): Promise<void> {
   for (const p of existing ?? []) existingMap.set(p.normalized_name, p)
 
   const now = new Date()
+  const deadline = new Date(now.getTime() + REVIEW_WINDOW_MS).toISOString()
+  const targetStatus = coachId ? 'pending_coach' : 'active'
 
   // Resolve the dance list new FPs will inherit. Priority: the class's own
-  // dance list → the teacher's dance_style → empty (rare edge case).
+  // dance list → the one style the teacher teaches this dancer (so the points
+  // stay in what he can see) → the teacher's dance_style → empty (rare).
   let fpDance: string[] = danceList
   if (fpDance.length === 0 && teacherId) {
-    const { data: coachRow } = await supabase
-      .from('users')
-      .select('dance_style')
-      .eq('id', teacherId)
-      .single()
-    fpDance = fallbackDanceForCoachStyle(coachRow?.dance_style)
+    const taught = new Set<string>(
+      (acceptedReqs ?? [])
+        .filter((r: any) => r.coach_id === teacherId && r.category)
+        .map((r: any) => r.category),
+    )
+    if (studentRow?.latin_coach_id === teacherId) taught.add('latin')
+    if (studentRow?.ballroom_coach_id === teacherId) taught.add('ballroom')
+    if (taught.size === 1) {
+      fpDance = taught.has('latin') ? LATIN_FALLBACK : BALLROOM_FALLBACK
+    } else {
+      const { data: coachRow } = await supabase
+        .from('users')
+        .select('dance_style')
+        .eq('id', teacherId)
+        .single()
+      fpDance = fallbackDanceForCoachStyle(coachRow?.dance_style)
+    }
   }
 
   console.log(
     `[student-class-score] class=${class_input_id} student=${studentId} teacher=${teacherId} ` +
+      `reviewer=${coachId} style=${lessonCategory} ` +
       `teacher_name="${ci.teacher_name ?? ''}" dance=${JSON.stringify(danceList)} focuses=${focuses.length}`,
   )
 
@@ -243,10 +289,11 @@ async function process(supabase: any, payload: Payload): Promise<void> {
         train_target: tier === 'critical' ? 3 : 2,
         drill: fp.drill ?? null,
         dance: fpDance,
-        status: 'active',
+        status: targetStatus,
         source_class_input_id: class_input_id,
         class_input_id: class_input_id,
         last_mentioned_at: now.toISOString(),
+        ...(coachId ? { coach_review_deadline: deadline } : {}),
         is_archived: false,
         is_deleted: false,
         is_other: false,
@@ -259,7 +306,37 @@ async function process(supabase: any, payload: Payload): Promise<void> {
     }
   }
 
-  console.log(`[student-class-score] ${touchedNames.length} focus point(s) to the dancer`)
+  // The coach hears about it when the lesson opens: marking it scored below
+  // releases it, and release_class_to_coach tells him "<dancer> logged a class".
+  // Only a lesson that opened before its points existed needs telling here.
+  const { data: opened } = await supabase
+    .from('class_inputs')
+    .select('coach_released_at')
+    .eq('id', class_input_id)
+    .maybeSingle()
+  if (coachId && touchedNames.length > 0 && opened?.coach_released_at) {
+    const studentName = studentRow?.name ?? 'a student'
+    const { error: notifErr } = await supabase.from('notifications').insert({
+      user_id: coachId,
+      type: touchedNames.length > 1 ? 'focus_points_added' : 'focus_point_added',
+      title: `${studentName} logged a class`,
+      body:
+        touchedNames.length === 1
+          ? `Review focus point: "${touchedNames[0]}"`
+          : `Review ${touchedNames.length} focus points`,
+      data: { class_input_id, student_id: studentId },
+    })
+    if (notifErr) {
+      console.warn('[student-class-score] notification insert failed:', notifErr.message)
+    } else {
+      console.log(`[student-class-score] notified coach ${coachId}`)
+    }
+  } else {
+    console.log(
+      `[student-class-score] no notif sent here (reviewer=${coachId}, touched=${touchedNames.length}, ` +
+        `opened=${!!opened?.coach_released_at})`,
+    )
+  }
 
   await supabase
     .from('class_inputs')

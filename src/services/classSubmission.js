@@ -64,8 +64,9 @@ export async function processClassDraft(draft) {
     created_at: createdAt,
   });
 
-  // Server creates the focus points, live straight away: a lesson the dancer
-  // logs goes to no coach for review. This is the single source of truth.
+  // Server creates the focus points: waiting for the coach the dancer named
+  // when he teaches them this style, live straight away otherwise. This is the
+  // single source of truth.
   if (classInputId) {
     const focuses = [
       primaryFocusName
