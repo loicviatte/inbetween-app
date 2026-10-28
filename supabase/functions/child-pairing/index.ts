@@ -97,10 +97,14 @@ async function claim(admin: SupabaseClient, b: Row, ip: string) {
   if (!row || new Date(row.expires_at) < new Date()) {
     return json({ error: "That code didn't work. Codes last 10 minutes — ask your parent for a new one." }, 404)
   }
-  // Spend it first; if two phones race, only one gets through.
-  const { data: spent } = await admin.from('child_pairing_codes').update({ used_at: new Date().toISOString() })
-    .eq('id', row.id).is('used_at', null).select('id')
-  if (!spent?.length) return json({ error: 'That code has just been used. Ask your parent for a new one.' }, 409)
+  // Spend it first; if two phones race, only one gets through. A code kept on
+  // purpose (reusable, set by hand for a child whose parent never opens the
+  // app) is never spent: it signs in again after a log-out (20261028a).
+  if (!row.reusable) {
+    const { data: spent } = await admin.from('child_pairing_codes').update({ used_at: new Date().toISOString() })
+      .eq('id', row.id).is('used_at', null).select('id')
+    if (!spent?.length) return json({ error: 'That code has just been used. Ask your parent for a new one.' }, 409)
+  }
 
   const [{ data: au }, { data: child }, { data: parent }] = await Promise.all([
     admin.auth.admin.getUserById(row.child_id),
