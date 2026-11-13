@@ -50,6 +50,7 @@ import {
   uploadPreparedItems,
   purgeExpiredPreparedFiles,
   purgeExpiredM4aBackups,
+  purgeLeakedTmpImports,
 } from '../services/localRecordingAutoSync';
 import { endAllCoachRecordings as laEndAllCoachRecordings } from 'live-activities';
 import { getActiveCoachClass, subscribeToActiveCoachClass, clearActiveCoachClass } from '../storage/activeCoachClass';
@@ -340,6 +341,10 @@ export function DjiSyncProvider({ children, navigationRef }) {
     // Both are safe at mount:
     // backups are post-upload (never held) and prepared files aren't held yet.
     purgeExpiredM4aBackups().catch(() => {});
+    // Catch-up sweep for the mic copies the legacy file API silently failed to
+    // delete (see the tmp/ note in localRecordingAutoSync). Without this, every
+    // WAV imported before the fix stays on the phone for good — gigabytes.
+    purgeLeakedTmpImports().catch(() => {});
   }, []);
 
   // ─── Offline upload: hold prepared items, retry until the network is back ──

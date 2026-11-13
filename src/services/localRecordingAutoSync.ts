@@ -24,6 +24,7 @@
 // ───────────────────────────────────────────────────────────────────────
 
 import * as FileSystem from 'expo-file-system/legacy';
+import { Directory, File } from 'expo-file-system';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from './supabase/client';
 import {
@@ -348,6 +349,64 @@ const PREPARE_DIR = `${FileSystem.cacheDirectory ?? ''}dji-prepared/`;
 // retry's freshly-written file is never reclaimed out from under it.
 const PREPARE_STALE_MS = 24 * 60 * 60 * 1000; // 1 day
 
+// ─── tmp/ file ops: why these exist ──────────────────────────────────────
+// The native module writes the copied mic WAV and the transcoded m4a into the
+// app container's tmp/ (FileManager.temporaryDirectory). expo-file-system's
+// LEGACY deleteAsync/moveAsync check write permission on the UNRESOLVED parent
+// path `<file>/..`; outside document/cache/applicationSupport that falls
+// through to FileManager.isWritableFile("<file>/.."), which is always false for
+// a regular file (ENOTDIR). So every legacy delete/move of a tmp file threw —
+// and each call site swallowed it — leaving every imported WAV on disk forever
+// (4.5 GB on a beta coach's phone before this was found). iOS only reclaims
+// tmp/ under storage pressure, so it just grows.
+//
+// The new File API validates the URL itself instead of a `..` parent, so it
+// works in tmp as well as in cache. These two helpers are the only way this
+// module should delete or move a recording file.
+
+/** Delete a file wherever it lives. True when it's gone (or never existed). */
+function deleteFileAnywhere(uri: string): boolean {
+  try {
+    const file = new File(uri);
+    if (!file.exists) return true;
+    file.delete();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Move a file wherever it lives, overwriting the destination. */
+function moveFileAnywhere(fromUri: string, toUri: string): boolean {
+  try {
+    const dest = new File(toUri);
+    if (dest.exists) {
+      try { dest.delete(); } catch { /* let move fail instead */ }
+    }
+    new File(fromUri).move(dest);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Where the native module stages mic copies. expo exposes no constant for the
+// container's tmp/, so derive it from cacheDirectory
+// (`<container>/Library/Caches/`). Returns null if that isn't the layout
+// (Android, or a future expo change) so the sweep no-ops instead of guessing.
+function tmpDirUri(): string | null {
+  const cache = FileSystem.cacheDirectory;
+  if (!cache) return null;
+  const marker = 'Library/Caches/';
+  return cache.endsWith(marker) ? `${cache.slice(0, -marker.length)}tmp/` : null;
+}
+
+// Must match `inbetween-dji-import` in LocalRecordingFilesModule.swift.
+const TMP_IMPORT_SUBDIR = 'inbetween-dji-import/';
+// A WAV copy + transcode takes minutes at worst, and the sweep only runs at
+// provider mount (nothing in flight). Two hours is far past any live file.
+const TMP_LEAK_STALE_MS = 2 * 60 * 60 * 1000;
+
 function deriveAdminReviewStatus(
   sessionStatus: MatchSession['status'],
   confidence: MatchConfidence,
@@ -659,15 +718,13 @@ export async function attachSessionToClass(args: {
 
     // Delete the WAV right away — it's huge and disposable (a cache copy of a
     // file that still lives on the DJI mic, the real backup).
-    try { await FileSystem.deleteAsync(parts[idx].uri, { idempotent: true }); } catch {}
+    deleteFileAnywhere(parts[idx].uri);
     // Keep the small m4a on-device as a short-lived local backup: move it out
     // of tmp into the cache backup folder; purgeExpiredM4aBackups() deletes it
-    // after the retention window. Best-effort — if the move fails it just
-    // stays in tmp and gets purged by iOS instead.
-    try {
-      await FileSystem.makeDirectoryAsync(M4A_BACKUP_DIR, { intermediates: true });
-      await FileSystem.moveAsync({ from: m4aUri, to: `${M4A_BACKUP_DIR}${classId}_${idx}.m4a` });
-    } catch { /* leave it in tmp */ }
+    // after the retention window. Best-effort — if the move fails it stays in
+    // tmp, where purgeLeakedTmpImports() picks it up at the next mount.
+    try { await FileSystem.makeDirectoryAsync(M4A_BACKUP_DIR, { intermediates: true }); } catch {}
+    moveFileAnywhere(m4aUri, `${M4A_BACKUP_DIR}${classId}_${idx}.m4a`);
   }
 
   // Drop any stale chunk rows left by an earlier, LARGER import of this class.
@@ -814,6 +871,44 @@ export async function purgeExpiredPreparedFiles(): Promise<void> {
       } catch { /* skip this file */ }
     }
   } catch { /* best-effort */ }
+}
+
+/**
+ * Sweep the mic-import staging files the legacy delete/move silently failed to
+ * clean (see the tmp/ note above): the copied WAV (and any .part) under
+ * tmp/inbetween-dji-import/, plus the transcoded m4a AVAssetExportSession
+ * writes under a UUID name in the tmp ROOT. Both are post-upload leftovers —
+ * the WAV's original still lives on the mic, the m4a is already in Supabase
+ * Storage. Call at provider mount alongside the other two sweeps, where
+ * nothing is in flight. Best-effort: never throws.
+ */
+export async function purgeLeakedTmpImports(): Promise<void> {
+  const tmp = tmpDirUri();
+  if (!tmp) return;
+  const now = Date.now();
+
+  const sweep = (dirUri: string, wanted: (name: string) => boolean) => {
+    try {
+      const dir = new Directory(dirUri);
+      if (!dir.exists) return;
+      for (const entry of dir.list()) {
+        if (!(entry instanceof File) || !wanted(entry.name)) continue;
+        try {
+          // New-API modificationTime is in MILLISECONDS (legacy used seconds).
+          // Null means we can't age it — leave it rather than delete blind.
+          const mtime = entry.modificationTime;
+          if (mtime == null || now - mtime < TMP_LEAK_STALE_MS) continue;
+          entry.delete();
+        } catch { /* skip this file */ }
+      }
+    } catch { /* best-effort */ }
+  };
+
+  // Our own folder: everything in it is a mic copy, so no name filter.
+  sweep(`${tmp}${TMP_IMPORT_SUBDIR}`, () => true);
+  // The tmp root is shared with iOS and other libraries — only ever touch the
+  // .m4a our transcode leaves there, never anything else.
+  sweep(tmp, (name) => name.toLowerCase().endsWith('.m4a'));
 }
 
 // ─── Orphan → class reconciliation ───────────────────────────────────────
@@ -1461,14 +1556,9 @@ export async function uploadUnmatchedSession(args: {
       'audio/mp4',
     );
     storagePaths.push(storagePath);
-    try { await FileSystem.deleteAsync(parts[idx].uri, { idempotent: true }); } catch {}
-    try {
-      await FileSystem.makeDirectoryAsync(M4A_BACKUP_DIR, { intermediates: true });
-      await FileSystem.moveAsync({
-        from: m4aUri,
-        to: `${M4A_BACKUP_DIR}unmatched_${session.index}_${idx}.m4a`,
-      });
-    } catch { /* leave it in tmp */ }
+    deleteFileAnywhere(parts[idx].uri);
+    try { await FileSystem.makeDirectoryAsync(M4A_BACKUP_DIR, { intermediates: true }); } catch {}
+    moveFileAnywhere(m4aUri, `${M4A_BACKUP_DIR}unmatched_${session.index}_${idx}.m4a`);
   }
 
   // Idempotent on the natural key — a lost-ACK retry re-runs this whole
@@ -1562,10 +1652,9 @@ async function uploadPreparedPair(
 
   // Whole item committed — retire the prepared m4a to the short-lived backup.
   for (let idx = 0; idx < m4aParts.length; idx++) {
-    try {
-      await FileSystem.makeDirectoryAsync(M4A_BACKUP_DIR, { intermediates: true });
-      await FileSystem.moveAsync({ from: m4aParts[idx].m4aUri, to: `${M4A_BACKUP_DIR}${classId}_${idx}.m4a` });
-    } catch { /* leave it in the prepare dir; the purge sweeps it later */ }
+    try { await FileSystem.makeDirectoryAsync(M4A_BACKUP_DIR, { intermediates: true }); } catch {}
+    // Leaves it in the prepare dir on failure; the purge sweeps it later.
+    moveFileAnywhere(m4aParts[idx].m4aUri, `${M4A_BACKUP_DIR}${classId}_${idx}.m4a`);
   }
 
   // Best-effort kick of finalize-class. The cron picks up stragglers.
@@ -1617,10 +1706,9 @@ async function uploadPreparedOrphan(
 
   // Committed — retire the prepared m4a to the short-lived backup.
   for (let idx = 0; idx < m4aParts.length; idx++) {
-    try {
-      await FileSystem.makeDirectoryAsync(M4A_BACKUP_DIR, { intermediates: true });
-      await FileSystem.moveAsync({ from: m4aParts[idx].m4aUri, to: `${M4A_BACKUP_DIR}unmatched_${session.index}_${idx}.m4a` });
-    } catch { /* leave it in the prepare dir; the purge sweeps it later */ }
+    try { await FileSystem.makeDirectoryAsync(M4A_BACKUP_DIR, { intermediates: true }); } catch {}
+    // Leaves it in the prepare dir on failure; the purge sweeps it later.
+    moveFileAnywhere(m4aParts[idx].m4aUri, `${M4A_BACKUP_DIR}unmatched_${session.index}_${idx}.m4a`);
   }
 }
 
@@ -1785,7 +1873,7 @@ export async function executeAutoSync(
     // handler swallows a late rejection so it isn't an unhandled promise.
     native.then(
       (path: string) => {
-        if (timedOut && path) FileSystem.deleteAsync(path, { idempotent: true }).catch(() => {});
+        if (timedOut && path) deleteFileAnywhere(path);
       },
       () => {},
     );
@@ -1825,7 +1913,7 @@ export async function executeAutoSync(
         try {
           m4aTmp = await transcodeWithTimeout(wavUri);
         } finally {
-          try { await FileSystem.deleteAsync(wavUri, { idempotent: true }); } catch {}
+          deleteFileAnywhere(wavUri);
         }
         // Guard against a transcode that reports success but produced an empty /
         // near-empty m4a — a subtly-corrupt WAV that AVFoundation opens with no
@@ -1835,15 +1923,13 @@ export async function executeAutoSync(
         // already freed; a later sync re-copies the original from the mic).
         const outInfo = await FileSystem.getInfoAsync(m4aTmp);
         if (!outInfo.exists || outInfo.size < 4096) {
-          try { await FileSystem.deleteAsync(m4aTmp, { idempotent: true }); } catch {}
+          deleteFileAnywhere(m4aTmp);
           throw new Error('E_TRANSCODE_EMPTY');
         }
         let m4aUri = m4aTmp;
-        try {
-          await FileSystem.makeDirectoryAsync(PREPARE_DIR, { intermediates: true });
-          m4aUri = `${PREPARE_DIR}${parts[p].fileName}_${p}.m4a`;
-          await FileSystem.moveAsync({ from: m4aTmp, to: m4aUri });
-        } catch { m4aUri = m4aTmp; }
+        try { await FileSystem.makeDirectoryAsync(PREPARE_DIR, { intermediates: true }); } catch {}
+        const staged = `${PREPARE_DIR}${parts[p].fileName}_${p}.m4a`;
+        if (moveFileAnywhere(m4aTmp, staged)) m4aUri = staged;
         out.push({ m4aUri, name: parts[p].fileName, sizeBytes: parts[p].sizeBytes });
       }
       return out;
@@ -1852,7 +1938,7 @@ export async function executeAutoSync(
       // m4a are already staged in PREPARE_DIR but this whole recording won't
       // upload. Delete them so they don't strand until the periodic sweep.
       for (const part of out) {
-        try { await FileSystem.deleteAsync(part.m4aUri, { idempotent: true }); } catch {}
+        deleteFileAnywhere(part.m4aUri);
       }
       throw err;
     }
