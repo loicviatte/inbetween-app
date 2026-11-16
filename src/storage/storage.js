@@ -398,6 +398,22 @@ export async function getFocusPoints() {
   return data || [];
 }
 
+// One of the user's focus points by id, whatever its status. A retired ("past")
+// focus point can still be trained again, and getFocusPoints() only lists the
+// active ones.
+export async function getFocusPointById(id) {
+  if (!id) return null;
+  const userId = await getUserId();
+  const { data } = await supabase
+    .from('focus_points')
+    .select('*')
+    .eq('id', id)
+    .eq('user_id', userId)
+    .eq('is_deleted', false)
+    .maybeSingle();
+  return data || null;
+}
+
 export async function saveFocusPoint(fp) {
   const userId = await getUserId();
   if (fp.id) {
