@@ -50,7 +50,7 @@ import HeroCardGradient from '../components/HeroCardGradient';
 // Sessions shorter than this don't count as a real practice — the prompt
 // asks the user to keep training or cancel outright.
 const MIN_SESSION_SECONDS = 180; // 3 minutes
-import { getFocusPoints, getClassInputsForFocus, getClassInputs, getTrainingSessionsThisWeek, getTeacherContextForAI, askCoach } from '../storage/storage';
+import { getFocusPointById, getClassInputsForFocus, getClassInputs, getTrainingSessionsThisWeek, getTeacherContextForAI, askCoach } from '../storage/storage';
 import { callClaudeChat } from '../services/ai/anthropic';
 import { supabase } from '../services/supabase/client';
 import { completeTrainingSession, getSessionLabel } from '../utils/algorithm';
@@ -951,13 +951,14 @@ export default function FocusSessionScreen({ route, navigation }) {
       // The starter already has the full focus row in hand (HomeScreen passes it
       // through params), so use it directly and skip the round-trip entirely.
       // Couple sessions otherwise carry a couple_focus_points id (not a solo
-      // focus_points one), so load it from the couple table; solo stays on
-      // getFocusPoints().
+      // focus_points one), so load it from the couple table. Solo loads the row
+      // by id, whatever its status: a retired ("past") focus point opened with
+      // "Again" is not in the active list and used to load as a blank card.
       const fp = focusPointData
         ? focusPointData
         : (couple && coupleId)
           ? await getCoupleFocusPointById(focusPointId).catch(() => null)
-          : ((await getFocusPoints()).find(p => p.id === focusPointId) || null);
+          : await getFocusPointById(focusPointId).catch(() => null);
       if (fp) {
         // Smooth height transition from skeleton → real content
         LayoutAnimation.configureNext({
@@ -1741,7 +1742,7 @@ I don't have that in your data, but you can send the question to your coach if y
                 <View style={styles.subtitleWrap}>
                   <Text style={styles.focusSubtitle}>{focusPoint.subtitle}</Text>
                   {focusPoint?.context ? (
-                    <TouchableOpacity onPress={toggleContext} activeOpacity={0.7} style={styles.readMoreBtn}>
+                    <TouchableOpacity onPress={() => toggleContext()} activeOpacity={0.7} style={styles.readMoreBtn}>
                       <Text style={styles.readMoreText}>{contextExpanded ? 'Read less ↑' : 'Read more ↓'}</Text>
                     </TouchableOpacity>
                   ) : null}

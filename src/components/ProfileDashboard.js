@@ -216,7 +216,7 @@ function Card({ children, onPress, label, side, style, tight }) {
     >
       {!!label && (
         <View style={[s.chead, tight && s.cheadTight]}>
-          <Text style={s.h2}>{label}</Text>
+          <Text style={s.h2} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7} maxFontSizeMultiplier={1.4}>{label}</Text>
           {!!side && <Text style={s.side}>{side}</Text>}
           {!!onPress && <Chevron />}
         </View>
